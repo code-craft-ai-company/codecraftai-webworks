@@ -1,0 +1,235 @@
+# Implementation Plan: Router and Request Handling
+
+## Overview
+
+This implementation plan creates the router and request handling system for matching HTTP requests to endpoint handlers, managing request/response primitives, and orchestrating middleware pipelines. The implementation follows a bottom-up approach, starting with core primitives and building up to the full dispatcher.
+
+## Tasks
+
+- [x] 1. Set up project structure and helper classes
+  - [x] 1.1 Create `source/packages/automojo/webworks/routing/` package directory
+    - Create `__init__.py` with public exports
+    - _Requirements: 1.1_
+  - [x] 1.2 Implement `QueryParams` class for query string parsing
+    - Support multi-value keys via getlist()
+    - Implement dict-like interface (__getitem__, get, keys, items)
+    - _Requirements: 3.3_
+  - [x] 1.3 Implement `Headers` class for case-insensitive header access
+    - Store headers with normalized keys
+    - Implement case-insensitive __getitem__, get, __contains__
+    - _Requirements: 3.4_
+  - [x] 1.4 Write property test for header case-insensitivity
+    - **Property 6: Request Header Case-Insensitivity**
+    - **Validates: Requirements 3.4**
+
+- [x] 2. Implement Request class
+  - [x] 2.1 Implement `Request` class with core properties
+    - Properties: method, path, query_params, headers, body, cookies, url
+    - Mutable path_params property for routing
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.8, 3.9, 3.10_
+  - [x] 2.2 Implement `Request.from_wsgi()` classmethod
+    - Parse WSGI environ dict into Request
+    - _Requirements: 3.11_
+  - [x] 2.3 Implement `Request.from_asgi()` classmethod
+    - Parse ASGI scope dict into Request
+    - _Requirements: 3.11_
+  - [x] 2.4 Implement `Request.json()` method
+    - Parse body as JSON, raise on invalid JSON
+    - _Requirements: 3.6_
+  - [x] 2.5 Implement `Request.form()` method
+    - Parse body as form-encoded data
+    - _Requirements: 3.7_
+  - [x] 2.6 Write property test for query/form parsing round-trip
+    - **Property 4: Request Query/Form Parsing**
+    - **Validates: Requirements 3.3, 3.7**
+  - [x] 2.7 Write property test for JSON round-trip
+    - **Property 5: Request JSON Round-Trip**
+    - **Validates: Requirements 3.6**
+
+- [x] 3. Implement Response classes
+  - [x] 3.1 Implement `Response` base class
+    - Constructor with status_code, headers, body
+    - Methods: set_header(), set_cookie(), delete_cookie()
+    - _Requirements: 4.1, 4.2, 4.3, 4.4_
+  - [x] 3.2 Implement `Response.to_wsgi()` method
+    - Convert to WSGI response tuple (status, headers, body)
+    - _Requirements: 4.5_
+  - [x] 3.3 Implement `Response.to_asgi()` method
+    - Convert to ASGI response events
+    - _Requirements: 4.6_
+  - [x] 3.4 Implement `JSONResponse` subclass
+    - Auto-serialize content to JSON
+    - Set Content-Type: application/json
+    - _Requirements: 4.7_
+  - [x] 3.5 Implement `HTMLResponse`, `RedirectResponse`, `StreamingResponse`
+    - HTMLResponse: Set Content-Type: text/html
+    - RedirectResponse: Set Location header and 3xx status
+    - StreamingResponse: Yield body chunks
+    - _Requirements: 4.8, 4.9, 4.10_
+  - [x] 3.6 Write property test for response format conversion
+    - **Property 7: Response Format Conversion**
+    - **Validates: Requirements 4.5, 4.6**
+  - [x] 3.7 Write property test for JSONResponse round-trip
+    - **Property 8: JSONResponse Serialization Round-Trip**
+    - **Validates: Requirements 4.7**
+
+- [x] 4. Checkpoint - Request/Response primitives complete
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 5. Implement path parameter converters
+  - [x] 5.1 Define `Converter` protocol
+    - Attributes: regex pattern
+    - Method: convert(value: str) -> Any
+    - _Requirements: 10.1_
+  - [x] 5.2 Implement built-in converters
+    - StringConverter: match non-empty string
+    - IntConverter: match and convert integers
+    - FloatConverter: match and convert floats
+    - UUIDConverter: match and convert UUIDs
+    - PathConverter: match remaining path including slashes
+    - _Requirements: 10.2, 10.3, 10.4, 10.5, 10.6_
+  - [x] 5.3 Implement converter registry with `register_converter()`
+    - Global CONVERTERS dict with built-in converters
+    - register_converter() for custom converters
+    - _Requirements: 10.8_
+  - [x] 5.4 Write property test for path parameter conversion
+    - **Property 13: Path Parameter Conversion**
+    - **Validates: Requirements 10.2, 10.3, 10.4, 10.5, 10.6, 10.7**
+
+- [x] 6. Implement Matcher class
+  - [x] 6.1 Implement `Matcher` class for URL pattern matching
+    - Parse pattern into segments (static, param, wildcard)
+    - Support typed parameters: {name:converter}
+    - _Requirements: 2.1, 2.2, 2.3, 2.4_
+  - [x] 6.2 Implement `Matcher.match()` method
+    - Match path against pattern
+    - Extract and convert parameters
+    - Return None on no match or conversion failure
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 10.7_
+  - [x] 6.3 Implement `Matcher.specificity` property
+    - Calculate specificity score for route precedence
+    - Static segments > parameterized > wildcard
+    - _Requirements: 2.6_
+  - [x] 6.4 Write property test for path parameter extraction
+    - **Property 2: Path Parameter Extraction**
+    - **Validates: Requirements 2.2, 2.3, 2.4**
+
+- [x] 7. Implement Router class
+  - [x] 7.1 Implement `Router` class with URL tree
+    - Constructor with strict_slashes, case_sensitive, redirect_slashes
+    - Internal URLNode tree structure
+    - _Requirements: 11.1, 11.4, 11.6_
+  - [x] 7.2 Implement `Router.add_endpoint()` method
+    - Add EndpointDescriptor to URL tree
+    - Raise RoutingError on duplicate path+method
+    - _Requirements: 1.1, 1.2_
+  - [x] 7.3 Implement `Router.load_from_registry()` method
+    - Bulk-load descriptors from EndpointRegistry
+    - _Requirements: 1.7_
+  - [x] 7.4 Implement `Router.match()` method
+    - Match request path and method against tree
+    - Return RouteMatch or None
+    - Handle strict_slashes and case_sensitive config
+    - _Requirements: 1.3, 1.4, 1.5, 1.6, 11.2, 11.3, 11.5_
+  - [x] 7.5 Write property test for route matching correctness
+    - **Property 1: Route Matching Correctness**
+    - **Validates: Requirements 1.3, 1.4, 1.5, 1.6**
+  - [x] 7.6 Write property test for route precedence
+    - **Property 3: Route Precedence**
+    - **Validates: Requirements 2.6, 2.7**
+  - [x] 7.7 Write property test for router configuration behavior
+    - **Property 14: Router Configuration Behavior**
+    - **Validates: Requirements 11.2, 11.3, 11.5**
+
+- [x] 8. Implement RouteMatch dataclass
+  - [x] 8.1 Implement `RouteMatch` dataclass
+    - Fields: handler, path_params, descriptor, matched_path
+    - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
+
+- [x] 9. Checkpoint - Routing system complete
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 10. Implement Middleware system
+  - [x] 10.1 Define `Middleware` and `AsyncMiddleware` protocols
+    - __call__(request, call_next) -> Response
+    - Optional name attribute for identification
+    - _Requirements: 5.1, 5.6_
+  - [x] 10.2 Implement `MiddlewarePipeline` class
+    - Ordered list of middleware components
+    - Named middleware support
+    - _Requirements: 6.1, 6.9_
+  - [x] 10.3 Implement `MiddlewarePipeline.add()` method
+    - Support position: "start", "end", "before:<name>", "after:<name>"
+    - _Requirements: 6.2, 6.3, 6.4, 6.5, 6.6_
+  - [x] 10.4 Implement `MiddlewarePipeline.remove()` method
+    - Remove middleware by name
+    - _Requirements: 6.7_
+  - [x] 10.5 Implement `MiddlewarePipeline.execute()` method
+    - Execute middleware chain with handler as final callable
+    - Support request modification before call_next
+    - Support response modification after call_next
+    - Support short-circuit (return without call_next)
+    - _Requirements: 5.2, 5.3, 5.4, 5.5, 6.8_
+  - [x] 10.6 Implement `MiddlewarePipeline.execute_async()` method
+    - Async version of execute()
+    - _Requirements: 5.6_
+  - [x] 10.7 Write property test for middleware execution order
+    - **Property 9: Middleware Pipeline Execution Order**
+    - **Validates: Requirements 5.2, 5.3, 5.4, 6.8**
+  - [x] 10.8 Write property test for middleware short-circuit
+    - **Property 10: Middleware Short-Circuit**
+    - **Validates: Requirements 5.5**
+  - [x] 10.9 Write property test for middleware positioning
+    - **Property 11: Middleware Positioning**
+    - **Validates: Requirements 6.3, 6.4, 6.5, 6.6**
+
+- [x] 11. Implement exception classes
+  - [x] 11.1 Implement `HTTPException` base class
+    - Fields: status_code, detail, headers
+    - _Requirements: 9.1_
+  - [x] 11.2 Implement standard exception subclasses
+    - NotFound (404), BadRequest (400), Unauthorized (401)
+    - Forbidden (403), MethodNotAllowed (405)
+    - _Requirements: 9.3_
+  - [x] 11.3 Implement `RoutingError` exception
+    - Fields: message, path, method, existing_handler
+    - _Requirements: 1.5_
+
+- [x] 12. Implement Dispatcher class
+  - [x] 12.1 Implement `Dispatcher` class
+    - Constructor with router, pipeline, debug, error_format
+    - _Requirements: 8.1_
+  - [x] 12.2 Implement `Dispatcher.dispatch()` method
+    - Route request to find handler
+    - Populate request.path_params from RouteMatch
+    - Execute middleware pipeline with handler
+    - Return 404 on no match
+    - _Requirements: 8.2, 8.3, 8.4, 8.5, 8.6_
+  - [x] 12.3 Implement HTTPException handling in dispatch
+    - Convert HTTPException to appropriate response
+    - Support configurable error format (json, html, text)
+    - _Requirements: 9.2, 9.4_
+  - [x] 12.4 Implement unhandled exception handling
+    - Return 500 response
+    - Hide details in production, show stack trace in debug
+    - _Requirements: 8.7, 9.5, 9.6, 9.7_
+  - [x] 12.5 Implement `Dispatcher.dispatch_async()` method
+    - Async version of dispatch()
+    - _Requirements: 8.8_
+  - [x] 12.6 Write property test for dispatcher error handling
+    - **Property 12: Dispatcher Error Handling**
+    - **Validates: Requirements 8.6, 8.7, 9.2, 9.5**
+
+- [x] 13. Final checkpoint - All components complete
+  - Ensure all tests pass, ask the user if questions arise.
+
+## Notes
+
+- Tasks marked with `*` are optional and can be skipped for faster MVP
+- Each task references specific requirements for traceability
+- Checkpoints ensure incremental validation
+- Property tests validate universal correctness properties
+- Unit tests validate specific examples and edge cases
+- Testing framework: testbase (per AGENTS.md)
+- Test location: `source/testroots/automojo/tests/singlehost/webworks/routing/`
+- This feature integrates with endpoint-abstractions for EndpointDescriptor and EndpointRegistry

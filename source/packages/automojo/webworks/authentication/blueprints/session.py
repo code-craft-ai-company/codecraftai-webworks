@@ -1,0 +1,642 @@
+"""
+.. module:: session
+    :platform: Darwin, Linux, Unix, Windows
+    :synopsis: Session-based authentication blueprint providing login, logout, and info endpoints.
+
+.. moduleauthor:: Automation Mojo LLC
+
+This module provides the :class:`SessionAuthBlueprint` class which extends
+:class:`SecurityBlueprint` to offer pre-built endpoints for cookie-based
+session management. The blueprint delegates credential validation to a
+configurable :class:`IdentityProvider` and manages sessions via an optional
+:class:`SessionStore`.
+
+Sessions are tracked using secure cookies with configurable HttpOnly,
+Secure, and SameSite attributes. The blueprint supports configurable
+session duration, remember-me extended duration, and session renewal
+on activity.
+
+Endpoints:
+    - ``POST <base_path>/login`` — Authenticate and create a new session.
+    - ``POST <base_path>/logout`` — Invalidate the session and clear the cookie.
+    - ``GET <base_path>`` — Retrieve information about the current session.
+"""
+
+__author__ = "Automation Mojo LLC"
+__copyright__ = "Copyright 2025, Automation Mojo LLC"
+__credits__ = []
+
+
+import asyncio
+import secrets
+import time
+
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+from automojo.webworks.authentication.basic import IdentityProvider
+from automojo.webworks.authentication.core import AuthenticationContext
+from automojo.webworks.authentication.blueprints.responses import (
+    AuthError,
+    AuthResponse
+)
+from automojo.webworks.authentication.blueprints.schemas import (
+    SessionLoginRequest,
+    SessionInfo
+)
+from automojo.webworks.authentication.blueprints.security import (
+    SecurityBlueprint
+)
+from automojo.webworks.endpoints.doc import Doc
+
+
+def _run_async(coro: Any) -> Any:
+    """
+        Run an asynchronous coroutine synchronously.
+
+        This helper obtains the current event loop and uses
+        ``run_until_complete`` to execute the coroutine. It is used
+        internally by :class:`SessionAuthBlueprint` to call async
+        :class:`SessionStore` and :class:`IdentityProvider` methods
+        from synchronous endpoint handlers.
+
+        :param coro: The coroutine to execute.
+
+        :returns: The result of the coroutine.
+    """
+    loop = asyncio.get_event_loop()
+    result = loop.run_until_complete(coro)
+    return result
+
+
+class SessionStore:
+    """
+        Abstract base class for session persistence.
+
+        Subclasses must implement all methods to provide session storage
+        and retrieval. The default :class:`SessionAuthBlueprint` uses an
+        in-memory dictionary when no store is configured.
+
+        Each session is represented as a dictionary with the following keys:
+            - ``session_id``: Unique session identifier string.
+            - ``principal_id``: Identifier of the authenticated principal.
+            - ``created_at``: ISO 8601 timestamp of session creation.
+            - ``expires_at``: ISO 8601 timestamp of session expiration, or None.
+            - ``last_accessed``: ISO 8601 timestamp of last activity.
+    """
+
+    async def create_session(
+        self,
+        session_id: str,
+        principal_id: str,
+        created_at: str,
+        expires_at: Optional[str],
+        last_accessed: str
+    ) -> None:
+        """
+            Store a new session.
+
+            :param session_id: Unique session identifier.
+            :param principal_id: Identifier of the authenticated principal.
+            :param created_at: ISO 8601 creation timestamp.
+            :param expires_at: ISO 8601 expiration timestamp, or None.
+            :param last_accessed: ISO 8601 last-accessed timestamp.
+        """
+        raise NotImplementedError("Subclasses must implement create_session")
+
+    async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """
+            Retrieve a session by its identifier.
+
+            :param session_id: The session identifier to look up.
+
+            :returns: A dictionary of session data, or None if not found.
+        """
+        raise NotImplementedError("Subclasses must implement get_session")
+
+    async def delete_session(self, session_id: str) -> bool:
+        """
+            Remove a session from the store.
+
+            :param session_id: The session identifier to remove.
+
+            :returns: True if the session was found and removed, False otherwise.
+        """
+        raise NotImplementedError("Subclasses must implement delete_session")
+
+    async def update_last_accessed(self, session_id: str, last_accessed: str) -> bool:
+        """
+            Update the last-accessed timestamp for a session.
+
+            Used for session renewal on activity.
+
+            :param session_id: The session identifier to update.
+            :param last_accessed: The new ISO 8601 last-accessed timestamp.
+
+            :returns: True if the session was found and updated, False otherwise.
+        """
+        raise NotImplementedError("Subclasses must implement update_last_accessed")
+
+
+class SessionAuthBlueprint(SecurityBlueprint):
+    """
+        Blueprint for session-based authentication endpoints.
+
+        Provides login, logout, and session info endpoints for cookie-based
+        session management. Credential validation is delegated to a
+        configurable :class:`IdentityProvider` instance. Sessions are
+        persisted via an optional :class:`SessionStore`; when no store is
+        configured, an in-memory dictionary is used.
+
+        Login responses include a ``Set-Cookie`` header with configurable
+        security attributes (HttpOnly, Secure, SameSite). The blueprint
+        supports configurable session duration, extended remember-me
+        duration, and session renewal on activity.
+
+        Default Endpoints:
+            - ``POST /auth/session/login`` — Authenticate and create a
+              new session with a secure cookie.
+            - ``POST /auth/session/logout`` — Invalidate the current
+              session and clear the cookie.
+            - ``GET /auth/session`` — Retrieve information about the
+              current session.
+
+        Class Attributes:
+            base_path: Base URL path for all endpoints. Defaults to
+                       ``"/auth/session"``.
+            tags: Documentation tags applied to all endpoints.
+            identity_provider: The :class:`IdentityProvider` used for
+                               credential validation. Must be set before
+                               the login endpoint can process requests.
+            session_store: Optional :class:`SessionStore` for persisting
+                           sessions. When None, sessions are stored in an
+                           in-memory dictionary.
+            session_duration: Default session lifetime in seconds. Defaults
+                              to 3600 (1 hour).
+            remember_me_duration: Extended session lifetime in seconds when
+                                  the ``remember_me`` flag is set. Defaults
+                                  to 2592000 (30 days).
+            cookie_name: Name of the session cookie. Defaults to
+                         ``"session_id"``.
+            cookie_secure: Whether to set the Secure flag on the cookie.
+                           Defaults to True.
+            cookie_httponly: Whether to set the HttpOnly flag on the cookie.
+                             Defaults to True.
+            cookie_samesite: The SameSite attribute for the cookie. Defaults
+                             to ``"Lax"``.
+    """
+
+    base_path: str = "/auth/session"
+    tags: List[str] = ["Authentication", "Session"]
+
+    identity_provider: Optional[IdentityProvider] = None
+    session_store: Optional[SessionStore] = None
+    session_duration: int = 3600
+    remember_me_duration: int = 86400 * 30
+    cookie_name: str = "session_id"
+    cookie_secure: bool = True
+    cookie_httponly: bool = True
+    cookie_samesite: str = "Lax"
+
+    # In-memory fallback store when no session_store is configured
+    _memory_store: Dict[str, Dict[str, Any]] = {}
+
+    @classmethod
+    def _generate_session_id(cls) -> str:
+        """
+            Generate a cryptographically secure session identifier.
+
+            The identifier is a URL-safe base64-encoded string of 32
+            random bytes, providing 256 bits of entropy.
+
+            :returns: A random session identifier string.
+        """
+        session_id = secrets.token_urlsafe(32)
+        return session_id
+
+    @classmethod
+    def _build_cookie_header(cls, session_id: str, max_age: int) -> str:
+        """
+            Build a Set-Cookie header value with security attributes.
+
+            Constructs the cookie string including the session identifier,
+            Max-Age, Path, and the configured security flags (HttpOnly,
+            Secure, SameSite).
+
+            :param session_id: The session identifier to set in the cookie.
+            :param max_age: The cookie lifetime in seconds.
+
+            :returns: A complete Set-Cookie header value string.
+        """
+        parts = []
+        parts.append("{}={}".format(cls.cookie_name, session_id))
+        parts.append("Max-Age={}".format(max_age))
+        parts.append("Path=/")
+
+        if cls.cookie_httponly:
+            parts.append("HttpOnly")
+
+        if cls.cookie_secure:
+            parts.append("Secure")
+
+        if cls.cookie_samesite:
+            parts.append("SameSite={}".format(cls.cookie_samesite))
+
+        cookie_header = "; ".join(parts)
+        return cookie_header
+
+    @classmethod
+    def _build_clear_cookie_header(cls) -> str:
+        """
+            Build a Set-Cookie header value that clears the session cookie.
+
+            Sets the cookie value to empty and Max-Age to 0, which instructs
+            the browser to remove the cookie immediately.
+
+            :returns: A Set-Cookie header value string that clears the cookie.
+        """
+        parts = []
+        parts.append("{}=".format(cls.cookie_name))
+        parts.append("Max-Age=0")
+        parts.append("Path=/")
+
+        if cls.cookie_httponly:
+            parts.append("HttpOnly")
+
+        if cls.cookie_secure:
+            parts.append("Secure")
+
+        if cls.cookie_samesite:
+            parts.append("SameSite={}".format(cls.cookie_samesite))
+
+        cookie_header = "; ".join(parts)
+        return cookie_header
+
+    @classmethod
+    def _get_session_id_from_request(cls, request: Any) -> Optional[str]:
+        """
+            Extract the session identifier from the request cookies.
+
+            Looks for the configured cookie name in the request's cookie
+            header and returns its value if found.
+
+            :param request: The incoming HTTP request object.
+
+            :returns: The session identifier string, or None if not found.
+        """
+        cookies = None
+
+        if hasattr(request, "cookies"):
+            cookies = request.cookies
+        elif hasattr(request, "headers"):
+            headers = request.headers
+            cookie_header = None
+            if isinstance(headers, dict):
+                cookie_header = headers.get("Cookie") or headers.get("cookie")
+            if cookie_header is not None:
+                cookies = {}
+                for pair in cookie_header.split(";"):
+                    pair = pair.strip()
+                    if "=" in pair:
+                        key, value = pair.split("=", 1)
+                        cookies[key.strip()] = value.strip()
+
+        if cookies is None:
+            return None
+
+        session_id = cookies.get(cls.cookie_name)
+        return session_id
+
+    @classmethod
+    @SecurityBlueprint.create(
+        leaf="login",
+        request_schema=SessionLoginRequest,
+        response_schema=SessionInfo,
+        doc=Doc(
+            summary="Login and create session",
+            description="Authenticate with username and password and create "
+                        "a new session with a secure cookie."
+        ),
+        on_conflict="replace"
+    )
+    def login(cls, request: Any) -> dict:
+        """
+            Handle a login request and create a new session.
+
+            Validates the provided credentials against the configured
+            :attr:`identity_provider`. On success, creates a new session,
+            stores it, and returns a response with a Set-Cookie header
+            containing the session identifier and security attributes.
+
+            When the ``remember_me`` flag is set in the request body, the
+            session uses the extended :attr:`remember_me_duration` instead
+            of the default :attr:`session_duration`.
+
+            The endpoint can be disabled via the ``enabled_endpoints``
+            configuration. When disabled, a 404 response is returned.
+
+            :param request: The incoming HTTP request object. The request
+                            body must contain ``username`` and ``password``
+                            fields, and may optionally include ``remember_me``.
+
+            :returns: A response dictionary with ``status``, ``body``,
+                      ``content_type``, and ``headers`` keys.
+        """
+        if not cls.is_endpoint_enabled("login"):
+            error = AuthError(
+                error="endpoint_disabled",
+                error_description="Login endpoint is disabled"
+            )
+            response = cls.format_error(error, status_code=404)
+            return response
+
+        # Pre-authentication hook
+        pre_error = cls.pre_authenticate(request)
+        if pre_error is not None:
+            response = cls.format_error(pre_error)
+            return response
+
+        # Extract credentials from request body
+        body = request.json()
+        username = body.get("username")
+        password = body.get("password")
+        remember_me = body.get("remember_me", False)
+
+        if username is None or password is None:
+            error = AuthError(
+                error="invalid_request",
+                error_description="Username and password required"
+            )
+            response = cls.format_error(error)
+            return response
+
+        if len(username) == 0 or len(password) == 0:
+            error = AuthError(
+                error="invalid_request",
+                error_description="Username and password must not be empty"
+            )
+            response = cls.format_error(error)
+            return response
+
+        # Validate credentials via the identity provider
+        if cls.identity_provider is None:
+            error = AuthError(
+                error="server_error",
+                error_description="No identity provider configured"
+            )
+            response = cls.format_error(error, status_code=500)
+            return response
+
+        principal = _run_async(
+            cls.identity_provider.validate_credentials(username, password)
+        )
+
+        if principal is None:
+            error = AuthError(
+                error="invalid_credentials",
+                error_description="Invalid username or password"
+            )
+            response = cls.format_error(error)
+            return response
+
+        # Create authentication context
+        context = AuthenticationContext(
+            principal=principal,
+            scheme="Session"
+        )
+
+        # Post-authentication hook
+        cls.post_authenticate(request, context)
+
+        # Determine session duration
+        if remember_me:
+            duration = cls.remember_me_duration
+        else:
+            duration = cls.session_duration
+
+        # Generate session
+        session_id = cls._generate_session_id()
+        now = datetime.now(tz=timezone.utc)
+        created_at = now.isoformat()
+        last_accessed = created_at
+        expires_ts = time.time() + duration
+        expires_at = datetime.fromtimestamp(
+            expires_ts, tz=timezone.utc
+        ).isoformat()
+
+        # Store the session
+        session_data = {
+            "session_id": session_id,
+            "principal_id": principal.identifier,
+            "created_at": created_at,
+            "expires_at": expires_at,
+            "last_accessed": last_accessed,
+        }
+
+        if cls.session_store is not None:
+            _run_async(
+                cls.session_store.create_session(
+                    session_id=session_id,
+                    principal_id=principal.identifier,
+                    created_at=created_at,
+                    expires_at=expires_at,
+                    last_accessed=last_accessed
+                )
+            )
+        else:
+            cls._memory_store[session_id] = session_data
+
+        # Build the Set-Cookie header
+        cookie_header = cls._build_cookie_header(session_id, duration)
+
+        # Build response
+        response_body = {
+            "session_id": session_id,
+            "principal_id": principal.identifier,
+            "created_at": created_at,
+            "expires_at": expires_at,
+            "last_accessed": last_accessed,
+            "message": "Login successful",
+        }
+
+        response = {
+            "status": 200,
+            "body": response_body,
+            "content_type": "application/json",
+            "headers": {
+                "Set-Cookie": cookie_header,
+            },
+        }
+        return response
+
+    @classmethod
+    @SecurityBlueprint.create(
+        leaf="logout",
+        doc=Doc(
+            summary="Logout and destroy session",
+            description="Invalidate the current session and clear the "
+                        "session cookie."
+        ),
+        on_conflict="replace"
+    )
+    def logout(cls, request: Any) -> dict:
+        """
+            Handle a logout request and destroy the current session.
+
+            Extracts the session identifier from the request cookie,
+            removes the session from the store, and returns a response
+            with a Set-Cookie header that clears the cookie.
+
+            The endpoint can be disabled via the ``enabled_endpoints``
+            configuration. When disabled, a 404 response is returned.
+
+            :param request: The incoming HTTP request object. The session
+                            identifier is read from the cookie header.
+
+            :returns: A response dictionary with ``status``, ``body``,
+                      ``content_type``, and ``headers`` keys.
+        """
+        if not cls.is_endpoint_enabled("logout"):
+            error = AuthError(
+                error="endpoint_disabled",
+                error_description="Logout endpoint is disabled"
+            )
+            response = cls.format_error(error, status_code=404)
+            return response
+
+        # Extract session ID from cookie
+        session_id = cls._get_session_id_from_request(request)
+
+        if session_id is not None:
+            # Invalidate the session in the store
+            if cls.session_store is not None:
+                _run_async(cls.session_store.delete_session(session_id))
+            else:
+                cls._memory_store.pop(session_id, None)
+
+        # Build the clear-cookie header
+        clear_cookie = cls._build_clear_cookie_header()
+
+        response = {
+            "status": 200,
+            "body": {"message": "Logged out"},
+            "content_type": "application/json",
+            "headers": {
+                "Set-Cookie": clear_cookie,
+            },
+        }
+        return response
+
+    @classmethod
+    @SecurityBlueprint.read(
+        path="",
+        response_schema=SessionInfo,
+        doc=Doc(
+            summary="Get session info",
+            description="Retrieve information about the current session."
+        ),
+        on_conflict="replace"
+    )
+    def info(cls, request: Any) -> dict:
+        """
+            Retrieve information about the current session.
+
+            Extracts the session identifier from the request cookie and
+            looks up the session data. If the session is found and has
+            not expired, the last-accessed timestamp is updated to support
+            session renewal on activity.
+
+            The endpoint can be disabled via the ``enabled_endpoints``
+            configuration. When disabled, a 404 response is returned.
+
+            :param request: The incoming HTTP request object. The session
+                            identifier is read from the cookie header.
+
+            :returns: A response dictionary with ``status``, ``body``, and
+                      ``content_type`` keys.
+        """
+        if not cls.is_endpoint_enabled("info"):
+            error = AuthError(
+                error="endpoint_disabled",
+                error_description="Session info endpoint is disabled"
+            )
+            response = cls.format_error(error, status_code=404)
+            return response
+
+        # Extract session ID from cookie
+        session_id = cls._get_session_id_from_request(request)
+
+        if session_id is None:
+            error = AuthError(
+                error="invalid_session",
+                error_description="No session cookie found"
+            )
+            response = cls.format_error(error, status_code=401)
+            return response
+
+        # Look up the session
+        if cls.session_store is not None:
+            session_data = _run_async(
+                cls.session_store.get_session(session_id)
+            )
+        else:
+            session_data = cls._memory_store.get(session_id)
+
+        if session_data is None:
+            error = AuthError(
+                error="invalid_session",
+                error_description="Session not found or expired"
+            )
+            response = cls.format_error(error, status_code=401)
+            return response
+
+        # Check expiration
+        expires_at = session_data.get("expires_at")
+        if expires_at is not None:
+            now = datetime.now(tz=timezone.utc)
+            try:
+                expires_dt = datetime.fromisoformat(expires_at)
+                if now > expires_dt:
+                    # Session has expired — remove it
+                    if cls.session_store is not None:
+                        _run_async(
+                            cls.session_store.delete_session(session_id)
+                        )
+                    else:
+                        cls._memory_store.pop(session_id, None)
+
+                    error = AuthError(
+                        error="session_expired",
+                        error_description="Session has expired"
+                    )
+                    response = cls.format_error(error, status_code=401)
+                    return response
+            except (ValueError, TypeError):
+                pass
+
+        # Renew session — update last_accessed timestamp
+        now_str = datetime.now(tz=timezone.utc).isoformat()
+
+        if cls.session_store is not None:
+            _run_async(
+                cls.session_store.update_last_accessed(session_id, now_str)
+            )
+        else:
+            if session_id in cls._memory_store:
+                cls._memory_store[session_id]["last_accessed"] = now_str
+
+        # Build response body
+        response_body = {
+            "session_id": session_data.get("session_id"),
+            "principal_id": session_data.get("principal_id"),
+            "created_at": session_data.get("created_at"),
+            "expires_at": session_data.get("expires_at"),
+            "last_accessed": now_str,
+        }
+
+        response = {
+            "status": 200,
+            "body": response_body,
+            "content_type": "application/json",
+        }
+        return response

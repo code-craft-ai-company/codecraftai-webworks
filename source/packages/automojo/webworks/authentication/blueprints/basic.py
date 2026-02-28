@@ -1,0 +1,241 @@
+"""
+.. module:: basic
+    :platform: Darwin, Linux, Unix, Windows
+    :synopsis: Basic authentication blueprint providing login and logout endpoints.
+
+.. moduleauthor:: Automation Mojo LLC
+
+This module provides the :class:`BasicAuthBlueprint` class which extends
+:class:`SecurityBlueprint` to offer pre-built login and logout endpoints
+for username/password authentication. The blueprint delegates credential
+validation to a configurable :class:`IdentityProvider` and produces
+standardized authentication responses.
+
+Endpoints:
+    - ``POST <base_path>/login`` — Authenticate with username and password.
+    - ``POST <base_path>/logout`` — End the current authentication session.
+"""
+
+__author__ = "Automation Mojo LLC"
+__copyright__ = "Copyright 2025, Automation Mojo LLC"
+__credits__ = []
+
+
+import asyncio
+
+from typing import Any, List, Optional
+
+from automojo.webworks.authentication.basic import IdentityProvider
+from automojo.webworks.authentication.core import AuthenticationContext
+from automojo.webworks.authentication.blueprints.responses import (
+    AuthError,
+    AuthResponse
+)
+from automojo.webworks.authentication.blueprints.schemas import (
+    LoginRequest,
+    LoginResponse
+)
+from automojo.webworks.authentication.blueprints.security import (
+    SecurityBlueprint
+)
+from automojo.webworks.endpoints.doc import Doc
+
+
+def _run_async(coro: Any) -> Any:
+    """
+        Run an asynchronous coroutine synchronously.
+
+        This helper obtains the current event loop and uses
+        ``run_until_complete`` to execute the coroutine. It is used
+        internally by :class:`BasicAuthBlueprint` to call the async
+        :meth:`IdentityProvider.validate_credentials` method from
+        synchronous endpoint handlers.
+
+        :param coro: The coroutine to execute.
+
+        :returns: The result of the coroutine.
+    """
+    loop = asyncio.get_event_loop()
+    result = loop.run_until_complete(coro)
+    return result
+
+
+class BasicAuthBlueprint(SecurityBlueprint):
+    """
+        Blueprint for HTTP Basic Authentication endpoints.
+
+        Provides login and logout endpoints for username/password
+        authentication. Credential validation is delegated to a
+        configurable :class:`IdentityProvider` instance set on the
+        ``identity_provider`` class attribute.
+
+        Default Endpoints:
+            - ``POST /auth/basic/login`` — Authenticate with username and
+              password credentials.
+            - ``POST /auth/basic/logout`` — End the current authentication
+              session.
+
+        Class Attributes:
+            base_path: Base URL path for all endpoints. Defaults to
+                       ``"/auth/basic"``.
+            tags: Documentation tags applied to all endpoints.
+            identity_provider: The :class:`IdentityProvider` used for
+                               credential validation. Must be set before
+                               the login endpoint can process requests.
+            issue_token: When True, return a JWT token on successful login.
+                         Defaults to False.
+    """
+
+    base_path: str = "/auth/basic"
+    tags: List[str] = ["Authentication", "Basic"]
+
+    identity_provider: Optional[IdentityProvider] = None
+    issue_token: bool = False
+
+    @classmethod
+    @SecurityBlueprint.create(
+        leaf="login",
+        request_schema=LoginRequest,
+        response_schema=LoginResponse,
+        doc=Doc(
+            summary="Login with username and password",
+            description="Authenticate using HTTP Basic credentials."
+        )
+    )
+    def login(cls, request: Any) -> dict:
+        """
+            Handle a login request with username and password.
+
+            Validates the provided credentials against the configured
+            :attr:`identity_provider`. On success, creates an
+            :class:`AuthenticationContext` and invokes the
+            :meth:`post_authenticate` hook before returning a success
+            response. On failure, returns a 401 error response.
+
+            The endpoint can be disabled via the ``enabled_endpoints``
+            configuration. When disabled, a 404 response is returned.
+
+            :param request: The incoming HTTP request object. The request
+                            body must contain ``username`` and ``password``
+                            fields.
+
+            :returns: A response dictionary with ``status``, ``body``, and
+                      ``content_type`` keys.
+        """
+        if not cls.is_endpoint_enabled("login"):
+            error = AuthError(
+                error="endpoint_disabled",
+                error_description="Login endpoint is disabled"
+            )
+            response = cls.format_error(error, status_code=404)
+            return response
+
+        # Pre-authentication hook
+        pre_error = cls.pre_authenticate(request)
+        if pre_error is not None:
+            response = cls.format_error(pre_error)
+            return response
+
+        # Extract credentials from request body
+        body = request.json()
+        username = body.get("username")
+        password = body.get("password")
+
+        if username is None or password is None:
+            error = AuthError(
+                error="invalid_request",
+                error_description="Username and password required"
+            )
+            response = cls.format_error(error)
+            return response
+
+        if len(username) == 0 or len(password) == 0:
+            error = AuthError(
+                error="invalid_request",
+                error_description="Username and password must not be empty"
+            )
+            response = cls.format_error(error)
+            return response
+
+        # Validate credentials via the identity provider
+        if cls.identity_provider is None:
+            error = AuthError(
+                error="server_error",
+                error_description="No identity provider configured"
+            )
+            response = cls.format_error(error, status_code=500)
+            return response
+
+        principal = _run_async(
+            cls.identity_provider.validate_credentials(username, password)
+        )
+
+        if principal is None:
+            error = AuthError(
+                error="invalid_credentials",
+                error_description="Invalid username or password"
+            )
+            response = cls.format_error(error)
+            return response
+
+        # Create authentication context
+        context = AuthenticationContext(
+            principal=principal,
+            scheme="Basic"
+        )
+
+        # Post-authentication hook
+        cls.post_authenticate(request, context)
+
+        # Build success response
+        login_response = LoginResponse(
+            authenticated=True,
+            principal_id=principal.identifier,
+            message="Login successful"
+        )
+
+        auth_response = AuthResponse()
+        response = cls.format_success(auth_response, status_code=200)
+
+        # Merge login-specific fields into the response body
+        response["body"]["authenticated"] = login_response.authenticated
+        response["body"]["principal_id"] = login_response.principal_id
+        response["body"]["message"] = login_response.message
+
+        return response
+
+    @classmethod
+    @SecurityBlueprint.create(
+        leaf="logout",
+        doc=Doc(
+            summary="Logout",
+            description="End the current authentication session."
+        )
+    )
+    def logout(cls, request: Any) -> dict:
+        """
+            Handle a logout request.
+
+            Ends the current authentication session. The endpoint can be
+            disabled via the ``enabled_endpoints`` configuration. When
+            disabled, a 404 response is returned.
+
+            :param request: The incoming HTTP request object.
+
+            :returns: A response dictionary with ``status``, ``body``, and
+                      ``content_type`` keys.
+        """
+        if not cls.is_endpoint_enabled("logout"):
+            error = AuthError(
+                error="endpoint_disabled",
+                error_description="Logout endpoint is disabled"
+            )
+            response = cls.format_error(error, status_code=404)
+            return response
+
+        response = {
+            "status": 200,
+            "body": {"message": "Logged out"},
+            "content_type": "application/json"
+        }
+        return response
