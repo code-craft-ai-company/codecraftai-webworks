@@ -30,7 +30,7 @@ from automojo.webworks.routing.response import (
 )
 from automojo.webworks.routing.router import Router, RouteMatch
 from automojo.webworks.routing.middleware import MiddlewarePipeline
-from automojo.webworks.routing.exceptions import HTTPException, NotFound
+from automojo.webworks.routing.exceptions import HTTPException, MethodNotAllowed, NotFound
 
 
 class Dispatcher:
@@ -159,8 +159,11 @@ class Dispatcher:
             match = self._router.match(request)
             
             if match is None:
-                # No route matched - return 404
-                return self._handle_http_exception(NotFound())
+                # Check if the path exists with other methods before returning 404
+                allowed_methods = self._router.get_allowed_methods(request.path)
+                if allowed_methods:
+                    raise MethodNotAllowed(allowed=allowed_methods)
+                raise NotFound()
             
             # Populate request.path_params from the route match
             request.path_params = match.path_params
@@ -208,8 +211,11 @@ class Dispatcher:
             match = self._router.match(request)
             
             if match is None:
-                # No route matched - return 404
-                return self._handle_http_exception(NotFound())
+                # Check if the path exists with other methods before returning 404
+                allowed_methods = self._router.get_allowed_methods(request.path)
+                if allowed_methods:
+                    raise MethodNotAllowed(allowed=allowed_methods)
+                raise NotFound()
             
             # Populate request.path_params from the route match
             request.path_params = match.path_params

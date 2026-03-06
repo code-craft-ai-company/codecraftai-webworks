@@ -24,7 +24,7 @@ __credits__ = []
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.securitycontext import SecurityContext
 
 
 @dataclass(frozen=True)
@@ -114,7 +114,7 @@ class AccessPolicy:
 
         return rtnval
 
-    def check(self, context: Security_Context) -> bool:
+    def check(self, context: SecurityContext) -> bool:
         """
             Check if a security context satisfies this policy.
 
@@ -150,7 +150,7 @@ class AccessPolicy:
 
         return rtnval
 
-    def get_denial_reason(self, context: Security_Context) -> Optional[str]:
+    def get_denial_reason(self, context: SecurityContext) -> Optional[str]:
         """
             Get the reason why a context fails this policy.
 

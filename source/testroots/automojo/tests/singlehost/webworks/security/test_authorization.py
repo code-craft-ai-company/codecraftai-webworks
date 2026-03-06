@@ -8,11 +8,11 @@
 """
 
 from automojo.webworks.security.accesspolicy import AccessPolicy
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.securitycontext import SecurityContext
 from automojo.webworks.security.authorizationengine import (
     AuthorizationResult,
     AuthorizationRule,
-    Authorization_Engine,
+    AuthorizationEngine,
 )
 
 
@@ -51,7 +51,7 @@ def test_authorization_result_with_all_fields():
         Test that AuthorizationResult can be created with all fields populated.
     """
     policy = AccessPolicy(roles=("admin",))
-    ctx = Security_Context(user_id="user-1", roles=("admin",))
+    ctx = SecurityContext(user_id="user-1", roles=("admin",))
 
     result = AuthorizationResult(
         allowed=False,
@@ -96,7 +96,7 @@ def test_authorization_rule_can_be_subclassed():
 
     rule = AllowAllRule()
     policy = AccessPolicy()
-    ctx = Security_Context(user_id="user-1")
+    ctx = SecurityContext(user_id="user-1")
 
     result = rule.evaluate(policy, ctx, None)
 
@@ -127,7 +127,7 @@ def test_authorization_rule_can_return_none():
 
     rule = PassThroughRule()
     policy = AccessPolicy()
-    ctx = Security_Context(user_id="user-1")
+    ctx = SecurityContext(user_id="user-1")
 
     result = rule.evaluate(policy, ctx, None)
 
@@ -147,13 +147,13 @@ def test_engine_allows_authenticated_user_with_matching_role_and_scope():
         Test that evaluate returns allowed=True when the context satisfies
         all policy constraints.
     """
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
     policy = AccessPolicy(
         roles=("admin", "editor"),
         scopes=("read", "write"),
         require_auth=True
     )
-    ctx = Security_Context(
+    ctx = SecurityContext(
         user_id="user-1",
         roles=("admin",),
         scopes=("read", "write", "delete")
@@ -181,9 +181,9 @@ def test_engine_denies_unauthenticated_when_auth_required():
         Test that evaluate returns allowed=False when require_auth is True
         and the context is not authenticated.
     """
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
     policy = AccessPolicy(require_auth=True)
-    ctx = Security_Context.guest()
+    ctx = SecurityContext.guest()
 
     result = engine.evaluate(policy, ctx)
 
@@ -203,9 +203,9 @@ def test_engine_allows_unauthenticated_when_auth_not_required():
         Test that evaluate returns allowed=True when require_auth is False
         and the context is not authenticated.
     """
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
     policy = AccessPolicy(require_auth=False)
-    ctx = Security_Context.guest()
+    ctx = SecurityContext.guest()
 
     result = engine.evaluate(policy, ctx)
 
@@ -221,9 +221,9 @@ def test_engine_denies_when_missing_required_role():
         Test that evaluate returns allowed=False when the context lacks
         any of the required roles.
     """
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
     policy = AccessPolicy(roles=("admin", "superadmin"))
-    ctx = Security_Context(user_id="user-1", roles=("editor",))
+    ctx = SecurityContext(user_id="user-1", roles=("editor",))
 
     result = engine.evaluate(policy, ctx)
 
@@ -243,9 +243,9 @@ def test_engine_allows_with_one_matching_role():
         Test that evaluate returns allowed=True when the context has at
         least one of the required roles (OR logic).
     """
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
     policy = AccessPolicy(roles=("admin", "editor"))
-    ctx = Security_Context(user_id="user-1", roles=("editor",))
+    ctx = SecurityContext(user_id="user-1", roles=("editor",))
 
     result = engine.evaluate(policy, ctx)
 
@@ -261,9 +261,9 @@ def test_engine_denies_when_missing_required_scope():
         Test that evaluate returns allowed=False when the context is
         missing a required scope.
     """
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
     policy = AccessPolicy(scopes=("read", "write"))
-    ctx = Security_Context(user_id="user-1", scopes=("read",))
+    ctx = SecurityContext(user_id="user-1", scopes=("read",))
 
     result = engine.evaluate(policy, ctx)
 
@@ -283,9 +283,9 @@ def test_engine_allows_with_all_required_scopes():
         Test that evaluate returns allowed=True when the context has all
         required scopes (AND logic).
     """
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
     policy = AccessPolicy(scopes=("read", "write"))
-    ctx = Security_Context(user_id="user-1", scopes=("read", "write", "delete"))
+    ctx = SecurityContext(user_id="user-1", scopes=("read", "write", "delete"))
 
     result = engine.evaluate(policy, ctx)
 
@@ -301,9 +301,9 @@ def test_engine_allows_with_empty_roles_and_scopes():
         Test that evaluate returns allowed=True when the policy has no
         role or scope requirements and the context is authenticated.
     """
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
     policy = AccessPolicy(require_auth=True)
-    ctx = Security_Context(user_id="user-1")
+    ctx = SecurityContext(user_id="user-1")
 
     result = engine.evaluate(policy, ctx)
 
@@ -323,8 +323,8 @@ def test_check_roles_returns_true_with_matching_role():
         Test that check_roles returns True when the context has at least
         one of the required roles.
     """
-    engine = Authorization_Engine()
-    ctx = Security_Context(user_id="user-1", roles=("admin", "editor"))
+    engine = AuthorizationEngine()
+    ctx = SecurityContext(user_id="user-1", roles=("admin", "editor"))
 
     result = engine.check_roles(("editor", "viewer"), ctx)
 
@@ -340,8 +340,8 @@ def test_check_roles_returns_false_with_no_matching_role():
         Test that check_roles returns False when the context has none
         of the required roles.
     """
-    engine = Authorization_Engine()
-    ctx = Security_Context(user_id="user-1", roles=("viewer",))
+    engine = AuthorizationEngine()
+    ctx = SecurityContext(user_id="user-1", roles=("viewer",))
 
     result = engine.check_roles(("admin", "superadmin"), ctx)
 
@@ -357,8 +357,8 @@ def test_check_scopes_returns_true_with_all_scopes():
         Test that check_scopes returns True when the context has all
         required scopes.
     """
-    engine = Authorization_Engine()
-    ctx = Security_Context(user_id="user-1", scopes=("read", "write", "delete"))
+    engine = AuthorizationEngine()
+    ctx = SecurityContext(user_id="user-1", scopes=("read", "write", "delete"))
 
     result = engine.check_scopes(("read", "write"), ctx)
 
@@ -374,8 +374,8 @@ def test_check_scopes_returns_false_when_missing_scope():
         Test that check_scopes returns False when the context is missing
         at least one required scope.
     """
-    engine = Authorization_Engine()
-    ctx = Security_Context(user_id="user-1", scopes=("read",))
+    engine = AuthorizationEngine()
+    ctx = SecurityContext(user_id="user-1", scopes=("read",))
 
     result = engine.check_scopes(("read", "write"), ctx)
 
@@ -395,7 +395,7 @@ def test_pre_hooks_are_called_before_evaluation():
         Test that pre-hooks are called during evaluate and receive
         the policy and context.
     """
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
     hook_calls = []
 
     def pre_hook(policy, context):
@@ -404,7 +404,7 @@ def test_pre_hooks_are_called_before_evaluation():
     engine.add_pre_hook(pre_hook)
 
     policy = AccessPolicy(require_auth=False)
-    ctx = Security_Context.guest()
+    ctx = SecurityContext.guest()
 
     engine.evaluate(policy, ctx)
 
@@ -435,7 +435,7 @@ def test_post_hooks_are_called_after_evaluation():
         Test that post-hooks are called during evaluate and receive
         the policy, context, and result.
     """
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
     hook_calls = []
 
     def post_hook(policy, context, result):
@@ -444,7 +444,7 @@ def test_post_hooks_are_called_after_evaluation():
     engine.add_post_hook(post_hook)
 
     policy = AccessPolicy(require_auth=False)
-    ctx = Security_Context.guest()
+    ctx = SecurityContext.guest()
 
     eval_result = engine.evaluate(policy, ctx)
 
@@ -464,7 +464,7 @@ def test_post_hooks_called_on_denial():
     """
         Test that post-hooks are called even when authorization is denied.
     """
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
     hook_calls = []
 
     def post_hook(policy, context, result):
@@ -473,7 +473,7 @@ def test_post_hooks_called_on_denial():
     engine.add_post_hook(post_hook)
 
     policy = AccessPolicy(require_auth=True)
-    ctx = Security_Context.guest()
+    ctx = SecurityContext.guest()
 
     eval_result = engine.evaluate(policy, ctx)
 
@@ -508,11 +508,11 @@ def test_custom_rule_overrides_standard_checks():
             )
             return rtnval
 
-    engine = Authorization_Engine(custom_rules=[AlwaysAllowRule()])
+    engine = AuthorizationEngine(custom_rules=[AlwaysAllowRule()])
 
     # Policy that would normally deny a guest
     policy = AccessPolicy(roles=("admin",), require_auth=True)
-    ctx = Security_Context.guest()
+    ctx = SecurityContext.guest()
 
     result = engine.evaluate(policy, ctx)
 
@@ -537,10 +537,10 @@ def test_custom_rule_returning_none_falls_through():
         def evaluate(self, policy, context, request):
             return None
 
-    engine = Authorization_Engine(custom_rules=[PassThroughRule()])
+    engine = AuthorizationEngine(custom_rules=[PassThroughRule()])
 
     policy = AccessPolicy(require_auth=True)
-    ctx = Security_Context.guest()
+    ctx = SecurityContext.guest()
 
     result = engine.evaluate(policy, ctx)
 
@@ -567,11 +567,11 @@ def test_add_custom_rule_method():
             )
             return rtnval
 
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
 
     # Without the rule, this should be allowed
     policy = AccessPolicy(require_auth=False)
-    ctx = Security_Context.guest()
+    ctx = SecurityContext.guest()
 
     result_before = engine.evaluate(policy, ctx)
     if result_before.allowed is not True:
@@ -597,7 +597,7 @@ def test_engine_default_policy():
     """
         Test that the engine stores a default policy when none is provided.
     """
-    engine = Authorization_Engine()
+    engine = AuthorizationEngine()
 
     default_policy = engine._default_policy
 
@@ -617,7 +617,7 @@ def test_engine_with_custom_default_policy():
         Test that the engine uses a provided default policy.
     """
     custom_default = AccessPolicy(require_auth=False)
-    engine = Authorization_Engine(default_policy=custom_default)
+    engine = AuthorizationEngine(default_policy=custom_default)
 
     if engine._default_policy is not custom_default:
         errmsg = "Expected engine to use the provided default policy"
@@ -705,7 +705,7 @@ def _random_security_context(role_pool, scope_pool):
     num_scopes = random.randint(0, 4)
     scopes = tuple(random.sample(scope_pool, min(num_scopes, len(scope_pool))))
 
-    ctx = Security_Context(user_id=user_id, roles=roles, scopes=scopes)
+    ctx = SecurityContext(user_id=user_id, roles=roles, scopes=scopes)
     return ctx
 
 

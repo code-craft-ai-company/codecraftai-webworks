@@ -28,29 +28,29 @@ __credits__ = []
 # Core data models
 # These will be populated as subsequent tasks implement the modules.
 
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.securitycontext import SecurityContext
 from automojo.webworks.security.accesspolicy import AccessPolicy
 
 # Authentication
 from automojo.webworks.security.authenticationprovider import (
-    Authentication_Provider,
+    AuthenticationProvider,
     JWTAuthProvider,
     SessionAuthProvider,
     APIKeyAuthProvider,
 )
-from automojo.webworks.security.authenticationmanager import Authentication_Manager
+from automojo.webworks.security.authenticationmanager import AuthenticationManager
 
 # Authorization
 from automojo.webworks.security.authorizationengine import (
-    Authorization_Engine,
+    AuthorizationEngine,
     AuthorizationResult,
     AuthorizationRule,
 )
 
 # Audit logging
 from automojo.webworks.security.auditlogger import (
-    Audit_Logger,
-    Audit_Entry,
+    AuditLogger,
+    AuditEntry,
     AuditLevel,
     AuditDestination,
 )
@@ -97,20 +97,20 @@ from automojo.webworks.security.middleware import validate_security_completeness
 __all__ = [
     # Core data models
     "AccessPolicy",
-    "Security_Context",
+    "SecurityContext",
     # Authentication
-    "Authentication_Provider",
+    "AuthenticationProvider",
     "JWTAuthProvider",
     "SessionAuthProvider",
     "APIKeyAuthProvider",
-    "Authentication_Manager",
+    "AuthenticationManager",
     # Authorization
-    "Authorization_Engine",
+    "AuthorizationEngine",
     "AuthorizationResult",
     "AuthorizationRule",
     # Audit logging
-    "Audit_Logger",
-    "Audit_Entry",
+    "AuditLogger",
+    "AuditEntry",
     "AuditLevel",
     "AuditDestination",
     # Policy factories

@@ -1,0 +1,28 @@
+{
+    "swagger-ui": {
+        "version": "5.32.0",
+        "files": {
+            "swagger-ui-bundle.js": {
+                "url": "https://github.com/swagger-api/swagger-ui/releases/download/v5.32.0/swagger-ui-bundle.js",
+                "sha256": "d9bbb469128e88a974c78e76457c3910babb4649447d901af19a60335a09ee1e"
+            },
+            "swagger-ui.css": {
+                "url": "https://github.com/swagger-api/swagger-ui/releases/download/v5.32.0/swagger-ui.css",
+                "sha256": "b024df29b02b4943bf95cb835fce9d19d4559c14e374b0dd36a89b27a223a2da"
+            },
+            "favicon-32x32.png": {
+                "url": "https://github.com/swagger-api/swagger-ui/releases/download/v5.32.0/favicon-32x32.png",
+                "sha256": "3ed612f41e050ca5e7000cad6f1cbe7e7da39f65fca99c02e99e6591056e5837"
+            }
+        }
+    },
+    "redoc": {
+        "version": "2.5.1",
+        "files": {
+            "redoc.standalone.js": {
+                "url": "https://cdn.redoc.ly/redoc/v2.5.1/bundles/redoc.standalone.js",
+                "sha256": "2d8d13e94b5a21011cc6f8260d87ca475d0f6f2faed16dd12e7394dfa3bb05b8"
+            }
+        }
+    }
+}

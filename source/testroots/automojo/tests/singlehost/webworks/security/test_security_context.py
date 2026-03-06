@@ -8,7 +8,7 @@
 
 from datetime import datetime, timedelta
 
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.securitycontext import SecurityContext
 
 
 # =============================================================================
@@ -19,7 +19,7 @@ def test_security_context_default_fields():
     """
         Test that a default Security_Context has expected default values.
     """
-    ctx = Security_Context()
+    ctx = SecurityContext()
 
     if ctx.user_id is not None:
         errmsg = f"Expected user_id to be None, got '{ctx.user_id}'"
@@ -67,7 +67,7 @@ def test_security_context_with_all_fields():
     now = datetime.utcnow()
     later = now + timedelta(hours=1)
 
-    ctx = Security_Context(
+    ctx = SecurityContext(
         user_id="user-123",
         username="testuser",
         email="test@example.com",
@@ -126,7 +126,7 @@ def test_is_authenticated_true_when_user_id_present():
     """
         Test that is_authenticated returns True when user_id is set.
     """
-    ctx = Security_Context(user_id="user-456")
+    ctx = SecurityContext(user_id="user-456")
 
     result = ctx.is_authenticated
 
@@ -141,7 +141,7 @@ def test_is_authenticated_false_when_user_id_none():
     """
         Test that is_authenticated returns False when user_id is None.
     """
-    ctx = Security_Context()
+    ctx = SecurityContext()
 
     result = ctx.is_authenticated
 
@@ -160,7 +160,7 @@ def test_is_expired_false_when_no_expiration():
     """
         Test that is_expired returns False when expires_at is None.
     """
-    ctx = Security_Context(user_id="user-789")
+    ctx = SecurityContext(user_id="user-789")
 
     result = ctx.is_expired
 
@@ -176,7 +176,7 @@ def test_is_expired_false_when_not_yet_expired():
         Test that is_expired returns False when expires_at is in the future.
     """
     future = datetime.utcnow() + timedelta(hours=1)
-    ctx = Security_Context(user_id="user-789", expires_at=future)
+    ctx = SecurityContext(user_id="user-789", expires_at=future)
 
     result = ctx.is_expired
 
@@ -192,7 +192,7 @@ def test_is_expired_true_when_past_expiration():
         Test that is_expired returns True when expires_at is in the past.
     """
     past = datetime.utcnow() - timedelta(hours=1)
-    ctx = Security_Context(user_id="user-789", expires_at=past)
+    ctx = SecurityContext(user_id="user-789", expires_at=past)
 
     result = ctx.is_expired
 
@@ -211,7 +211,7 @@ def test_has_role_returns_true_for_present_role():
     """
         Test that has_role returns True when the role is in the context.
     """
-    ctx = Security_Context(roles=("admin", "editor"))
+    ctx = SecurityContext(roles=("admin", "editor"))
 
     result = ctx.has_role("admin")
 
@@ -226,7 +226,7 @@ def test_has_role_returns_false_for_absent_role():
     """
         Test that has_role returns False when the role is not in the context.
     """
-    ctx = Security_Context(roles=("editor",))
+    ctx = SecurityContext(roles=("editor",))
 
     result = ctx.has_role("admin")
 
@@ -241,7 +241,7 @@ def test_has_role_returns_false_for_empty_roles():
     """
         Test that has_role returns False when the context has no roles.
     """
-    ctx = Security_Context()
+    ctx = SecurityContext()
 
     result = ctx.has_role("admin")
 
@@ -260,7 +260,7 @@ def test_has_scope_returns_true_for_present_scope():
     """
         Test that has_scope returns True when the scope is in the context.
     """
-    ctx = Security_Context(scopes=("read", "write"))
+    ctx = SecurityContext(scopes=("read", "write"))
 
     result = ctx.has_scope("read")
 
@@ -275,7 +275,7 @@ def test_has_scope_returns_false_for_absent_scope():
     """
         Test that has_scope returns False when the scope is not in the context.
     """
-    ctx = Security_Context(scopes=("read",))
+    ctx = SecurityContext(scopes=("read",))
 
     result = ctx.has_scope("write")
 
@@ -294,7 +294,7 @@ def test_has_any_role_returns_true_when_one_matches():
     """
         Test that has_any_role returns True when at least one role matches.
     """
-    ctx = Security_Context(roles=("editor",))
+    ctx = SecurityContext(roles=("editor",))
 
     result = ctx.has_any_role("admin", "editor", "viewer")
 
@@ -309,7 +309,7 @@ def test_has_any_role_returns_false_when_none_match():
     """
         Test that has_any_role returns False when no roles match.
     """
-    ctx = Security_Context(roles=("viewer",))
+    ctx = SecurityContext(roles=("viewer",))
 
     result = ctx.has_any_role("admin", "editor")
 
@@ -324,7 +324,7 @@ def test_has_any_role_returns_false_for_empty_roles():
     """
         Test that has_any_role returns False when context has no roles.
     """
-    ctx = Security_Context()
+    ctx = SecurityContext()
 
     result = ctx.has_any_role("admin", "editor")
 
@@ -343,7 +343,7 @@ def test_has_all_scopes_returns_true_when_all_present():
     """
         Test that has_all_scopes returns True when all scopes are present.
     """
-    ctx = Security_Context(scopes=("read", "write", "delete"))
+    ctx = SecurityContext(scopes=("read", "write", "delete"))
 
     result = ctx.has_all_scopes("read", "write")
 
@@ -358,7 +358,7 @@ def test_has_all_scopes_returns_false_when_one_missing():
     """
         Test that has_all_scopes returns False when one scope is missing.
     """
-    ctx = Security_Context(scopes=("read",))
+    ctx = SecurityContext(scopes=("read",))
 
     result = ctx.has_all_scopes("read", "write")
 
@@ -373,7 +373,7 @@ def test_has_all_scopes_returns_true_for_empty_request():
     """
         Test that has_all_scopes returns True when no scopes are requested.
     """
-    ctx = Security_Context(scopes=("read",))
+    ctx = SecurityContext(scopes=("read",))
 
     result = ctx.has_all_scopes()
 
@@ -392,7 +392,7 @@ def test_guest_returns_unauthenticated_context():
     """
         Test that guest() returns a context with is_authenticated False.
     """
-    ctx = Security_Context.guest()
+    ctx = SecurityContext.guest()
 
     if ctx.is_authenticated is not False:
         errmsg = "Expected guest context to have is_authenticated False"
@@ -421,7 +421,7 @@ def test_security_context_is_immutable():
     """
         Test that Security_Context fields cannot be modified after creation.
     """
-    ctx = Security_Context(user_id="user-123", roles=("admin",))
+    ctx = SecurityContext(user_id="user-123", roles=("admin",))
 
     try:
         ctx.user_id = "user-999"
@@ -478,7 +478,7 @@ def _generate_random_security_context():
     roles = _random_string_tuple(min_count=0, max_count=8)
     scopes = _random_string_tuple(min_count=0, max_count=8)
 
-    ctx = Security_Context(
+    ctx = SecurityContext(
         user_id=user_id,
         roles=roles,
         scopes=scopes

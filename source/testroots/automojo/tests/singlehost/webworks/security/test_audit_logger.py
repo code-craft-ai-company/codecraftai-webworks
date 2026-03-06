@@ -12,12 +12,12 @@ import json
 from datetime import datetime, timedelta
 
 from automojo.webworks.security.accesspolicy import AccessPolicy
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.securitycontext import SecurityContext
 from automojo.webworks.security.auditlogger import (
     AuditLevel,
-    Audit_Entry,
+    AuditEntry,
     AuditDestination,
-    Audit_Logger,
+    AuditLogger,
 )
 from automojo.testbase.mocking import Mock
 
@@ -90,7 +90,7 @@ def test_audit_entry_creation_with_all_fields():
     """
     now = datetime.utcnow()
 
-    entry = Audit_Entry(
+    entry = AuditEntry(
         timestamp=now,
         event_type="authentication",
         outcome="success",
@@ -151,7 +151,7 @@ def test_audit_entry_extra_defaults_to_empty_dict():
     """
     now = datetime.utcnow()
 
-    entry = Audit_Entry(
+    entry = AuditEntry(
         timestamp=now,
         event_type="authorization",
         outcome="failure",
@@ -183,7 +183,7 @@ def test_audit_entry_to_json_produces_valid_json():
     """
     now = datetime.utcnow()
 
-    entry = Audit_Entry(
+    entry = AuditEntry(
         timestamp=now,
         event_type="authentication",
         outcome="success",
@@ -231,7 +231,7 @@ def test_audit_entry_to_json_includes_all_fields():
     """
     now = datetime.utcnow()
 
-    entry = Audit_Entry(
+    entry = AuditEntry(
         timestamp=now,
         event_type="violation",
         outcome="failure",
@@ -270,7 +270,7 @@ def test_audit_entry_as_dict_returns_dictionary():
     """
     now = datetime.utcnow()
 
-    entry = Audit_Entry(
+    entry = AuditEntry(
         timestamp=now,
         event_type="authentication",
         outcome="success",
@@ -313,7 +313,7 @@ def test_audit_destination_write_can_be_called():
     dest = AuditDestination()
     now = datetime.utcnow()
 
-    entry = Audit_Entry(
+    entry = AuditEntry(
         timestamp=now,
         event_type="authentication",
         outcome="success",
@@ -341,7 +341,7 @@ def test_logger_default_level_is_all():
     """
         Test that Audit_Logger defaults to AuditLevel.ALL.
     """
-    logger = Audit_Logger()
+    logger = AuditLogger()
 
     if logger._level != AuditLevel.ALL:
         errmsg = "Expected default level AuditLevel.ALL, got {}".format(logger._level)
@@ -354,7 +354,7 @@ def test_logger_default_destinations_is_empty():
     """
         Test that Audit_Logger defaults to an empty destinations list.
     """
-    logger = Audit_Logger()
+    logger = AuditLogger()
 
     if len(logger._destinations) != 0:
         errmsg = "Expected empty destinations list, got {} items".format(
@@ -369,7 +369,7 @@ def test_logger_accepts_custom_level():
     """
         Test that Audit_Logger accepts a custom audit level.
     """
-    logger = Audit_Logger(level=AuditLevel.FAILURES_ONLY)
+    logger = AuditLogger(level=AuditLevel.FAILURES_ONLY)
 
     if logger._level != AuditLevel.FAILURES_ONLY:
         errmsg = "Expected level FAILURES_ONLY, got {}".format(logger._level)
@@ -387,8 +387,8 @@ def test_log_authentication_success():
         Test that log_authentication creates an entry for a successful
         authentication attempt.
     """
-    logger = Audit_Logger()
-    ctx = Security_Context(user_id="user-1", provider="jwt")
+    logger = AuditLogger()
+    ctx = SecurityContext(user_id="user-1", provider="jwt")
 
     logger.log_authentication(
         context=ctx,
@@ -428,8 +428,8 @@ def test_log_authentication_failure():
         Test that log_authentication creates an entry for a failed
         authentication attempt.
     """
-    logger = Audit_Logger()
-    ctx = Security_Context.guest()
+    logger = AuditLogger()
+    ctx = SecurityContext.guest()
 
     logger.log_authentication(
         context=ctx,
@@ -472,8 +472,8 @@ def test_log_authentication_dispatches_to_destination():
 
     mock_dest.mock_context().mock_method("write", side_effect=capture_write)
 
-    logger = Audit_Logger(destinations=[mock_dest])
-    ctx = Security_Context(user_id="user-1")
+    logger = AuditLogger(destinations=[mock_dest])
+    ctx = SecurityContext(user_id="user-1")
 
     logger.log_authentication(
         context=ctx,
@@ -500,8 +500,8 @@ def test_log_authorization_success():
         Test that log_authorization creates an entry for a successful
         authorization decision.
     """
-    logger = Audit_Logger()
-    ctx = Security_Context(user_id="user-1", roles=("admin",))
+    logger = AuditLogger()
+    ctx = SecurityContext(user_id="user-1", roles=("admin",))
     policy = AccessPolicy(roles=("admin",))
 
     logger.log_authorization(
@@ -539,8 +539,8 @@ def test_log_authorization_failure():
         Test that log_authorization creates an entry for a failed
         authorization decision.
     """
-    logger = Audit_Logger()
-    ctx = Security_Context(user_id="user-1", roles=("viewer",))
+    logger = AuditLogger()
+    ctx = SecurityContext(user_id="user-1", roles=("viewer",))
     policy = AccessPolicy(roles=("admin",))
 
     logger.log_authorization(
@@ -579,8 +579,8 @@ def test_log_violation_creates_failure_entry():
         Test that log_violation creates an entry with outcome 'failure'
         and event_type 'violation'.
     """
-    logger = Audit_Logger()
-    ctx = Security_Context(user_id="user-1")
+    logger = AuditLogger()
+    ctx = SecurityContext(user_id="user-1")
     policy = AccessPolicy(roles=("admin",), scopes=("write",))
 
     logger.log_violation(
@@ -622,8 +622,8 @@ def test_level_none_logs_nothing():
     """
         Test that AuditLevel.NONE prevents all events from being logged.
     """
-    logger = Audit_Logger(level=AuditLevel.NONE)
-    ctx = Security_Context(user_id="user-1")
+    logger = AuditLogger(level=AuditLevel.NONE)
+    ctx = SecurityContext(user_id="user-1")
 
     logger.log_authentication(context=ctx, provider="jwt", success=True)
     logger.log_authentication(context=ctx, provider="jwt", success=False)
@@ -641,8 +641,8 @@ def test_level_failures_only_logs_only_failures():
     """
         Test that AuditLevel.FAILURES_ONLY logs only failed events.
     """
-    logger = Audit_Logger(level=AuditLevel.FAILURES_ONLY)
-    ctx = Security_Context(user_id="user-1")
+    logger = AuditLogger(level=AuditLevel.FAILURES_ONLY)
+    ctx = SecurityContext(user_id="user-1")
 
     logger.log_authentication(context=ctx, provider="jwt", success=True)
     logger.log_authentication(context=ctx, provider="jwt", success=False)
@@ -664,8 +664,8 @@ def test_level_all_logs_everything():
     """
         Test that AuditLevel.ALL logs both successes and failures.
     """
-    logger = Audit_Logger(level=AuditLevel.ALL)
-    ctx = Security_Context(user_id="user-1")
+    logger = AuditLogger(level=AuditLevel.ALL)
+    ctx = SecurityContext(user_id="user-1")
 
     logger.log_authentication(context=ctx, provider="jwt", success=True)
     logger.log_authentication(context=ctx, provider="jwt", success=False)
@@ -684,8 +684,8 @@ def test_level_failures_only_logs_violations():
         Test that AuditLevel.FAILURES_ONLY logs violations since they
         are always failures.
     """
-    logger = Audit_Logger(level=AuditLevel.FAILURES_ONLY)
-    ctx = Security_Context(user_id="user-1")
+    logger = AuditLogger(level=AuditLevel.FAILURES_ONLY)
+    ctx = SecurityContext(user_id="user-1")
     policy = AccessPolicy(roles=("admin",))
 
     logger.log_violation(
@@ -707,8 +707,8 @@ def test_level_none_blocks_violations():
     """
         Test that AuditLevel.NONE blocks even violation events.
     """
-    logger = Audit_Logger(level=AuditLevel.NONE)
-    ctx = Security_Context(user_id="user-1")
+    logger = AuditLogger(level=AuditLevel.NONE)
+    ctx = SecurityContext(user_id="user-1")
     policy = AccessPolicy(roles=("admin",))
 
     logger.log_violation(
@@ -735,7 +735,7 @@ def test_add_destination_increases_destination_count():
     """
         Test that add_destination adds a destination to the logger.
     """
-    logger = Audit_Logger()
+    logger = AuditLogger()
 
     mock_dest = Mock()
     mock_dest.configure(recursive=True)
@@ -764,11 +764,11 @@ def test_add_multiple_destinations():
     mock_b.configure(recursive=True)
     mock_b.mock_context().mock_method("write", side_effect=lambda e: written_b.append(e))
 
-    logger = Audit_Logger()
+    logger = AuditLogger()
     logger.add_destination(mock_a)
     logger.add_destination(mock_b)
 
-    ctx = Security_Context(user_id="user-1")
+    ctx = SecurityContext(user_id="user-1")
     logger.log_authentication(context=ctx, provider="jwt", success=True)
 
     if len(written_a) != 1:
@@ -790,8 +790,8 @@ def test_query_returns_all_entries_with_no_filters():
     """
         Test that query() returns all entries when no filters are provided.
     """
-    logger = Audit_Logger()
-    ctx = Security_Context(user_id="user-1")
+    logger = AuditLogger()
+    ctx = SecurityContext(user_id="user-1")
 
     logger.log_authentication(context=ctx, provider="jwt", success=True)
     logger.log_authentication(context=ctx, provider="jwt", success=False)
@@ -809,8 +809,8 @@ def test_query_filters_by_event_type():
     """
         Test that query() filters entries by event_type.
     """
-    logger = Audit_Logger()
-    ctx = Security_Context(user_id="user-1")
+    logger = AuditLogger()
+    ctx = SecurityContext(user_id="user-1")
     policy = AccessPolicy(roles=("admin",))
 
     logger.log_authentication(context=ctx, provider="jwt", success=True)
@@ -835,9 +835,9 @@ def test_query_filters_by_user_id():
     """
         Test that query() filters entries by user_id.
     """
-    logger = Audit_Logger()
-    ctx_a = Security_Context(user_id="user-a")
-    ctx_b = Security_Context(user_id="user-b")
+    logger = AuditLogger()
+    ctx_a = SecurityContext(user_id="user-a")
+    ctx_b = SecurityContext(user_id="user-b")
 
     logger.log_authentication(context=ctx_a, provider="jwt", success=True)
     logger.log_authentication(context=ctx_b, provider="jwt", success=True)
@@ -859,8 +859,8 @@ def test_query_filters_by_outcome():
     """
         Test that query() filters entries by outcome.
     """
-    logger = Audit_Logger()
-    ctx = Security_Context(user_id="user-1")
+    logger = AuditLogger()
+    ctx = SecurityContext(user_id="user-1")
 
     logger.log_authentication(context=ctx, provider="jwt", success=True)
     logger.log_authentication(context=ctx, provider="jwt", success=False)
@@ -882,8 +882,8 @@ def test_query_filters_by_time_range():
     """
         Test that query() filters entries by start_time and end_time.
     """
-    logger = Audit_Logger()
-    ctx = Security_Context(user_id="user-1")
+    logger = AuditLogger()
+    ctx = SecurityContext(user_id="user-1")
 
     # Log three entries
     logger.log_authentication(context=ctx, provider="jwt", success=True)
@@ -923,9 +923,9 @@ def test_query_combines_multiple_filters():
     """
         Test that query() combines multiple filters with AND logic.
     """
-    logger = Audit_Logger()
-    ctx_a = Security_Context(user_id="user-a")
-    ctx_b = Security_Context(user_id="user-b")
+    logger = AuditLogger()
+    ctx_a = SecurityContext(user_id="user-a")
+    ctx_b = SecurityContext(user_id="user-b")
 
     logger.log_authentication(context=ctx_a, provider="jwt", success=True)
     logger.log_authentication(context=ctx_a, provider="jwt", success=False)
@@ -1044,7 +1044,7 @@ def _random_security_context():
     roles = _random_string_tuple()
     scopes = _random_string_tuple()
 
-    rtnval = Security_Context(
+    rtnval = SecurityContext(
         user_id=user_id,
         roles=roles,
         scopes=scopes,
@@ -1086,7 +1086,7 @@ def test_property_audit_log_completeness_authentication():
     iteration_count = 100
 
     for iteration in range(iteration_count):
-        logger = Audit_Logger(level=AuditLevel.ALL)
+        logger = AuditLogger(level=AuditLevel.ALL)
         ctx = _random_security_context()
         provider_name = _random_string(3, 8)
         success = random.choice([True, False])
@@ -1233,7 +1233,7 @@ def test_property_audit_log_completeness_authorization():
     iteration_count = 100
 
     for iteration in range(iteration_count):
-        logger = Audit_Logger(level=AuditLevel.ALL)
+        logger = AuditLogger(level=AuditLevel.ALL)
         ctx = _random_security_context()
         policy = _random_access_policy()
         allowed = random.choice([True, False])
@@ -1389,7 +1389,7 @@ def test_property_audit_log_completeness_violation():
     iteration_count = 100
 
     for iteration in range(iteration_count):
-        logger = Audit_Logger(level=AuditLevel.ALL)
+        logger = AuditLogger(level=AuditLevel.ALL)
         ctx = _random_security_context()
         policy = _random_access_policy()
         constraint = _random_string(5, 30)

@@ -11,12 +11,12 @@ import random
 import string
 
 from automojo.webworks.security.accesspolicy import AccessPolicy
-from automojo.webworks.security.authenticationmanager import Authentication_Manager
+from automojo.webworks.security.authenticationmanager import AuthenticationManager
 from automojo.webworks.security.authorizationengine import (
-    Authorization_Engine,
+    AuthorizationEngine,
     AuthorizationResult,
 )
-from automojo.webworks.security.auditlogger import Audit_Logger, AuditLevel
+from automojo.webworks.security.auditlogger import AuditLogger, AuditLevel
 from automojo.webworks.security.errors import SecurityCompletenessError
 from automojo.webworks.security.middleware import (
     SecurityMiddleware,
@@ -26,7 +26,7 @@ from automojo.webworks.security.policyattachment import (
     attach_policy,
     POLICY_CONSTRAINTS_KEY,
 )
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.securitycontext import SecurityContext
 from automojo.testbase.mocking import Mock
 
 
@@ -44,7 +44,7 @@ def _create_mock_auth_manager(context=None):
         :returns: A Mock configured as an Authentication_Manager.
     """
     if context is None:
-        context = Security_Context.guest()
+        context = SecurityContext.guest()
 
     mock_manager = Mock()
     mock_manager.configure(recursive=True)
@@ -130,7 +130,7 @@ def test_middleware_allows_authenticated_request_with_matching_policy():
         Test that the middleware allows a request when the user is
         authenticated and satisfies the endpoint policy.
     """
-    context = Security_Context(
+    context = SecurityContext(
         user_id="user-1",
         roles=("admin",),
         scopes=("read",),
@@ -166,7 +166,7 @@ def test_middleware_returns_401_for_unauthenticated_request():
         Test that the middleware returns a 401 response when the user
         is not authenticated and the policy requires authentication.
     """
-    guest_context = Security_Context.guest()
+    guest_context = SecurityContext.guest()
 
     policy = AccessPolicy(require_auth=True)
     constraints = {}
@@ -209,7 +209,7 @@ def test_middleware_returns_403_for_unauthorized_request():
         Test that the middleware returns a 403 response when the user
         is authenticated but lacks the required permissions.
     """
-    context = Security_Context(
+    context = SecurityContext(
         user_id="user-1",
         roles=("viewer",),
         provider="jwt",
@@ -251,7 +251,7 @@ def test_middleware_uses_default_policy_when_no_explicit_policy():
         Test that the middleware applies the default policy when the
         endpoint has no explicit policy attached.
     """
-    context = Security_Context(user_id="user-1", provider="jwt")
+    context = SecurityContext(user_id="user-1", provider="jwt")
 
     default_policy = AccessPolicy(require_auth=True)
 
@@ -281,7 +281,7 @@ def test_middleware_denies_when_no_policy_and_no_default():
         Test that the middleware denies access when the endpoint has no
         explicit policy and no default policy is configured (default-deny).
     """
-    guest_context = Security_Context.guest()
+    guest_context = SecurityContext.guest()
 
     auth_manager = _create_mock_auth_manager(guest_context)
     authz_engine = _create_mock_authz_engine(
@@ -310,7 +310,7 @@ def test_middleware_calls_next_handler_on_success():
         Test that the middleware calls the next handler and returns its
         response when authorization succeeds.
     """
-    context = Security_Context(user_id="user-1", provider="jwt")
+    context = SecurityContext(user_id="user-1", provider="jwt")
 
     call_tracker = {"called": False}
 
@@ -484,7 +484,7 @@ def test_middleware_audit_mode_allows_unauthorized_request():
         Test that in security_audit_mode, unauthorized requests are
         allowed to proceed with a warning logged.
     """
-    context = Security_Context(user_id="user-1", provider="jwt")
+    context = SecurityContext(user_id="user-1", provider="jwt")
 
     auth_manager = _create_mock_auth_manager(context)
     authz_engine = _create_mock_authz_engine(

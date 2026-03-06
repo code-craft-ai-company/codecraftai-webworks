@@ -12,6 +12,26 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "name": "Python: Hello World",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/source/testsites/helloworld/app.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "name": "Python: Blueprint Example",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/source/testsites/blueprintdemo/app.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "envFile": "${workspaceFolder}/.env"
         }
+        
+
     ]
 }

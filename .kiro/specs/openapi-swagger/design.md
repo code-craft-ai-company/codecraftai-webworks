@@ -2,9 +2,10 @@
 
 ## Overview
 
-This design document describes the architecture and implementation approach for the OpenAPI and Swagger UI feature. The feature provides automatic OpenAPI 3.0+ specification generation from endpoint descriptors and hosts interactive documentation via Swagger UI and ReDoc.
+This design document describes the architecture and implementation approach for the OpenAPI and Swagger UI feature. The feature provides automatic OpenAPI 3.0+ specification generation from endpoint descriptors and hosts interactive documentation via Swagger UI and ReDoc using fully bundled static assets.
 
 Key design principles:
+- Self-contained: All UI assets (JS, CSS, fonts) are vendored in the package — no CDN or external network access at runtime
 - Automatic: Specifications are generated from endpoint metadata without manual documentation
 - Accurate: Generated documentation reflects the actual API implementation
 - Extensible: Custom schemas, security schemes, and metadata can be added
@@ -32,17 +33,39 @@ Key design principles:
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
+│                      Bundled Static Asset Layer                               │
+│                                                                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  openapi/static/swagger-ui/                                         │   │
+│  │    swagger-ui-bundle.js                                             │   │
+│  │    swagger-ui.css                                                   │   │
+│  │    swagger-ui-standalone-preset.js (if needed by version)           │   │
+│  │    favicon-32x32.png                                                │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  openapi/static/redoc/                                              │   │
+│  │    redoc.standalone.js                                              │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  openapi/static/manifest.json                                       │   │
+│  │    { asset_name, version, url, sha256 }                             │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
 │                      Documentation Hosting                                   │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                    Swagger_UI_Blueprint                              │   │
-│  │  /docs          -> Swagger UI HTML                                  │   │
-│  │  /openapi.json  -> Generated OpenAPI spec                           │   │
+│  │  /docs              -> Swagger UI HTML (refs local assets)          │   │
+│  │  /openapi.json      -> Generated OpenAPI spec                       │   │
+│  │  /_swagger/<file>   -> Bundled static assets                        │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                    ReDoc_Blueprint                                   │   │
-│  │  /redoc         -> ReDoc HTML                                       │   │
+│  │  /redoc             -> ReDoc HTML (refs local assets)               │   │
+│  │  /_redoc/<file>     -> Bundled static assets                        │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
 
@@ -61,220 +84,149 @@ Key design principles:
 
 ## Components and Interfaces
 
-### OpenAPI_Generator Class
+### Static Asset Management
 
-```python
-class OpenAPI_Generator:
-    """
-    Generates OpenAPI 3.0+ specifications from endpoint descriptors.
-    """
-    
-    def __init__(
-        self,
-        registry: "EndpointRegistry",
-        info: "OpenAPIInfo",
-        servers: Optional[List["ServerObject"]] = None,
-        security_schemes: Optional[Dict[str, "SecurityScheme"]] = None,
-        tag_descriptions: Optional[Dict[str, str]] = None,
-        external_docs: Optional["ExternalDocs"] = None
-    ):
-        self.registry = registry
-        self.info = info
-        self.servers = servers or []
-        self.security_schemes = security_schemes or {}
-        self.tag_descriptions = tag_descriptions or {}
-        self.external_docs = external_docs
-        self._schema_converter = Schema_Converter()
-        self._cache: Optional[Dict[str, Any]] = None
-    
-    def generate(self) -> Dict[str, Any]:
-        """
-        Generate complete OpenAPI specification.
-        
-        Returns:
-            OpenAPI specification as a dictionary.
-        """
-        pass
-    
-    def generate_json(self, indent: int = 2) -> str:
-        """Generate specification as JSON string."""
-        pass
-    
-    def generate_yaml(self) -> str:
-        """Generate specification as YAML string."""
-        pass
-    
-    def export(self, path: str, format: Optional[str] = None) -> None:
-        """
-        Export specification to file.
-        
-        Args:
-            path: Output file path.
-            format: 'json' or 'yaml', inferred from extension if not specified.
-        """
-        pass
-    
-    def validate(self, strict: bool = False) -> List["ValidationIssue"]:
-        """
-        Validate the generated specification.
-        
-        Args:
-            strict: If True, treat warnings as errors.
-        
-        Returns:
-            List of validation issues (empty if valid).
-        
-        Raises:
-            SpecificationValidationError: If validation fails.
-        """
-        pass
-    
-    def refresh(self) -> None:
-        """Invalidate cached specification."""
-        self._cache = None
-    
-    def _build_paths(self) -> Dict[str, Any]:
-        """Build paths object from endpoint descriptors."""
-        pass
-    
-    def _build_operation(self, descriptor: "EndpointDescriptor", method: str) -> Dict[str, Any]:
-        """Build operation object for a single endpoint method."""
-        pass
-    
-    def _build_parameters(self, descriptor: "EndpointDescriptor") -> List[Dict[str, Any]]:
-        """Build parameter objects from path and query parameters."""
-        pass
-    
-    def _build_request_body(self, descriptor: "EndpointDescriptor") -> Optional[Dict[str, Any]]:
-        """Build requestBody object from request_schema."""
-        pass
-    
-    def _build_responses(self, descriptor: "EndpointDescriptor") -> Dict[str, Any]:
-        """Build responses object including success and error responses."""
-        pass
-    
-    def _build_security(self, descriptor: "EndpointDescriptor") -> Optional[List[Dict[str, List[str]]]]:
-        """Build security requirements from access_policy."""
-        pass
-    
-    def _collect_tags(self) -> List[Dict[str, str]]:
-        """Collect and build tags array."""
-        pass
-    
-    def _build_components(self) -> Dict[str, Any]:
-        """Build components object with schemas and security schemes."""
-        pass
+#### Directory Layout
+
+```
+source/packages/automojo/webworks/openapi/
+├── static/
+│   ├── manifest.json              # Asset versions and checksums
+│   ├── swagger-ui/
+│   │   ├── swagger-ui-bundle.js   # Main Swagger UI JS bundle
+│   │   ├── swagger-ui.css         # Swagger UI stylesheet
+│   │   └── favicon-32x32.png     # Swagger UI favicon
+│   └── redoc/
+│       └── redoc.standalone.js    # ReDoc standalone bundle
+├── assets.py                      # Asset resolver and serving helpers
+├── swaggerui.py                   # Swagger UI blueprint (updated)
+├── redoc.py                       # ReDoc blueprint (updated)
+└── ...                            # Existing modules unchanged
 ```
 
-### Schema_Converter Class
+#### manifest.json Schema
 
-```python
-class Schema_Converter:
-    """
-    Converts Python types to JSON Schema for OpenAPI specifications.
-    """
-    
-    def __init__(self):
-        self._schema_cache: Dict[str, Dict[str, Any]] = {}
-        self._refs: Dict[str, str] = {}  # type -> $ref path
-    
-    def convert(self, python_type: Type) -> Dict[str, Any]:
-        """
-        Convert a Python type to JSON Schema.
-        
-        Args:
-            python_type: Python type (dataclass, Pydantic model, or primitive).
-        
-        Returns:
-            JSON Schema dictionary.
-        """
-        pass
-    
-    def get_ref(self, python_type: Type) -> str:
-        """
-        Get $ref path for a complex type.
-        
-        Args:
-            python_type: Python type to reference.
-        
-        Returns:
-            Reference path (e.g., "#/components/schemas/UserCreate").
-        """
-        pass
-    
-    def get_all_schemas(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Get all collected schemas for components/schemas section.
-        
-        Returns:
-            Dictionary of schema name -> JSON Schema.
-        """
-        return dict(self._schema_cache)
-    
-    def _convert_dataclass(self, dc_type: Type) -> Dict[str, Any]:
-        """Convert dataclass to JSON Schema."""
-        pass
-    
-    def _convert_pydantic(self, model_type: Type) -> Dict[str, Any]:
-        """Convert Pydantic model to JSON Schema."""
-        pass
-    
-    def _convert_primitive(self, python_type: Type) -> Dict[str, Any]:
-        """Convert primitive type to JSON Schema."""
-        pass
-    
-    def _convert_list(self, item_type: Type) -> Dict[str, Any]:
-        """Convert List[T] to JSON Schema array."""
-        pass
-    
-    def _convert_dict(self, key_type: Type, value_type: Type) -> Dict[str, Any]:
-        """Convert Dict[K, V] to JSON Schema object."""
-        pass
-    
-    def _convert_optional(self, inner_type: Type) -> Dict[str, Any]:
-        """Convert Optional[T] to nullable JSON Schema."""
-        pass
-    
-    def _convert_union(self, types: Tuple[Type, ...]) -> Dict[str, Any]:
-        """Convert Union[A, B, ...] to JSON Schema oneOf."""
-        pass
-    
-    def _get_schema_name(self, python_type: Type) -> str:
-        """Generate unique schema name from Python type."""
-        pass
-
-
-# Type mapping for primitives
-PYTHON_TO_JSON_SCHEMA = {
-    str: {"type": "string"},
-    int: {"type": "integer"},
-    float: {"type": "number"},
-    bool: {"type": "boolean"},
-    bytes: {"type": "string", "format": "binary"},
-    datetime: {"type": "string", "format": "date-time"},
-    date: {"type": "string", "format": "date"},
-    time: {"type": "string", "format": "time"},
-    UUID: {"type": "string", "format": "uuid"},
-    Decimal: {"type": "string", "format": "decimal"},
-    Any: {},
+```json
+{
+    "swagger-ui": {
+        "version": "5.18.2",
+        "files": {
+            "swagger-ui-bundle.js": {
+                "url": "https://github.com/swagger-api/swagger-ui/releases/...",
+                "sha256": "abc123..."
+            },
+            "swagger-ui.css": {
+                "url": "https://github.com/swagger-api/swagger-ui/releases/...",
+                "sha256": "def456..."
+            },
+            "favicon-32x32.png": {
+                "url": "https://github.com/swagger-api/swagger-ui/releases/...",
+                "sha256": "ghi789..."
+            }
+        }
+    },
+    "redoc": {
+        "version": "2.1.5",
+        "files": {
+            "redoc.standalone.js": {
+                "url": "https://github.com/Redocly/redoc/releases/...",
+                "sha256": "jkl012..."
+            }
+        }
+    }
 }
 ```
 
-### Swagger_UI_Blueprint Class
+#### AssetResolver Class
 
 ```python
-class Swagger_UI_Blueprint(RestBlueprint):
+class AssetResolver:
     """
-    Blueprint that serves Swagger UI and OpenAPI specification.
+    Resolves and serves bundled static assets for Swagger UI and ReDoc.
+
+    Uses the ``static/`` directory co-located with this module as the
+    asset root.  All file reads use ``importlib.resources`` (or
+    ``__file__``-relative paths) so the assets work from both source
+    trees and installed wheels.
     """
-    
+
+    # MIME type mapping for static asset Content-Type headers
+    MIME_TYPES = {
+        ".js": "application/javascript",
+        ".css": "text/css",
+        ".png": "image/png",
+        ".svg": "image/svg+xml",
+        ".ico": "image/x-icon",
+        ".json": "application/json",
+        ".map": "application/json",
+        ".woff": "font/woff",
+        ".woff2": "font/woff2",
+        ".ttf": "font/ttf",
+    }
+
+    def __init__(self):
+        self._static_dir = os.path.join(os.path.dirname(__file__), "static")
+        self._manifest = self._load_manifest()
+
+    def _load_manifest(self) -> dict:
+        """Load manifest.json from the static directory."""
+        pass
+
+    def resolve(self, asset_group: str, filename: str) -> Optional[bytes]:
+        """
+        Read a bundled asset file.
+
+        :param asset_group: 'swagger-ui' or 'redoc'.
+        :param filename: File name within the asset group directory.
+        :returns: File contents as bytes, or None if not found.
+        """
+        pass
+
+    def content_type(self, filename: str) -> str:
+        """
+        Determine the Content-Type for a filename based on extension.
+
+        :param filename: The asset filename.
+        :returns: MIME type string.
+        """
+        pass
+
+    def verify_integrity(self) -> List[str]:
+        """
+        Verify all vendored assets match their manifest checksums.
+
+        :returns: List of error messages (empty if all pass).
+        """
+        pass
+
+    @property
+    def swagger_ui_version(self) -> Optional[str]:
+        """Return the vendored Swagger UI version from the manifest."""
+        pass
+
+    @property
+    def redoc_version(self) -> Optional[str]:
+        """Return the vendored ReDoc version from the manifest."""
+        pass
+```
+
+### Updated Swagger_UI_Blueprint Class
+
+```python
+class SwaggerUIBlueprint(RestBlueprint):
+    """
+    Blueprint that serves Swagger UI from bundled assets and the
+    OpenAPI specification.  No external CDN requests are made.
+    """
+
     base_path = "/docs"
-    
+
     def __init__(
         self,
-        generator: OpenAPI_Generator,
+        generator: "OpenAPIGenerator",
         ui_path: str = "/docs",
         spec_path: str = "/openapi.json",
+        static_path: str = "/_swagger",
         try_it_out: bool = True,
         doc_expansion: str = "list",
         filter: bool = True,
@@ -283,446 +235,242 @@ class Swagger_UI_Blueprint(RestBlueprint):
         self.generator = generator
         self.ui_path = ui_path
         self.spec_path = spec_path
+        self.static_path = static_path
         self.try_it_out = try_it_out
         self.doc_expansion = doc_expansion
         self.filter = filter
         self.swagger_config = swagger_config
-    
-    @classmethod
-    def register(cls, router: Optional["Router"] = None) -> List["EndpointDescriptor"]:
-        """Register Swagger UI routes."""
+        self._asset_resolver = AssetResolver()
+
+    def serve_ui(self) -> Tuple[str, int, Dict[str, str]]:
+        """Serve the Swagger UI HTML page referencing local assets."""
         pass
-    
-    def serve_ui(self) -> "Response":
-        """
-        Serve Swagger UI HTML page.
-        
-        Returns:
-            HTML response with Swagger UI.
-        """
+
+    def serve_spec(self) -> Tuple[str, int, Dict[str, str]]:
+        """Serve the OpenAPI specification as JSON."""
         pass
-    
-    def serve_spec(self) -> "Response":
+
+    def serve_static(self, filename: str) -> Tuple[bytes, int, Dict[str, str]]:
         """
-        Serve OpenAPI specification JSON.
-        
-        Returns:
-            JSON response with OpenAPI spec.
+        Serve a bundled Swagger UI static asset.
+
+        :param filename: The asset filename (e.g. 'swagger-ui-bundle.js').
+        :returns: Tuple of (content_bytes, status_code, headers).
         """
         pass
-    
+
     def _build_swagger_html(self) -> str:
-        """Build Swagger UI HTML with configuration."""
+        """
+        Build Swagger UI HTML referencing local static paths.
+
+        The generated HTML uses self.static_path for all JS/CSS
+        references instead of CDN URLs.
+        """
+        pass
+
+    def get_descriptors(self) -> List["EndpointDescriptor"]:
+        """
+        Create endpoint descriptors for UI, spec, and static routes.
+
+        Returns descriptors for:
+        - ui_path (GET) -> serve_ui
+        - spec_path (GET) -> serve_spec
+        - static_path/<filename> (GET) -> serve_static
+        """
         pass
 ```
 
-### ReDoc_Blueprint Class
+### Updated Swagger UI HTML Template
 
 ```python
-class ReDoc_Blueprint(RestBlueprint):
+SWAGGER_UI_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title} - Swagger UI</title>
+    <link rel="stylesheet" href="{static_path}/swagger-ui.css">
+    <link rel="icon" type="image/png" href="{static_path}/favicon-32x32.png" sizes="32x32">
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="{static_path}/swagger-ui-bundle.js"></script>
+    <script>
+        window.onload = function() {{
+            SwaggerUIBundle({{
+                url: "{spec_url}",
+                dom_id: '#swagger-ui',
+                presets: [
+                    SwaggerUIBundle.presets.apis
+                ],
+                tryItOutEnabled: {try_it_out},
+                docExpansion: "{doc_expansion}",
+                filter: {filter},
+                {extra_config}
+            }});
+        }};
+    </script>
+</body>
+</html>
+"""
+```
+
+### Updated ReDoc_Blueprint Class
+
+```python
+class ReDocBlueprint(RestBlueprint):
     """
-    Blueprint that serves ReDoc documentation UI.
+    Blueprint that serves ReDoc from bundled assets.
+    No external CDN requests are made.
     """
-    
+
     base_path = "/redoc"
-    
+
     def __init__(
         self,
-        generator: OpenAPI_Generator,
+        generator: "OpenAPIGenerator",
         ui_path: str = "/redoc",
         spec_url: str = "/openapi.json",
+        static_path: str = "/_redoc",
         **redoc_config
     ):
         self.generator = generator
         self.ui_path = ui_path
         self.spec_url = spec_url
+        self.static_path = static_path
         self.redoc_config = redoc_config
-    
-    @classmethod
-    def register(cls, router: Optional["Router"] = None) -> List["EndpointDescriptor"]:
-        """Register ReDoc routes."""
+        self._asset_resolver = AssetResolver()
+
+    def serve_ui(self) -> Tuple[str, int, Dict[str, str]]:
+        """Serve the ReDoc HTML page referencing local assets."""
         pass
-    
-    def serve_ui(self) -> "Response":
-        """
-        Serve ReDoc HTML page.
-        
-        Returns:
-            HTML response with ReDoc.
-        """
+
+    def serve_static(self, filename: str) -> Tuple[bytes, int, Dict[str, str]]:
+        """Serve a bundled ReDoc static asset."""
         pass
-    
+
     def _build_redoc_html(self) -> str:
-        """Build ReDoc HTML with configuration."""
+        """Build ReDoc HTML referencing local static paths."""
         pass
 ```
 
-### Configuration Data Classes
+### Updated ReDoc HTML Template
 
 ```python
-@dataclass
-class OpenAPIInfo:
-    """
-    OpenAPI info object configuration.
-    """
-    
-    title: str
-    version: str
-    description: Optional[str] = None
-    terms_of_service: Optional[str] = None
-    contact: Optional["ContactObject"] = None
-    license: Optional["LicenseObject"] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to OpenAPI info object."""
-        result = {
-            "title": self.title,
-            "version": self.version
-        }
-        if self.description:
-            result["description"] = self.description
-        if self.terms_of_service:
-            result["termsOfService"] = self.terms_of_service
-        if self.contact:
-            result["contact"] = self.contact.to_dict()
-        if self.license:
-            result["license"] = self.license.to_dict()
-        return result
-
-
-@dataclass
-class ContactObject:
-    """OpenAPI contact object."""
-    
-    name: Optional[str] = None
-    url: Optional[str] = None
-    email: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result = {}
-        if self.name:
-            result["name"] = self.name
-        if self.url:
-            result["url"] = self.url
-        if self.email:
-            result["email"] = self.email
-        return result
-
-
-@dataclass
-class LicenseObject:
-    """OpenAPI license object."""
-    
-    name: str
-    url: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result = {"name": self.name}
-        if self.url:
-            result["url"] = self.url
-        return result
-
-
-@dataclass
-class ServerObject:
-    """OpenAPI server object."""
-    
-    url: str
-    description: Optional[str] = None
-    variables: Optional[Dict[str, "ServerVariable"]] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result = {"url": self.url}
-        if self.description:
-            result["description"] = self.description
-        if self.variables:
-            result["variables"] = {
-                k: v.to_dict() for k, v in self.variables.items()
-            }
-        return result
-
-
-@dataclass
-class ServerVariable:
-    """OpenAPI server variable."""
-    
-    default: str
-    enum: Optional[List[str]] = None
-    description: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result = {"default": self.default}
-        if self.enum:
-            result["enum"] = self.enum
-        if self.description:
-            result["description"] = self.description
-        return result
-
-
-@dataclass
-class ExternalDocs:
-    """OpenAPI external documentation object."""
-    
-    url: str
-    description: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result = {"url": self.url}
-        if self.description:
-            result["description"] = self.description
-        return result
+REDOC_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title} - API Documentation</title>
+    <style>
+        body {{ margin: 0; padding: 0; }}
+    </style>
+</head>
+<body>
+    <redoc spec-url="{spec_url}" {extra_config}></redoc>
+    <script src="{static_path}/redoc.standalone.js"></script>
+</body>
+</html>
+"""
 ```
 
-### Security Scheme Classes
+### Asset Update CLI Command
 
 ```python
-@dataclass
-class SecurityScheme:
-    """Base class for OpenAPI security schemes."""
-    
-    type: str
-    description: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result = {"type": self.type}
-        if self.description:
-            result["description"] = self.description
-        return result
-
-
-@dataclass
-class APIKeySecurityScheme(SecurityScheme):
-    """API key security scheme."""
-    
-    type: str = "apiKey"
-    name: str = "X-API-Key"
-    in_: str = "header"  # header, query, or cookie
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result = super().to_dict()
-        result["name"] = self.name
-        result["in"] = self.in_
-        return result
-
-
-@dataclass
-class HTTPSecurityScheme(SecurityScheme):
-    """HTTP security scheme (bearer, basic)."""
-    
-    type: str = "http"
-    scheme: str = "bearer"
-    bearer_format: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result = super().to_dict()
-        result["scheme"] = self.scheme
-        if self.bearer_format:
-            result["bearerFormat"] = self.bearer_format
-        return result
-
-
-@dataclass
-class OAuth2SecurityScheme(SecurityScheme):
-    """OAuth2 security scheme."""
-    
-    type: str = "oauth2"
-    flows: "OAuthFlows" = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result = super().to_dict()
-        if self.flows:
-            result["flows"] = self.flows.to_dict()
-        return result
-
-
-@dataclass
-class OAuthFlows:
-    """OAuth2 flows configuration."""
-    
-    implicit: Optional["OAuthFlow"] = None
-    password: Optional["OAuthFlow"] = None
-    client_credentials: Optional["OAuthFlow"] = None
-    authorization_code: Optional["OAuthFlow"] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result = {}
-        if self.implicit:
-            result["implicit"] = self.implicit.to_dict()
-        if self.password:
-            result["password"] = self.password.to_dict()
-        if self.client_credentials:
-            result["clientCredentials"] = self.client_credentials.to_dict()
-        if self.authorization_code:
-            result["authorizationCode"] = self.authorization_code.to_dict()
-        return result
-
-
-@dataclass
-class OAuthFlow:
-    """Single OAuth2 flow configuration."""
-    
-    scopes: Dict[str, str]  # scope name -> description
-    authorization_url: Optional[str] = None
-    token_url: Optional[str] = None
-    refresh_url: Optional[str] = None
-    
-    def to_dict(self) -> Dict[str, Any]:
-        result = {"scopes": self.scopes}
-        if self.authorization_url:
-            result["authorizationUrl"] = self.authorization_url
-        if self.token_url:
-            result["tokenUrl"] = self.token_url
-        if self.refresh_url:
-            result["refreshUrl"] = self.refresh_url
-        return result
-```
-
-### Validation Classes
-
-```python
-@dataclass
-class ValidationIssue:
-    """Single validation issue in the specification."""
-    
-    path: str  # JSON path to the issue location
-    message: str
-    severity: str  # "error" or "warning"
-
-
-class SpecificationValidationError(Exception):
-    """Raised when OpenAPI specification validation fails."""
-    
-    def __init__(self, issues: List[ValidationIssue]):
-        self.issues = issues
-        message = f"OpenAPI specification validation failed with {len(issues)} issue(s)"
-        super().__init__(message)
-
-
-class OpenAPIValidator:
+class AssetUpdater:
     """
-    Validates OpenAPI specifications against the schema.
-    """
-    
-    def __init__(self, strict: bool = False):
-        self.strict = strict
-    
-    def validate(self, spec: Dict[str, Any]) -> List[ValidationIssue]:
-        """
-        Validate an OpenAPI specification.
-        
-        Args:
-            spec: OpenAPI specification dictionary.
-        
-        Returns:
-            List of validation issues.
-        
-        Raises:
-            SpecificationValidationError: If validation fails.
-        """
-        pass
-    
-    def _validate_structure(self, spec: Dict[str, Any]) -> List[ValidationIssue]:
-        """Validate basic structure requirements."""
-        pass
-    
-    def _validate_refs(self, spec: Dict[str, Any]) -> List[ValidationIssue]:
-        """Validate all $ref references resolve."""
-        pass
-    
-    def _validate_security(self, spec: Dict[str, Any]) -> List[ValidationIssue]:
-        """Validate security scheme references."""
-        pass
-    
-    def _validate_schemas(self, spec: Dict[str, Any]) -> List[ValidationIssue]:
-        """Validate JSON Schema definitions."""
-        pass
-```
+    Downloads and vendors the latest Swagger UI and ReDoc releases
+    from their official GitHub repositories.
 
-### Specification Cache
+    Usage via CLI:
+        webworks openapi update-assets
+        webworks openapi update-assets --swagger-version 5.18.2
+        webworks openapi update-assets --redoc-version 2.1.5
+    """
 
-```python
-class SpecificationCache:
-    """
-    Caches generated OpenAPI specifications.
-    """
-    
-    def __init__(self, ttl: Optional[int] = None, production_mode: bool = False):
-        self.ttl = ttl  # Time-to-live in seconds
-        self.production_mode = production_mode
-        self._cache: Optional[Dict[str, Any]] = None
-        self._cache_time: Optional[float] = None
-    
-    def get(self) -> Optional[Dict[str, Any]]:
-        """
-        Get cached specification if valid.
-        
-        Returns:
-            Cached specification or None if expired/missing.
-        """
-        if self._cache is None:
-            return None
-        
-        if self.production_mode:
-            return self._cache
-        
-        if self.ttl and self._cache_time:
-            if time.time() - self._cache_time > self.ttl:
-                self.invalidate()
-                return None
-        
-        return self._cache
-    
-    def set(self, spec: Dict[str, Any]) -> None:
-        """Cache a specification."""
-        self._cache = spec
-        self._cache_time = time.time()
-    
-    def invalidate(self) -> None:
-        """Invalidate the cache."""
-        self._cache = None
-        self._cache_time = None
+    SWAGGER_UI_GITHUB = "swagger-api/swagger-ui"
+    REDOC_GITHUB = "Redocly/redoc"
 
+    SWAGGER_UI_FILES = [
+        "swagger-ui-bundle.js",
+        "swagger-ui.css",
+        "favicon-32x32.png",
+    ]
 
-class CachedOpenAPIGenerator(OpenAPI_Generator):
-    """
-    OpenAPI generator with caching support.
-    """
-    
-    def __init__(
-        self,
-        registry: "EndpointRegistry",
-        info: "OpenAPIInfo",
-        cache_ttl: Optional[int] = None,
-        production_mode: bool = False,
-        **kwargs
-    ):
-        super().__init__(registry, info, **kwargs)
-        self._spec_cache = SpecificationCache(
-            ttl=cache_ttl,
-            production_mode=production_mode
+    REDOC_FILES = [
+        "redoc.standalone.js",
+    ]
+
+    def __init__(self, static_dir: Optional[str] = None):
+        self._static_dir = static_dir or os.path.join(
+            os.path.dirname(__file__), "static"
         )
-    
-    def generate(self) -> Dict[str, Any]:
-        """Generate specification with caching."""
-        cached = self._spec_cache.get()
-        if cached is not None:
-            return cached
-        
-        spec = super().generate()
-        self._spec_cache.set(spec)
-        return spec
-    
-    def refresh(self) -> None:
-        """Invalidate cache and regenerate."""
-        self._spec_cache.invalidate()
+
+    def update_swagger_ui(self, version: Optional[str] = None) -> None:
+        """
+        Download Swagger UI distribution files from GitHub releases.
+
+        :param version: Specific version to download, or None for latest.
+        """
+        pass
+
+    def update_redoc(self, version: Optional[str] = None) -> None:
+        """
+        Download ReDoc standalone bundle from GitHub releases.
+
+        :param version: Specific version to download, or None for latest.
+        """
+        pass
+
+    def _download_file(self, url: str, dest: str) -> str:
+        """
+        Download a file and return its SHA-256 checksum.
+
+        :param url: URL to download from.
+        :param dest: Local file path to write to.
+        :returns: Hex-encoded SHA-256 checksum of the downloaded content.
+        """
+        pass
+
+    def _update_manifest(self, group: str, version: str,
+                         files: Dict[str, Dict]) -> None:
+        """
+        Update manifest.json with new version and checksum info.
+
+        :param group: 'swagger-ui' or 'redoc'.
+        :param version: Version string.
+        :param files: Dict of filename -> {url, sha256}.
+        """
+        pass
+
+    def _get_latest_release(self, repo: str) -> str:
+        """
+        Query GitHub API for the latest release tag.
+
+        :param repo: GitHub repo in 'owner/name' format.
+        :returns: Version tag string.
+        """
+        pass
 ```
+
+### Existing Components (Unchanged)
+
+The following components from the existing design remain unchanged:
+
+- **OpenAPI_Generator** — generates OpenAPI 3.0+ specs from EndpointRegistry
+- **Schema_Converter** — converts Python types to JSON Schema
+- **Configuration dataclasses** — OpenAPIInfo, ServerObject, ContactObject, etc.
+- **Security scheme dataclasses** — SecurityScheme, APIKeySecurityScheme, HTTPSecurityScheme, OAuth2SecurityScheme
+- **OpenAPIValidator** — validates generated specs against OpenAPI 3.0 schema
+- **SpecificationCache / CachedOpenAPIGenerator** — caching layer
+- **CLI commands** — generate, validate, export (plus new update-assets)
 
 ## Data Models
 
 ### OpenAPI Specification Structure
 
 ```python
-# OpenAPI 3.0 specification structure
 OPENAPI_SPEC_TEMPLATE = {
     "openapi": "3.0.3",
     "info": {
@@ -739,7 +487,6 @@ OPENAPI_SPEC_TEMPLATE = {
     "security": []
 }
 
-# Standard error response schema
 REST_ERROR_SCHEMA = {
     "type": "object",
     "properties": {
@@ -771,155 +518,52 @@ REST_ERROR_SCHEMA = {
     },
     "required": ["error", "message"]
 }
-
-# Standard error responses
-STANDARD_ERROR_RESPONSES = {
-    "400": {
-        "description": "Bad Request - Invalid input",
-        "content": {
-            "application/json": {
-                "schema": {"$ref": "#/components/schemas/RESTError"}
-            }
-        }
-    },
-    "401": {
-        "description": "Unauthorized - Authentication required",
-        "content": {
-            "application/json": {
-                "schema": {"$ref": "#/components/schemas/RESTError"}
-            }
-        }
-    },
-    "403": {
-        "description": "Forbidden - Insufficient permissions",
-        "content": {
-            "application/json": {
-                "schema": {"$ref": "#/components/schemas/RESTError"}
-            }
-        }
-    },
-    "404": {
-        "description": "Not Found - Resource does not exist",
-        "content": {
-            "application/json": {
-                "schema": {"$ref": "#/components/schemas/RESTError"}
-            }
-        }
-    },
-    "500": {
-        "description": "Internal Server Error",
-        "content": {
-            "application/json": {
-                "schema": {"$ref": "#/components/schemas/RESTError"}
-            }
-        }
-    }
-}
-```
-
-### Swagger UI HTML Template
-
-```python
-SWAGGER_UI_HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title} - Swagger UI</title>
-    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
-</head>
-<body>
-    <div id="swagger-ui"></div>
-    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-    <script>
-        window.onload = function() {{
-            SwaggerUIBundle({{
-                url: "{spec_url}",
-                dom_id: '#swagger-ui',
-                presets: [
-                    SwaggerUIBundle.presets.apis,
-                    SwaggerUIBundle.SwaggerUIStandalonePreset
-                ],
-                layout: "StandaloneLayout",
-                tryItOutEnabled: {try_it_out},
-                docExpansion: "{doc_expansion}",
-                filter: {filter},
-                {extra_config}
-            }});
-        }};
-    </script>
-</body>
-</html>
-"""
-
-REDOC_HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title} - API Documentation</title>
-    <link href="https://fonts.googleapis.com/css?family=Montserrat:300,400,700|Roboto:300,400,700" rel="stylesheet">
-    <style>
-        body {{ margin: 0; padding: 0; }}
-    </style>
-</head>
-<body>
-    <redoc spec-url="{spec_url}" {extra_config}></redoc>
-    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
-</body>
-</html>
-"""
 ```
 
 ## Correctness Properties
 
-*A property is a characteristic or behavior that should hold true across all valid executions of a system—essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
+### Property 1: Self-Containment
+For any deployment of the package, the Swagger UI and ReDoc documentation pages SHALL render correctly without making any HTTP requests to external hosts. All JavaScript, CSS, and font resources SHALL be served from the application's own endpoints.
 
-### Property 1: Schema Conversion Round-Trip
+### Property 2: Asset Integrity
+For any vendored asset file, the SHA-256 checksum recorded in the manifest SHALL match the actual file content. The asset update command SHALL reject downloads whose checksums do not match expected values.
 
-*For any* Python dataclass or Pydantic model, converting to JSON Schema and then validating a conforming JSON object against that schema SHALL accept all valid instances of the original type.
+### Property 3: Specification Determinism
+For any fixed set of endpoint descriptors and generator configuration, calling generate() multiple times SHALL produce byte-identical JSON output.
 
-**Validates: Requirements 2.1, 2.2, 2.4**
-
-### Property 2: Path Parameter Extraction
-
-*For any* EndpointDescriptor with path parameters (e.g., `/users/{id:int}`), the generated OpenAPI path SHALL contain corresponding parameter objects with correct names and types.
-
-**Validates: Requirements 3.1, 3.2**
-
-### Property 3: Operation Completeness
-
-*For any* EndpointDescriptor with multiple HTTP methods, the generated OpenAPI specification SHALL contain a separate operation object for each method, all with correct operationId, summary, and tags.
-
-**Validates: Requirements 3.3, 3.4, 3.5, 3.6**
-
-### Property 4: Security Scheme Consistency
-
-*For any* endpoint with an access_policy, the generated operation SHALL reference security schemes that exist in the components/securitySchemes section.
-
-**Validates: Requirements 4.1, 4.2, 4.3**
+### Property 4: Content-Type Correctness
+For any static asset request, the response Content-Type header SHALL match the file's actual MIME type (e.g., .js → application/javascript, .css → text/css, .png → image/png).
 
 ### Property 5: Specification Validity
+For any set of valid endpoint descriptors, the generated OpenAPI specification SHALL pass validation against the OpenAPI 3.0 JSON Schema.
 
-*For any* generated OpenAPI specification, the output SHALL pass validation against the OpenAPI 3.0 JSON Schema without errors.
+### Property 6: Schema Conversion Round-Trip
+For any Python dataclass or Pydantic model, converting to JSON Schema and then validating a conforming JSON object against that schema SHALL accept all valid instances of the original type.
 
-**Validates: Requirements 9.1, 9.5**
+### Property 7: Path Parameter Extraction
+For any EndpointDescriptor with path parameters, the generated OpenAPI path SHALL contain corresponding parameter objects with correct names and types.
 
-### Property 6: Export Format Consistency
+### Property 8: Operation Completeness
+For any EndpointDescriptor with multiple HTTP methods, the generated specification SHALL contain a separate operation object for each method with correct operationId, summary, and tags.
 
-*For any* OpenAPI specification, exporting to JSON and then parsing SHALL produce an equivalent dictionary to the original specification.
+### Property 9: Security Scheme Consistency
+For any endpoint with an access_policy, the generated operation SHALL reference security schemes that exist in the components/securitySchemes section.
 
-**Validates: Requirements 10.1, 10.2, 10.6**
+### Property 10: Export Format Consistency
+For any OpenAPI specification, exporting to JSON and then parsing SHALL produce an equivalent dictionary to the original specification.
 
-### Property 7: Cache Consistency
-
-*For any* cached specification, retrieving from cache SHALL return a specification equivalent to regenerating from the same endpoint registry state.
-
-**Validates: Requirements 12.1, 12.2**
+### Property 11: Cache Consistency
+For any cached specification, retrieving from cache SHALL return a specification equivalent to regenerating from the same endpoint registry state.
 
 ## Error Handling
+
+### Asset Errors
+
+| Error Type | Condition | Handling |
+|------------|-----------|----------|
+| AssetNotFoundError | Requested static file not in bundle | Return 404 response |
+| AssetIntegrityError | Checksum mismatch during verification | Log warning, serve file anyway (non-fatal) |
+| ManifestNotFoundError | manifest.json missing from static dir | Log warning, assets still servable by path |
 
 ### Generation Errors
 
@@ -951,28 +595,34 @@ REDOC_HTML_TEMPLATE = """
 
 ### Unit Tests
 
-Unit tests verify specific examples and edge cases:
-
+- AssetResolver file resolution for each asset type
+- AssetResolver Content-Type mapping for all supported extensions
+- AssetResolver integrity verification (matching and mismatched checksums)
+- Swagger UI HTML template contains only local asset references (no CDN URLs)
+- ReDoc HTML template contains only local asset references (no CDN URLs)
+- Static asset endpoint returns correct Content-Type and Cache-Control headers
 - Schema conversion for each supported Python type
 - Path parameter parsing for various formats
 - Security scheme extraction from access policies
-- HTML template generation with various configurations
 - Cache behavior (hit, miss, expiration, invalidation)
 
 ### Property-Based Tests
 
 Property-based tests verify universal properties using the testbase framework:
 
-1. **Schema Round-Trip**: Generate random dataclasses, convert to JSON Schema, validate conforming instances
-2. **Path Extraction**: Generate random path patterns, verify parameter extraction
-3. **Specification Validity**: Generate specifications from random endpoint sets, validate against OpenAPI schema
-4. **Export Consistency**: Generate specifications, export to JSON/YAML, parse back, compare
+1. **Self-Containment**: For generated HTML pages, verify no `src` or `href` attributes reference external domains
+2. **Asset Integrity**: For all manifest entries, verify SHA-256 checksums match file contents
+3. **Content-Type Correctness**: For all supported file extensions, verify correct MIME type mapping
+4. **Schema Round-Trip**: Generate random dataclasses, convert to JSON Schema, validate conforming instances
+5. **Path Extraction**: Generate random path patterns, verify parameter extraction
+6. **Specification Validity**: Generate specifications from random endpoint sets, validate against OpenAPI schema
+7. **Export Consistency**: Generate specifications, export to JSON/YAML, parse back, compare
 
 ### Integration Tests
 
-Integration tests verify end-to-end behavior:
-
 - Full specification generation from a sample endpoint registry
-- Swagger UI serving and configuration
-- ReDoc serving and configuration
+- Swagger UI serving from bundled assets (verify no external requests)
+- ReDoc serving from bundled assets (verify no external requests)
+- Static asset serving with correct headers
 - CLI export command execution
+- CLI update-assets command execution (with mocked HTTP)

@@ -148,7 +148,7 @@ class ServeCommand(CLICommand):
         )
 
         try:
-            server.start()
+            server.serve_forever()
         except PortInUseError:
             message = format_port_in_use_message(host, port)
             print(message)

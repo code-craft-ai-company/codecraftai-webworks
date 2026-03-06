@@ -85,7 +85,7 @@ def test_thiswebapplicationsingleton_returns_singleton_when_established():
     """
         Test that ThisWebApplicationSingleton returns the singleton when it is established.
     """
-    from automojo.webworks.persona.webapplication import WebApplication
+    from automojo.webworks.webapplication import WebApplication
     import automojo.webworks.wellknown as wellknown_module
     
     # Save original state
@@ -124,7 +124,7 @@ def test_thiswebapplicationsingleton_returns_same_instance_on_multiple_calls():
     """
         Test that ThisWebApplicationSingleton returns the same instance on multiple calls.
     """
-    from automojo.webworks.persona.webapplication import WebApplication
+    from automojo.webworks.webapplication import WebApplication
     import automojo.webworks.wellknown as wellknown_module
     
     # Save original state
@@ -186,7 +186,7 @@ def test_thiswebapplication_singleton_can_be_set():
     """
         Test that THISWEBAPPLICATION_SINGLETON can be set to a WebApplication instance.
     """
-    from automojo.webworks.persona.webapplication import WebApplication
+    from automojo.webworks.webapplication import WebApplication
     import automojo.webworks.wellknown as wellknown_module
     
     # Save original state
@@ -238,7 +238,7 @@ def test_property_thread_safe_singleton_access():
     """
     import threading
     import random
-    from automojo.webworks.persona.webapplication import WebApplication
+    from automojo.webworks.webapplication import WebApplication
     import automojo.webworks.wellknown as wellknown_module
     
     # Save original state
@@ -332,7 +332,7 @@ def test_property_thread_safe_singleton_write_then_read():
     import threading
     import time
     import random
-    from automojo.webworks.persona.webapplication import WebApplication
+    from automojo.webworks.webapplication import WebApplication
     from automojo.thisapp.wellknown import SINGLETON_LOCK
     import automojo.webworks.wellknown as wellknown_module
     
@@ -457,7 +457,7 @@ def test_property_singleton_identity_consistency():
     """
     import random
     import string
-    from automojo.webworks.persona.webapplication import WebApplication
+    from automojo.webworks.webapplication import WebApplication
     from automojo.thisapp.wellknown import (
         SINGLETON_LOCK,
         ThisApplicationSingleton

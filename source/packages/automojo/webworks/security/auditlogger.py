@@ -7,12 +7,12 @@
 .. moduleauthor:: Automation Mojo LLC
 
 This module provides the audit logging infrastructure for the security framework.
-It includes the AuditLevel enum for configuring logging verbosity, the Audit_Entry
+It includes the AuditLevel enum for configuring logging verbosity, the AuditEntry
 dataclass for structured log entries, the AuditDestination protocol for pluggable
-log destinations, and the Audit_Logger class that coordinates logging of security
+log destinations, and the AuditLogger class that coordinates logging of security
 events.
 
-The Audit_Logger supports multiple destinations, configurable audit levels, and
+The AuditLogger supports multiple destinations, configurable audit levels, and
 provides a query interface for retrieving historical security events. Logging is
 designed to avoid blocking request processing.
 """
@@ -29,7 +29,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from automojo.webworks.security.accesspolicy import AccessPolicy
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.securitycontext import SecurityContext
 
 
 class AuditLevel(Enum):
@@ -48,7 +48,7 @@ class AuditLevel(Enum):
 
 
 @dataclass
-class Audit_Entry:
+class AuditEntry:
     """
         Structured audit log entry for security events.
 
@@ -131,7 +131,7 @@ class AuditDestination:
         methods are provided.
     """
 
-    def write(self, entry: Audit_Entry) -> None:
+    def write(self, entry: AuditEntry) -> None:
         """
             Write an audit entry to this destination.
 
@@ -139,7 +139,7 @@ class AuditDestination:
         """
         ...
 
-    async def write_async(self, entry: Audit_Entry) -> None:
+    async def write_async(self, entry: AuditEntry) -> None:
         """
             Asynchronously write an audit entry to this destination.
 
@@ -149,7 +149,7 @@ class AuditDestination:
 
 
 
-class Audit_Logger:
+class AuditLogger:
     """
         Logs security events for compliance and forensics.
 
@@ -173,7 +173,7 @@ class Audit_Logger:
     ):
         self._level = level
         self._destinations: List[AuditDestination] = destinations if destinations is not None else []
-        self._entries: List[Audit_Entry] = []
+        self._entries: List[AuditEntry] = []
         return
 
     def _should_log(self, outcome: str) -> bool:
@@ -195,7 +195,7 @@ class Audit_Logger:
         # AuditLevel.ALL
         return True
 
-    def _dispatch(self, entry: Audit_Entry) -> None:
+    def _dispatch(self, entry: AuditEntry) -> None:
         """
             Store the entry internally and write it to all registered
             destinations.
@@ -211,7 +211,7 @@ class Audit_Logger:
 
     def log_authentication(
         self,
-        context: Security_Context,
+        context: SecurityContext,
         provider: str,
         success: bool,
         endpoint: Optional[str] = None,
@@ -238,7 +238,7 @@ class Audit_Logger:
         if should_log is not True:
             return
 
-        entry = Audit_Entry(
+        entry = AuditEntry(
             timestamp=datetime.utcnow(),
             event_type="authentication",
             outcome=outcome,
@@ -259,7 +259,7 @@ class Audit_Logger:
 
     def log_authorization(
         self,
-        context: Security_Context,
+        context: SecurityContext,
         policy: AccessPolicy,
         allowed: bool,
         reason: Optional[str] = None,
@@ -292,7 +292,7 @@ class Audit_Logger:
             policy.roles, policy.scopes, policy.require_auth
         )
 
-        entry = Audit_Entry(
+        entry = AuditEntry(
             timestamp=datetime.utcnow(),
             event_type="authorization",
             outcome=outcome,
@@ -312,7 +312,7 @@ class Audit_Logger:
 
     def log_violation(
         self,
-        context: Security_Context,
+        context: SecurityContext,
         policy: AccessPolicy,
         constraint: str,
         endpoint: Optional[str] = None,
@@ -346,7 +346,7 @@ class Audit_Logger:
             policy.roles, policy.scopes, policy.require_auth
         )
 
-        entry = Audit_Entry(
+        entry = AuditEntry(
             timestamp=datetime.utcnow(),
             event_type="violation",
             outcome=outcome,
@@ -380,7 +380,7 @@ class Audit_Logger:
         event_type: Optional[str] = None,
         user_id: Optional[str] = None,
         outcome: Optional[str] = None
-    ) -> List[Audit_Entry]:
+    ) -> List[AuditEntry]:
         """
             Query historical audit entries with optional filters.
 
@@ -395,7 +395,7 @@ class Audit_Logger:
 
             :returns: A list of matching Audit_Entry objects.
         """
-        results: List[Audit_Entry] = []
+        results: List[AuditEntry] = []
 
         for entry in self._entries:
             if start_time is not None:

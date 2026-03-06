@@ -29,11 +29,11 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, Protocol, runtime_checkable
 
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.securitycontext import SecurityContext
 
 
 @runtime_checkable
-class Authentication_Provider(Protocol):
+class AuthenticationProvider(Protocol):
     """
         Protocol for authentication providers that verify user identity.
 
@@ -57,7 +57,7 @@ class Authentication_Provider(Protocol):
         """
         ...
 
-    def authenticate(self, request: Any) -> Optional[Security_Context]:
+    def authenticate(self, request: Any) -> Optional[SecurityContext]:
         """
             Attempt to authenticate a request synchronously.
 
@@ -69,7 +69,7 @@ class Authentication_Provider(Protocol):
         """
         ...
 
-    async def authenticate_async(self, request: Any) -> Optional[Security_Context]:
+    async def authenticate_async(self, request: Any) -> Optional[SecurityContext]:
         """
             Attempt to authenticate a request asynchronously.
 
@@ -211,7 +211,7 @@ class JWTAuthProvider:
         """
         return self._priority
 
-    def authenticate(self, request: Any) -> Optional[Security_Context]:
+    def authenticate(self, request: Any) -> Optional[SecurityContext]:
         """
             Extract and validate a JWT from the Authorization header.
 
@@ -272,7 +272,7 @@ class JWTAuthProvider:
             if key not in reserved_claims:
                 extra[key] = value
 
-        rtnval = Security_Context(
+        rtnval = SecurityContext(
             user_id=str(user_id),
             username=username,
             email=email,
@@ -286,7 +286,7 @@ class JWTAuthProvider:
 
         return rtnval
 
-    async def authenticate_async(self, request: Any) -> Optional[Security_Context]:
+    async def authenticate_async(self, request: Any) -> Optional[SecurityContext]:
         """
             Async version of authenticate. Delegates to the synchronous method.
 
@@ -340,7 +340,7 @@ class SessionAuthProvider:
         """
         return self._priority
 
-    def authenticate(self, request: Any) -> Optional[Security_Context]:
+    def authenticate(self, request: Any) -> Optional[SecurityContext]:
         """
             Extract and validate a session from a cookie.
 
@@ -392,7 +392,7 @@ class SessionAuthProvider:
             if isinstance(expires_at_value, datetime):
                 expires_at = expires_at_value
 
-        rtnval = Security_Context(
+        rtnval = SecurityContext(
             user_id=str(user_id),
             username=username,
             email=email,
@@ -405,7 +405,7 @@ class SessionAuthProvider:
 
         return rtnval
 
-    async def authenticate_async(self, request: Any) -> Optional[Security_Context]:
+    async def authenticate_async(self, request: Any) -> Optional[SecurityContext]:
         """
             Async version of authenticate. Delegates to the synchronous method.
 
@@ -462,7 +462,7 @@ class APIKeyAuthProvider:
         """
         return self._priority
 
-    def authenticate(self, request: Any) -> Optional[Security_Context]:
+    def authenticate(self, request: Any) -> Optional[SecurityContext]:
         """
             Extract and validate an API key from header or query parameter.
 
@@ -510,7 +510,7 @@ class APIKeyAuthProvider:
         scopes_value = key_data.get("scopes", ())
         scopes = tuple(scopes_value)
 
-        rtnval = Security_Context(
+        rtnval = SecurityContext(
             user_id=str(user_id),
             username=username,
             email=email,
@@ -521,7 +521,7 @@ class APIKeyAuthProvider:
 
         return rtnval
 
-    async def authenticate_async(self, request: Any) -> Optional[Security_Context]:
+    async def authenticate_async(self, request: Any) -> Optional[SecurityContext]:
         """
             Async version of authenticate. Delegates to the synchronous method.
 

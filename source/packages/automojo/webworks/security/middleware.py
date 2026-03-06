@@ -25,9 +25,9 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from automojo.webworks.security.accesspolicy import AccessPolicy
-from automojo.webworks.security.authenticationmanager import Authentication_Manager
-from automojo.webworks.security.authorizationengine import Authorization_Engine
-from automojo.webworks.security.auditlogger import Audit_Logger
+from automojo.webworks.security.authenticationmanager import AuthenticationManager
+from automojo.webworks.security.authorizationengine import AuthorizationEngine
+from automojo.webworks.security.auditlogger import AuditLogger
 from automojo.webworks.security.errors import (
     AuthenticationError,
     AuthorizationError,
@@ -37,7 +37,7 @@ from automojo.webworks.security.policyattachment import (
     get_attached_policy,
     POLICY_CONSTRAINTS_KEY,
 )
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.securitycontext import SecurityContext
 
 
 logger = logging.getLogger(__name__)
@@ -81,9 +81,9 @@ class SecurityMiddleware:
 
     def __init__(
         self,
-        auth_manager: Authentication_Manager,
-        authz_engine: Authorization_Engine,
-        audit_logger: Audit_Logger,
+        auth_manager: AuthenticationManager,
+        authz_engine: AuthorizationEngine,
+        audit_logger: AuditLogger,
         default_policy: Optional[AccessPolicy] = None,
         security_audit_mode: bool = False
     ):

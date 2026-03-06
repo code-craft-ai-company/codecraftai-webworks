@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional, Tuple
 
 
 @dataclass(frozen=True)
-class Security_Context:
+class SecurityContext:
     """
         Immutable security context containing authenticated user information.
 

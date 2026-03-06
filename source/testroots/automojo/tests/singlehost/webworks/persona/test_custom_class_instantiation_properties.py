@@ -19,11 +19,11 @@ import string
 
 from automojo.thisapp.persona import AppPersona
 from automojo.thisapp.wellknown import ThisApplication
-from automojo.webworks.persona import (
+from automojo.webworks.webapplication import (
     establish_webapp_persona,
     reset_webapp_persona,
 )
-from automojo.webworks.persona.webapplication import WebApplication
+from automojo.webworks.webapplication import WebApplication
 from automojo.webworks.wellknown import ThisWebApplicationSingleton
 import automojo.webworks.wellknown as webworks_wellknown
 import automojo.thisapp.wellknown as thisapp_wellknown

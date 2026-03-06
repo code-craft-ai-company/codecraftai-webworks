@@ -197,6 +197,10 @@ class RestBlueprint(RestEndpoint):
         merged_version = version if version is not None else cls.version
         
         # Call parent attach_at with computed path
+        # Mark as REST endpoint so the OpenAPI generator can distinguish
+        # REST API routes from plain page routes.
+        extras["endpoint_type"] = "rest"
+
         return super().attach_at(
             leaf=None if computed_path else leaf,
             path=computed_path,

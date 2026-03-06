@@ -18,7 +18,7 @@ from automojo.webworks.security.policyfactories import (
     roles,
     scopes,
 )
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.securitycontext import SecurityContext
 
 
 # =============================================================================
@@ -74,7 +74,7 @@ def test_public_allows_unauthenticated_access():
         Test that a public policy passes check() for a guest context.
     """
     policy = public()
-    guest = Security_Context.guest()
+    guest = SecurityContext.guest()
 
     check_result = policy.check(guest)
     if check_result is not True:
@@ -137,7 +137,7 @@ def test_authenticated_denies_guest_access():
         Test that an authenticated policy denies access for a guest context.
     """
     policy = authenticated()
-    guest = Security_Context.guest()
+    guest = SecurityContext.guest()
 
     check_result = policy.check(guest)
     if check_result is not False:
@@ -152,7 +152,7 @@ def test_authenticated_allows_authenticated_user():
         Test that an authenticated policy allows access for an authenticated user.
     """
     policy = authenticated()
-    user_ctx = Security_Context(user_id="user-1", username="testuser")
+    user_ctx = SecurityContext(user_id="user-1", username="testuser")
 
     check_result = policy.check(user_ctx)
     if check_result is not True:
@@ -239,7 +239,7 @@ def test_roles_denies_user_without_matching_role():
         Test that a roles policy denies a user who lacks the required roles.
     """
     policy = roles("admin")
-    user_ctx = Security_Context(user_id="user-1", roles=("viewer",))
+    user_ctx = SecurityContext(user_id="user-1", roles=("viewer",))
 
     check_result = policy.check(user_ctx)
     if check_result is not False:
@@ -254,7 +254,7 @@ def test_roles_allows_user_with_matching_role():
         Test that a roles policy allows a user who has one of the required roles.
     """
     policy = roles("admin", "editor")
-    user_ctx = Security_Context(user_id="user-1", roles=("editor",))
+    user_ctx = SecurityContext(user_id="user-1", roles=("editor",))
 
     check_result = policy.check(user_ctx)
     if check_result is not True:
@@ -342,7 +342,7 @@ def test_scopes_denies_user_missing_a_scope():
         required scopes.
     """
     policy = scopes("read", "write")
-    user_ctx = Security_Context(user_id="user-1", scopes=("read",))
+    user_ctx = SecurityContext(user_id="user-1", scopes=("read",))
 
     check_result = policy.check(user_ctx)
     if check_result is not False:
@@ -357,7 +357,7 @@ def test_scopes_allows_user_with_all_scopes():
         Test that a scopes policy allows a user who has all required scopes.
     """
     policy = scopes("read", "write")
-    user_ctx = Security_Context(user_id="user-1", scopes=("read", "write", "delete"))
+    user_ctx = SecurityContext(user_id="user-1", scopes=("read", "write", "delete"))
 
     check_result = policy.check(user_ctx)
     if check_result is not True:

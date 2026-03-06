@@ -7,6 +7,7 @@ AI Agents working in this repository should refer to themselves as an agent name
 - Look in the '<repository>/prompts' folder for pre-build prompts
 - Files inside the .venv folder should not be modified, they are modified by the setup scripts
 - Do not use hypothesis, unittest or pytest test frameworks.  Use only the testbase
+- Place test results inside the .output folder, don't create .output-* directories in the root of the repository
 
 # Project Overview
 
@@ -238,7 +239,60 @@ patch.deactivate()
 | `mock.assert_called_once()` | `ctx.assert_called_once()` |
 
 
-# Evaluating Test Results
+# 'testbase agents' CLI Commands
+The testbase agents command group provides compact, machine-readable commands for analyzing test results. These commands operate on result files directly and do not require a running test session.
+
+## Summary Operations
+```bash
+# Extract compact summary from a test run
+testbase agents summary extract --summary-file=<path/to/testrun_summary.json>
+# Compare two runs for regressions
+testbase agents summary compare --baseline=<path/to/baseline_summary.json> --current=<path/to/current_summary.json>
+```
+## Test Result Operations
+
+```bash
+# List all tests and their final results
+testbase agents testresult list --results-file=<path/to/testrun_results_stream.jsos>
+# List only failed/errored tests with error messages
+testbase agents testresult failures --results-file=<path/to/testrun_results_stream.jsos>
+# Extract details for a specific test
+testbase agents testresult extract --results-file=<path/to/testrun_results_stream.jsos> --testname="package.module#test_name"
+# Filter results by status (PASSED, FAILED, ERRORED, SKIPPED)
+testbase agents testresult list --results-file=<path/to/testrun_results_stream.jsos> --result-filter=FAILED
+```
+
+## Configuration Operations
+```bash
+# Extract key config settings from a test run
+testbase agents config extract --config-file=<path/to/startup-configuration.json>
+```
+## Output Format
+All agent commands output compact key-value text with no decorative formatting. Fields with placeholder values ((not-set), (unknown)) are automatically omitted. Errors are printed to stderr as ERROR: <message> with a non-zero exit code.
+
+```
+result: PASSED
+start: 2026-02-24T22:04:46.299524
+stop: 2026-02-24T22:04:50.357629
+detail:
+  passed: 3
+  failed: 0
+  errors: 0
+  skipped: 0
+  total: 3
+job:
+  id: 8344f668-a0e3-4ef6-89ca-acf007fcb3a0
+  type: TestRun
+```
+
+## Recommended Workflow
+1. After a test run, use summary extract to get the overall result
+2. If failures exist, use testresult failures to identify which tests failed
+3. Use testresult extract --testname=... to get error details for specific failures
+4. Use summary compare to check for regressions between runs
+
+
+# Test Results in Detail
 There is a machine processable Summary File in the output folder.
 
 "*outputfolder*/testrun_summary.json"

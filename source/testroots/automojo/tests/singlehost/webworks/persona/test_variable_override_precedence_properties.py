@@ -24,7 +24,7 @@ from configparser import ConfigParser
 from automojo.thisapp.appvardesc import AppVarDesc, VariableSource
 from automojo.thisapp.appvarset import AppVarSet
 from automojo.thisapp.personavariables import PersonaVariablesDesc
-from automojo.webworks.persona.webapplication import WebApplication
+from automojo.webworks.webapplication import WebApplication
 
 
 # =============================================================================
@@ -423,7 +423,7 @@ def test_property_persona_variables_override_via_establish():
         **Feature: webapp-persona, Property 8: Variable Override Precedence**
         **Validates: Requirements 3.7, 4.1**
     """
-    from automojo.webworks.persona import (
+    from automojo.webworks.webapplication import (
         establish_webapp_persona,
         reset_webapp_persona,
     )

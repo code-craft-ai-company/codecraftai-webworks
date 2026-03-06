@@ -18,11 +18,11 @@ __credits__ = []
 
 from typing import Any, List
 
-from automojo.webworks.security.authenticationprovider import Authentication_Provider
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.authenticationprovider import AuthenticationProvider
+from automojo.webworks.security.securitycontext import SecurityContext
 
 
-class Authentication_Manager:
+class AuthenticationManager:
     """
         Manages multiple authentication providers and coordinates the
         authentication process.
@@ -35,11 +35,11 @@ class Authentication_Manager:
     """
 
     def __init__(self):
-        self._providers: List[Authentication_Provider] = []
+        self._providers: List[AuthenticationProvider] = []
         return
 
     @property
-    def providers(self) -> List[Authentication_Provider]:
+    def providers(self) -> List[AuthenticationProvider]:
         """
             Return the list of registered providers in priority order.
 
@@ -48,7 +48,7 @@ class Authentication_Manager:
         rtnval = list(self._providers)
         return rtnval
 
-    def register_provider(self, provider: Authentication_Provider) -> None:
+    def register_provider(self, provider: AuthenticationProvider) -> None:
         """
             Register an authentication provider.
 
@@ -62,7 +62,7 @@ class Authentication_Manager:
         self._providers.sort(key=lambda p: p.priority)
         return
 
-    def authenticate(self, request: Any) -> Security_Context:
+    def authenticate(self, request: Any) -> SecurityContext:
         """
             Attempt authentication using all registered providers.
 
@@ -80,10 +80,10 @@ class Authentication_Manager:
             if result is not None:
                 return result
 
-        rtnval = Security_Context.guest()
+        rtnval = SecurityContext.guest()
         return rtnval
 
-    async def authenticate_async(self, request: Any) -> Security_Context:
+    async def authenticate_async(self, request: Any) -> SecurityContext:
         """
             Attempt authentication using all registered providers asynchronously.
 
@@ -101,5 +101,6 @@ class Authentication_Manager:
             if result is not None:
                 return result
 
-        rtnval = Security_Context.guest()
+        rtnval = SecurityContext.guest()
         return rtnval
+

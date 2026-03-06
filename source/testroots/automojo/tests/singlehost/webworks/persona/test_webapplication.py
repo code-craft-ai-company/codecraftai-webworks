@@ -5,7 +5,7 @@
     ThisApplication with database lifecycle hooks.
 """
 
-from automojo.webworks.persona.webapplication import WebApplication
+from automojo.webworks.webapplication import WebApplication
 from automojo.thisapp.wellknown import ThisApplication
 from automojo.errors.exceptions import SemanticError
 

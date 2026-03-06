@@ -15,13 +15,13 @@ import time
 from automojo.testbase.mocking import Mock
 
 from automojo.webworks.security.authenticationprovider import (
-    Authentication_Provider,
+    AuthenticationProvider,
     JWTAuthProvider,
     SessionAuthProvider,
     APIKeyAuthProvider,
 )
-from automojo.webworks.security.authenticationmanager import Authentication_Manager
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.authenticationmanager import AuthenticationManager
+from automojo.webworks.security.securitycontext import SecurityContext
 
 
 # =============================================================================
@@ -123,7 +123,7 @@ def test_jwt_provider_implements_protocol():
     """
     provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY)
 
-    is_instance = isinstance(provider, Authentication_Provider)
+    is_instance = isinstance(provider, AuthenticationProvider)
     if is_instance is not True:
         errmsg = "JWTAuthProvider should implement Authentication_Provider protocol"
         raise AssertionError(errmsg)
@@ -138,7 +138,7 @@ def test_session_provider_implements_protocol():
     store = _create_mock_store()
     provider = SessionAuthProvider(session_store=store)
 
-    is_instance = isinstance(provider, Authentication_Provider)
+    is_instance = isinstance(provider, AuthenticationProvider)
     if is_instance is not True:
         errmsg = "SessionAuthProvider should implement Authentication_Provider protocol"
         raise AssertionError(errmsg)
@@ -153,7 +153,7 @@ def test_api_key_provider_implements_protocol():
     store = _create_mock_store()
     provider = APIKeyAuthProvider(key_store=store)
 
-    is_instance = isinstance(provider, Authentication_Provider)
+    is_instance = isinstance(provider, AuthenticationProvider)
     if is_instance is not True:
         errmsg = "APIKeyAuthProvider should implement Authentication_Provider protocol"
         raise AssertionError(errmsg)
@@ -639,7 +639,7 @@ def test_manager_returns_guest_when_no_providers():
     """
         Test that Authentication_Manager returns a guest context when no providers are registered.
     """
-    manager = Authentication_Manager()
+    manager = AuthenticationManager()
     request = _create_mock_request()
 
     result = manager.authenticate(request)
@@ -662,7 +662,7 @@ def test_manager_returns_context_from_successful_provider():
     token = _create_jwt_token(payload)
     request = _create_mock_request(headers={"Authorization": f"Bearer {token}"})
 
-    manager = Authentication_Manager()
+    manager = AuthenticationManager()
     provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY)
     manager.register_provider(provider)
 
@@ -701,7 +701,7 @@ def test_manager_tries_providers_in_priority_order():
     api_provider = APIKeyAuthProvider(key_store=key_store, priority=5)
     session_provider = SessionAuthProvider(session_store=session_store, priority=20)
 
-    manager = Authentication_Manager()
+    manager = AuthenticationManager()
     # Register in reverse order to verify sorting
     manager.register_provider(session_provider)
     manager.register_provider(api_provider)
@@ -736,7 +736,7 @@ def test_manager_falls_through_to_next_provider():
     jwt_provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY, priority=10)
     session_provider = SessionAuthProvider(session_store=session_store, priority=20)
 
-    manager = Authentication_Manager()
+    manager = AuthenticationManager()
     manager.register_provider(jwt_provider)
     manager.register_provider(session_provider)
 
@@ -764,7 +764,7 @@ def test_manager_returns_guest_when_all_providers_fail():
     session_provider = SessionAuthProvider(session_store=store, priority=20)
     api_provider = APIKeyAuthProvider(key_store=store, priority=30)
 
-    manager = Authentication_Manager()
+    manager = AuthenticationManager()
     manager.register_provider(jwt_provider)
     manager.register_provider(session_provider)
     manager.register_provider(api_provider)
@@ -791,7 +791,7 @@ def test_manager_providers_property_returns_sorted_list():
     provider_b = JWTAuthProvider(secret_key=TEST_SECRET_KEY, priority=10)
     provider_c = SessionAuthProvider(session_store=store, priority=20)
 
-    manager = Authentication_Manager()
+    manager = AuthenticationManager()
     manager.register_provider(provider_a)
     manager.register_provider(provider_b)
     manager.register_provider(provider_c)
@@ -889,7 +889,7 @@ def _generate_random_provider_chain():
 
         if will_succeed:
             user_id = f"user-{_random_string(4, 10)}"
-            result = Security_Context(
+            result = SecurityContext(
                 user_id=user_id,
                 provider=provider_name,
                 roles=tuple(),
@@ -934,7 +934,7 @@ def test_property_authentication_provider_chain():
     for iteration in range(num_iterations):
         providers_with_ids, expected_user_id, expected_called_count = _generate_random_provider_chain()
 
-        manager = Authentication_Manager()
+        manager = AuthenticationManager()
         mock_providers = []
 
         # Register providers in random order to verify sorting

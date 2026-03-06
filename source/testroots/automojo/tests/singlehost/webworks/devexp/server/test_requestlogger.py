@@ -388,3 +388,120 @@ def test_method_color_options_is_white():
         raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Property-Based Tests
+# =============================================================================
+
+import random
+import string
+
+
+# Characters for generating random HTTP methods and paths
+_METHOD_CHARS = string.ascii_uppercase
+_PATH_CHARS = string.ascii_letters + string.digits + "/-_.~"
+
+
+def _random_method():
+    """
+        Return a random HTTP method string of 3 to 7 uppercase letters.
+    """
+    length = random.randint(3, 7)
+    method = "".join(random.choice(_METHOD_CHARS) for _ in range(length))
+    return method
+
+
+def _random_path():
+    """
+        Return a random URL path string starting with '/'.
+    """
+    length = random.randint(1, 50)
+    path = "/" + "".join(random.choice(_PATH_CHARS) for _ in range(length))
+    return path
+
+
+def _random_status_code():
+    """
+        Return a random HTTP status code between 100 and 599.
+    """
+    return random.randint(100, 599)
+
+
+def _random_elapsed_ms():
+    """
+        Return a random elapsed time in milliseconds as a float.
+    """
+    return round(random.uniform(0.01, 9999.99), 2)
+
+
+def test_property_log_format():
+    """
+        Property 10: Request Log Format
+
+        For any HTTP method, request path, status code, and elapsed time,
+        the RequestLogger._format_log output should be a single line
+        matching the format "{method} {path} {status_code} {elapsed_ms}ms"
+        and should contain all four values.
+
+        **Validates: Requirements 9.1, 9.2**
+    """
+    # Feature: development-server, Property 10: Request Log Format
+    rl = RequestLogger(use_colors=False)
+
+    for iteration in range(100):
+        method = _random_method()
+        path = _random_path()
+        status_code = _random_status_code()
+        elapsed_ms = _random_elapsed_ms()
+
+        result = rl._format_log(method, path, status_code, elapsed_ms)
+
+        # Verify single line (no newlines)
+        if "\n" in result:
+            errmsg = (
+                "Iteration {}: Expected single line, got multi-line: '{}'"
+                .format(iteration, repr(result))
+            )
+            raise AssertionError(errmsg)
+
+        # Build the expected format string
+        expected = "{} {} {} {}ms".format(method, path, status_code, elapsed_ms)
+
+        if result != expected:
+            errmsg = (
+                "Iteration {}: Expected '{}', got '{}'"
+                .format(iteration, expected, result)
+            )
+            raise AssertionError(errmsg)
+
+        # Verify all four values are present in the result
+        if method not in result:
+            errmsg = (
+                "Iteration {}: Method '{}' not found in '{}'"
+                .format(iteration, method, result)
+            )
+            raise AssertionError(errmsg)
+
+        if path not in result:
+            errmsg = (
+                "Iteration {}: Path '{}' not found in '{}'"
+                .format(iteration, path, result)
+            )
+            raise AssertionError(errmsg)
+
+        if str(status_code) not in result:
+            errmsg = (
+                "Iteration {}: Status code '{}' not found in '{}'"
+                .format(iteration, status_code, result)
+            )
+            raise AssertionError(errmsg)
+
+        if str(elapsed_ms) not in result:
+            errmsg = (
+                "Iteration {}: Elapsed time '{}' not found in '{}'"
+                .format(iteration, elapsed_ms, result)
+            )
+            raise AssertionError(errmsg)
+
+    return

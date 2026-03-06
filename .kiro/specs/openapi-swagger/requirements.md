@@ -2,14 +2,17 @@
 
 ## Introduction
 
-This document specifies the requirements for the OpenAPI and Swagger UI feature. This feature provides automatic OpenAPI specification generation from endpoint descriptors and hosts an interactive Swagger UI for API exploration and testing.
+This document specifies the requirements for the OpenAPI and Swagger UI feature. This feature provides automatic OpenAPI specification generation from endpoint descriptors and hosts a fully self-contained interactive Swagger UI for API exploration and testing.
 
-The feature enables developers to automatically generate OpenAPI 3.0+ specifications from the endpoint registry without manual documentation, expose interactive API documentation via Swagger UI, and maintain documentation that stays synchronized with the actual API implementation.
+A core design principle is that the package must be fully self-reliant. The Swagger UI and ReDoc assets (CSS, JavaScript, fonts) must be bundled within the package itself so that no external CDN requests are made at runtime. This enables the documentation UI to function in air-gapped environments, behind firewalls, and without internet connectivity.
+
+The feature enables developers to automatically generate OpenAPI 3.0+ specifications from the endpoint registry without manual documentation, expose interactive API documentation via a locally-served Swagger UI, and maintain documentation that stays synchronized with the actual API implementation.
 
 ## Glossary
 
 - **OpenAPI_Specification**: A machine-readable document (JSON or YAML) describing a REST API's endpoints, parameters, request/response schemas, authentication, and metadata following the OpenAPI 3.0+ standard.
 - **Swagger_UI**: An interactive web-based interface that renders OpenAPI specifications and allows users to explore and test API endpoints directly from the browser.
+- **Bundled_Assets**: The Swagger UI and ReDoc static files (JavaScript, CSS, fonts, images) vendored into the package distribution so they can be served without external network access.
 - **EndpointDescriptor**: A dataclass containing handler reference, path, methods, schemas, and metadata collected during endpoint registration.
 - **EndpointRegistry**: A module-level registry that collects all EndpointDescriptor objects from attach_at/attach_child calls.
 - **Schema_Converter**: A component that converts Python types (dataclasses, Pydantic models) to JSON Schema for OpenAPI specification.
@@ -101,20 +104,39 @@ The feature enables developers to automatically generate OpenAPI 3.0+ specificat
 4. THE generator SHALL include response descriptions explaining each error condition.
 5. THE generator SHALL support custom error schemas per endpoint when specified.
 
-### Requirement 7: Swagger UI Hosting
+### Requirement 7: Bundled Static Asset Management
 
-**User Story:** As an API developer, I want Swagger UI hosted automatically, so that I can provide interactive documentation without additional setup.
+**User Story:** As an API developer, I want the Swagger UI and ReDoc assets bundled within the package, so that the documentation UI works without any external network access.
 
 #### Acceptance Criteria
 
-1. THE Swagger_UI_Blueprint SHALL serve the Swagger UI static assets at a configurable path (default: /docs).
-2. THE Swagger_UI_Blueprint SHALL serve the OpenAPI specification at a configurable path (default: /openapi.json).
-3. WHEN a user visits the Swagger UI path, THE system SHALL render the interactive documentation interface.
-4. THE Swagger UI SHALL be configured to use the served OpenAPI specification URL.
-5. THE Swagger_UI_Blueprint SHALL support enabling/disabling the "Try it out" feature via configuration.
-6. THE Swagger_UI_Blueprint SHALL support custom Swagger UI configuration options (e.g., docExpansion, filter).
+1. THE package SHALL include a vendored copy of the Swagger UI distribution files (swagger-ui-bundle.js, swagger-ui.css, and supporting assets) under `source/packages/automojo/webworks/openapi/static/swagger-ui/`.
+2. THE package SHALL include a vendored copy of the ReDoc standalone JavaScript file under `source/packages/automojo/webworks/openapi/static/redoc/`.
+3. THE static assets SHALL be included in the package distribution via `pyproject.toml` package-data configuration.
+4. THE package SHALL provide a management script or CLI command (`webworks openapi update-assets`) that downloads the latest Swagger UI and ReDoc releases from their official GitHub repositories and updates the vendored copies.
+5. THE asset update command SHALL record the downloaded version numbers in a manifest file (`static/manifest.json`) containing asset name, version, download URL, and SHA-256 checksum.
+6. THE asset update command SHALL verify downloaded file integrity using SHA-256 checksums before overwriting vendored files.
+7. THE vendored assets SHALL be committed to version control so that builds and deployments never require network access.
+8. THE HTML templates SHALL reference the bundled assets via local URL paths (e.g., `/_swagger/swagger-ui-bundle.js`) rather than CDN URLs.
 
-### Requirement 8: Specification Customization
+### Requirement 8: Swagger UI Hosting
+
+**User Story:** As an API developer, I want Swagger UI hosted automatically from bundled assets, so that I can provide interactive documentation without additional setup or external dependencies.
+
+#### Acceptance Criteria
+
+1. THE Swagger_UI_Blueprint SHALL serve the bundled Swagger UI static assets at a configurable base path (default: `/_swagger/`).
+2. THE Swagger_UI_Blueprint SHALL serve the Swagger UI HTML page at a configurable path (default: `/docs`).
+3. THE Swagger_UI_Blueprint SHALL serve the OpenAPI specification at a configurable path (default: `/openapi.json`).
+4. WHEN a user visits the Swagger UI path, THE system SHALL render the interactive documentation interface using only locally-served assets.
+5. THE Swagger UI HTML page SHALL NOT contain any references to external CDNs, unpkg, or other remote asset sources.
+6. THE Swagger_UI_Blueprint SHALL support enabling/disabling the "Try it out" feature via configuration.
+7. THE Swagger_UI_Blueprint SHALL support custom Swagger UI configuration options (e.g., docExpansion, filter, defaultModelsExpandDepth).
+8. THE static asset endpoint SHALL set appropriate Content-Type headers based on file extension (application/javascript for .js, text/css for .css, etc.).
+9. THE static asset endpoint SHALL set Cache-Control headers to enable browser caching of immutable assets.
+10. THE Swagger_UI_Blueprint SHALL serve a favicon for the documentation pages from the bundled assets.
+
+### Requirement 9: Specification Customization
 
 **User Story:** As an API developer, I want specification customization options, so that I can add additional metadata and customize the generated documentation.
 
@@ -127,7 +149,7 @@ The feature enables developers to automatically generate OpenAPI 3.0+ specificat
 5. THE generator SHALL support filtering endpoints by tag or path pattern for partial specification generation.
 6. THE generator SHALL support merging additional OpenAPI content from external files.
 
-### Requirement 9: Specification Validation
+### Requirement 10: Specification Validation
 
 **User Story:** As an API developer, I want specification validation, so that I can ensure the generated OpenAPI document is valid before deployment.
 
@@ -139,7 +161,7 @@ The feature enables developers to automatically generate OpenAPI 3.0+ specificat
 4. THE generator SHALL provide a validate() method that checks the specification without generating output.
 5. THE validation SHALL detect missing schema references and undefined security schemes.
 
-### Requirement 10: Specification Export
+### Requirement 11: Specification Export
 
 **User Story:** As an API developer, I want specification export capabilities, so that I can use the generated documentation with external tools and CI/CD pipelines.
 
@@ -152,19 +174,20 @@ The feature enables developers to automatically generate OpenAPI 3.0+ specificat
 5. THE generator SHALL support writing to stdout for pipeline integration.
 6. THE export SHALL produce deterministic output (consistent ordering) for version control diffing.
 
-### Requirement 11: ReDoc Alternative UI
+### Requirement 12: ReDoc Alternative UI
 
 **User Story:** As an API developer, I want an alternative documentation UI option, so that I can choose the documentation style that best fits my project.
 
 #### Acceptance Criteria
 
-1. THE ReDoc_Blueprint SHALL serve ReDoc static assets at a configurable path (default: /redoc).
+1. THE ReDoc_Blueprint SHALL serve the bundled ReDoc static assets at a configurable path (default: `/redoc`).
 2. THE ReDoc_Blueprint SHALL use the same OpenAPI specification as Swagger UI.
-3. WHEN a user visits the ReDoc path, THE system SHALL render the ReDoc documentation interface.
-4. THE ReDoc_Blueprint SHALL support custom ReDoc configuration options.
-5. THE system SHALL support enabling Swagger UI, ReDoc, or both simultaneously.
+3. WHEN a user visits the ReDoc path, THE system SHALL render the ReDoc documentation interface using only locally-served assets.
+4. THE ReDoc HTML page SHALL NOT contain any references to external CDNs or remote asset sources.
+5. THE ReDoc_Blueprint SHALL support custom ReDoc configuration options.
+6. THE system SHALL support enabling Swagger UI, ReDoc, or both simultaneously.
 
-### Requirement 12: Specification Caching
+### Requirement 13: Specification Caching
 
 **User Story:** As an API developer, I want specification caching, so that the OpenAPI document is not regenerated on every request.
 
@@ -176,3 +199,20 @@ The feature enables developers to automatically generate OpenAPI 3.0+ specificat
 4. THE system SHALL support a cache_ttl configuration for time-based cache expiration.
 5. THE system SHALL support manual cache invalidation via a refresh() method.
 6. IN production mode, THE specification SHALL be generated once at startup and cached indefinitely.
+
+## Correctness Properties
+
+### Property 1: Self-Containment
+For any deployment of the package, the Swagger UI and ReDoc documentation pages SHALL render correctly without making any HTTP requests to external hosts. All JavaScript, CSS, and font resources SHALL be served from the application's own endpoints.
+
+### Property 2: Asset Integrity
+For any vendored asset file, the SHA-256 checksum recorded in the manifest SHALL match the actual file content. The asset update command SHALL reject downloads whose checksums do not match expected values.
+
+### Property 3: Specification Determinism
+For any fixed set of endpoint descriptors and generator configuration, calling generate() multiple times SHALL produce byte-identical JSON output.
+
+### Property 4: Content-Type Correctness
+For any static asset request, the response Content-Type header SHALL match the file's actual MIME type (e.g., .js → application/javascript, .css → text/css, .png → image/png).
+
+### Property 5: Specification Validity
+For any set of valid endpoint descriptors, the generated OpenAPI specification SHALL pass validation against the OpenAPI 3.0 JSON Schema.

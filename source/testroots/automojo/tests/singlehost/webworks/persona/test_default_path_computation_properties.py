@@ -19,7 +19,7 @@ import random
 import string
 
 from automojo.thisapp.persona import AppPersona
-from automojo.webworks.persona import (
+from automojo.webworks.webapplication import (
     establish_webapp_persona,
     reset_webapp_persona,
 )

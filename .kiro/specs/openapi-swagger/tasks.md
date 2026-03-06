@@ -2,288 +2,228 @@
 
 ## Overview
 
-This implementation plan creates the OpenAPI specification generation and Swagger UI hosting feature. The implementation follows a bottom-up approach: first building the schema converter, then the specification generator, then the UI blueprints, and finally the CLI tooling.
+This implementation plan updates the OpenAPI specification generation and Swagger UI hosting feature to use fully bundled static assets instead of CDN references. The plan preserves all existing generation, validation, caching, and CLI functionality while adding a vendored asset layer, an asset resolver, and updated HTML templates that reference local paths. New tasks focus on the static asset infrastructure; existing completed tasks are retained for traceability.
 
 ## Tasks
 
-- [ ] 1. Set up module structure and base classes
-  - [ ] 1.1 Create `automojo.webworks.openapi` package with `__init__.py`
-    - Create package directory structure
-    - Export public API classes
-    - _Requirements: 1.1_
+- [x] 1. Set up module structure and base classes
+  - [x] 1.1 Create `automojo.webworks.openapi` package with `__init__.py`
+  - [x] 1.2 Create configuration dataclasses (OpenAPIInfo, ServerObject, etc.)
+  - [x] 1.3 Create security scheme dataclasses
 
-  - [ ] 1.2 Create configuration dataclasses (OpenAPIInfo, ServerObject, etc.)
-    - Implement OpenAPIInfo with title, version, description, contact, license
-    - Implement ContactObject and LicenseObject
-    - Implement ServerObject and ServerVariable
-    - Implement ExternalDocs
-    - _Requirements: 8.1, 8.2, 8.3_
+- [x] 2. Implement Schema_Converter
+  - [x] 2.1 Create Schema_Converter class with type mapping
+  - [x] 2.2 Implement dataclass conversion
+  - [x] 2.3 Implement Pydantic model conversion
+  - [x] 2.4 Implement complex type handling
+  - [x] 2.5 Implement $ref handling for nested schemas
+  - [x] 2.6 Write property test for schema conversion round-trip
 
-  - [ ] 1.3 Create security scheme dataclasses
-    - Implement SecurityScheme base class
-    - Implement APIKeySecurityScheme
-    - Implement HTTPSecurityScheme
-    - Implement OAuth2SecurityScheme with OAuthFlows and OAuthFlow
-    - _Requirements: 4.4_
+- [x] 3. Checkpoint - Verify schema conversion
 
-- [ ] 2. Implement Schema_Converter
-  - [ ] 2.1 Create Schema_Converter class with type mapping
-    - Implement primitive type conversion (str, int, float, bool, etc.)
-    - Implement PYTHON_TO_JSON_SCHEMA mapping
-    - _Requirements: 2.5_
+- [x] 4. Implement OpenAPI_Generator core
+  - [x] 4.1 Create OpenAPI_Generator class skeleton
+  - [x] 4.2 Implement path building from endpoint descriptors
+  - [x] 4.3 Write property test for path parameter extraction
+  - [x] 4.4 Implement operation building
+  - [x] 4.5 Implement query parameter handling
+  - [x] 4.6 Implement request body building
+  - [x] 4.7 Implement response building
+  - [x] 4.8 Write property test for operation completeness
 
-  - [ ] 2.2 Implement dataclass conversion
-    - Extract fields from dataclass using dataclasses.fields()
-    - Convert field types recursively
-    - Preserve field descriptions and defaults
-    - _Requirements: 2.1, 2.4_
+- [x] 5. Implement security and tag handling
+  - [x] 5.1 Implement security extraction from access_policy
+  - [x] 5.2 Implement security schemes building
+  - [x] 5.3 Implement scope handling for OAuth2
+  - [x] 5.4 Write property test for security scheme consistency
+  - [x] 5.5 Implement tag collection and building
+  - [x] 5.6 Implement automatic tag derivation from path
 
-  - [ ] 2.3 Implement Pydantic model conversion
-    - Use model_json_schema() for Pydantic models
-    - Handle nested model references
-    - _Requirements: 2.2_
+- [x] 6. Checkpoint - Verify generator core
 
-  - [ ] 2.4 Implement complex type handling
-    - Implement List[T] to array conversion
-    - Implement Dict[K, V] to object conversion
-    - Implement Optional[T] to nullable schema
-    - Implement Union[A, B] to oneOf schema
-    - _Requirements: 2.5_
+- [x] 7. Implement specification validation
+  - [x] 7.1 Create ValidationIssue and SpecificationValidationError classes
+  - [x] 7.2 Create OpenAPIValidator class
+  - [x] 7.3 Implement strict mode validation
+  - [x] 7.4 Add validate() method to OpenAPI_Generator
+  - [x] 7.5 Write property test for specification validity
 
-  - [ ] 2.5 Implement $ref handling for nested schemas
-    - Generate unique schema names
-    - Track schemas in cache for components/schemas
-    - Handle circular references
-    - _Requirements: 2.3, 2.6, 2.7_
+- [x] 8. Implement export functionality
+  - [x] 8.1 Implement JSON export
+  - [x] 8.2 Implement YAML export
+  - [x] 8.3 Implement file export
+  - [x] 8.4 Write property test for export format consistency
 
-  - [ ]* 2.6 Write property test for schema conversion round-trip
-    - **Property 1: Schema Conversion Round-Trip**
-    - **Validates: Requirements 2.1, 2.2, 2.4**
+- [x] 9. Implement specification caching
+  - [x] 9.1 Create SpecificationCache class
+  - [x] 9.2 Create CachedOpenAPIGenerator class
+  - [x] 9.3 Implement development mode cache invalidation
+  - [x] 9.4 Write property test for cache consistency
 
-- [ ] 3. Checkpoint - Verify schema conversion
-  - Ensure all tests pass, ask the user if questions arise.
+- [x] 10. Checkpoint - Verify generator complete
 
-- [ ] 4. Implement OpenAPI_Generator core
-  - [ ] 4.1 Create OpenAPI_Generator class skeleton
-    - Initialize with registry, info, servers, security_schemes
-    - Set up schema converter instance
-    - _Requirements: 1.1_
-
-  - [ ] 4.2 Implement path building from endpoint descriptors
-    - Convert EndpointDescriptor paths to OpenAPI path format
-    - Extract and convert path parameters
-    - Group operations by path
-    - _Requirements: 3.1, 3.2_
-
-  - [ ]* 4.3 Write property test for path parameter extraction
-    - **Property 2: Path Parameter Extraction**
-    - **Validates: Requirements 3.1, 3.2**
-
-  - [ ] 4.4 Implement operation building
-    - Generate operationId from handler name
-    - Include summary and description from doc attribute
-    - Include tags from endpoint tags
-    - _Requirements: 3.3, 3.4, 3.5, 3.6_
-
-  - [ ] 4.5 Implement query parameter handling
-    - Extract query parameters from endpoint metadata
-    - Convert to OpenAPI parameter objects
-    - _Requirements: 3.7_
-
-  - [ ] 4.6 Implement request body building
-    - Build requestBody from request_schema
-    - Use schema converter for JSON Schema
-    - _Requirements: 1.6_
-
-  - [ ] 4.7 Implement response building
-    - Build success response from response_schema
-    - Include standard error responses
-    - Include custom error responses from error_map
-    - _Requirements: 1.7, 6.1, 6.2, 6.3, 6.4_
-
-  - [ ]* 4.8 Write property test for operation completeness
-    - **Property 3: Operation Completeness**
-    - **Validates: Requirements 3.3, 3.4, 3.5, 3.6**
-
-- [ ] 5. Implement security and tag handling
-  - [ ] 5.1 Implement security extraction from access_policy
-    - Extract authentication requirements
-    - Map to security scheme references
-    - _Requirements: 4.1, 4.3_
-
-  - [ ] 5.2 Implement security schemes building
-    - Build securitySchemes in components section
-    - Support apiKey, http, oauth2 schemes
-    - _Requirements: 4.2, 4.4_
-
-  - [ ] 5.3 Implement scope handling for OAuth2
-    - Extract scope requirements from access_policy
-    - Include in security requirement objects
-    - _Requirements: 4.6_
-
-  - [ ]* 5.4 Write property test for security scheme consistency
-    - **Property 4: Security Scheme Consistency**
-    - **Validates: Requirements 4.1, 4.2, 4.3**
-
-  - [ ] 5.5 Implement tag collection and building
-    - Collect unique tags from all endpoints
-    - Build tags array with descriptions
-    - Support tag_descriptions configuration
-    - _Requirements: 5.1, 5.2, 5.3, 5.4_
-
-  - [ ] 5.6 Implement automatic tag derivation from path
-    - Derive tags from path hierarchy when not specified
-    - _Requirements: 5.5_
-
-- [ ] 6. Checkpoint - Verify generator core
-  - Ensure all tests pass, ask the user if questions arise.
-
-- [ ] 7. Implement specification validation
-  - [ ] 7.1 Create ValidationIssue and SpecificationValidationError classes
-    - Implement ValidationIssue dataclass
-    - Implement SpecificationValidationError exception
-    - _Requirements: 9.2_
-
-  - [ ] 7.2 Create OpenAPIValidator class
-    - Implement structure validation
-    - Implement $ref resolution validation
-    - Implement security scheme reference validation
-    - _Requirements: 9.1, 9.5_
-
-  - [ ] 7.3 Implement strict mode validation
-    - Check for missing descriptions
-    - Check for missing examples
-    - _Requirements: 9.3_
-
-  - [ ] 7.4 Add validate() method to OpenAPI_Generator
-    - Integrate validator with generator
-    - Support strict parameter
-    - _Requirements: 9.4_
-
-  - [ ]* 7.5 Write property test for specification validity
-    - **Property 5: Specification Validity**
-    - **Validates: Requirements 9.1, 9.5**
-
-- [ ] 8. Implement export functionality
-  - [ ] 8.1 Implement JSON export
-    - Add generate_json() method
-    - Support indentation parameter
-    - _Requirements: 1.5, 10.1_
-
-  - [ ] 8.2 Implement YAML export
-    - Add generate_yaml() method
-    - Use PyYAML or ruamel.yaml
-    - _Requirements: 1.5, 10.2_
-
-  - [ ] 8.3 Implement file export
-    - Add export() method with path and format
-    - Infer format from file extension
-    - Ensure deterministic output ordering
-    - _Requirements: 10.1, 10.2, 10.6_
-
-  - [ ]* 8.4 Write property test for export format consistency
-    - **Property 6: Export Format Consistency**
-    - **Validates: Requirements 10.1, 10.2, 10.6**
-
-- [ ] 9. Implement specification caching
-  - [ ] 9.1 Create SpecificationCache class
-    - Implement get/set/invalidate methods
-    - Support TTL-based expiration
-    - Support production mode (no expiration)
-    - _Requirements: 12.1, 12.4, 12.6_
-
-  - [ ] 9.2 Create CachedOpenAPIGenerator class
-    - Extend OpenAPI_Generator with caching
-    - Implement refresh() method
-    - _Requirements: 12.2, 12.5_
-
-  - [ ] 9.3 Implement development mode cache invalidation
-    - Detect endpoint modifications
-    - Auto-invalidate on changes
-    - _Requirements: 12.3_
-
-  - [ ]* 9.4 Write property test for cache consistency
-    - **Property 7: Cache Consistency**
-    - **Validates: Requirements 12.1, 12.2**
-
-- [ ] 10. Checkpoint - Verify generator complete
-  - Ensure all tests pass, ask the user if questions arise.
-
-- [ ] 11. Implement Swagger UI Blueprint
-  - [ ] 11.1 Create Swagger_UI_Blueprint class
-    - Extend RestBlueprint
-    - Configure ui_path and spec_path
+- [x] 11. Vendor static assets and create asset resolver
+  - [x] 11.1 Create static asset directory structure
+    - Create `source/packages/automojo/webworks/openapi/static/swagger-ui/`
+    - Create `source/packages/automojo/webworks/openapi/static/redoc/`
+    - Create `source/packages/automojo/webworks/openapi/static/manifest.json` with empty structure
     - _Requirements: 7.1, 7.2_
 
-  - [ ] 11.2 Implement serve_ui() endpoint
-    - Generate Swagger UI HTML
-    - Configure Swagger UI options
-    - _Requirements: 7.3, 7.4_
+  - [x] 11.2 Download and vendor Swagger UI distribution files
+    - Download `swagger-ui-bundle.js`, `swagger-ui.css`, `favicon-32x32.png` from the latest Swagger UI GitHub release
+    - Place files in `static/swagger-ui/`
+    - Record version, download URLs, and SHA-256 checksums in `manifest.json`
+    - _Requirements: 7.1, 7.5, 7.6_
 
-  - [ ] 11.3 Implement serve_spec() endpoint
-    - Return cached OpenAPI specification
-    - Set Content-Type to application/json
-    - _Requirements: 7.2_
+  - [x] 11.3 Download and vendor ReDoc standalone bundle
+    - Download `redoc.standalone.js` from the latest ReDoc GitHub release
+    - Place file in `static/redoc/`
+    - Record version, download URL, and SHA-256 checksum in `manifest.json`
+    - _Requirements: 7.2, 7.5, 7.6_
 
-  - [ ] 11.4 Implement Swagger UI configuration options
-    - Support try_it_out enable/disable
-    - Support docExpansion, filter options
-    - Support custom configuration
-    - _Requirements: 7.5, 7.6_
+  - [x] 11.4 Create `AssetResolver` class in `source/packages/automojo/webworks/openapi/assets.py`
+    - Implement `resolve(asset_group, filename)` to read bundled files using `__file__`-relative paths
+    - Implement `content_type(filename)` with MIME type mapping for .js, .css, .png, .svg, .ico, .json, .woff, .woff2, .ttf
+    - Implement `verify_integrity()` to check SHA-256 checksums against manifest
+    - Implement `swagger_ui_version` and `redoc_version` properties
+    - _Requirements: 7.1, 7.2, 7.5, 7.6, 8.8_
 
-  - [ ] 11.5 Implement blueprint registration
-    - Register UI and spec routes
-    - Support custom paths
-    - _Requirements: 7.1, 7.2_
+  - [x] 11.5 Write unit tests for AssetResolver
+    - Create `source/testroots/automojo/tests/singlehost/webworks/openapi/test_assets.py`
+    - Test `resolve` returns bytes for each vendored file
+    - Test `resolve` returns None for non-existent files
+    - Test `content_type` returns correct MIME type for each supported extension
+    - Test `verify_integrity` passes for unmodified vendored files
+    - Test `swagger_ui_version` and `redoc_version` return version strings from manifest
+    - _Requirements: 7.1, 7.2, 7.5, 7.6, 8.8_
 
-- [ ] 12. Implement ReDoc Blueprint
-  - [ ] 12.1 Create ReDoc_Blueprint class
-    - Extend RestBlueprint
-    - Configure ui_path and spec_url
-    - _Requirements: 11.1, 11.2_
+  - [x] 11.6 Write property test for Content-Type correctness
+    - **Property 4: Content-Type Correctness**
+    - For all supported file extensions, verify the MIME type mapping returns the correct Content-Type
+    - **Validates: Requirements 8.8**
 
-  - [ ] 12.2 Implement serve_ui() endpoint
-    - Generate ReDoc HTML
-    - Configure ReDoc options
-    - _Requirements: 11.3_
+  - [x] 11.7 Write property test for asset integrity
+    - **Property 2: Asset Integrity**
+    - For all entries in manifest.json, verify the SHA-256 checksum matches the actual file content
+    - **Validates: Requirements 7.5, 7.6**
 
-  - [ ] 12.3 Implement ReDoc configuration options
-    - Support custom ReDoc configuration
-    - _Requirements: 11.4_
+- [x] 12. Checkpoint - Verify asset resolver and vendored files
 
-  - [ ] 12.4 Support simultaneous UI hosting
-    - Allow both Swagger UI and ReDoc
-    - Share OpenAPI specification
-    - _Requirements: 11.5_
+- [x] 13. Update Swagger UI Blueprint to serve bundled assets
+  - [x] 13.1 Update `SwaggerUIBlueprint.__init__` to accept `static_path` parameter
+    - Add `static_path` parameter (default: `/_swagger`)
+    - Instantiate `AssetResolver` internally
+    - _Requirements: 8.1_
 
-- [ ] 13. Implement CLI tooling
-  - [ ] 13.1 Create openapi CLI command group
-    - Add to webworks CLI
-    - _Requirements: 10.3_
+  - [x] 13.2 Update `_build_swagger_html` to reference local asset paths
+    - Replace CDN URLs with `{static_path}/swagger-ui-bundle.js` and `{static_path}/swagger-ui.css`
+    - Add favicon link referencing `{static_path}/favicon-32x32.png`
+    - Remove `SwaggerUIStandalonePreset` and `StandaloneLayout` references
+    - _Requirements: 8.4, 8.5_
 
-  - [ ] 13.2 Implement generate subcommand
-    - Accept output path parameter
-    - Accept format parameter (json/yaml)
-    - Accept filter options (tags, paths)
-    - _Requirements: 10.3, 10.4_
+  - [x] 13.3 Implement `serve_static` method
+    - Accept filename parameter, delegate to `AssetResolver.resolve("swagger-ui", filename)`
+    - Set Content-Type header from `AssetResolver.content_type(filename)`
+    - Set `Cache-Control: public, max-age=31536000, immutable` header
+    - Return 404 if file not found
+    - _Requirements: 8.1, 8.8, 8.9_
 
-  - [ ] 13.3 Implement stdout output
-    - Support writing to stdout for pipelines
-    - _Requirements: 10.5_
+  - [x] 13.4 Update `get_descriptors` to include static asset route
+    - Add an EndpointDescriptor for `{static_path}/<filename>` (GET) pointing to `serve_static`
+    - _Requirements: 8.1_
 
-  - [ ] 13.4 Implement validate subcommand
-    - Validate specification without export
-    - Support strict mode flag
-    - _Requirements: 9.4_
+  - [x] 13.5 Write unit tests for updated SwaggerUIBlueprint
+    - Test `_build_swagger_html` output contains no external CDN references
+    - Test `_build_swagger_html` output references `static_path` for JS and CSS
+    - Test `serve_static` returns correct Content-Type and Cache-Control headers
+    - Test `serve_static` returns 404 for non-existent files
+    - Test `get_descriptors` includes UI, spec, and static routes
+    - _Requirements: 8.1, 8.4, 8.5, 8.8, 8.9_
 
-- [ ] 14. Final checkpoint - Verify complete implementation
-  - Ensure all tests pass, ask the user if questions arise.
+  - [x] 13.6 Write property test for self-containment
+    - **Property 1: Self-Containment**
+    - For generated Swagger UI HTML, verify no `src` or `href` attributes reference external domains (only relative paths)
+    - **Validates: Requirements 8.4, 8.5**
+
+- [x] 14. Update ReDoc Blueprint to serve bundled assets
+  - [x] 14.1 Update `ReDocBlueprint.__init__` to accept `static_path` parameter
+    - Add `static_path` parameter (default: `/_redoc`)
+    - Instantiate `AssetResolver` internally
+    - _Requirements: 12.1_
+
+  - [x] 14.2 Update `_build_redoc_html` to reference local asset paths
+    - Replace CDN URL with `{static_path}/redoc.standalone.js`
+    - Remove Google Fonts CDN link
+    - _Requirements: 12.3, 12.4_
+
+  - [x] 14.3 Implement `serve_static` method for ReDoc
+    - Accept filename parameter, delegate to `AssetResolver.resolve("redoc", filename)`
+    - Set Content-Type and Cache-Control headers
+    - Return 404 if file not found
+    - _Requirements: 12.1_
+
+  - [x] 14.4 Update `get_descriptors` to include static asset route
+    - Add an EndpointDescriptor for `{static_path}/<filename>` (GET) pointing to `serve_static`
+    - _Requirements: 12.1_
+
+  - [x] 14.5 Write unit tests for updated ReDocBlueprint
+    - Test `_build_redoc_html` output contains no external CDN references
+    - Test `_build_redoc_html` output references `static_path` for JS
+    - Test `serve_static` returns correct Content-Type and Cache-Control headers
+    - Test `serve_static` returns 404 for non-existent files
+    - _Requirements: 12.1, 12.3, 12.4_
+
+  - [x] 14.6 Write property test for ReDoc self-containment
+    - For generated ReDoc HTML, verify no `src` or `href` attributes reference external domains
+    - **Validates: Requirements 12.3, 12.4**
+
+- [x] 15. Checkpoint - Verify updated UI blueprints serve from bundled assets
+
+- [x] 16. Implement asset update CLI command
+  - [x] 16.1 Create `AssetUpdater` class in `source/packages/automojo/webworks/openapi/assets.py`
+    - Implement `update_swagger_ui(version=None)` to download from GitHub releases
+    - Implement `update_redoc(version=None)` to download from GitHub releases
+    - Implement `_download_file(url, dest)` returning SHA-256 checksum
+    - Implement `_update_manifest(group, version, files)` to write manifest.json
+    - Implement `_get_latest_release(repo)` to query GitHub API for latest tag
+    - _Requirements: 7.4, 7.5, 7.6_
+
+  - [x] 16.2 Add `update-assets` subcommand to the openapi CLI group
+    - Accept `--swagger-version` and `--redoc-version` optional arguments
+    - Call `AssetUpdater.update_swagger_ui()` and `AssetUpdater.update_redoc()`
+    - Print summary of downloaded versions and checksums
+    - _Requirements: 7.4_
+
+  - [x] 16.3 Write unit tests for AssetUpdater
+    - Test `_get_latest_release` parses GitHub API response (mock HTTP)
+    - Test `_download_file` computes correct SHA-256 (mock HTTP)
+    - Test `_update_manifest` writes valid JSON with correct structure
+    - Test `update_swagger_ui` downloads all expected files (mock HTTP)
+    - Test `update_redoc` downloads expected file (mock HTTP)
+    - _Requirements: 7.4, 7.5, 7.6_
+
+- [x] 17. Update pyproject.toml for package-data inclusion
+  - [x] 17.1 Add `static/**/*` to package-data in pyproject.toml
+    - Ensure `manifest.json` and all vendored asset files are included in the distribution
+    - _Requirements: 7.3_
+
+- [x] 18. Update blueprintdemo test site to use bundled assets
+  - [x] 18.1 Verify blueprintdemo `/docs` page loads without external requests
+    - Start the blueprintdemo dev server
+    - Confirm Swagger UI renders using only local `/_swagger/` asset paths
+    - Confirm no network errors in browser console
+    - _Requirements: 8.4, 8.5_
+
+- [x] 19. Final checkpoint - Verify complete implementation
+  - Run full test suite to ensure all tests pass
+  - Verify Swagger UI and ReDoc render from bundled assets with no external requests
 
 ## Notes
 
-- Tasks marked with `*` are optional and can be skipped for faster MVP
+- Tasks 1–10 are already completed from the original implementation
+- Tasks 11–19 implement the bundled asset layer and update existing blueprints
+- The `update-assets` CLI command is the only operation that requires network access; it is a developer-time tool, not a runtime dependency
+- All vendored assets are committed to version control so builds never require network access
 - Each task references specific requirements for traceability
-- Checkpoints ensure incremental validation
-- Property tests validate universal correctness properties
-- Unit tests validate specific examples and edge cases
-- The testbase framework should be used for all tests per repository conventions
+- All tests use the `testbase` framework per repository conventions
+- Property tests use data-driven iteration over generated inputs (minimum 10 iterations per property)

@@ -448,6 +448,136 @@ class Router:
                 return match_result
         
         return None
+
+    def get_allowed_methods(self, path: str) -> List[str]:
+        """
+            Get the list of HTTP methods registered for a given path.
+
+            This method traverses the URL tree to find a node matching
+            the given path and returns all HTTP methods that have
+            registered handlers at that node. If no node matches the
+            path, an empty list is returned.
+
+            :param path: The URL path to check.
+
+            :returns: List of HTTP method strings registered for the path.
+        """
+        normalized_path = self._normalize_path(path)
+
+        methods = self._collect_methods_for_path(normalized_path)
+
+        if len(methods) > 0:
+            return methods
+
+        # If strict_slashes is False, try alternate path
+        if not self._strict_slashes:
+            if normalized_path.endswith("/"):
+                alt_path = normalized_path.rstrip("/") or "/"
+            else:
+                alt_path = normalized_path + "/"
+
+            methods = self._collect_methods_for_path(alt_path)
+
+        return methods
+
+    def _collect_methods_for_path(self, path: str) -> List[str]:
+        """
+            Collect all HTTP methods registered at a path in the URL tree.
+
+            :param path: Normalized URL path.
+
+            :returns: List of HTTP method strings.
+        """
+        segments = self._parse_path_segments(path)
+
+        node = self._find_node_for_segments(self._root, segments, 0)
+
+        if node is None:
+            return []
+
+        methods = sorted(node.handlers.keys())
+
+        return methods
+
+    def _find_node_for_segments(
+        self,
+        node: URLNode,
+        segments: List[str],
+        index: int
+    ) -> Optional[URLNode]:
+        """
+            Find the terminal URLNode for a sequence of path segments.
+
+            This method traverses the URL tree without filtering by
+            HTTP method, returning the node where handlers are registered
+            for the given path.
+
+            :param node: Current tree node.
+            :param segments: List of path segments.
+            :param index: Current segment index.
+
+            :returns: The terminal URLNode if found, None otherwise.
+        """
+        # Base case: all segments consumed
+        if index >= len(segments):
+            if len(node.handlers) > 0:
+                return node
+            return None
+
+        current_segment = segments[index]
+        segment_key = current_segment if self._case_sensitive else current_segment.lower()
+
+        # Try static children first (more specific)
+        if segment_key in node.children:
+            result = self._find_node_for_segments(
+                node.children[segment_key],
+                segments,
+                index + 1
+            )
+            if result is not None:
+                return result
+
+        # Try case-insensitive match if needed
+        if not self._case_sensitive:
+            for child_key, child_node in node.children.items():
+                if child_key.lower() == segment_key.lower():
+                    result = self._find_node_for_segments(
+                        child_node,
+                        segments,
+                        index + 1
+                    )
+                    if result is not None:
+                        return result
+
+        # Try parameterized children (in order of specificity)
+        for param_node in node.param_children:
+            # Check if this is a wildcard (path converter)
+            if param_node.matcher is not None:
+                matcher_segments = param_node.matcher.segments
+                if matcher_segments and matcher_segments[0].segment_type == SegmentType.WILDCARD:
+                    remaining_path = "/".join(segments[index:])
+                    match_result = param_node.matcher.match(f"/{remaining_path}")
+
+                    if match_result is not None:
+                        if len(param_node.handlers) > 0:
+                            return param_node
+                    continue
+
+            # Regular parameterized segment
+            if param_node.matcher is not None:
+                match_result = param_node.matcher.match(f"/{current_segment}")
+
+                if match_result is not None:
+                    result = self._find_node_for_segments(
+                        param_node,
+                        segments,
+                        index + 1
+                    )
+                    if result is not None:
+                        return result
+
+        return None
+
     
     def _match_path(self, path: str, method: str) -> Optional[RouteMatch]:
         """

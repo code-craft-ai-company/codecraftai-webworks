@@ -7,7 +7,7 @@
 """
 
 from automojo.webworks.security.accesspolicy import AccessPolicy
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.securitycontext import SecurityContext
 
 
 # =============================================================================
@@ -246,7 +246,7 @@ def test_check_passes_for_authenticated_user_with_role_and_scope():
         scopes=("read", "write"),
         require_auth=True
     )
-    ctx = Security_Context(
+    ctx = SecurityContext(
         user_id="user-1",
         roles=("admin",),
         scopes=("read", "write", "delete")
@@ -267,7 +267,7 @@ def test_check_fails_when_not_authenticated():
         is not authenticated.
     """
     policy = AccessPolicy(require_auth=True)
-    ctx = Security_Context.guest()
+    ctx = SecurityContext.guest()
 
     result = policy.check(ctx)
 
@@ -284,7 +284,7 @@ def test_check_passes_when_auth_not_required():
         is not authenticated.
     """
     policy = AccessPolicy(require_auth=False)
-    ctx = Security_Context.guest()
+    ctx = SecurityContext.guest()
 
     result = policy.check(ctx)
 
@@ -300,7 +300,7 @@ def test_check_fails_when_missing_required_role():
         Test that check returns False when the context lacks any required role.
     """
     policy = AccessPolicy(roles=("admin", "superadmin"))
-    ctx = Security_Context(user_id="user-1", roles=("editor",))
+    ctx = SecurityContext(user_id="user-1", roles=("editor",))
 
     result = policy.check(ctx)
 
@@ -317,7 +317,7 @@ def test_check_passes_with_one_matching_role():
         of the required roles (OR logic).
     """
     policy = AccessPolicy(roles=("admin", "editor"))
-    ctx = Security_Context(user_id="user-1", roles=("editor",))
+    ctx = SecurityContext(user_id="user-1", roles=("editor",))
 
     result = policy.check(ctx)
 
@@ -333,7 +333,7 @@ def test_check_fails_when_missing_required_scope():
         Test that check returns False when the context is missing a required scope.
     """
     policy = AccessPolicy(scopes=("read", "write"))
-    ctx = Security_Context(user_id="user-1", scopes=("read",))
+    ctx = SecurityContext(user_id="user-1", scopes=("read",))
 
     result = policy.check(ctx)
 
@@ -350,7 +350,7 @@ def test_check_passes_with_all_required_scopes():
         (AND logic).
     """
     policy = AccessPolicy(scopes=("read", "write"))
-    ctx = Security_Context(user_id="user-1", scopes=("read", "write", "delete"))
+    ctx = SecurityContext(user_id="user-1", scopes=("read", "write", "delete"))
 
     result = policy.check(ctx)
 
@@ -367,7 +367,7 @@ def test_check_passes_with_empty_roles_and_scopes():
         and the context is authenticated.
     """
     policy = AccessPolicy(require_auth=True)
-    ctx = Security_Context(user_id="user-1")
+    ctx = SecurityContext(user_id="user-1")
 
     result = policy.check(ctx)
 
@@ -388,7 +388,7 @@ def test_get_denial_reason_returns_none_when_check_passes():
         the policy.
     """
     policy = AccessPolicy(roles=("admin",), scopes=("read",))
-    ctx = Security_Context(user_id="user-1", roles=("admin",), scopes=("read",))
+    ctx = SecurityContext(user_id="user-1", roles=("admin",), scopes=("read",))
 
     reason = policy.get_denial_reason(ctx)
 
@@ -405,7 +405,7 @@ def test_get_denial_reason_for_unauthenticated():
         unauthenticated context.
     """
     policy = AccessPolicy(require_auth=True)
-    ctx = Security_Context.guest()
+    ctx = SecurityContext.guest()
 
     reason = policy.get_denial_reason(ctx)
 
@@ -426,7 +426,7 @@ def test_get_denial_reason_for_missing_role():
         is missing.
     """
     policy = AccessPolicy(roles=("admin",))
-    ctx = Security_Context(user_id="user-1", roles=("editor",))
+    ctx = SecurityContext(user_id="user-1", roles=("editor",))
 
     reason = policy.get_denial_reason(ctx)
 
@@ -447,7 +447,7 @@ def test_get_denial_reason_for_missing_scope():
         is missing.
     """
     policy = AccessPolicy(scopes=("read", "write"))
-    ctx = Security_Context(user_id="user-1", scopes=("read",))
+    ctx = SecurityContext(user_id="user-1", scopes=("read",))
 
     reason = policy.get_denial_reason(ctx)
 
@@ -651,7 +651,7 @@ def _random_security_context():
     roles = _random_string_tuple()
     scopes = _random_string_tuple()
 
-    rtnval = Security_Context(
+    rtnval = SecurityContext(
         user_id=user_id,
         roles=roles,
         scopes=scopes

@@ -18,11 +18,11 @@ import random
 import string
 
 from automojo.thisapp.persona import AppPersona
-from automojo.webworks.persona import (
+from automojo.webworks.webapplication import (
     establish_webapp_persona,
     reset_webapp_persona,
 )
-from automojo.webworks.persona.establish import PersonaAlreadyEstablishedError
+from automojo.webworks.webapplication import PersonaAlreadyEstablishedError
 import automojo.webworks.wellknown as webworks_wellknown
 import automojo.thisapp.wellknown as thisapp_wellknown
 

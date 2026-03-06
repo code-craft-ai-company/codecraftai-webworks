@@ -41,7 +41,7 @@ from automojo.webworks.configuration.model import ConfigurationModel
 
 
 if TYPE_CHECKING:
-    from automojo.webworks.persona.webapplication import WebApplication
+    from automojo.webworks.webapplication import WebApplication
 
 
 # Module-level registry for cleanup tracking

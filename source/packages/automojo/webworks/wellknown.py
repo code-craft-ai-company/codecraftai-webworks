@@ -17,7 +17,7 @@ from automojo.thisapp.wellknown import SINGLETON_LOCK
 from automojo.errors.exceptions import SemanticError
 
 if TYPE_CHECKING:
-    from automojo.webworks.persona.webapplication import WebApplication
+    from automojo.webworks.webapplication import WebApplication
 
 
 THISWEBAPPLICATION_SINGLETON: Optional['WebApplication'] = None

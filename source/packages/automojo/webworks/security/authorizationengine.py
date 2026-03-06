@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, List, Optional, Tuple
 
 from automojo.webworks.security.accesspolicy import AccessPolicy
-from automojo.webworks.security.securitycontext import Security_Context
+from automojo.webworks.security.securitycontext import SecurityContext
 
 
 @dataclass
@@ -46,7 +46,7 @@ class AuthorizationResult:
     allowed: bool
     reason: Optional[str] = None
     policy: Optional[AccessPolicy] = None
-    context: Optional[Security_Context] = None
+    context: Optional[SecurityContext] = None
 
 
 class AuthorizationRule:
@@ -64,7 +64,7 @@ class AuthorizationRule:
     def evaluate(
         self,
         policy: AccessPolicy,
-        context: Security_Context,
+        context: SecurityContext,
         request: Any
     ) -> Optional[AuthorizationResult]:
         """
@@ -80,7 +80,7 @@ class AuthorizationRule:
         ...
 
 
-class Authorization_Engine:
+class AuthorizationEngine:
     """
         Evaluates access policies against security contexts to make
         authorization decisions.
@@ -115,7 +115,7 @@ class Authorization_Engine:
     def evaluate(
         self,
         policy: AccessPolicy,
-        context: Security_Context
+        context: SecurityContext
     ) -> AuthorizationResult:
         """
             Evaluate a policy against a security context.
@@ -207,7 +207,7 @@ class Authorization_Engine:
     def check_roles(
         self,
         required_roles: Tuple[str, ...],
-        context: Security_Context
+        context: SecurityContext
     ) -> bool:
         """
             Check if the context has any of the required roles (OR logic).
@@ -223,7 +223,7 @@ class Authorization_Engine:
     def check_scopes(
         self,
         required_scopes: Tuple[str, ...],
-        context: Security_Context
+        context: SecurityContext
     ) -> bool:
         """
             Check if the context has all required scopes (AND logic).

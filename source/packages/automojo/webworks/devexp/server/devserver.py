@@ -8,14 +8,23 @@
     The server holds configuration for host, port, debug mode, reload
     behaviour, and file watch patterns. It provides :meth:`start` and
     :meth:`stop` methods for lifecycle management.
+
+    When the application is a callable ASGI application, :meth:`start`
+    creates an :class:`AsyncServerCore` and :class:`LifespanManager`,
+    then runs the asyncio event loop to block the calling thread until
+    the server is stopped via signal or programmatic call.
 """
 
+import asyncio
 import logging
+import signal
 import socket
 
 from typing import Any, Callable, List, Optional, TYPE_CHECKING
 
 from automojo.webworks.devexp.cli.exitcodes import EXIT_ERROR
+from automojo.webworks.devexp.server.asyncservercore import AsyncServerCore
+from automojo.webworks.devexp.server.lifespanmanager import LifespanManager
 
 if TYPE_CHECKING:
     from automojo.webworks.asgi.application import ASGIApplication
@@ -193,6 +202,11 @@ class DevelopmentServer:
         self._restart_count: int = 0
         self._last_reload_error: Optional[Exception] = None
 
+        self._server_core: Optional[AsyncServerCore] = None
+        self._lifespan_manager: Optional[LifespanManager] = None
+        self._shutdown_event: Optional[asyncio.Event] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
         return
 
     # -------------------------------------------------------------------------
@@ -316,9 +330,9 @@ class DevelopmentServer:
     # Lifecycle Methods
     # -------------------------------------------------------------------------
 
-    def start(self) -> None:
+    def serve_forever(self, host: Optional[str] = None, port: Optional[int] = None) -> None:
         """
-            Start the development server.
+            Start the development server and block until shutdown.
 
             Checks that the configured port is available before starting.
             If the port is already in use, raises :class:`PortInUseError`.
@@ -327,8 +341,26 @@ class DevelopmentServer:
             logging is always configured. When reload is enabled, starts
             the file watcher to monitor for source changes.
 
+            If the application is a callable ASGI application, creates an
+            :class:`AsyncServerCore` and :class:`LifespanManager`, then
+            runs the asyncio event loop to block the calling thread until
+            the server is stopped.
+
+            :param host: The interface IP to bind to.  Overrides the value
+                passed to the constructor.  Defaults to ``None`` which
+                uses the constructor value (``"127.0.0.1"``).
+            :param port: The port number to bind to.  Overrides the value
+                passed to the constructor.  Defaults to ``None`` which
+                uses the constructor value (``8000``).
+
             :raises PortInUseError: If the configured port is already in use.
         """
+        if host is not None:
+            self._host = host
+
+        if port is not None:
+            self._port = port
+
         port_available = check_port_available(self._host, self._port)
 
         if not port_available:
@@ -344,10 +376,23 @@ class DevelopmentServer:
 
         self._running = True
 
+        scheme = "http"
+        display_host = "localhost" if self._host in ("0.0.0.0", "127.0.0.1", "::1", "::") else self._host
+
         logger.info(
             "Development server started on %s:%d (debug=%s, reload=%s)",
             self._host, self._port, self._debug, self._reload,
         )
+        logger.info("Serving on %s://%s:%d", scheme, display_host, self._port)
+
+        # If the app is a callable ASGI application, run the async
+        # server core. Otherwise, just set the running flag (backward
+        # compatibility for tests using non-callable fake apps).
+        if callable(self._app):
+            try:
+                asyncio.run(self._run_async())
+            finally:
+                self._running = False
 
         return
 
@@ -355,15 +400,123 @@ class DevelopmentServer:
         """
             Stop the server and clean up resources.
 
-            If a file watcher is running, it is stopped first.
+            If a file watcher is running, it is stopped first. If the
+            async server core is running, signals the shutdown event
+            to trigger graceful shutdown of the event loop.
         """
         if self._watcher is not None:
             self._watcher.stop()
             self._watcher = None
 
+        # Signal the async event loop to shut down.
+        # Use call_soon_threadsafe when the event loop is running in
+        # a different thread (e.g. when stop() is called from the
+        # main thread while the event loop runs in a background thread).
+        if self._shutdown_event is not None and self._loop is not None:
+            try:
+                self._loop.call_soon_threadsafe(self._shutdown_event.set)
+            except RuntimeError:
+                # The loop may already be closed.
+                self._shutdown_event.set()
+
         self._running = False
 
         logger.info("Development server stopped.")
+
+        return
+
+    # -------------------------------------------------------------------------
+    # Async Event Loop
+    # -------------------------------------------------------------------------
+
+    async def _run_async(self) -> None:
+        """
+            Run the async server core within an asyncio event loop.
+
+            Creates a shutdown event, starts the lifespan manager, creates
+            and starts the async server core, installs signal handlers,
+            and awaits the shutdown event. On shutdown, runs lifespan
+            shutdown and stops the server core.
+        """
+        self._shutdown_event = asyncio.Event()
+
+        # Store the loop reference for cross-thread shutdown signaling.
+        self._loop = asyncio.get_running_loop()
+
+        # Run lifespan startup.
+        self._lifespan_manager = LifespanManager(self._app)
+        await self._lifespan_manager.startup()
+
+        if self._lifespan_manager.startup_failed:
+            logger.error(
+                "Lifespan startup failed: %s. Stopping server.",
+                self._lifespan_manager.failure_message,
+            )
+            self._running = False
+            return
+
+        # Create and start the async server core.
+        self._server_core = AsyncServerCore(
+            app=self._app,
+            host=self._host,
+            port=self._port,
+            debug=self._debug,
+            request_logger=self._request_logger,
+        )
+        await self._server_core.start()
+
+        # Install signal handlers for graceful shutdown.
+        loop = asyncio.get_running_loop()
+        self._setup_signal_handlers(loop)
+
+        logger.info(
+            "Async server core running on %s:%d. Waiting for shutdown signal.",
+            self._host,
+            self._port,
+        )
+
+        # Block until the shutdown event is set.
+        await self._shutdown_event.wait()
+
+        # Run lifespan shutdown.
+        await self._lifespan_manager.shutdown()
+
+        # Stop the server core.
+        await self._server_core.stop()
+        self._server_core = None
+
+        logger.info("Async event loop shutdown complete.")
+
+        return
+
+    def _setup_signal_handlers(self, loop: asyncio.AbstractEventLoop) -> None:
+        """
+            Register SIGINT and SIGTERM handlers on the event loop.
+
+            Each signal sets the shutdown event to trigger graceful
+            shutdown of the async server core.
+
+            Signal handlers can only be installed from the main thread.
+            If the event loop is running in a non-main thread, the
+            handlers are skipped with a debug log message.
+
+            :param loop: The running asyncio event loop.
+        """
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(
+                    sig,
+                    self._shutdown_event.set,
+                )
+            except RuntimeError:
+                logger.debug(
+                    "Cannot install signal handler for %s: "
+                    "not running in the main thread.",
+                    sig.name,
+                )
+                return
+
+        logger.debug("Signal handlers installed for SIGINT and SIGTERM.")
 
         return
 
@@ -431,6 +584,9 @@ class DevelopmentServer:
             import error occurs during the restart, the error is
             logged and the server continues watching for further
             changes.
+
+            When an async server core is running, stops and restarts
+            it. Otherwise, performs the legacy restart logic.
         """
         logger.info(
             "File change detected. Restarting server on %s:%d...",
@@ -452,6 +608,66 @@ class DevelopmentServer:
 
             self._setup_request_logging()
 
+            # If the async server core is running, stop and restart it.
+            if self._server_core is not None:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._restart_server_core())
+            else:
+                self._running = True
+                self._restart_count += 1
+
+                logger.info(
+                    "Server restarted successfully on %s:%d (restart #%d).",
+                    host,
+                    port,
+                    self._restart_count,
+                )
+        except (SyntaxError, ImportError) as exc:
+            # Display the error and continue watching for fixes
+            self._last_reload_error = exc
+            self._running = False
+
+            logger.error(
+                "Error during reload: %s: %s. Watching for fixes...",
+                type(exc).__name__,
+                exc,
+            )
+        except Exception as exc:
+            self._last_reload_error = exc
+            self._running = False
+
+            logger.error(
+                "Unexpected error during reload: %s: %s. Watching for fixes...",
+                type(exc).__name__,
+                exc,
+            )
+
+        return
+
+    async def _restart_server_core(self) -> None:
+        """
+            Stop and restart the async server core during a file-change
+            reload.
+
+            Stops the current server core, creates a new one, and starts
+            it. Increments the restart count on success. Catches
+            ``SyntaxError`` and ``ImportError`` and logs on failure.
+        """
+        host = self._host
+        port = self._port
+
+        try:
+            await self._server_core.stop()
+
+            self._server_core = AsyncServerCore(
+                app=self._app,
+                host=host,
+                port=port,
+                debug=self._debug,
+                request_logger=self._request_logger,
+            )
+            await self._server_core.start()
+
             self._running = True
             self._restart_count += 1
 
@@ -462,7 +678,6 @@ class DevelopmentServer:
                 self._restart_count,
             )
         except (SyntaxError, ImportError) as exc:
-            # Display the error and continue watching for fixes
             self._last_reload_error = exc
             self._running = False
 
