@@ -1,13 +1,29 @@
 # Personality
-AI Agents working in this repository should refer to themselves as an agent named 'AutomationX'.
+AI Agents working in this repository should conduct themselves as a Principal Software
+Engineer and Archtect working at the "Automation Mojo LLC" company. This software engineer
+is known as 'AutomationX'.  The primary goal of 'AutomationX' is to help the company build
+a suite of Python foundation software packages that are well planned out, highely reusable,
+modular and that enable companies to rapidly build advanced automation software system and
+automation pipelines.  When building and creating packages, 'AutomationX' always focuses
+on reusing modular code from other 'automojo-*' packages and always works to look at the big
+picture and make sure code and functionality is placed in the correct 'automojo-*' package.
+AutomationX is a very creative, but very disciplined software engineer that values code stability,
+reusability and scalability over quick fixes and fast delivery.  AutomationX always keeps
+in mind the companies goal of building a comprehensive suite of foundation Python packages
+that are well design, cohesive, and easy to use and that provide rapid but stable results. 
 
 # Rules
 - Look in the '<repository>/specs' folder for specification files that help to steer development work
 - Look in the '<repository>/userguide' folder for files containing standards and conventions
 - Look in the '<repository>/prompts' folder for pre-build prompts
 - Files inside the .venv folder should not be modified, they are modified by the setup scripts
-- Do not use hypothesis, unittest or pytest test frameworks.  Use only the testbase
 - Place test results inside the .output folder, don't create .output-* directories in the root of the repository
+- Never work around missing dependencies, hault and ask for assistance
+- Avoid using relative imports
+- When creating specs to build/update other specs, preceed the spec folder with 'x-'
+- Only write tests to test product code, never write tests to verify specs
+- Always prioritize the reuse of code from 'automojo-*' packages over rewriting functionality
+
 
 # Project Overview
 
@@ -237,6 +253,228 @@ patch.deactivate()
 | `mock.method.return_value` | `ctx.mock_method('method', return_value=value)` |
 | `patch('module.attr')` | `create_module_patch(module, 'attr')` |
 | `mock.assert_called_once()` | `ctx.assert_called_once()` |
+
+
+# Property Testing with TestBase
+
+The testbase framework includes a built-in property-based testing engine under `automojo.testbase.properties`. Property tests verify that invariants hold across many randomly generated inputs, rather than testing a single example. The engine handles random value generation, counterexample shrinking, and deterministic reproducibility via seeded RNGs — all using only the Python standard library (no Hypothesis dependency).
+
+## Quick Start
+
+```python
+import automojo.testbase as testbase
+
+from automojo.testbase.properties import given
+from automojo.testbase.properties import strategies as st
+
+
+@given(x=st.integers(-1000, 1000), y=st.integers(-1000, 1000))
+def test_addition_commutative(x, y):
+    """Integer addition is commutative: x + y == y + x."""
+    testbase.assert_equal(x + y, y + x,
+        f"Addition should be commutative: {x} + {y} != {y} + {x}.")
+```
+
+The `@given` decorator marks a test function as a property test. Each keyword argument maps a parameter name to a `Strategy` that generates random values. The test runner executes the function 100 times (by default) with different random inputs.
+
+## Imports
+
+```python
+from automojo.testbase.properties import given, expect_exception, assume
+from automojo.testbase.properties import strategies as st
+```
+
+## Configuring Test Execution with `constraints`
+
+Pass a `constraints` dictionary to `@given` to control execution parameters:
+
+```python
+@given(
+    base=st.integers(2, 10),
+    exp=st.integers(0, 6),
+    constraints={"max_examples": 50}
+)
+def test_power_of_base(base, exp):
+    expected = 1
+    for _ in range(exp):
+        expected *= base
+    testbase.assert_equal(base ** exp, expected,
+        f"{base}**{exp} should equal repeated multiplication ({expected}).")
+```
+
+Constraint keys:
+- `max_examples` — Number of random examples to generate per test (default: 100)
+- `max_shrink_attempts` — Maximum shrinking iterations when minimizing a counterexample (default: 100)
+
+## Reproducibility via Job Seed
+
+The per-test seed is always derived deterministically from the job seed and the fully qualified test name. It cannot be overridden per-test. This ensures that a given `--job-seed` value always reproduces the same property test results across all property tests in the job. To reproduce a specific test run, re-run with the same `--job-seed` value.
+
+## Available Strategies
+
+All strategies are accessed via `st.<name>(...)`:
+
+| Strategy | Description | Example |
+|---|---|---|
+| `st.integers(min, max)` | Random integers in inclusive range | `st.integers(-100, 100)` |
+| `st.floats(min, max)` | Random floats in range | `st.floats(0.0, 1.0)` |
+| `st.booleans()` | Random True/False | `st.booleans()` |
+| `st.text(alphabet, min_size, max_size)` | Random strings from alphabet | `st.text(max_size=50)` |
+| `st.characters(categories, characters)` | Single characters | `st.characters(characters="abc")` |
+| `st.binary(min_size, max_size)` | Random bytes objects | `st.binary(max_size=32)` |
+| `st.none()` | Always generates None | `st.none()` |
+| `st.just(value)` | Always returns a fixed value | `st.just(42)` |
+| `st.lists(element, min_size, max_size)` | Random lists | `st.lists(st.integers(), max_size=20)` |
+| `st.tuples(*strategies)` | Random tuples (one strategy per position) | `st.tuples(st.integers(), st.text())` |
+| `st.sets(element, min_size, max_size)` | Random sets | `st.sets(st.integers(), max_size=10)` |
+| `st.frozensets(element, min_size, max_size)` | Random frozensets | `st.frozensets(st.text())` |
+| `st.dictionaries(keys, values, min_size, max_size)` | Random dicts | `st.dictionaries(st.text(min_size=1, max_size=5), st.integers())` |
+| `st.fixed_dictionaries(mapping)` | Dicts with fixed keys, random values | `st.fixed_dictionaries({"x": st.integers(), "y": st.floats()})` |
+| `st.sampled_from(elements)` | Random choice from a fixed sequence | `st.sampled_from(["a", "b", "c"])` |
+| `st.one_of(*strategies)` | Random choice of strategy, then generate | `st.one_of(st.integers(), st.text())` |
+| `st.explicit(values)` | Deterministic sequence (cycles through values) | `st.explicit([1, 2, 3])` |
+| `st.builds(target, **kwarg_strategies)` | Construct objects from strategies | `st.builds(Point, x=st.integers(), y=st.integers())` |
+
+## Strategy Combinators
+
+Strategies support chaining via `.map()`, `.filter()`, and `.flatmap()`:
+
+```python
+# Transform generated values
+even_integers = st.integers(0, 100).map(lambda x: x * 2)
+
+# Filter generated values (retries until predicate is satisfied)
+nonzero = st.integers(-100, 100).filter(lambda x: x != 0)
+
+# Generate a value, then use it to parameterize another strategy
+variable_length_text = st.integers(1, 10).flatmap(lambda n: st.text(min_size=n, max_size=n))
+```
+
+## Composite Strategies
+
+For complex data generation, use the `@composite` decorator:
+
+```python
+from automojo.testbase.properties.strategies import composite
+
+@composite
+def sorted_lists(draw, min_size=0, max_size=10):
+    xs = draw(st.lists(st.integers(), min_size=min_size, max_size=max_size))
+    return sorted(xs)
+
+@given(xs=sorted_lists(min_size=1))
+def test_sorted_list_has_min_at_front(xs):
+    testbase.assert_equal(xs[0], min(xs),
+        "First element of sorted list should be the minimum.")
+```
+
+The `draw` callable pulls a random value from any strategy during generation.
+
+## Skipping Invalid Inputs with `assume`
+
+Use `assume()` to skip examples that don't meet preconditions:
+
+```python
+from automojo.testbase.properties import assume
+
+@given(x=st.integers(), y=st.integers())
+def test_division(x, y):
+    assume(y != 0)
+    result = x / y
+    testbase.assert_true(result * y - x < 1e-9,
+        f"Division roundtrip failed for {x} / {y}.")
+```
+
+When `assume()` receives a falsy value, the current example is silently skipped without counting as a failure.
+
+## Documenting Known Failures with `@expect_exception`
+
+Use `@expect_exception` to mark tests that are expected to raise a specific exception (e.g., documenting known edge cases):
+
+```python
+from automojo.testbase.properties import expect_exception
+
+@expect_exception(AssertionError, reason="urlencode/parse_qsl loses empty-value entries")
+@given(
+    params=st.explicit([{"a": "", "b": "x"}]),
+    constraints={"max_examples": 1}
+)
+def test_url_encode_decode_roundtrip(params):
+    encoded = urllib.parse.urlencode(params)
+    decoded = dict(urllib.parse.parse_qsl(encoded))
+    testbase.assert_equal(decoded, params,
+        f"URL encode/decode roundtrip failed for: {params}")
+```
+
+When the expected exception is raised, the test passes. When no exception is raised, the test fails. When a different exception type is raised, the test errors.
+
+## Using Assertions
+
+Property tests use the standard testbase assertion functions:
+
+- `testbase.assert_equal(actual, expected, message)` — Assert equality
+- `testbase.assert_true(condition, message)` — Assert truthiness
+- `testbase.assert_false(condition, message)` — Assert falsiness
+
+Always include a descriptive message that includes the generated values for debuggability.
+
+## Test File Conventions
+
+Property test files follow the same naming convention as regular tests but with a `_properties` suffix:
+
+| Source File | Unit Test File | Property Test File |
+|---|---|---|
+| agentkit/agentidentity.py | test_agentidentity.py | test_agentidentity_properties.py |
+| agentkit/tracecontext.py | test_tracecontext.py | test_tracecontext_properties.py |
+
+Property test files should include the standard testbase entrypoint at the bottom:
+
+```python
+if __name__ == "__main__":
+    from automojo.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()
+```
+
+## Complete Example: Round-Trip Property Test
+
+```python
+"""
+    .. module:: automojo.tests.singlehost.agentkit.test_agentidentity_properties
+    :platform: Darwin, Linux, Unix, Windows
+    :synopsis: Property tests for AgentIdentity serialization invariants.
+"""
+
+import automojo.testbase as testbase
+
+from automojo.testbase.properties import given
+from automojo.testbase.properties import strategies as st
+
+from automojo.agentkit.agentidentity import AgentIdentity
+
+
+@given(
+    name=st.text(min_size=1, max_size=30, alphabet="abcdefghijklmnopqrstuvwxyz"),
+    version=st.text(min_size=1, max_size=10, alphabet="0123456789."),
+    constraints={"max_examples": 100}
+)
+def test_agentidentity_json_roundtrip(name, version):
+    """Serializing an AgentIdentity to JSON and back produces an equivalent object."""
+    identity = AgentIdentity(name=name, version=version)
+    json_str = identity.to_json()
+    restored = AgentIdentity.from_json(json_str)
+
+    testbase.assert_equal(restored.name, identity.name,
+        f"Name mismatch after JSON roundtrip: {restored.name} != {identity.name}")
+    testbase.assert_equal(restored.version, identity.version,
+        f"Version mismatch after JSON roundtrip: {restored.version} != {identity.version}")
+    testbase.assert_equal(restored.identifier, identity.identifier,
+        f"Identifier mismatch after JSON roundtrip.")
+
+
+if __name__ == "__main__":
+    from automojo.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()
+```
 
 
 # 'testbase agents' CLI Commands
