@@ -2,9 +2,9 @@
 .. module:: test_property_lifecycle
     :platform: Darwin, Linux, Unix, Windows
     :synopsis: Property-based tests for the WebApplication lifecycle phase
-        ordering enforcement.  Each property test iterates over generated
-        inputs a minimum of 10 times to verify that universal properties
-        hold across all valid executions.
+        ordering enforcement.  Each property test uses the testbase
+        ``@given`` decorator to verify that universal properties hold across
+        generated inputs.
 
 .. moduleauthor:: Automation Mojo LLC
 """
@@ -13,13 +13,14 @@ __author__ = "Automation Mojo LLC"
 __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
+import automojo.testbase as testbase
 
-import random
-import string
-
-import automojo.webworks.webapplication as webapp_module
+from automojo.testbase.properties import given
+from automojo.testbase.properties import strategies as st
 
 from automojo.testbase.mocking import Mock, create_module_patch
+
+import automojo.webworks.webapplication as webapp_module
 
 from automojo.webworks.webapplication import (
     WebApplication,
@@ -40,9 +41,6 @@ from automojo.webworks.endpoints.registry import EndpointRegistry
 # Constants
 # =============================================================================
 
-# Each tuple is (property_name, required_phase) for properties that should
-# raise LifecycleError when accessed on a freshly created WebApplication
-# (current phase = CREATED).
 PHASE_GUARDED_PROPERTIES = [
     ("router", LifecyclePhase.INFRASTRUCTURE_READY),
     ("dispatcher", LifecyclePhase.INFRASTRUCTURE_READY),
@@ -55,12 +53,50 @@ PHASE_GUARDED_PROPERTIES = [
 
 
 # =============================================================================
+# Strategies
+# =============================================================================
+
+name_strategy = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyz",
+    min_size=3,
+    max_size=12,
+)
+
+guarded_property_strategy = st.sampled_from(PHASE_GUARDED_PROPERTIES)
+
+# Build the full set of (property, required_phase, insufficient_phase) tuples
+_phase_order = list(LifecyclePhase)
+_insufficient_phase_pairs = []
+for _prop_name, _required_phase in PHASE_GUARDED_PROPERTIES:
+    _required_index = _phase_order.index(_required_phase)
+    for _phase in _phase_order[:_required_index]:
+        _insufficient_phase_pairs.append((_prop_name, _required_phase, _phase))
+
+insufficient_phase_strategy = st.sampled_from(_insufficient_phase_pairs)
+
+# Build the full set of (property, required_phase, sufficient_phase) tuples
+_sufficient_phase_pairs = []
+for _prop_name, _required_phase in PHASE_GUARDED_PROPERTIES:
+    _required_index = _phase_order.index(_required_phase)
+    for _phase in _phase_order[_required_index:]:
+        if _phase == LifecyclePhase.SHUTDOWN:
+            continue
+        _sufficient_phase_pairs.append((_prop_name, _required_phase, _phase))
+
+sufficient_phase_strategy = st.sampled_from(_sufficient_phase_pairs)
+
+
+# =============================================================================
 # Property 10: Lifecycle phase ordering enforcement
 # Feature: webapp-lifecycle, Property 10: Lifecycle phase ordering enforcement
 # Validates: Requirements 8.1, 8.2, 7.4
 # =============================================================================
 
-def test_property_lifecycle_phase_ordering_raises_lifecycle_error():
+@given(
+    guarded_prop=guarded_property_strategy,
+    constraints={"max_examples": 10},
+)
+def test_property_lifecycle_phase_ordering_raises_lifecycle_error(guarded_prop):
     """
         Property 10: Lifecycle phase ordering enforcement
 
@@ -70,97 +106,80 @@ def test_property_lifecycle_phase_ordering_raises_lifecycle_error():
         whose message names the missing prerequisite phase and the
         attempted operation.
 
-        Each iteration randomly selects a property from the guarded set
-        and verifies the error attributes.  Runs 10 iterations.
-
         **Feature: webapp-lifecycle, Property 10: Lifecycle phase ordering enforcement**
         **Validates: Requirements 8.1, 8.2, 7.4**
     """
-    for iteration in range(10):
-        prop_name, required_phase = random.choice(PHASE_GUARDED_PROPERTIES)
+    prop_name, required_phase = guarded_prop
+
+    try:
+        reset_webapp_persona()
+
+        app = establish_webapp_persona(
+            name="testapp",
+            logger_name="testapp",
+            log_basename="testapp",
+        )
+
+        testbase.assert_equal(
+            app.current_phase, LifecyclePhase.CREATED,
+            f"Expected current_phase to be CREATED, got '{app.current_phase.value}'"
+        )
+
+        caught_error = None
 
         try:
-            reset_webapp_persona()
-
-            app = establish_webapp_persona(
-                name="testapp",
-                logger_name="testapp",
-                log_basename="testapp",
+            _ = getattr(app, prop_name)
+        except LifecycleError as err:
+            caught_error = err
+        except Exception as err:
+            raise AssertionError(
+                f"Accessing '{prop_name}' raised {type(err).__name__} "
+                f"instead of LifecycleError: {err}"
             )
 
-            # The app should be in CREATED phase
-            if app.current_phase != LifecyclePhase.CREATED:
-                errmsg = (
-                    f"Iteration {iteration}: Expected current_phase to be "
-                    f"CREATED, got '{app.current_phase.value}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_true(
+            caught_error is not None,
+            f"Accessing '{prop_name}' did not raise LifecycleError "
+            f"(current phase is CREATED, required phase is {required_phase.value})"
+        )
 
-            # Accessing the guarded property should raise LifecycleError
-            caught_error = None
+        testbase.assert_equal(
+            caught_error.required_phase, required_phase,
+            f"LifecycleError for '{prop_name}' has required_phase "
+            f"'{caught_error.required_phase.value}', expected '{required_phase.value}'"
+        )
 
-            try:
-                _ = getattr(app, prop_name)
-            except LifecycleError as err:
-                caught_error = err
-            except Exception as err:
-                errmsg = (
-                    f"Iteration {iteration}: Accessing '{prop_name}' raised "
-                    f"{type(err).__name__} instead of LifecycleError: {err}"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            caught_error.current_phase, LifecyclePhase.CREATED,
+            f"LifecycleError for '{prop_name}' has current_phase "
+            f"'{caught_error.current_phase.value}', expected 'created'"
+        )
 
-            if caught_error is None:
-                errmsg = (
-                    f"Iteration {iteration}: Accessing '{prop_name}' did not "
-                    f"raise LifecycleError (current phase is CREATED, "
-                    f"required phase is {required_phase.value})"
-                )
-                raise AssertionError(errmsg)
+        error_message = str(caught_error)
 
-            # Verify the error attributes match the expected values
-            if caught_error.required_phase != required_phase:
-                errmsg = (
-                    f"Iteration {iteration}: LifecycleError for '{prop_name}' "
-                    f"has required_phase '{caught_error.required_phase.value}', "
-                    f"expected '{required_phase.value}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_true(
+            required_phase.value in error_message,
+            f"LifecycleError message for '{prop_name}' does not contain "
+            f"required phase '{required_phase.value}'. Got: '{error_message}'"
+        )
 
-            if caught_error.current_phase != LifecyclePhase.CREATED:
-                errmsg = (
-                    f"Iteration {iteration}: LifecycleError for '{prop_name}' "
-                    f"has current_phase '{caught_error.current_phase.value}', "
-                    f"expected 'created'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_true(
+            LifecyclePhase.CREATED.value in error_message,
+            f"LifecycleError message for '{prop_name}' does not contain "
+            f"current phase 'created'. Got: '{error_message}'"
+        )
 
-            # Verify the error message contains the phase names
-            error_message = str(caught_error)
-
-            if required_phase.value not in error_message:
-                errmsg = (
-                    f"Iteration {iteration}: LifecycleError message for "
-                    f"'{prop_name}' does not contain required phase "
-                    f"'{required_phase.value}'. Got: '{error_message}'"
-                )
-                raise AssertionError(errmsg)
-
-            if LifecyclePhase.CREATED.value not in error_message:
-                errmsg = (
-                    f"Iteration {iteration}: LifecycleError message for "
-                    f"'{prop_name}' does not contain current phase 'created'. "
-                    f"Got: '{error_message}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
 
 
-def test_property_require_phase_rejects_all_insufficient_phases():
+@given(
+    pair=insufficient_phase_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_require_phase_rejects_all_insufficient_phases(pair):
     """
         Property 10: Lifecycle phase ordering enforcement
 
@@ -168,106 +187,78 @@ def test_property_require_phase_rejects_all_insufficient_phases():
         the _require_phase method shall raise LifecycleError when the
         current phase ordinal is strictly below the required phase ordinal.
 
-        This test iterates over every guarded property and every phase
-        that is below the required phase, verifying that LifecycleError
-        is raised with the correct operation name.  Runs at least 100
-        iterations by repeating the full matrix with random ordering.
-
         **Feature: webapp-lifecycle, Property 10: Lifecycle phase ordering enforcement**
         **Validates: Requirements 8.1, 8.2, 7.4**
     """
-    phase_order = list(LifecyclePhase)
+    prop_name, required_phase, insufficient_phase = pair
 
-    # Build the full set of (property, insufficient_phase) pairs
-    test_pairs = []
-    for prop_name, required_phase in PHASE_GUARDED_PROPERTIES:
-        required_index = phase_order.index(required_phase)
-        for phase in phase_order[:required_index]:
-            test_pairs.append((prop_name, required_phase, phase))
+    try:
+        reset_webapp_persona()
 
-    # Ensure we run at least 10 iterations
-    iterations = max(10, len(test_pairs))
+        app = establish_webapp_persona(
+            name="testapp",
+            logger_name="testapp",
+            log_basename="testapp",
+        )
 
-    for iteration in range(iterations):
-        prop_name, required_phase, insufficient_phase = test_pairs[iteration % len(test_pairs)]
+        app._current_phase = insufficient_phase
+
+        caught_error = None
 
         try:
-            reset_webapp_persona()
-
-            app = establish_webapp_persona(
-                name="testapp",
-                logger_name="testapp",
-                log_basename="testapp",
+            _ = getattr(app, prop_name)
+        except LifecycleError as err:
+            caught_error = err
+        except Exception as err:
+            raise AssertionError(
+                f"Accessing '{prop_name}' at phase '{insufficient_phase.value}' "
+                f"raised {type(err).__name__} instead of LifecycleError: {err}"
             )
 
-            # Manually set the phase to the insufficient phase for testing
-            app._current_phase = insufficient_phase
+        testbase.assert_true(
+            caught_error is not None,
+            f"Accessing '{prop_name}' at phase '{insufficient_phase.value}' "
+            f"did not raise LifecycleError (required phase is '{required_phase.value}')"
+        )
 
-            caught_error = None
+        testbase.assert_equal(
+            caught_error.required_phase, required_phase,
+            f"LifecycleError for '{prop_name}' at phase '{insufficient_phase.value}' "
+            f"has required_phase '{caught_error.required_phase.value}', "
+            f"expected '{required_phase.value}'"
+        )
 
-            try:
-                _ = getattr(app, prop_name)
-            except LifecycleError as err:
-                caught_error = err
-            except Exception as err:
-                errmsg = (
-                    f"Iteration {iteration}: Accessing '{prop_name}' at phase "
-                    f"'{insufficient_phase.value}' raised {type(err).__name__} "
-                    f"instead of LifecycleError: {err}"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            caught_error.current_phase, insufficient_phase,
+            f"LifecycleError for '{prop_name}' has current_phase "
+            f"'{caught_error.current_phase.value}', expected '{insufficient_phase.value}'"
+        )
 
-            if caught_error is None:
-                errmsg = (
-                    f"Iteration {iteration}: Accessing '{prop_name}' at phase "
-                    f"'{insufficient_phase.value}' did not raise LifecycleError "
-                    f"(required phase is '{required_phase.value}')"
-                )
-                raise AssertionError(errmsg)
+        error_message = str(caught_error)
 
-            if caught_error.required_phase != required_phase:
-                errmsg = (
-                    f"Iteration {iteration}: LifecycleError for '{prop_name}' "
-                    f"at phase '{insufficient_phase.value}' has required_phase "
-                    f"'{caught_error.required_phase.value}', expected "
-                    f"'{required_phase.value}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_true(
+            required_phase.value in error_message,
+            f"LifecycleError message does not contain required phase "
+            f"'{required_phase.value}'. Got: '{error_message}'"
+        )
 
-            if caught_error.current_phase != insufficient_phase:
-                errmsg = (
-                    f"Iteration {iteration}: LifecycleError for '{prop_name}' "
-                    f"has current_phase '{caught_error.current_phase.value}', "
-                    f"expected '{insufficient_phase.value}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_true(
+            insufficient_phase.value in error_message,
+            f"LifecycleError message does not contain current phase "
+            f"'{insufficient_phase.value}'. Got: '{error_message}'"
+        )
 
-            # Verify the error message contains both phase names
-            error_message = str(caught_error)
-
-            if required_phase.value not in error_message:
-                errmsg = (
-                    f"Iteration {iteration}: LifecycleError message does not "
-                    f"contain required phase '{required_phase.value}'. "
-                    f"Got: '{error_message}'"
-                )
-                raise AssertionError(errmsg)
-
-            if insufficient_phase.value not in error_message:
-                errmsg = (
-                    f"Iteration {iteration}: LifecycleError message does not "
-                    f"contain current phase '{insufficient_phase.value}'. "
-                    f"Got: '{error_message}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
 
 
-def test_property_sufficient_phase_allows_access():
+@given(
+    pair=sufficient_phase_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_sufficient_phase_allows_access(pair):
     """
         Property 10: Lifecycle phase ordering enforcement
 
@@ -275,108 +266,40 @@ def test_property_sufficient_phase_allows_access():
         when the current phase ordinal is at or above the required phase
         ordinal, accessing the property shall NOT raise LifecycleError.
 
-        This test verifies the complementary condition: that phase
-        enforcement does not block access when the prerequisite is met.
-        Runs at least 10 iterations.
-
         **Feature: webapp-lifecycle, Property 10: Lifecycle phase ordering enforcement**
         **Validates: Requirements 8.1, 8.2, 7.4**
     """
-    phase_order = list(LifecyclePhase)
+    prop_name, required_phase, sufficient_phase = pair
 
-    # Build the full set of (property, sufficient_phase) pairs
-    test_pairs = []
-    for prop_name, required_phase in PHASE_GUARDED_PROPERTIES:
-        required_index = phase_order.index(required_phase)
-        # Include the required phase and all phases above it (except SHUTDOWN)
-        for phase in phase_order[required_index:]:
-            if phase == LifecyclePhase.SHUTDOWN:
-                continue
-            test_pairs.append((prop_name, required_phase, phase))
+    try:
+        reset_webapp_persona()
 
-    # Ensure we run at least 10 iterations
-    iterations = max(10, len(test_pairs))
+        app = establish_webapp_persona(
+            name="testapp",
+            logger_name="testapp",
+            log_basename="testapp",
+        )
 
-    for iteration in range(iterations):
-        prop_name, required_phase, sufficient_phase = test_pairs[iteration % len(test_pairs)]
+        app._current_phase = sufficient_phase
+
+        lifecycle_error_raised = False
 
         try:
-            reset_webapp_persona()
+            _ = getattr(app, prop_name)
+        except LifecycleError:
+            lifecycle_error_raised = True
 
-            app = establish_webapp_persona(
-                name="testapp",
-                logger_name="testapp",
-                log_basename="testapp",
-            )
+        testbase.assert_false(
+            lifecycle_error_raised,
+            f"Accessing '{prop_name}' at phase '{sufficient_phase.value}' "
+            f"raised LifecycleError, but the phase '{sufficient_phase.value}' "
+            f"meets the requirement of '{required_phase.value}'"
+        )
 
-            # Manually set the phase to the sufficient phase for testing
-            app._current_phase = sufficient_phase
-
-            # Accessing the property should NOT raise LifecycleError.
-            # The property value will be None since no setup has run,
-            # but the phase guard should not block access.
-            lifecycle_error_raised = False
-
-            try:
-                _ = getattr(app, prop_name)
-            except LifecycleError:
-                lifecycle_error_raised = True
-
-            if lifecycle_error_raised:
-                errmsg = (
-                    f"Iteration {iteration}: Accessing '{prop_name}' at phase "
-                    f"'{sufficient_phase.value}' raised LifecycleError, but "
-                    f"the phase '{sufficient_phase.value}' meets the "
-                    f"requirement of '{required_phase.value}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
-
-
-# =============================================================================
-# Helpers
-# =============================================================================
-
-def _random_name(min_length=3, max_length=12):
-    """
-        Generate a random lowercase alphabetic name suitable for use as
-        a persona name or logger name.
-
-        :returns: A random string of lowercase letters.
-    """
-    length = random.randint(min_length, max_length)
-    return "".join(random.choices(string.ascii_lowercase, k=length))
-
-
-def _create_app_with_mock_config():
-    """
-        Creates a fresh WebApplication via ``establish_webapp_persona``
-        and patches ``ManagedConfigRegistry`` so that ``startup()`` can
-        complete without filesystem access.
-
-        :returns: A tuple of (app, patch) where *patch* must be
-            deactivated in a ``finally`` block.
-    """
-    reset_webapp_persona()
-
-    app = establish_webapp_persona(
-        name="testapp",
-        logger_name="testapp",
-        log_basename="testapp",
-    )
-
-    # Patch ManagedConfigRegistry to avoid filesystem side effects
-    patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
-    mock_cls = patch.activate()
-    mock_registry = Mock()
-    mock_registry.configure(recursive=True)
-    mock_cls.configure(return_value=mock_registry)
-
-    return app, patch, mock_registry
 
 
 # =============================================================================
@@ -385,7 +308,11 @@ def _create_app_with_mock_config():
 # Validates: Requirements 1.1, 1.2, 1.3, 4.1, 5.1, 6.1, 7.1, 8.3
 # =============================================================================
 
-def test_property_startup_initializes_all_subsystems():
+@given(
+    persona_name=name_strategy,
+    constraints={"max_examples": 10},
+)
+def test_property_startup_initializes_all_subsystems(persona_name):
     """
         Property 1: Startup initializes all subsystems
 
@@ -395,124 +322,85 @@ def test_property_startup_initializes_all_subsystems():
         non-None instances of their expected types, and
         ``current_phase`` shall be ``READY``.
 
-        The ``credentials`` and ``data_profiles`` properties are
-        currently placeholders (None) so we verify they are accessible
-        without raising ``LifecycleError`` rather than checking for
-        non-None.
-
-        Each iteration uses a randomly generated persona name and
-        logger name.  Runs 10 iterations.
-
         **Feature: webapp-lifecycle, Property 1: Startup initializes all subsystems**
         **Validates: Requirements 1.1, 1.2, 1.3, 4.1, 5.1, 6.1, 7.1, 8.3**
     """
-    for iteration in range(10):
-        patch = None
+    patch = None
 
+    try:
+        reset_webapp_persona()
+
+        app = establish_webapp_persona(
+            name=persona_name,
+            logger_name=persona_name,
+            log_basename=persona_name,
+        )
+
+        patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
+        mock_cls = patch.activate()
+        mock_registry = Mock()
+        mock_registry.configure(recursive=True)
+        mock_cls.configure(return_value=mock_registry)
+
+        app.startup()
+
+        testbase.assert_equal(
+            app.current_phase, LifecyclePhase.READY,
+            f"Expected current_phase READY, got '{app.current_phase.value}' "
+            f"(persona_name='{persona_name}')"
+        )
+
+        testbase.assert_true(
+            isinstance(app.router, Router),
+            f"Expected router to be Router, got {type(app.router).__name__} "
+            f"(persona_name='{persona_name}')"
+        )
+
+        testbase.assert_true(
+            isinstance(app.dispatcher, Dispatcher),
+            f"Expected dispatcher to be Dispatcher, got {type(app.dispatcher).__name__} "
+            f"(persona_name='{persona_name}')"
+        )
+
+        testbase.assert_true(
+            isinstance(app.asgi_app, ASGIApplication),
+            f"Expected asgi_app to be ASGIApplication, got {type(app.asgi_app).__name__} "
+            f"(persona_name='{persona_name}')"
+        )
+
+        testbase.assert_true(
+            app.config is not None,
+            f"Expected config to be non-None (persona_name='{persona_name}')"
+        )
+
+        testbase.assert_true(
+            isinstance(app.auth_system, AuthenticationSystem),
+            f"Expected auth_system to be AuthenticationSystem, got "
+            f"{type(app.auth_system).__name__} (persona_name='{persona_name}')"
+        )
+
+        # Verify credentials is accessible without LifecycleError (placeholder — currently None)
         try:
-            reset_webapp_persona()
-
-            persona_name = _random_name()
-            logger_name = _random_name()
-
-            app = establish_webapp_persona(
-                name=persona_name,
-                logger_name=logger_name,
-                log_basename=logger_name,
+            _ = app.credentials
+        except LifecycleError as err:
+            raise AssertionError(
+                f"Accessing credentials raised LifecycleError after startup: {err} "
+                f"(persona_name='{persona_name}')"
             )
 
-            # Patch ManagedConfigRegistry to avoid filesystem access
-            patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
-            mock_cls = patch.activate()
-            mock_registry = Mock()
-            mock_registry.configure(recursive=True)
-            mock_cls.configure(return_value=mock_registry)
+        # Verify data_profiles is accessible without LifecycleError (placeholder — currently None)
+        try:
+            _ = app.data_profiles
+        except LifecycleError as err:
+            raise AssertionError(
+                f"Accessing data_profiles raised LifecycleError after startup: {err} "
+                f"(persona_name='{persona_name}')"
+            )
 
-            app.startup()
-
-            # Verify current_phase is READY
-            if app.current_phase != LifecyclePhase.READY:
-                errmsg = (
-                    f"Iteration {iteration}: Expected current_phase READY, "
-                    f"got '{app.current_phase.value}' "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-            # Verify router is non-None and correct type
-            if not isinstance(app.router, Router):
-                errmsg = (
-                    f"Iteration {iteration}: Expected router to be Router, "
-                    f"got {type(app.router).__name__} "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-            # Verify dispatcher is non-None and correct type
-            if not isinstance(app.dispatcher, Dispatcher):
-                errmsg = (
-                    f"Iteration {iteration}: Expected dispatcher to be "
-                    f"Dispatcher, got {type(app.dispatcher).__name__} "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-            # Verify asgi_app is non-None and correct type
-            if not isinstance(app.asgi_app, ASGIApplication):
-                errmsg = (
-                    f"Iteration {iteration}: Expected asgi_app to be "
-                    f"ASGIApplication, got {type(app.asgi_app).__name__} "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-            # Verify config is accessible (mock instance)
-            config_val = app.config
-            if config_val is None:
-                errmsg = (
-                    f"Iteration {iteration}: Expected config to be non-None "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-            # Verify auth_system is non-None and correct type
-            if not isinstance(app.auth_system, AuthenticationSystem):
-                errmsg = (
-                    f"Iteration {iteration}: Expected auth_system to be "
-                    f"AuthenticationSystem, got "
-                    f"{type(app.auth_system).__name__} "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-            # Verify credentials is accessible without LifecycleError
-            # (placeholder — currently None)
-            try:
-                _ = app.credentials
-            except LifecycleError as err:
-                errmsg = (
-                    f"Iteration {iteration}: Accessing credentials raised "
-                    f"LifecycleError after startup: {err} "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-            # Verify data_profiles is accessible without LifecycleError
-            # (placeholder — currently None)
-            try:
-                _ = app.data_profiles
-            except LifecycleError as err:
-                errmsg = (
-                    f"Iteration {iteration}: Accessing data_profiles raised "
-                    f"LifecycleError after startup: {err} "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            if patch is not None:
-                patch.deactivate()
-            reset_webapp_persona()
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
 
     return
 
@@ -523,7 +411,11 @@ def test_property_startup_initializes_all_subsystems():
 # Validates: Requirements 1.4, 1.5, 1.6
 # =============================================================================
 
-def test_property_infrastructure_wiring_consistency():
+@given(
+    persona_name=name_strategy,
+    constraints={"max_examples": 10},
+)
+def test_property_infrastructure_wiring_consistency(persona_name):
     """
         Property 2: Infrastructure wiring consistency
 
@@ -533,71 +425,54 @@ def test_property_infrastructure_wiring_consistency():
         EndpointDescriptor instances from the EndpointRegistry at
         startup time shall be matchable via the Router.
 
-        Each iteration uses a randomly generated persona name.
-        Runs 10 iterations.
-
         **Feature: webapp-lifecycle, Property 2: Infrastructure wiring consistency**
         **Validates: Requirements 1.4, 1.5, 1.6**
     """
-    for iteration in range(10):
-        patch = None
+    patch = None
 
-        try:
-            reset_webapp_persona()
+    try:
+        reset_webapp_persona()
 
-            persona_name = _random_name()
+        app = establish_webapp_persona(
+            name=persona_name,
+            logger_name=persona_name,
+            log_basename=persona_name,
+        )
 
-            app = establish_webapp_persona(
-                name=persona_name,
-                logger_name=persona_name,
-                log_basename=persona_name,
-            )
+        descriptors_before = EndpointRegistry.collect()
 
-            # Snapshot the EndpointRegistry descriptors before startup
-            descriptors_before = EndpointRegistry.collect()
+        patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
+        mock_cls = patch.activate()
+        mock_registry = Mock()
+        mock_registry.configure(recursive=True)
+        mock_cls.configure(return_value=mock_registry)
 
-            # Patch ManagedConfigRegistry to avoid filesystem access
-            patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
-            mock_cls = patch.activate()
-            mock_registry = Mock()
-            mock_registry.configure(recursive=True)
-            mock_cls.configure(return_value=mock_registry)
+        app.startup()
 
-            app.startup()
+        testbase.assert_true(
+            app.dispatcher.router is app.router,
+            f"Dispatcher.router is not the same object as WebApplication.router "
+            f"(persona_name='{persona_name}')"
+        )
 
-            # Identity check: Dispatcher.router is the same object as
-            # WebApplication.router
-            if app.dispatcher.router is not app.router:
-                errmsg = (
-                    f"Iteration {iteration}: Dispatcher.router is not the "
-                    f"same object as WebApplication.router "
-                    f"(persona_name='{persona_name}')"
+        for descriptor in descriptors_before:
+            path = descriptor.path
+            methods = descriptor.methods if descriptor.methods else ["GET"]
+
+            for method in methods:
+                request = Request(method=method, path=path)
+                match_result = app.router.match(request)
+
+                testbase.assert_true(
+                    match_result is not None,
+                    f"EndpointDescriptor path='{path}' method='{method}' is not "
+                    f"matchable via the Router (persona_name='{persona_name}')"
                 )
-                raise AssertionError(errmsg)
 
-            # Verify all EndpointDescriptors from the registry are
-            # matchable via the Router
-            for descriptor in descriptors_before:
-                path = descriptor.path
-                methods = descriptor.methods if descriptor.methods else ["GET"]
-
-                for method in methods:
-                    request = Request(method=method, path=path)
-                    match_result = app.router.match(request)
-
-                    if match_result is None:
-                        errmsg = (
-                            f"Iteration {iteration}: EndpointDescriptor "
-                            f"path='{path}' method='{method}' is not "
-                            f"matchable via the Router "
-                            f"(persona_name='{persona_name}')"
-                        )
-                        raise AssertionError(errmsg)
-
-        finally:
-            if patch is not None:
-                patch.deactivate()
-            reset_webapp_persona()
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
 
     return
 
@@ -608,7 +483,11 @@ def test_property_infrastructure_wiring_consistency():
 # Validates: Requirements 8.4
 # =============================================================================
 
-def test_property_shutdown_releases_all_resources():
+@given(
+    persona_name=name_strategy,
+    constraints={"max_examples": 10},
+)
+def test_property_shutdown_releases_all_resources(persona_name):
     """
         Property 11: Shutdown releases all resources
 
@@ -617,63 +496,49 @@ def test_property_shutdown_releases_all_resources():
         ``SHUTDOWN`` and the config registry's ``cleanup()`` having been
         called.
 
-        Each iteration uses a randomly generated persona name.
-        Runs 10 iterations.
-
         **Feature: webapp-lifecycle, Property 11: Shutdown releases all resources**
         **Validates: Requirements 8.4**
     """
-    for iteration in range(10):
-        patch = None
+    patch = None
 
-        try:
-            reset_webapp_persona()
+    try:
+        reset_webapp_persona()
 
-            persona_name = _random_name()
+        app = establish_webapp_persona(
+            name=persona_name,
+            logger_name=persona_name,
+            log_basename=persona_name,
+        )
 
-            app = establish_webapp_persona(
-                name=persona_name,
-                logger_name=persona_name,
-                log_basename=persona_name,
-            )
+        patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
+        mock_cls = patch.activate()
+        mock_registry = Mock()
+        mock_registry.configure(recursive=True)
+        mock_cls.configure(return_value=mock_registry)
 
-            # Patch ManagedConfigRegistry to avoid filesystem access
-            patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
-            mock_cls = patch.activate()
-            mock_registry = Mock()
-            mock_registry.configure(recursive=True)
-            mock_cls.configure(return_value=mock_registry)
+        app.startup()
 
-            app.startup()
+        testbase.assert_equal(
+            app.current_phase, LifecyclePhase.READY,
+            f"Expected phase READY before shutdown, got '{app.current_phase.value}' "
+            f"(persona_name='{persona_name}')"
+        )
 
-            # Verify we are in READY phase before shutdown
-            if app.current_phase != LifecyclePhase.READY:
-                errmsg = (
-                    f"Iteration {iteration}: Expected phase READY before "
-                    f"shutdown, got '{app.current_phase.value}' "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
+        app.shutdown()
 
-            app.shutdown()
+        testbase.assert_equal(
+            app.current_phase, LifecyclePhase.SHUTDOWN,
+            f"Expected current_phase SHUTDOWN after shutdown(), "
+            f"got '{app.current_phase.value}' (persona_name='{persona_name}')"
+        )
 
-            # Verify current_phase is SHUTDOWN
-            if app.current_phase != LifecyclePhase.SHUTDOWN:
-                errmsg = (
-                    f"Iteration {iteration}: Expected current_phase SHUTDOWN "
-                    f"after shutdown(), got '{app.current_phase.value}' "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
+        cleanup_mock = mock_registry.cleanup
+        cleanup_mock.mock_context().assert_called()
 
-            # Verify config cleanup() was called on the mock registry
-            cleanup_mock = mock_registry.cleanup
-            cleanup_mock.mock_context().assert_called()
-
-        finally:
-            if patch is not None:
-                patch.deactivate()
-            reset_webapp_persona()
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
 
     return
 
@@ -685,7 +550,6 @@ def test_property_shutdown_releases_all_resources():
 # Validates: Requirements 9.2
 # =============================================================================
 
-# The expected lifecycle method call order during startup.
 EXPECTED_LIFECYCLE_ORDER = [
     "setup_configuration",
     "setup_credentials",
@@ -740,116 +604,89 @@ class TrackingWebApplication(WebApplication):
         return
 
 
-def test_property_subclass_overrides_invoked_during_startup():
+@given(
+    persona_name=name_strategy,
+    constraints={"max_examples": 10},
+)
+def test_property_subclass_overrides_invoked_during_startup(persona_name):
     """
         Property 12: Subclass overrides are invoked during startup
 
         For any WebApplication subclass that overrides all lifecycle
         phase methods with tracking wrappers, calling ``startup()``
-        shall invoke the overridden methods (not the base
-        implementations) in the correct lifecycle order:
-
-        1. ``setup_configuration``
-        2. ``setup_credentials``
-        3. ``setup_data_profiles``
-        4. ``setup_database``
-        5. ``setup_authentication``
-        6. ``setup_infrastructure``
-
-        Each iteration uses a randomly generated persona name and
-        verifies the recorded call order matches the expected sequence.
-        Runs 10 iterations.
+        shall invoke the overridden methods in the correct lifecycle order.
 
         **Feature: webapp-lifecycle, Property 12: Subclass overrides are invoked during startup**
         **Validates: Requirements 9.2**
     """
-    for iteration in range(10):
-        patch = None
+    patch = None
 
-        try:
-            reset_webapp_persona()
+    try:
+        reset_webapp_persona()
 
-            persona_name = _random_name()
+        app = establish_webapp_persona(
+            name=persona_name,
+            logger_name=persona_name,
+            log_basename=persona_name,
+            application_cls=TrackingWebApplication,
+        )
 
-            app = establish_webapp_persona(
-                name=persona_name,
-                logger_name=persona_name,
-                log_basename=persona_name,
-                application_cls=TrackingWebApplication,
+        testbase.assert_true(
+            isinstance(app, TrackingWebApplication),
+            f"Expected TrackingWebApplication instance, got {type(app).__name__} "
+            f"(persona_name='{persona_name}')"
+        )
+
+        testbase.assert_equal(
+            len(app._call_order), 0,
+            f"Expected empty _call_order before startup, got {app._call_order} "
+            f"(persona_name='{persona_name}')"
+        )
+
+        patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
+        mock_cls = patch.activate()
+        mock_registry = Mock()
+        mock_registry.configure(recursive=True)
+        mock_cls.configure(return_value=mock_registry)
+
+        app.startup()
+
+        testbase.assert_equal(
+            app.current_phase, LifecyclePhase.READY,
+            f"Expected current_phase READY after startup, "
+            f"got '{app.current_phase.value}' (persona_name='{persona_name}')"
+        )
+
+        testbase.assert_equal(
+            len(app._call_order), len(EXPECTED_LIFECYCLE_ORDER),
+            f"Expected {len(EXPECTED_LIFECYCLE_ORDER)} lifecycle calls, "
+            f"got {len(app._call_order)}. Recorded: {app._call_order} "
+            f"(persona_name='{persona_name}')"
+        )
+
+        testbase.assert_equal(
+            app._call_order, EXPECTED_LIFECYCLE_ORDER,
+            f"Lifecycle call order mismatch. Expected: {EXPECTED_LIFECYCLE_ORDER}, "
+            f"got: {app._call_order} (persona_name='{persona_name}')"
+        )
+
+        for idx, expected_method in enumerate(EXPECTED_LIFECYCLE_ORDER):
+            actual_method = app._call_order[idx]
+            testbase.assert_equal(
+                actual_method, expected_method,
+                f"At position {idx}, expected '{expected_method}' but got "
+                f"'{actual_method}'. Full order: {app._call_order} "
+                f"(persona_name='{persona_name}')"
             )
 
-            # Verify the correct subclass was instantiated
-            if not isinstance(app, TrackingWebApplication):
-                errmsg = (
-                    f"Iteration {iteration}: Expected TrackingWebApplication "
-                    f"instance, got {type(app).__name__} "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-            # Verify call_order is empty before startup
-            if len(app._call_order) != 0:
-                errmsg = (
-                    f"Iteration {iteration}: Expected empty _call_order "
-                    f"before startup, got {app._call_order} "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-            # Patch ManagedConfigRegistry to avoid filesystem access
-            patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
-            mock_cls = patch.activate()
-            mock_registry = Mock()
-            mock_registry.configure(recursive=True)
-            mock_cls.configure(return_value=mock_registry)
-
-            app.startup()
-
-            # Verify current_phase is READY after startup
-            if app.current_phase != LifecyclePhase.READY:
-                errmsg = (
-                    f"Iteration {iteration}: Expected current_phase READY "
-                    f"after startup, got '{app.current_phase.value}' "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-            # Verify all overrides were called
-            if len(app._call_order) != len(EXPECTED_LIFECYCLE_ORDER):
-                errmsg = (
-                    f"Iteration {iteration}: Expected "
-                    f"{len(EXPECTED_LIFECYCLE_ORDER)} lifecycle calls, "
-                    f"got {len(app._call_order)}. "
-                    f"Recorded: {app._call_order} "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-            # Verify the call order matches the expected sequence
-            if app._call_order != EXPECTED_LIFECYCLE_ORDER:
-                errmsg = (
-                    f"Iteration {iteration}: Lifecycle call order mismatch. "
-                    f"Expected: {EXPECTED_LIFECYCLE_ORDER}, "
-                    f"got: {app._call_order} "
-                    f"(persona_name='{persona_name}')"
-                )
-                raise AssertionError(errmsg)
-
-            # Verify each individual position for debuggability
-            for idx, expected_method in enumerate(EXPECTED_LIFECYCLE_ORDER):
-                actual_method = app._call_order[idx]
-                if actual_method != expected_method:
-                    errmsg = (
-                        f"Iteration {iteration}: At position {idx}, "
-                        f"expected '{expected_method}' but got "
-                        f"'{actual_method}'. Full order: {app._call_order} "
-                        f"(persona_name='{persona_name}')"
-                    )
-                    raise AssertionError(errmsg)
-
-        finally:
-            if patch is not None:
-                patch.deactivate()
-            reset_webapp_persona()
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
 
     return
+
+
+if __name__ == "__main__":
+    from automojo.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

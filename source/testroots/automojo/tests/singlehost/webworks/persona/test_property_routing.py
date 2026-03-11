@@ -3,9 +3,9 @@
     :platform: Darwin, Linux, Unix, Windows
     :synopsis: Property-based tests for the WebApplication endpoint
         registration APIs: ``attach_route`` and
-        ``attach_blueprint_to_route``.  Each property test iterates over
-        generated inputs a minimum of 10 times to verify that universal
-        properties hold across all valid executions.
+        ``attach_blueprint_to_route``.  Each property test uses the testbase
+        ``@given`` decorator to verify that universal properties hold across
+        generated inputs.
 
 .. moduleauthor:: Automation Mojo LLC
 """
@@ -14,13 +14,15 @@ __author__ = "Automation Mojo LLC"
 __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
+import automojo.testbase as testbase
 
-import random
-import string
-
-import automojo.webworks.webapplication as webapp_module
+from automojo.testbase.properties import given
+from automojo.testbase.properties import strategies as st
+from automojo.testbase.properties.strategies import composite
 
 from automojo.testbase.mocking import Mock, create_module_patch
+
+import automojo.webworks.webapplication as webapp_module
 
 from automojo.webworks.webapplication import (
     establish_webapp_persona,
@@ -34,79 +36,32 @@ from automojo.webworks.routing.request import Request
 
 
 # =============================================================================
-# Helpers
+# Strategies
 # =============================================================================
 
 HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"]
 
+segment_strategy = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyz",
+    min_size=3,
+    max_size=10,
+)
 
-def _random_segment(min_length=3, max_length=10):
-    """
-        Generate a random lowercase alphabetic URL path segment.
+method_strategy = st.sampled_from(HTTP_METHODS)
 
-        :returns: A random string of lowercase letters.
-    """
-    length = random.randint(min_length, max_length)
-    return "".join(random.choices(string.ascii_lowercase, k=length))
-
-
-def _random_path():
-    """
-        Generate a random valid URL path with 1 to 3 segments.
-
-        :returns: A random URL path string like ``/api/abcdef``.
-    """
-    depth = random.randint(1, 3)
-    segments = [_random_segment() for _ in range(depth)]
-    path = "/" + "/".join(segments)
-    return path
+name_strategy = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyz",
+    min_size=3,
+    max_size=12,
+)
 
 
-def _random_method():
-    """
-        Select a random HTTP method from the standard set.
-
-        :returns: A random HTTP method string.
-    """
-    return random.choice(HTTP_METHODS)
-
-
-def _random_name(min_length=3, max_length=12):
-    """
-        Generate a random lowercase alphabetic name suitable for use as
-        a function name or docstring word.
-
-        :returns: A random string of lowercase letters.
-    """
-    length = random.randint(min_length, max_length)
-    return "".join(random.choices(string.ascii_lowercase, k=length))
-
-
-def _create_app_with_mock_config():
-    """
-        Creates a fresh WebApplication via ``establish_webapp_persona``
-        and patches ``ManagedConfigRegistry`` so that ``startup()`` can
-        complete without filesystem access.
-
-        :returns: A tuple of (app, patch) where *patch* must be
-            deactivated in a ``finally`` block.
-    """
-    reset_webapp_persona()
-
-    app = establish_webapp_persona(
-        name="testapp",
-        logger_name="testapp",
-        log_basename="testapp",
-    )
-
-    patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
-    mock_cls = patch.activate()
-    mock_registry = Mock()
-    mock_registry.configure(recursive=True)
-    mock_cls.configure(return_value=mock_registry)
-
-    return app, patch
-
+@composite
+def random_path_strategy(draw):
+    """Generate a random valid URL path with 1 to 3 segments."""
+    depth = draw(st.integers(1, 3))
+    segments = [draw(segment_strategy) for _ in range(depth)]
+    return "/" + "/".join(segments)
 
 
 # =============================================================================
@@ -115,7 +70,13 @@ def _create_app_with_mock_config():
 # Validates: Requirements 2.1
 # =============================================================================
 
-def test_property_attach_route_registers_routable_endpoints():
+@given(
+    iteration=st.integers(0, 9999),
+    path_segment=segment_strategy,
+    method=method_strategy,
+    constraints={"max_examples": 10},
+)
+def test_property_attach_route_registers_routable_endpoints(iteration, path_segment, method):
     """
         Property 3: attach_route registers routable endpoints
 
@@ -124,68 +85,52 @@ def test_property_attach_route_registers_routable_endpoints():
         ``startup()`` shall result in the Router successfully matching a
         request to that path and method to the decorated handler.
 
-        Each iteration generates a unique random path and a random HTTP
-        method, registers a handler via ``attach_route``, starts the
-        application, and verifies the Router matches the path and method
-        to the correct handler.  Runs 10 iterations.
-
         **Feature: webapp-lifecycle, Property 3: attach_route registers routable endpoints**
         **Validates: Requirements 2.1**
     """
-    for iteration in range(10):
-        patch = None
+    patch = None
+    path = f"/prop3/{path_segment}/{iteration}"
 
-        try:
-            reset_webapp_persona()
+    try:
+        reset_webapp_persona()
 
-            # Generate a unique path per iteration to avoid conflicts
-            path = f"/prop3/{_random_segment()}/{iteration}"
-            method = _random_method()
+        app = establish_webapp_persona(
+            name="testapp",
+            logger_name="testapp",
+            log_basename="testapp",
+        )
 
-            app = establish_webapp_persona(
-                name="testapp",
-                logger_name="testapp",
-                log_basename="testapp",
-            )
+        def handler_func(request):
+            return {"ok": True}
 
-            # Define a handler and register it via attach_route
-            def handler_func(request):
-                return {"ok": True}
+        decorated = app.attach_route(path, methods=[method])(handler_func)
 
-            decorated = app.attach_route(path, methods=[method])(handler_func)
+        patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
+        mock_cls = patch.activate()
+        mock_registry = Mock()
+        mock_registry.configure(recursive=True)
+        mock_cls.configure(return_value=mock_registry)
 
-            # Patch ManagedConfigRegistry and start up
-            patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
-            mock_cls = patch.activate()
-            mock_registry = Mock()
-            mock_registry.configure(recursive=True)
-            mock_cls.configure(return_value=mock_registry)
+        app.startup()
 
-            app.startup()
+        request = Request(method=method, path=path)
+        match = app.router.match(request)
 
-            # Verify the Router matches the path and method
-            request = Request(method=method, path=path)
-            match = app.router.match(request)
+        testbase.assert_true(
+            match is not None,
+            f"Router did not match {method} {path} after attach_route and startup"
+        )
 
-            if match is None:
-                errmsg = (
-                    f"Iteration {iteration}: Router did not match "
-                    f"{method} {path} after attach_route and startup"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_true(
+            match.handler is decorated,
+            f"Router matched {method} {path} to handler {match.handler}, "
+            f"expected the decorated handler {decorated}"
+        )
 
-            if match.handler is not decorated:
-                errmsg = (
-                    f"Iteration {iteration}: Router matched {method} {path} "
-                    f"to handler {match.handler}, expected the decorated "
-                    f"handler {decorated}"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            if patch is not None:
-                patch.deactivate()
-            reset_webapp_persona()
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
 
     return
 
@@ -196,7 +141,13 @@ def test_property_attach_route_registers_routable_endpoints():
 # Validates: Requirements 2.2
 # =============================================================================
 
-def test_property_attach_route_conflict_detection():
+@given(
+    iteration=st.integers(0, 9999),
+    path_segment=segment_strategy,
+    method=method_strategy,
+    constraints={"max_examples": 10},
+)
+def test_property_attach_route_conflict_detection(iteration, path_segment, method):
     """
         Property 4: attach_route conflict detection
 
@@ -205,81 +156,66 @@ def test_property_attach_route_conflict_detection():
         ``attach_route`` again with the same path and method shall raise
         an ``EndpointConflictError``.
 
-        Each iteration generates a random path and method, registers a
-        handler, starts the application so the route is live in the
-        Router, then attempts to register a second handler at the same
-        path and method.  Runs 10 iterations.
-
         **Feature: webapp-lifecycle, Property 4: attach_route conflict detection**
         **Validates: Requirements 2.2**
     """
-    for iteration in range(10):
-        patch = None
+    patch = None
+    path = f"/prop4/{path_segment}/{iteration}"
+
+    try:
+        reset_webapp_persona()
+
+        app = establish_webapp_persona(
+            name="testapp",
+            logger_name="testapp",
+            log_basename="testapp",
+        )
+
+        @app.attach_route(path, methods=[method])
+        def first_handler(request):
+            return {"first": True}
+
+        patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
+        mock_cls = patch.activate()
+        mock_registry = Mock()
+        mock_registry.configure(recursive=True)
+        mock_cls.configure(return_value=mock_registry)
+
+        app.startup()
+
+        caught_error = None
 
         try:
-            reset_webapp_persona()
-
-            path = f"/prop4/{_random_segment()}/{iteration}"
-            method = _random_method()
-
-            app = establish_webapp_persona(
-                name="testapp",
-                logger_name="testapp",
-                log_basename="testapp",
-            )
-
-            # Register the first handler before startup (queued)
             @app.attach_route(path, methods=[method])
-            def first_handler(request):
-                return {"first": True}
+            def second_handler(request):
+                return {"second": True}
+        except EndpointConflictError as err:
+            caught_error = err
 
-            # Patch ManagedConfigRegistry and start up
-            patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
-            mock_cls = patch.activate()
-            mock_registry = Mock()
-            mock_registry.configure(recursive=True)
-            mock_cls.configure(return_value=mock_registry)
+        testbase.assert_true(
+            caught_error is not None,
+            f"Expected EndpointConflictError when registering duplicate route "
+            f"{method} {path}, but no error was raised"
+        )
 
-            app.startup()
+        error_message = str(caught_error)
 
-            # Attempt to register a second handler at the same path+method
-            caught_error = None
+        testbase.assert_true(
+            path in error_message,
+            f"EndpointConflictError message does not contain path '{path}'. "
+            f"Got: '{error_message}'"
+        )
 
-            try:
-                @app.attach_route(path, methods=[method])
-                def second_handler(request):
-                    return {"second": True}
-            except EndpointConflictError as err:
-                caught_error = err
+        testbase.assert_true(
+            method in error_message,
+            f"EndpointConflictError message does not contain method '{method}'. "
+            f"Got: '{error_message}'"
+        )
 
-            if caught_error is None:
-                errmsg = (
-                    f"Iteration {iteration}: Expected EndpointConflictError "
-                    f"when registering duplicate route {method} {path}, "
-                    f"but no error was raised"
-                )
-                raise AssertionError(errmsg)
-
-            error_message = str(caught_error)
-
-            if path not in error_message:
-                errmsg = (
-                    f"Iteration {iteration}: EndpointConflictError message "
-                    f"does not contain path '{path}'. Got: '{error_message}'"
-                )
-                raise AssertionError(errmsg)
-
-            if method not in error_message:
-                errmsg = (
-                    f"Iteration {iteration}: EndpointConflictError message "
-                    f"does not contain method '{method}'. Got: '{error_message}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            if patch is not None:
-                patch.deactivate()
-            reset_webapp_persona()
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
 
     return
 
@@ -290,7 +226,15 @@ def test_property_attach_route_conflict_detection():
 # Validates: Requirements 2.3
 # =============================================================================
 
-def test_property_attach_route_preserves_function_metadata():
+@given(
+    iteration=st.integers(0, 9999),
+    random_name=name_strategy,
+    random_doc_word=name_strategy,
+    path_segment=segment_strategy,
+    method=method_strategy,
+    constraints={"max_examples": 10},
+)
+def test_property_attach_route_preserves_function_metadata(iteration, random_name, random_doc_word, path_segment, method):
     """
         Property 5: attach_route preserves function metadata
 
@@ -299,61 +243,45 @@ def test_property_attach_route_preserves_function_metadata():
         function shall have the same ``__name__`` and ``__doc__`` as the
         original.
 
-        Each iteration creates a function, assigns random ``__name__``
-        and ``__doc__`` values, applies ``attach_route``, and verifies
-        both attributes are preserved.  Runs 10 iterations.
-
         **Feature: webapp-lifecycle, Property 5: attach_route preserves function metadata**
         **Validates: Requirements 2.3**
     """
-    for iteration in range(10):
-        try:
-            reset_webapp_persona()
+    try:
+        reset_webapp_persona()
 
-            app = establish_webapp_persona(
-                name="testapp",
-                logger_name="testapp",
-                log_basename="testapp",
-            )
+        app = establish_webapp_persona(
+            name="testapp",
+            logger_name="testapp",
+            log_basename="testapp",
+        )
 
-            # Generate random metadata
-            random_name = f"handler_{_random_name()}"
-            random_doc = f"Docstring for {_random_name()} iteration {iteration}."
+        handler_name = f"handler_{random_name}"
+        handler_doc = f"Docstring for {random_doc_word} iteration {iteration}."
 
-            # Create a function with the random metadata
-            def original_func(request):
-                return {"iteration": iteration}
+        def original_func(request):
+            return {"iteration": iteration}
 
-            original_func.__name__ = random_name
-            original_func.__doc__ = random_doc
+        original_func.__name__ = handler_name
+        original_func.__doc__ = handler_doc
 
-            # Use a unique path per iteration to avoid conflicts
-            path = f"/prop5/{_random_segment()}/{iteration}"
-            method = _random_method()
+        path = f"/prop5/{path_segment}/{iteration}"
 
-            decorated = app.attach_route(path, methods=[method])(original_func)
+        decorated = app.attach_route(path, methods=[method])(original_func)
 
-            # Verify __name__ is preserved
-            if decorated.__name__ != random_name:
-                errmsg = (
-                    f"Iteration {iteration}: Expected decorated __name__ "
-                    f"'{random_name}', got '{decorated.__name__}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            decorated.__name__, handler_name,
+            f"Expected decorated __name__ '{handler_name}', got '{decorated.__name__}'"
+        )
 
-            # Verify __doc__ is preserved
-            if decorated.__doc__ != random_doc:
-                errmsg = (
-                    f"Iteration {iteration}: Expected decorated __doc__ "
-                    f"'{random_doc}', got '{decorated.__doc__}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            decorated.__doc__, handler_doc,
+            f"Expected decorated __doc__ '{handler_doc}', got '{decorated.__doc__}'"
+        )
 
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
-
 
 
 # =============================================================================
@@ -362,7 +290,11 @@ def test_property_attach_route_preserves_function_metadata():
 # Validates: Requirements 3.1, 3.3
 # =============================================================================
 
-def test_property_attach_blueprint_registers_all_endpoints():
+@given(
+    iteration=st.integers(0, 9999),
+    constraints={"max_examples": 10},
+)
+def test_property_attach_blueprint_registers_all_endpoints(iteration):
     """
         Property 6: attach_blueprint_to_route registers all blueprint endpoints
 
@@ -371,84 +303,65 @@ def test_property_attach_blueprint_registers_all_endpoints():
         shall result in the blueprint's ``register`` method being called
         with the application's Router.
 
-        Each iteration creates a fake blueprint class with a tracking
-        ``register`` classmethod, registers it via
-        ``attach_blueprint_to_route`` before startup, starts the
-        application, and verifies that ``register`` was called with the
-        correct Router instance.  Runs 10 iterations.
-
         **Feature: webapp-lifecycle, Property 6: attach_blueprint_to_route registers all blueprint endpoints**
         **Validates: Requirements 3.1, 3.3**
     """
-    for iteration in range(10):
-        patch = None
+    patch = None
 
-        try:
-            reset_webapp_persona()
+    try:
+        reset_webapp_persona()
 
-            app = establish_webapp_persona(
-                name="testapp",
-                logger_name="testapp",
-                log_basename="testapp",
-            )
+        app = establish_webapp_persona(
+            name="testapp",
+            logger_name="testapp",
+            log_basename="testapp",
+        )
 
-            # Create a unique fake blueprint class per iteration so that
-            # each is a distinct class object (avoids duplicate detection
-            # across iterations sharing the same singleton).
-            register_calls = []
+        register_calls = []
 
-            # Use type() to create a unique class each iteration
-            def make_register(calls_list):
-                @classmethod
-                def register(cls, router=None):
-                    calls_list.append(router)
-                return register
+        def make_register(calls_list):
+            @classmethod
+            def register(cls, router=None):
+                calls_list.append(router)
+            return register
 
-            blueprint_cls = type(
-                f"FakeBlueprint_{iteration}",
-                (),
-                {"register": make_register(register_calls)},
-            )
+        blueprint_cls = type(
+            f"FakeBlueprint_{iteration}",
+            (),
+            {"register": make_register(register_calls)},
+        )
 
-            # Register the blueprint before startup (queued)
-            app.attach_blueprint_to_route(blueprint_cls)
+        app.attach_blueprint_to_route(blueprint_cls)
 
-            # Verify it was queued, not yet called
-            if len(register_calls) != 0:
-                errmsg = (
-                    f"Iteration {iteration}: Expected register to not be "
-                    f"called before startup, got {len(register_calls)} calls"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            len(register_calls), 0,
+            f"Expected register to not be called before startup, "
+            f"got {len(register_calls)} calls"
+        )
 
-            # Patch ManagedConfigRegistry and start up
-            patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
-            mock_cls = patch.activate()
-            mock_registry = Mock()
-            mock_registry.configure(recursive=True)
-            mock_cls.configure(return_value=mock_registry)
+        patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
+        mock_cls = patch.activate()
+        mock_registry = Mock()
+        mock_registry.configure(recursive=True)
+        mock_cls.configure(return_value=mock_registry)
 
-            app.startup()
+        app.startup()
 
-            # Verify register was called exactly once with the app's router
-            if len(register_calls) != 1:
-                errmsg = (
-                    f"Iteration {iteration}: Expected register to be called "
-                    f"once during startup, got {len(register_calls)} calls"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            len(register_calls), 1,
+            f"Expected register to be called once during startup, "
+            f"got {len(register_calls)} calls"
+        )
 
-            if register_calls[0] is not app._router:
-                errmsg = (
-                    f"Iteration {iteration}: Expected register to be called "
-                    f"with the app's Router instance"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_true(
+            register_calls[0] is app._router,
+            f"Expected register to be called with the app's Router instance"
+        )
 
-        finally:
-            if patch is not None:
-                patch.deactivate()
-            reset_webapp_persona()
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
 
     return
 
@@ -459,7 +372,11 @@ def test_property_attach_blueprint_registers_all_endpoints():
 # Validates: Requirements 3.2
 # =============================================================================
 
-def test_property_duplicate_blueprint_registration_raises_error():
+@given(
+    iteration=st.integers(0, 9999),
+    constraints={"max_examples": 10},
+)
+def test_property_duplicate_blueprint_registration_raises_error(iteration):
     """
         Property 7: Duplicate blueprint registration raises error
 
@@ -467,72 +384,63 @@ def test_property_duplicate_blueprint_registration_raises_error():
         ``attach_blueprint_to_route`` twice with the same class shall
         raise a ``BlueprintAlreadyRegisteredError`` on the second call.
 
-        Each iteration creates a unique fake blueprint class, registers
-        it once successfully, then attempts a second registration and
-        verifies the error is raised with the correct blueprint class
-        reference.  Runs 10 iterations.
-
         **Feature: webapp-lifecycle, Property 7: Duplicate blueprint registration raises error**
         **Validates: Requirements 3.2**
     """
-    for iteration in range(10):
+    try:
+        reset_webapp_persona()
+
+        app = establish_webapp_persona(
+            name="testapp",
+            logger_name="testapp",
+            log_basename="testapp",
+        )
+
+        blueprint_name = f"FakeBlueprint_{iteration}"
+
+        blueprint_cls = type(
+            blueprint_name,
+            (),
+            {
+                "register": classmethod(lambda cls, router=None: None),
+            },
+        )
+
+        app.attach_blueprint_to_route(blueprint_cls)
+
+        caught_error = None
+
         try:
-            reset_webapp_persona()
-
-            app = establish_webapp_persona(
-                name="testapp",
-                logger_name="testapp",
-                log_basename="testapp",
-            )
-
-            # Create a unique fake blueprint class per iteration
-            blueprint_name = f"FakeBlueprint_{iteration}"
-
-            blueprint_cls = type(
-                blueprint_name,
-                (),
-                {
-                    "register": classmethod(lambda cls, router=None: None),
-                },
-            )
-
-            # First registration should succeed
             app.attach_blueprint_to_route(blueprint_cls)
+        except BlueprintAlreadyRegisteredError as err:
+            caught_error = err
 
-            # Second registration should raise BlueprintAlreadyRegisteredError
-            caught_error = None
+        testbase.assert_true(
+            caught_error is not None,
+            f"Expected BlueprintAlreadyRegisteredError when registering "
+            f"'{blueprint_name}' twice, but no error was raised"
+        )
 
-            try:
-                app.attach_blueprint_to_route(blueprint_cls)
-            except BlueprintAlreadyRegisteredError as err:
-                caught_error = err
+        testbase.assert_true(
+            caught_error.blueprint_cls is blueprint_cls,
+            f"Expected BlueprintAlreadyRegisteredError.blueprint_cls to "
+            f"reference the duplicate class '{blueprint_name}'"
+        )
 
-            if caught_error is None:
-                errmsg = (
-                    f"Iteration {iteration}: Expected "
-                    f"BlueprintAlreadyRegisteredError when registering "
-                    f"'{blueprint_name}' twice, but no error was raised"
-                )
-                raise AssertionError(errmsg)
+        error_message = str(caught_error)
 
-            if caught_error.blueprint_cls is not blueprint_cls:
-                errmsg = (
-                    f"Iteration {iteration}: Expected "
-                    f"BlueprintAlreadyRegisteredError.blueprint_cls to "
-                    f"reference the duplicate class '{blueprint_name}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_true(
+            blueprint_name in error_message,
+            f"Expected error message to contain '{blueprint_name}', "
+            f"got: '{error_message}'"
+        )
 
-            error_message = str(caught_error)
-
-            if blueprint_name not in error_message:
-                errmsg = (
-                    f"Iteration {iteration}: Expected error message to "
-                    f"contain '{blueprint_name}', got: '{error_message}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
+
+
+if __name__ == "__main__":
+    from automojo.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

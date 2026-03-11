@@ -189,7 +189,7 @@ This implementation plan creates the ASGI Layer feature providing the Asynchrono
   - [x] 11.7 Write property test for WebSocket connection lifecycle
     - **Property 7: WebSocket Connection Lifecycle**
     - **Validates: Requirements 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 5.10, 5.11**
-
+C
 - [x] 12. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 

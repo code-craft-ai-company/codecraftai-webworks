@@ -39,6 +39,8 @@ from automojo.webworks.routing.middleware import (
     MiddlewareEntry,
     MiddlewarePipeline,
 )
+from automojo.webworks.routing.middlewarecontext import MiddlewareContext
+from automojo.webworks.routing.middlewareregistry import MiddlewareRegistry
 from automojo.webworks.routing.exceptions import (
     HTTPException,
     NotFound,
@@ -85,6 +87,8 @@ __all__ = [
     "AsyncMiddleware",
     "MiddlewareEntry",
     "MiddlewarePipeline",
+    "MiddlewareContext",
+    "MiddlewareRegistry",
     # Exceptions
     "HTTPException",
     "NotFound",

@@ -14,6 +14,11 @@ from urllib.parse import parse_qs, urlencode
 from automojo.webworks.routing.headers import Headers
 from automojo.webworks.routing.queryparams import QueryParams
 
+# Avoid circular import; use TYPE_CHECKING for MiddlewareContext
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from automojo.webworks.routing.middlewarecontext import MiddlewareContext
+
 
 class Request:
     """
@@ -55,6 +60,7 @@ class Request:
         self._host = host
         self._port = port
         self._path_params: Dict[str, Any] = {}
+        self._middleware_context: Optional["MiddlewareContext"] = None
         
         # Lazily initialized
         self._query_params: Optional[QueryParams] = None
@@ -292,6 +298,26 @@ class Request:
             :param value: Dictionary of path parameter names to values.
         """
         self._path_params = value
+        return
+    
+    @property
+    def middleware_context(self) -> Optional["MiddlewareContext"]:
+        """
+            Middleware context attached during pipeline execution.
+            
+            :returns: The MiddlewareContext instance or None.
+        """
+        rtnval = self._middleware_context
+        return rtnval
+    
+    @middleware_context.setter
+    def middleware_context(self, value: Optional["MiddlewareContext"]) -> None:
+        """
+            Set the middleware context (called by dispatcher before pipeline execution).
+            
+            :param value: The MiddlewareContext instance or None.
+        """
+        self._middleware_context = value
         return
     
     @property

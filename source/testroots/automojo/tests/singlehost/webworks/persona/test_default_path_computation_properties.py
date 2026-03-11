@@ -15,8 +15,11 @@ __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
 import os
-import random
-import string
+
+import automojo.testbase as testbase
+
+from automojo.testbase.properties import given
+from automojo.testbase.properties import strategies as st
 
 from automojo.thisapp.persona import AppPersona
 from automojo.webworks.webapplication import (
@@ -26,19 +29,20 @@ from automojo.webworks.webapplication import (
 
 
 # =============================================================================
-# Helper Functions for Generating Random Test Data
+# Strategies for Generating Random Test Data
 # =============================================================================
 
-def generate_app_name():
-    """Generate a random valid application name (lowercase alpha, 3-12 chars)."""
-    length = random.randint(3, 12)
-    return ''.join(random.choices(string.ascii_lowercase, k=length))
+app_name_strategy = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyz",
+    min_size=3,
+    max_size=12,
+)
 
-
-def generate_random_string(min_len=3, max_len=15):
-    """Generate a random alphanumeric string suitable for persona values."""
-    length = random.randint(min_len, max_len)
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+random_string_strategy = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyz0123456789",
+    min_size=3,
+    max_size=15,
+)
 
 
 # =============================================================================
@@ -47,7 +51,12 @@ def generate_random_string(min_len=3, max_len=15):
 # Validates: Requirements 2.5, 2.6, 2.7
 # =============================================================================
 
-def test_property_default_presence_dir():
+@given(
+    app_name=app_name_strategy,
+    suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_default_presence_dir(app_name, suffix):
     """
         Property 3: Default Path Computation
 
@@ -55,46 +64,45 @@ def test_property_default_presence_dir():
         without an explicit presence_dir, the resolved presence_dir SHALL
         default to ~/<appname> (using os.path.join("~", name.lower())).
 
-        This test generates random application names and verifies the
-        default presence_dir computation across 100 iterations.
-
         **Feature: webapp-persona, Property 3: Default Path Computation**
         **Validates: Requirement 2.5**
     """
-    for iteration in range(100):
-        app_name = generate_app_name()
-        logger_name = f"logger_{generate_random_string()}"
-        log_basename = f"logbase_{generate_random_string()}"
+    logger_name = f"logger_{suffix}"
+    log_basename = f"logbase_{suffix}"
 
-        expected_presence_dir = os.path.join("~", app_name.lower())
+    expected_presence_dir = os.path.join("~", app_name.lower())
 
-        try:
-            reset_webapp_persona()
+    try:
+        reset_webapp_persona()
 
-            app = establish_webapp_persona(
-                name=app_name,
-                logger_name=logger_name,
-                log_basename=log_basename,
-                # presence_dir intentionally omitted
-            )
+        app = establish_webapp_persona(
+            name=app_name,
+            logger_name=logger_name,
+            log_basename=log_basename,
+        )
 
-            actual_presence_dir = AppPersona.AM_PRESENCE_DIR
+        actual_presence_dir = AppPersona.AM_PRESENCE_DIR
 
-            if actual_presence_dir != expected_presence_dir:
-                errmsg = (
-                    f"Iteration {iteration}: Default presence_dir mismatch. "
-                    f"name='{app_name}', expected='{expected_presence_dir}', "
-                    f"got='{actual_presence_dir}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            actual_presence_dir, expected_presence_dir,
+            f"Default presence_dir mismatch. name='{app_name}', "
+            f"expected='{expected_presence_dir}', got='{actual_presence_dir}'"
+        )
 
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
 
 
-def test_property_default_log_directory():
+@given(
+    app_name=app_name_strategy,
+    suffix=random_string_strategy,
+    use_explicit_presence=st.booleans(),
+    presence_suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_default_log_directory(app_name, suffix, use_explicit_presence, presence_suffix):
     """
         Property 3: Default Path Computation
 
@@ -102,65 +110,60 @@ def test_property_default_log_directory():
         without an explicit log_directory, the resolved log_directory SHALL
         default to <presence_dir>/logs.
 
-        This test generates random application names with both default and
-        explicit presence_dir values, verifying the default log_directory
-        computation across 100 iterations.
-
         **Feature: webapp-persona, Property 3: Default Path Computation**
         **Validates: Requirement 2.6**
     """
-    for iteration in range(100):
-        app_name = generate_app_name()
-        logger_name = f"logger_{generate_random_string()}"
-        log_basename = f"logbase_{generate_random_string()}"
+    logger_name = f"logger_{suffix}"
+    log_basename = f"logbase_{suffix}"
 
-        # Randomly decide whether to supply an explicit presence_dir
-        use_explicit_presence = random.choice([True, False])
+    if use_explicit_presence:
+        presence_dir = f"/tmp/prop3test_{presence_suffix}"
+    else:
+        presence_dir = None
 
-        if use_explicit_presence:
-            presence_dir = f"/tmp/prop3test_{generate_random_string()}"
-        else:
-            presence_dir = None
+    if presence_dir is not None:
+        expected_presence_dir = presence_dir
+    else:
+        expected_presence_dir = os.path.join("~", app_name.lower())
 
-        # Compute the expected presence_dir for deriving log_directory
+    expected_log_directory = os.path.join(expected_presence_dir, "logs")
+
+    try:
+        reset_webapp_persona()
+
+        kwargs = dict(
+            name=app_name,
+            logger_name=logger_name,
+            log_basename=log_basename,
+        )
         if presence_dir is not None:
-            expected_presence_dir = presence_dir
-        else:
-            expected_presence_dir = os.path.join("~", app_name.lower())
+            kwargs["presence_dir"] = presence_dir
 
-        expected_log_directory = os.path.join(expected_presence_dir, "logs")
+        app = establish_webapp_persona(**kwargs)
 
-        try:
-            reset_webapp_persona()
+        actual_log_directory = AppPersona.AM_LOG_DIRECTORY
 
-            kwargs = dict(
-                name=app_name,
-                logger_name=logger_name,
-                log_basename=log_basename,
-                # log_directory intentionally omitted
-            )
-            if presence_dir is not None:
-                kwargs["presence_dir"] = presence_dir
+        testbase.assert_equal(
+            actual_log_directory, expected_log_directory,
+            f"Default log_directory mismatch. name='{app_name}', "
+            f"presence_dir='{expected_presence_dir}', "
+            f"expected='{expected_log_directory}', got='{actual_log_directory}'"
+        )
 
-            app = establish_webapp_persona(**kwargs)
-
-            actual_log_directory = AppPersona.AM_LOG_DIRECTORY
-
-            if actual_log_directory != expected_log_directory:
-                errmsg = (
-                    f"Iteration {iteration}: Default log_directory mismatch. "
-                    f"name='{app_name}', presence_dir='{expected_presence_dir}', "
-                    f"expected='{expected_log_directory}', got='{actual_log_directory}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
 
 
-def test_property_default_settings_file():
+@given(
+    app_name=app_name_strategy,
+    suffix=random_string_strategy,
+    use_explicit_presence=st.booleans(),
+    presence_suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_default_settings_file(app_name, suffix, use_explicit_presence, presence_suffix):
     """
         Property 3: Default Path Computation
 
@@ -168,65 +171,58 @@ def test_property_default_settings_file():
         without an explicit settings_file, the resolved settings_file SHALL
         default to <presence_dir>/settings.config.
 
-        This test generates random application names with both default and
-        explicit presence_dir values, verifying the default settings_file
-        computation across 100 iterations.
-
         **Feature: webapp-persona, Property 3: Default Path Computation**
         **Validates: Requirement 2.7**
     """
-    for iteration in range(100):
-        app_name = generate_app_name()
-        logger_name = f"logger_{generate_random_string()}"
-        log_basename = f"logbase_{generate_random_string()}"
+    logger_name = f"logger_{suffix}"
+    log_basename = f"logbase_{suffix}"
 
-        # Randomly decide whether to supply an explicit presence_dir
-        use_explicit_presence = random.choice([True, False])
+    if use_explicit_presence:
+        presence_dir = f"/tmp/prop3test_{presence_suffix}"
+    else:
+        presence_dir = None
 
-        if use_explicit_presence:
-            presence_dir = f"/tmp/prop3test_{generate_random_string()}"
-        else:
-            presence_dir = None
+    if presence_dir is not None:
+        expected_presence_dir = presence_dir
+    else:
+        expected_presence_dir = os.path.join("~", app_name.lower())
 
-        # Compute the expected presence_dir for deriving settings_file
+    expected_settings_file = os.path.join(expected_presence_dir, "settings.config")
+
+    try:
+        reset_webapp_persona()
+
+        kwargs = dict(
+            name=app_name,
+            logger_name=logger_name,
+            log_basename=log_basename,
+        )
         if presence_dir is not None:
-            expected_presence_dir = presence_dir
-        else:
-            expected_presence_dir = os.path.join("~", app_name.lower())
+            kwargs["presence_dir"] = presence_dir
 
-        expected_settings_file = os.path.join(expected_presence_dir, "settings.config")
+        app = establish_webapp_persona(**kwargs)
 
-        try:
-            reset_webapp_persona()
+        actual_settings_file = AppPersona.AM_SETTINGS_FILENAME
 
-            kwargs = dict(
-                name=app_name,
-                logger_name=logger_name,
-                log_basename=log_basename,
-                # settings_file intentionally omitted
-            )
-            if presence_dir is not None:
-                kwargs["presence_dir"] = presence_dir
+        testbase.assert_equal(
+            actual_settings_file, expected_settings_file,
+            f"Default settings_file mismatch. name='{app_name}', "
+            f"presence_dir='{expected_presence_dir}', "
+            f"expected='{expected_settings_file}', got='{actual_settings_file}'"
+        )
 
-            app = establish_webapp_persona(**kwargs)
-
-            actual_settings_file = AppPersona.AM_SETTINGS_FILENAME
-
-            if actual_settings_file != expected_settings_file:
-                errmsg = (
-                    f"Iteration {iteration}: Default settings_file mismatch. "
-                    f"name='{app_name}', presence_dir='{expected_presence_dir}', "
-                    f"expected='{expected_settings_file}', got='{actual_settings_file}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
 
 
-def test_property_all_defaults_consistent():
+@given(
+    app_name=app_name_strategy,
+    suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_all_defaults_consistent(app_name, suffix):
     """
         Property 3: Default Path Computation
 
@@ -236,59 +232,49 @@ def test_property_all_defaults_consistent():
         log_directory = <presence_dir>/logs,
         settings_file = <presence_dir>/settings.config.
 
-        This test verifies the consistency of all three default paths
-        together across 100 iterations.
-
         **Feature: webapp-persona, Property 3: Default Path Computation**
         **Validates: Requirements 2.5, 2.6, 2.7**
     """
-    for iteration in range(100):
-        app_name = generate_app_name()
-        logger_name = f"logger_{generate_random_string()}"
-        log_basename = f"logbase_{generate_random_string()}"
+    logger_name = f"logger_{suffix}"
+    log_basename = f"logbase_{suffix}"
 
-        expected_presence_dir = os.path.join("~", app_name.lower())
-        expected_log_directory = os.path.join(expected_presence_dir, "logs")
-        expected_settings_file = os.path.join(expected_presence_dir, "settings.config")
+    expected_presence_dir = os.path.join("~", app_name.lower())
+    expected_log_directory = os.path.join(expected_presence_dir, "logs")
+    expected_settings_file = os.path.join(expected_presence_dir, "settings.config")
 
-        try:
-            reset_webapp_persona()
+    try:
+        reset_webapp_persona()
 
-            app = establish_webapp_persona(
-                name=app_name,
-                logger_name=logger_name,
-                log_basename=log_basename,
-            )
+        app = establish_webapp_persona(
+            name=app_name,
+            logger_name=logger_name,
+            log_basename=log_basename,
+        )
 
-            actual_presence = AppPersona.AM_PRESENCE_DIR
-            actual_logdir = AppPersona.AM_LOG_DIRECTORY
-            actual_settings = AppPersona.AM_SETTINGS_FILENAME
+        testbase.assert_equal(
+            AppPersona.AM_PRESENCE_DIR, expected_presence_dir,
+            f"presence_dir mismatch in consistency check. name='{app_name}', "
+            f"expected='{expected_presence_dir}', got='{AppPersona.AM_PRESENCE_DIR}'"
+        )
 
-            if actual_presence != expected_presence_dir:
-                errmsg = (
-                    f"Iteration {iteration}: presence_dir mismatch in consistency check. "
-                    f"name='{app_name}', expected='{expected_presence_dir}', "
-                    f"got='{actual_presence}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            AppPersona.AM_LOG_DIRECTORY, expected_log_directory,
+            f"log_directory mismatch in consistency check. name='{app_name}', "
+            f"expected='{expected_log_directory}', got='{AppPersona.AM_LOG_DIRECTORY}'"
+        )
 
-            if actual_logdir != expected_log_directory:
-                errmsg = (
-                    f"Iteration {iteration}: log_directory mismatch in consistency check. "
-                    f"name='{app_name}', expected='{expected_log_directory}', "
-                    f"got='{actual_logdir}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            AppPersona.AM_SETTINGS_FILENAME, expected_settings_file,
+            f"settings_file mismatch in consistency check. name='{app_name}', "
+            f"expected='{expected_settings_file}', got='{AppPersona.AM_SETTINGS_FILENAME}'"
+        )
 
-            if actual_settings != expected_settings_file:
-                errmsg = (
-                    f"Iteration {iteration}: settings_file mismatch in consistency check. "
-                    f"name='{app_name}', expected='{expected_settings_file}', "
-                    f"got='{actual_settings}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
+
+
+if __name__ == "__main__":
+    from automojo.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

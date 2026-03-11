@@ -14,8 +14,10 @@ __author__ = "Automation Mojo LLC"
 __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
-import random
-import string
+import automojo.testbase as testbase
+
+from automojo.testbase.properties import given
+from automojo.testbase.properties import strategies as st
 
 from automojo.thisapp.persona import AppPersona
 from automojo.webworks.webapplication import (
@@ -28,19 +30,20 @@ import automojo.thisapp.wellknown as thisapp_wellknown
 
 
 # =============================================================================
-# Helper Functions for Generating Random Test Data
+# Strategies for Generating Random Test Data
 # =============================================================================
 
-def generate_app_name():
-    """Generate a random valid application name (lowercase alpha, 3-12 chars)."""
-    length = random.randint(3, 12)
-    return ''.join(random.choices(string.ascii_lowercase, k=length))
+app_name_strategy = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyz",
+    min_size=3,
+    max_size=12,
+)
 
-
-def generate_random_string(min_len=3, max_len=15):
-    """Generate a random alphanumeric string suitable for persona values."""
-    length = random.randint(min_len, max_len)
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+random_string_strategy = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyz0123456789",
+    min_size=3,
+    max_size=15,
+)
 
 
 # =============================================================================
@@ -49,7 +52,14 @@ def generate_random_string(min_len=3, max_len=15):
 # Validates: Requirements 5.7
 # =============================================================================
 
-def test_property_second_establish_raises_error():
+@given(
+    first_name=app_name_strategy,
+    first_suffix=random_string_strategy,
+    second_name=app_name_strategy,
+    second_suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_second_establish_raises_error(first_name, first_suffix, second_name, second_suffix):
     """
         Property 10: Singleton Establishment Guard
 
@@ -57,67 +67,66 @@ def test_property_second_establish_raises_error():
         call SHALL succeed; subsequent calls SHALL raise
         PersonaAlreadyEstablishedError.
 
-        This test establishes a persona, then attempts a second establishment
-        with different random parameters and verifies the correct exception
-        is raised, across 100 iterations.
-
         **Feature: webapp-persona, Property 10: Singleton Establishment Guard**
         **Validates: Requirements 5.7**
     """
-    for iteration in range(100):
-        first_name = generate_app_name()
-        first_logger = f"logger_{generate_random_string()}"
-        first_logbase = f"logbase_{generate_random_string()}"
+    first_logger = f"logger_{first_suffix}"
+    first_logbase = f"logbase_{first_suffix}"
+    second_logger = f"logger_{second_suffix}"
+    second_logbase = f"logbase_{second_suffix}"
 
-        second_name = generate_app_name()
-        second_logger = f"logger_{generate_random_string()}"
-        second_logbase = f"logbase_{generate_random_string()}"
+    try:
+        reset_webapp_persona()
+
+        establish_webapp_persona(
+            name=first_name,
+            logger_name=first_logger,
+            log_basename=first_logbase,
+        )
+
+        exception_raised = False
+        exception_type = None
 
         try:
-            reset_webapp_persona()
-
-            # First call should succeed
             establish_webapp_persona(
-                name=first_name,
-                logger_name=first_logger,
-                log_basename=first_logbase,
+                name=second_name,
+                logger_name=second_logger,
+                log_basename=second_logbase,
             )
+        except PersonaAlreadyEstablishedError:
+            exception_raised = True
+        except Exception as err:
+            exception_type = type(err)
 
-            # Second call should raise PersonaAlreadyEstablishedError
-            exception_raised = False
-            exception_type = None
-
-            try:
-                establish_webapp_persona(
-                    name=second_name,
-                    logger_name=second_logger,
-                    log_basename=second_logbase,
+        if not exception_raised:
+            if exception_type is not None:
+                errmsg = (
+                    f"Expected PersonaAlreadyEstablishedError on second call, "
+                    f"got {exception_type.__name__}. "
+                    f"first_name='{first_name}', second_name='{second_name}'"
                 )
-            except PersonaAlreadyEstablishedError:
-                exception_raised = True
-            except Exception as err:
-                exception_type = type(err)
+            else:
+                errmsg = (
+                    f"Expected PersonaAlreadyEstablishedError on second call, "
+                    f"but no exception was raised. "
+                    f"first_name='{first_name}', second_name='{second_name}'"
+                )
+            raise AssertionError(errmsg)
 
-            if not exception_raised:
-                if exception_type is not None:
-                    errmsg = (
-                        f"Iteration {iteration}: Expected PersonaAlreadyEstablishedError "
-                        f"on second call, got {exception_type.__name__}"
-                    )
-                else:
-                    errmsg = (
-                        f"Iteration {iteration}: Expected PersonaAlreadyEstablishedError "
-                        f"on second call, but no exception was raised"
-                    )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
 
 
-def test_property_original_singleton_preserved_after_second_call():
+@given(
+    first_name=app_name_strategy,
+    first_suffix=random_string_strategy,
+    second_name=app_name_strategy,
+    second_suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_original_singleton_preserved_after_second_call(first_name, first_suffix, second_name, second_suffix):
     """
         Property 10: Singleton Establishment Guard
 
@@ -125,78 +134,64 @@ def test_property_original_singleton_preserved_after_second_call():
         singleton SHALL remain unchanged after a failed second establishment
         attempt.
 
-        This test verifies that the singleton identity and persona attributes
-        from the first establishment are preserved after the second call
-        raises PersonaAlreadyEstablishedError, across 100 iterations.
-
         **Feature: webapp-persona, Property 10: Singleton Establishment Guard**
         **Validates: Requirements 5.7**
     """
-    for iteration in range(100):
-        first_name = generate_app_name()
-        first_logger = f"logger_{generate_random_string()}"
-        first_logbase = f"logbase_{generate_random_string()}"
+    first_logger = f"logger_{first_suffix}"
+    first_logbase = f"logbase_{first_suffix}"
+    second_logger = f"logger_{second_suffix}"
+    second_logbase = f"logbase_{second_suffix}"
 
-        second_name = generate_app_name()
-        second_logger = f"logger_{generate_random_string()}"
-        second_logbase = f"logbase_{generate_random_string()}"
+    try:
+        reset_webapp_persona()
+
+        original_app = establish_webapp_persona(
+            name=first_name,
+            logger_name=first_logger,
+            log_basename=first_logbase,
+        )
 
         try:
-            reset_webapp_persona()
-
-            # First call should succeed
-            original_app = establish_webapp_persona(
-                name=first_name,
-                logger_name=first_logger,
-                log_basename=first_logbase,
+            establish_webapp_persona(
+                name=second_name,
+                logger_name=second_logger,
+                log_basename=second_logbase,
             )
+        except PersonaAlreadyEstablishedError:
+            pass
 
-            # Capture original singleton references
-            original_web_singleton = webworks_wellknown.THISWEBAPPLICATION_SINGLETON
-            original_app_singleton = thisapp_wellknown.THISAPPLICATION_SINGLETON
-            original_persona_name = AppPersona.AM_NAME
+        testbase.assert_true(
+            webworks_wellknown.THISWEBAPPLICATION_SINGLETON is original_app,
+            f"THISWEBAPPLICATION_SINGLETON changed after failed second establishment. "
+            f"first_name='{first_name}', second_name='{second_name}'"
+        )
 
-            # Second call should raise PersonaAlreadyEstablishedError
-            try:
-                establish_webapp_persona(
-                    name=second_name,
-                    logger_name=second_logger,
-                    log_basename=second_logbase,
-                )
-            except PersonaAlreadyEstablishedError:
-                pass
+        testbase.assert_true(
+            thisapp_wellknown.THISAPPLICATION_SINGLETON is original_app,
+            f"THISAPPLICATION_SINGLETON changed after failed second establishment. "
+            f"first_name='{first_name}', second_name='{second_name}'"
+        )
 
-            # Verify the original singleton is preserved (identity check)
-            if webworks_wellknown.THISWEBAPPLICATION_SINGLETON is not original_app:
-                errmsg = (
-                    f"Iteration {iteration}: THISWEBAPPLICATION_SINGLETON changed "
-                    f"after failed second establishment"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            AppPersona.AM_NAME, first_name,
+            f"AppPersona.AM_NAME changed from '{first_name}' to '{AppPersona.AM_NAME}' "
+            f"after failed second establishment."
+        )
 
-            if thisapp_wellknown.THISAPPLICATION_SINGLETON is not original_app:
-                errmsg = (
-                    f"Iteration {iteration}: THISAPPLICATION_SINGLETON changed "
-                    f"after failed second establishment"
-                )
-                raise AssertionError(errmsg)
-
-            # Verify persona name was not overwritten
-            if AppPersona.AM_NAME != first_name:
-                errmsg = (
-                    f"Iteration {iteration}: AppPersona.AM_NAME changed from "
-                    f"'{first_name}' to '{AppPersona.AM_NAME}' after failed "
-                    f"second establishment"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
 
 
-def test_property_error_contains_existing_persona_name():
+@given(
+    first_name=app_name_strategy,
+    first_suffix=random_string_strategy,
+    second_name=app_name_strategy,
+    second_suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_error_contains_existing_persona_name(first_name, first_suffix, second_name, second_suffix):
     """
         Property 10: Singleton Establishment Guard
 
@@ -204,72 +199,67 @@ def test_property_error_contains_existing_persona_name():
         PersonaAlreadyEstablishedError SHALL include the name of the
         existing persona in its message.
 
-        This test verifies that the error message references the original
-        persona name across 100 iterations with random names.
-
         **Feature: webapp-persona, Property 10: Singleton Establishment Guard**
         **Validates: Requirements 5.7**
     """
-    for iteration in range(100):
-        first_name = generate_app_name()
-        first_logger = f"logger_{generate_random_string()}"
-        first_logbase = f"logbase_{generate_random_string()}"
+    first_logger = f"logger_{first_suffix}"
+    first_logbase = f"logbase_{first_suffix}"
+    second_logger = f"logger_{second_suffix}"
+    second_logbase = f"logbase_{second_suffix}"
 
-        second_name = generate_app_name()
-        second_logger = f"logger_{generate_random_string()}"
-        second_logbase = f"logbase_{generate_random_string()}"
+    try:
+        reset_webapp_persona()
+
+        establish_webapp_persona(
+            name=first_name,
+            logger_name=first_logger,
+            log_basename=first_logbase,
+        )
+
+        caught_error = None
 
         try:
-            reset_webapp_persona()
-
             establish_webapp_persona(
-                name=first_name,
-                logger_name=first_logger,
-                log_basename=first_logbase,
+                name=second_name,
+                logger_name=second_logger,
+                log_basename=second_logbase,
             )
+        except PersonaAlreadyEstablishedError as err:
+            caught_error = err
 
-            caught_error = None
+        testbase.assert_true(
+            caught_error is not None,
+            f"Expected PersonaAlreadyEstablishedError but no exception was raised. "
+            f"first_name='{first_name}', second_name='{second_name}'"
+        )
 
-            try:
-                establish_webapp_persona(
-                    name=second_name,
-                    logger_name=second_logger,
-                    log_basename=second_logbase,
-                )
-            except PersonaAlreadyEstablishedError as err:
-                caught_error = err
+        error_message = str(caught_error)
 
-            if caught_error is None:
-                errmsg = (
-                    f"Iteration {iteration}: Expected PersonaAlreadyEstablishedError "
-                    f"but no exception was raised"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_true(
+            first_name in error_message,
+            f"Error message does not contain existing persona name '{first_name}'. "
+            f"Got: '{error_message}'"
+        )
 
-            error_message = str(caught_error)
+        testbase.assert_equal(
+            caught_error.existing_name, first_name,
+            f"existing_name attribute mismatch. Expected '{first_name}', "
+            f"got '{caught_error.existing_name}'"
+        )
 
-            if first_name not in error_message:
-                errmsg = (
-                    f"Iteration {iteration}: Error message does not contain "
-                    f"existing persona name '{first_name}'. "
-                    f"Got: '{error_message}'"
-                )
-                raise AssertionError(errmsg)
-
-            if caught_error.existing_name != first_name:
-                errmsg = (
-                    f"Iteration {iteration}: existing_name attribute mismatch. "
-                    f"Expected '{first_name}', got '{caught_error.existing_name}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
 
 
-def test_property_multiple_subsequent_calls_all_fail():
+@given(
+    first_name=app_name_strategy,
+    first_suffix=random_string_strategy,
+    num_attempts=st.integers(2, 5),
+    constraints={"max_examples": 100},
+)
+def test_property_multiple_subsequent_calls_all_fail(first_name, first_suffix, num_attempts):
     """
         Property 10: Singleton Establishment Guard
 
@@ -278,77 +268,64 @@ def test_property_multiple_subsequent_calls_all_fail():
         PersonaAlreadyEstablishedError and the original singleton SHALL
         remain unchanged throughout.
 
-        This test establishes a persona once, then attempts a random number
-        of additional calls (2-5), verifying each one fails correctly,
-        across 100 iterations.
-
         **Feature: webapp-persona, Property 10: Singleton Establishment Guard**
         **Validates: Requirements 5.7**
     """
-    for iteration in range(100):
-        first_name = generate_app_name()
-        first_logger = f"logger_{generate_random_string()}"
-        first_logbase = f"logbase_{generate_random_string()}"
+    first_logger = f"logger_{first_suffix}"
+    first_logbase = f"logbase_{first_suffix}"
 
-        try:
-            reset_webapp_persona()
+    try:
+        reset_webapp_persona()
 
-            original_app = establish_webapp_persona(
-                name=first_name,
-                logger_name=first_logger,
-                log_basename=first_logbase,
+        original_app = establish_webapp_persona(
+            name=first_name,
+            logger_name=first_logger,
+            log_basename=first_logbase,
+        )
+
+        for attempt in range(num_attempts):
+            exception_raised = False
+
+            try:
+                establish_webapp_persona(
+                    name=f"attempt_{attempt}",
+                    logger_name=f"logger_attempt_{attempt}",
+                    log_basename=f"logbase_attempt_{attempt}",
+                )
+            except PersonaAlreadyEstablishedError:
+                exception_raised = True
+
+            testbase.assert_true(
+                exception_raised,
+                f"Attempt {attempt + 1}/{num_attempts}: Expected "
+                f"PersonaAlreadyEstablishedError but no exception raised. "
+                f"first_name='{first_name}'"
             )
 
-            # Attempt a random number of subsequent calls
-            num_attempts = random.randint(2, 5)
+        testbase.assert_true(
+            webworks_wellknown.THISWEBAPPLICATION_SINGLETON is original_app,
+            f"THISWEBAPPLICATION_SINGLETON changed after {num_attempts} failed "
+            f"establishment attempts. first_name='{first_name}'"
+        )
 
-            for attempt in range(num_attempts):
-                attempt_name = generate_app_name()
-                attempt_logger = f"logger_{generate_random_string()}"
-                attempt_logbase = f"logbase_{generate_random_string()}"
+        testbase.assert_true(
+            thisapp_wellknown.THISAPPLICATION_SINGLETON is original_app,
+            f"THISAPPLICATION_SINGLETON changed after {num_attempts} failed "
+            f"establishment attempts. first_name='{first_name}'"
+        )
 
-                exception_raised = False
+        testbase.assert_equal(
+            AppPersona.AM_NAME, first_name,
+            f"AppPersona.AM_NAME changed from '{first_name}' to '{AppPersona.AM_NAME}' "
+            f"after {num_attempts} failed establishment attempts."
+        )
 
-                try:
-                    establish_webapp_persona(
-                        name=attempt_name,
-                        logger_name=attempt_logger,
-                        log_basename=attempt_logbase,
-                    )
-                except PersonaAlreadyEstablishedError:
-                    exception_raised = True
-
-                if not exception_raised:
-                    errmsg = (
-                        f"Iteration {iteration}, attempt {attempt + 1}/{num_attempts}: "
-                        f"Expected PersonaAlreadyEstablishedError but no exception raised"
-                    )
-                    raise AssertionError(errmsg)
-
-            # After all failed attempts, original singleton must still be intact
-            if webworks_wellknown.THISWEBAPPLICATION_SINGLETON is not original_app:
-                errmsg = (
-                    f"Iteration {iteration}: THISWEBAPPLICATION_SINGLETON changed "
-                    f"after {num_attempts} failed establishment attempts"
-                )
-                raise AssertionError(errmsg)
-
-            if thisapp_wellknown.THISAPPLICATION_SINGLETON is not original_app:
-                errmsg = (
-                    f"Iteration {iteration}: THISAPPLICATION_SINGLETON changed "
-                    f"after {num_attempts} failed establishment attempts"
-                )
-                raise AssertionError(errmsg)
-
-            if AppPersona.AM_NAME != first_name:
-                errmsg = (
-                    f"Iteration {iteration}: AppPersona.AM_NAME changed from "
-                    f"'{first_name}' to '{AppPersona.AM_NAME}' after "
-                    f"{num_attempts} failed establishment attempts"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
+
+
+if __name__ == "__main__":
+    from automojo.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

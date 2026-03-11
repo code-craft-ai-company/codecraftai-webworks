@@ -156,7 +156,7 @@ debugpy = "^1.8.12"
 type = "git"
 url = "https://github.com/automationmojo/automojo-runtime.git"
 reference = "main"
-resolved_reference = "e88359951d1d6a9a526c949aed26b360a2ea200f"
+resolved_reference = "6f592624defcd78a7ea54f59b7717610d8de661d"
 
 [[package]]
 name = "automojo-testbase"
@@ -182,7 +182,7 @@ automojo-xmodules = {git = "https://github.com/automationmojo/automojo-xmodules.
 type = "git"
 url = "https://github.com/automationmojo/automojo-testbase.git"
 reference = "main"
-resolved_reference = "b728e7a81933499286c2e581244f099fa0ea1ab5"
+resolved_reference = "487a61136a122276486b08332c009bd7d126976b"
 
 [[package]]
 name = "automojo-this-app"

@@ -20,8 +20,12 @@ __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
 import os
-import random
-import string
+
+import automojo.testbase as testbase
+
+from automojo.testbase.properties import given
+from automojo.testbase.properties import strategies as st
+from automojo.testbase.properties.strategies import composite
 
 from automojo.thisapp.persona import AppPersona
 from automojo.webworks.webapplication import (
@@ -31,49 +35,62 @@ from automojo.webworks.webapplication import (
 
 
 # =============================================================================
-# Helper Functions for Generating Random Test Data
+# Strategies for Generating Random Test Data
 # =============================================================================
 
-def generate_app_name():
-    """Generate a random valid application name (lowercase alpha, 3-12 chars)."""
-    length = random.randint(3, 12)
-    return ''.join(random.choices(string.ascii_lowercase, k=length))
+app_name_strategy = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyz",
+    min_size=3,
+    max_size=12,
+)
+
+random_string_strategy = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyz0123456789",
+    min_size=3,
+    max_size=15,
+)
+
+path_segment_strategy = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyz0123456789",
+    min_size=3,
+    max_size=8,
+)
+
+extension_strategy = st.sampled_from([".config", ".ini", ".cfg", ".conf", ".settings"])
 
 
-def generate_random_string(min_len=3, max_len=15):
-    """Generate a random alphanumeric string suitable for persona values."""
-    length = random.randint(min_len, max_len)
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
-
-
-def generate_filename():
+@composite
+def filename_strategy(draw):
     """Generate a random filename without directory separators."""
-    name = generate_random_string(3, 10)
-    ext = random.choice([".config", ".ini", ".cfg", ".conf", ".settings"])
+    name = draw(path_segment_strategy)
+    ext = draw(extension_strategy)
     return f"{name}{ext}"
 
 
-def generate_absolute_path():
+@composite
+def absolute_path_strategy(draw):
     """Generate a random absolute path for settings_file."""
-    depth = random.randint(1, 4)
-    parts = [generate_random_string(3, 8) for _ in range(depth)]
-    filename = generate_filename()
+    depth = draw(st.integers(1, 4))
+    parts = [draw(path_segment_strategy) for _ in range(depth)]
+    filename = draw(filename_strategy())
     return os.path.join("/", *parts, filename)
 
 
-def generate_relative_path_with_dirs():
+@composite
+def relative_path_with_dirs_strategy(draw):
     """Generate a random relative path that contains directory separators."""
-    depth = random.randint(1, 3)
-    parts = [generate_random_string(3, 8) for _ in range(depth)]
-    filename = generate_filename()
+    depth = draw(st.integers(1, 3))
+    parts = [draw(path_segment_strategy) for _ in range(depth)]
+    filename = draw(filename_strategy())
     return os.path.join(*parts, filename)
 
 
-def generate_home_relative_path():
+@composite
+def home_relative_path_strategy(draw):
     """Generate a path starting with ~ for home directory expansion."""
-    depth = random.randint(1, 3)
-    parts = [generate_random_string(3, 8) for _ in range(depth)]
-    filename = generate_filename()
+    depth = draw(st.integers(1, 3))
+    parts = [draw(path_segment_strategy) for _ in range(depth)]
+    filename = draw(filename_strategy())
     return os.path.join("~", *parts, filename)
 
 
@@ -83,7 +100,15 @@ def generate_home_relative_path():
 # Validates: Requirements 2.8, 2.9
 # =============================================================================
 
-def test_property_filename_only_joined_with_presence_dir():
+@given(
+    app_name=app_name_strategy,
+    suffix=random_string_strategy,
+    bare_filename=filename_strategy(),
+    use_explicit_presence=st.booleans(),
+    presence_suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_filename_only_joined_with_presence_dir(app_name, suffix, bare_filename, use_explicit_presence, presence_suffix):
     """
         Property 4: Absolute Path Preservation
 
@@ -91,66 +116,60 @@ def test_property_filename_only_joined_with_presence_dir():
         the full value), establish_webapp_persona SHALL join it with the
         resolved presence_dir.
 
-        This test generates random bare filenames and verifies they are
-        joined with the presence_dir across 100 iterations.
-
         **Feature: webapp-persona, Property 4: Absolute Path Preservation**
         **Validates: Requirement 2.8**
     """
-    for iteration in range(100):
-        app_name = generate_app_name()
-        logger_name = f"logger_{generate_random_string()}"
-        log_basename = f"logbase_{generate_random_string()}"
-        bare_filename = generate_filename()
+    logger_name = f"logger_{suffix}"
+    log_basename = f"logbase_{suffix}"
 
-        # Randomly supply an explicit presence_dir or use the default
-        use_explicit_presence = random.choice([True, False])
+    if use_explicit_presence:
+        presence_dir = f"/tmp/prop4test_{presence_suffix}"
+    else:
+        presence_dir = None
 
-        if use_explicit_presence:
-            presence_dir = f"/tmp/prop4test_{generate_random_string()}"
-        else:
-            presence_dir = None
+    if presence_dir is not None:
+        expected_presence_dir = presence_dir
+    else:
+        expected_presence_dir = os.path.join("~", app_name.lower())
 
-        # Compute the expected presence_dir
+    expected_settings_file = os.path.join(expected_presence_dir, bare_filename)
+
+    try:
+        reset_webapp_persona()
+
+        kwargs = dict(
+            name=app_name,
+            logger_name=logger_name,
+            log_basename=log_basename,
+            settings_file=bare_filename,
+        )
         if presence_dir is not None:
-            expected_presence_dir = presence_dir
-        else:
-            expected_presence_dir = os.path.join("~", app_name.lower())
+            kwargs["presence_dir"] = presence_dir
 
-        expected_settings_file = os.path.join(expected_presence_dir, bare_filename)
+        establish_webapp_persona(**kwargs)
 
-        try:
-            reset_webapp_persona()
+        actual_settings_file = AppPersona.AM_SETTINGS_FILENAME
 
-            kwargs = dict(
-                name=app_name,
-                logger_name=logger_name,
-                log_basename=log_basename,
-                settings_file=bare_filename,
-            )
-            if presence_dir is not None:
-                kwargs["presence_dir"] = presence_dir
+        testbase.assert_equal(
+            actual_settings_file, expected_settings_file,
+            f"Filename-only settings_file not joined with presence_dir. "
+            f"bare_filename='{bare_filename}', presence_dir='{expected_presence_dir}', "
+            f"expected='{expected_settings_file}', got='{actual_settings_file}'"
+        )
 
-            establish_webapp_persona(**kwargs)
-
-            actual_settings_file = AppPersona.AM_SETTINGS_FILENAME
-
-            if actual_settings_file != expected_settings_file:
-                errmsg = (
-                    f"Iteration {iteration}: Filename-only settings_file not joined "
-                    f"with presence_dir. bare_filename='{bare_filename}', "
-                    f"presence_dir='{expected_presence_dir}', "
-                    f"expected='{expected_settings_file}', got='{actual_settings_file}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
 
 
-def test_property_absolute_path_preserved_via_abspath():
+@given(
+    app_name=app_name_strategy,
+    suffix=random_string_strategy,
+    absolute_path=absolute_path_strategy(),
+    constraints={"max_examples": 100},
+)
+def test_property_absolute_path_preserved_via_abspath(app_name, suffix, absolute_path):
     """
         Property 4: Absolute Path Preservation
 
@@ -160,49 +179,47 @@ def test_property_absolute_path_preserved_via_abspath():
         os.path.expanduser(settings_file))), which for clean absolute paths
         returns the path unchanged.
 
-        This test generates random absolute paths and verifies they are
-        preserved across 100 iterations.
-
         **Feature: webapp-persona, Property 4: Absolute Path Preservation**
         **Validates: Requirement 2.9**
     """
-    for iteration in range(100):
-        app_name = generate_app_name()
-        logger_name = f"logger_{generate_random_string()}"
-        log_basename = f"logbase_{generate_random_string()}"
-        absolute_path = generate_absolute_path()
+    logger_name = f"logger_{suffix}"
+    log_basename = f"logbase_{suffix}"
 
-        expected_settings_file = os.path.abspath(
-            os.path.expandvars(os.path.expanduser(absolute_path))
+    expected_settings_file = os.path.abspath(
+        os.path.expandvars(os.path.expanduser(absolute_path))
+    )
+
+    try:
+        reset_webapp_persona()
+
+        establish_webapp_persona(
+            name=app_name,
+            logger_name=logger_name,
+            log_basename=log_basename,
+            settings_file=absolute_path,
         )
 
-        try:
-            reset_webapp_persona()
+        actual_settings_file = AppPersona.AM_SETTINGS_FILENAME
 
-            establish_webapp_persona(
-                name=app_name,
-                logger_name=logger_name,
-                log_basename=log_basename,
-                settings_file=absolute_path,
-            )
+        testbase.assert_equal(
+            actual_settings_file, expected_settings_file,
+            f"Absolute path not preserved. input='{absolute_path}', "
+            f"expected='{expected_settings_file}', got='{actual_settings_file}'"
+        )
 
-            actual_settings_file = AppPersona.AM_SETTINGS_FILENAME
-
-            if actual_settings_file != expected_settings_file:
-                errmsg = (
-                    f"Iteration {iteration}: Absolute path not preserved. "
-                    f"input='{absolute_path}', expected='{expected_settings_file}', "
-                    f"got='{actual_settings_file}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
 
 
-def test_property_relative_path_with_dirs_resolved():
+@given(
+    app_name=app_name_strategy,
+    suffix=random_string_strategy,
+    relative_path=relative_path_with_dirs_strategy(),
+    constraints={"max_examples": 100},
+)
+def test_property_relative_path_with_dirs_resolved(app_name, suffix, relative_path):
     """
         Property 4: Absolute Path Preservation
 
@@ -211,49 +228,47 @@ def test_property_relative_path_with_dirs_resolved():
         os.path.abspath(os.path.expandvars(os.path.expanduser(
         settings_file))), converting it to an absolute path.
 
-        This test generates random relative paths with directory components
-        and verifies they are resolved to absolute paths across 100 iterations.
-
         **Feature: webapp-persona, Property 4: Absolute Path Preservation**
         **Validates: Requirement 2.9**
     """
-    for iteration in range(100):
-        app_name = generate_app_name()
-        logger_name = f"logger_{generate_random_string()}"
-        log_basename = f"logbase_{generate_random_string()}"
-        relative_path = generate_relative_path_with_dirs()
+    logger_name = f"logger_{suffix}"
+    log_basename = f"logbase_{suffix}"
 
-        expected_settings_file = os.path.abspath(
-            os.path.expandvars(os.path.expanduser(relative_path))
+    expected_settings_file = os.path.abspath(
+        os.path.expandvars(os.path.expanduser(relative_path))
+    )
+
+    try:
+        reset_webapp_persona()
+
+        establish_webapp_persona(
+            name=app_name,
+            logger_name=logger_name,
+            log_basename=log_basename,
+            settings_file=relative_path,
         )
 
-        try:
-            reset_webapp_persona()
+        actual_settings_file = AppPersona.AM_SETTINGS_FILENAME
 
-            establish_webapp_persona(
-                name=app_name,
-                logger_name=logger_name,
-                log_basename=log_basename,
-                settings_file=relative_path,
-            )
+        testbase.assert_equal(
+            actual_settings_file, expected_settings_file,
+            f"Relative path with dirs not resolved. input='{relative_path}', "
+            f"expected='{expected_settings_file}', got='{actual_settings_file}'"
+        )
 
-            actual_settings_file = AppPersona.AM_SETTINGS_FILENAME
-
-            if actual_settings_file != expected_settings_file:
-                errmsg = (
-                    f"Iteration {iteration}: Relative path with dirs not resolved. "
-                    f"input='{relative_path}', expected='{expected_settings_file}', "
-                    f"got='{actual_settings_file}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
 
 
-def test_property_home_tilde_path_expanded():
+@given(
+    app_name=app_name_strategy,
+    suffix=random_string_strategy,
+    home_path=home_relative_path_strategy(),
+    constraints={"max_examples": 100},
+)
+def test_property_home_tilde_path_expanded(app_name, suffix, home_path):
     """
         Property 4: Absolute Path Preservation
 
@@ -261,43 +276,40 @@ def test_property_home_tilde_path_expanded():
         establish_webapp_persona SHALL expand the home directory via
         os.path.expanduser and then resolve via os.path.abspath.
 
-        This test generates random ~-prefixed paths and verifies they are
-        expanded and resolved across 100 iterations.
-
         **Feature: webapp-persona, Property 4: Absolute Path Preservation**
         **Validates: Requirement 2.9**
     """
-    for iteration in range(100):
-        app_name = generate_app_name()
-        logger_name = f"logger_{generate_random_string()}"
-        log_basename = f"logbase_{generate_random_string()}"
-        home_path = generate_home_relative_path()
+    logger_name = f"logger_{suffix}"
+    log_basename = f"logbase_{suffix}"
 
-        expected_settings_file = os.path.abspath(
-            os.path.expandvars(os.path.expanduser(home_path))
+    expected_settings_file = os.path.abspath(
+        os.path.expandvars(os.path.expanduser(home_path))
+    )
+
+    try:
+        reset_webapp_persona()
+
+        establish_webapp_persona(
+            name=app_name,
+            logger_name=logger_name,
+            log_basename=log_basename,
+            settings_file=home_path,
         )
 
-        try:
-            reset_webapp_persona()
+        actual_settings_file = AppPersona.AM_SETTINGS_FILENAME
 
-            establish_webapp_persona(
-                name=app_name,
-                logger_name=logger_name,
-                log_basename=log_basename,
-                settings_file=home_path,
-            )
+        testbase.assert_equal(
+            actual_settings_file, expected_settings_file,
+            f"Home tilde path not expanded. input='{home_path}', "
+            f"expected='{expected_settings_file}', got='{actual_settings_file}'"
+        )
 
-            actual_settings_file = AppPersona.AM_SETTINGS_FILENAME
-
-            if actual_settings_file != expected_settings_file:
-                errmsg = (
-                    f"Iteration {iteration}: Home tilde path not expanded. "
-                    f"input='{home_path}', expected='{expected_settings_file}', "
-                    f"got='{actual_settings_file}'"
-                )
-                raise AssertionError(errmsg)
-
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
+
+
+if __name__ == "__main__":
+    from automojo.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

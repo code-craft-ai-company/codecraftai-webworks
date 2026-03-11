@@ -15,11 +15,14 @@ __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
 import os
-import random
-import string
 import tempfile
 
 from configparser import ConfigParser
+
+import automojo.testbase as testbase
+
+from automojo.testbase.properties import given
+from automojo.testbase.properties import strategies as st
 
 from automojo.thisapp.appvardesc import AppVarDesc, VariableSource
 from automojo.thisapp.appvarset import AppVarSet
@@ -28,30 +31,52 @@ from automojo.webworks.webapplication import WebApplication
 
 
 # =============================================================================
-# Helper Functions for Generating Random Test Data
+# Strategies for Generating Random Test Data
 # =============================================================================
 
-def generate_random_string(min_len=3, max_len=15):
-    """Generate a random alphanumeric string suitable for variable values."""
-    length = random.randint(min_len, max_len)
-    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
+random_string_strategy = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyz0123456789",
+    min_size=3,
+    max_size=15,
+)
+
+var_suffix_strategy = st.text(
+    alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    min_size=6,
+    max_size=6,
+)
+
+source_flags_strategy = st.sampled_from([
+    VariableSource.NONE,
+    VariableSource.ENVIRONMENT,
+    VariableSource.SETTINGS,
+    VariableSource.BOTH,
+])
+
+env_source_strategy = st.sampled_from([
+    VariableSource.ENVIRONMENT,
+    VariableSource.BOTH,
+])
+
+non_env_source_strategy = st.sampled_from([
+    VariableSource.NONE,
+    VariableSource.SETTINGS,
+])
+
+settings_source_strategy = st.sampled_from([
+    VariableSource.SETTINGS,
+    VariableSource.BOTH,
+])
+
+non_settings_source_strategy = st.sampled_from([
+    VariableSource.NONE,
+    VariableSource.ENVIRONMENT,
+])
 
 
-def generate_variable_name(iteration):
-    """Generate a valid environment variable name unique to the iteration."""
-    suffix = ''.join(random.choices(string.ascii_uppercase, k=6))
-    return f"AM_TEST_{iteration}_{suffix}"
-
-
-def generate_random_source():
-    """Generate a random VariableSource flag combination."""
-    return random.choice([
-        VariableSource.NONE,
-        VariableSource.ENVIRONMENT,
-        VariableSource.SETTINGS,
-        VariableSource.BOTH,
-    ])
-
+# =============================================================================
+# Helper Functions
+# =============================================================================
 
 def create_app_with_settings(settings_dict=None):
     """
@@ -62,7 +87,6 @@ def create_app_with_settings(settings_dict=None):
         if no settings were provided.
     """
     if settings_dict is not None:
-        # Write a temporary settings file
         tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.config', delete=False)
         parser = ConfigParser()
         for section, values in settings_dict.items():
@@ -111,7 +135,20 @@ def cleanup_env_var(var_name):
 # Validates: Requirements 3.7, 4.1
 # =============================================================================
 
-def test_property_override_takes_precedence_over_all_sources():
+@given(
+    iteration=st.integers(0, 999),
+    var_suffix=var_suffix_strategy,
+    source_flags=source_flags_strategy,
+    env_value_suffix=random_string_strategy,
+    settings_value_suffix=random_string_strategy,
+    default_value_suffix=random_string_strategy,
+    override_value_suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_override_takes_precedence_over_all_sources(
+    iteration, var_suffix, source_flags, env_value_suffix,
+    settings_value_suffix, default_value_suffix, override_value_suffix
+):
     """
         Property 8: Variable Override Precedence
 
@@ -119,75 +156,59 @@ def test_property_override_takes_precedence_over_all_sources():
         override_variable_value SHALL take precedence over all sources
         (environment, settings, and defaults).
 
-        This test creates variables with different VariableSource flag
-        combinations, sets values in environment and settings, then calls
-        override_variable_value and verifies the override value is always
-        returned by get_variable_value.
-
         **Feature: webapp-persona, Property 8: Variable Override Precedence**
         **Validates: Requirements 3.7, 4.1**
     """
-    env_vars_to_clean = []
+    var_name = f"AM_TEST_{iteration}_{var_suffix}"
+    env_value = f"env_{env_value_suffix}"
+    settings_value = f"settings_{settings_value_suffix}"
+    default_value = f"default_{default_value_suffix}"
+    override_value = f"override_{override_value_suffix}"
+
+    os.environ[var_name] = env_value
+
+    settings_dict = {'DEFAULT': {var_name: settings_value}}
+    app, settings_path = create_app_with_settings(settings_dict)
 
     try:
-        for iteration in range(100):
-            # Generate unique variable name for this iteration
-            var_name = generate_variable_name(iteration)
-            source_flags = generate_random_source()
+        var_desc = AppVarDesc(
+            source=source_flags,
+            default=default_value
+        )
+        var_desc._name = var_name
+        var_desc._key = f"DEFAULT->{var_name}"
+        var_desc._owner = type(app)
 
-            # Generate distinct values for each source
-            env_value = f"env_{generate_random_string()}"
-            settings_value = f"settings_{generate_random_string()}"
-            default_value = f"default_{generate_random_string()}"
-            override_value = f"override_{generate_random_string()}"
+        app.override_variable_value(var_desc, override_value)
 
-            # Set environment variable
-            os.environ[var_name] = env_value
-            env_vars_to_clean.append(var_name)
+        result = app.get_variable_value(var_desc)
 
-            # Create a settings file with the variable in the DEFAULT section
-            settings_dict = {'DEFAULT': {var_name: settings_value}}
-            app, settings_path = create_app_with_settings(settings_dict)
-
-            try:
-                # Create a variable descriptor with the generated source flags
-                # We use a custom AppVarSet subclass to properly bind the descriptor
-                var_desc = AppVarDesc(
-                    source=source_flags,
-                    default=default_value
-                )
-
-                # Manually bind the descriptor name (simulating __set_name__)
-                var_desc._name = var_name
-                var_desc._key = f"DEFAULT->{var_name}"
-                var_desc._owner = type(app)
-
-                # First, apply the override
-                app.override_variable_value(var_desc, override_value)
-
-                # Now get the variable value - it must be the override value
-                result = app.get_variable_value(var_desc)
-
-                if result != override_value:
-                    errmsg = (
-                        f"Iteration {iteration}: Override did not take precedence. "
-                        f"source={source_flags}, expected override_value='{override_value}', "
-                        f"got='{result}'. env_value='{env_value}', "
-                        f"settings_value='{settings_value}', default_value='{default_value}'"
-                    )
-                    raise AssertionError(errmsg)
-
-            finally:
-                cleanup_settings_file(settings_path)
+        testbase.assert_equal(
+            result, override_value,
+            f"Override did not take precedence. source={source_flags}, "
+            f"expected override_value='{override_value}', got='{result}'. "
+            f"env_value='{env_value}', settings_value='{settings_value}', "
+            f"default_value='{default_value}'"
+        )
 
     finally:
-        for var_name in env_vars_to_clean:
-            cleanup_env_var(var_name)
+        cleanup_settings_file(settings_path)
+        cleanup_env_var(var_name)
 
     return
 
 
-def test_property_environment_source_lookup_order():
+@given(
+    iteration=st.integers(0, 999),
+    var_suffix=var_suffix_strategy,
+    include_env=st.booleans(),
+    default_value_suffix=random_string_strategy,
+    env_value_suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_environment_source_lookup_order(
+    iteration, var_suffix, include_env, default_value_suffix, env_value_suffix
+):
     """
         Property 8: Variable Override Precedence
 
@@ -196,82 +217,64 @@ def test_property_environment_source_lookup_order():
         an environment variable exists, it SHALL be used. When the ENVIRONMENT
         flag is not set, environment variables SHALL be ignored even if present.
 
-        This test verifies the environment source lookup behavior across
-        different VariableSource flag combinations.
-
         **Feature: webapp-persona, Property 8: Variable Override Precedence**
         **Validates: Requirements 3.7, 4.1**
     """
-    env_vars_to_clean = []
+    var_name = f"AM_TEST_{iteration}_{var_suffix}"
+    default_value = f"default_{default_value_suffix}"
+    env_value = f"env_{env_value_suffix}"
+
+    if include_env:
+        source_flags = VariableSource.ENVIRONMENT
+    else:
+        source_flags = VariableSource.NONE
+
+    os.environ[var_name] = env_value
+
+    app, settings_path = create_app_with_settings()
 
     try:
-        for iteration in range(100):
-            var_name = generate_variable_name(iteration)
-            default_value = f"default_{generate_random_string()}"
-            env_value = f"env_{generate_random_string()}"
+        var_desc = AppVarDesc(
+            source=source_flags,
+            default=default_value
+        )
+        var_desc._name = var_name
+        var_desc._key = f"DEFAULT->{var_name}"
+        var_desc._owner = type(app)
 
-            # Randomly decide whether to include ENVIRONMENT in the source flags
-            include_env = random.choice([True, False])
+        result = app.get_variable_value(var_desc)
 
-            if include_env:
-                source_flags = random.choice([
-                    VariableSource.ENVIRONMENT,
-                    VariableSource.BOTH,
-                ])
-            else:
-                source_flags = random.choice([
-                    VariableSource.NONE,
-                    VariableSource.SETTINGS,
-                ])
-
-            # Set the environment variable
-            os.environ[var_name] = env_value
-            env_vars_to_clean.append(var_name)
-
-            # Create app without a settings file (so settings source is empty)
-            app, settings_path = create_app_with_settings()
-
-            try:
-                var_desc = AppVarDesc(
-                    source=source_flags,
-                    default=default_value
-                )
-                var_desc._name = var_name
-                var_desc._key = f"DEFAULT->{var_name}"
-                var_desc._owner = type(app)
-
-                result = app.get_variable_value(var_desc)
-
-                if include_env:
-                    # When ENVIRONMENT flag is set, the env value should be used
-                    if result != env_value:
-                        errmsg = (
-                            f"Iteration {iteration}: Environment value not used when "
-                            f"ENVIRONMENT flag is set. source={source_flags}, "
-                            f"expected='{env_value}', got='{result}'"
-                        )
-                        raise AssertionError(errmsg)
-                else:
-                    # When ENVIRONMENT flag is not set, the default should be used
-                    if result != default_value:
-                        errmsg = (
-                            f"Iteration {iteration}: Environment value used when "
-                            f"ENVIRONMENT flag is NOT set. source={source_flags}, "
-                            f"expected default='{default_value}', got='{result}'"
-                        )
-                        raise AssertionError(errmsg)
-
-            finally:
-                cleanup_settings_file(settings_path)
+        if include_env:
+            testbase.assert_equal(
+                result, env_value,
+                f"Environment value not used when ENVIRONMENT flag is set. "
+                f"source={source_flags}, expected='{env_value}', got='{result}'"
+            )
+        else:
+            testbase.assert_equal(
+                result, default_value,
+                f"Environment value used when ENVIRONMENT flag is NOT set. "
+                f"source={source_flags}, expected default='{default_value}', got='{result}'"
+            )
 
     finally:
-        for var_name in env_vars_to_clean:
-            cleanup_env_var(var_name)
+        cleanup_settings_file(settings_path)
+        cleanup_env_var(var_name)
 
     return
 
 
-def test_property_settings_source_lookup_order():
+@given(
+    iteration=st.integers(0, 999),
+    var_suffix=var_suffix_strategy,
+    include_settings=st.booleans(),
+    default_value_suffix=random_string_strategy,
+    settings_value_suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_settings_source_lookup_order(
+    iteration, var_suffix, include_settings, default_value_suffix, settings_value_suffix
+):
     """
         Property 8: Variable Override Precedence
 
@@ -281,144 +284,129 @@ def test_property_settings_source_lookup_order():
         variable takes precedence). When the SETTINGS flag is not set, settings
         file values SHALL be ignored.
 
-        This test verifies the settings source lookup behavior across
-        different VariableSource flag combinations, with no environment
-        variable present.
-
         **Feature: webapp-persona, Property 8: Variable Override Precedence**
         **Validates: Requirements 3.7, 4.1**
     """
-    for iteration in range(100):
-        var_name = generate_variable_name(iteration)
-        default_value = f"default_{generate_random_string()}"
-        settings_value = f"settings_{generate_random_string()}"
+    var_name = f"AM_TEST_{iteration}_{var_suffix}"
+    default_value = f"default_{default_value_suffix}"
+    settings_value = f"settings_{settings_value_suffix}"
 
-        # Ensure no environment variable is set for this name
-        cleanup_env_var(var_name)
+    cleanup_env_var(var_name)
 
-        # Randomly decide whether to include SETTINGS in the source flags
-        include_settings = random.choice([True, False])
+    if include_settings:
+        source_flags = VariableSource.SETTINGS
+    else:
+        source_flags = VariableSource.NONE
+
+    settings_dict = {'DEFAULT': {var_name: settings_value}}
+    app, settings_path = create_app_with_settings(settings_dict)
+
+    try:
+        var_desc = AppVarDesc(
+            source=source_flags,
+            default=default_value
+        )
+        var_desc._name = var_name
+        var_desc._key = f"DEFAULT->{var_name}"
+        var_desc._owner = type(app)
+
+        result = app.get_variable_value(var_desc)
 
         if include_settings:
-            source_flags = random.choice([
-                VariableSource.SETTINGS,
-                VariableSource.BOTH,
-            ])
-        else:
-            source_flags = random.choice([
-                VariableSource.NONE,
-                VariableSource.ENVIRONMENT,
-            ])
-
-        # Create app with a settings file containing the variable
-        settings_dict = {'DEFAULT': {var_name: settings_value}}
-        app, settings_path = create_app_with_settings(settings_dict)
-
-        try:
-            var_desc = AppVarDesc(
-                source=source_flags,
-                default=default_value
+            testbase.assert_equal(
+                result, settings_value,
+                f"Settings value not used when SETTINGS flag is set. "
+                f"source={source_flags}, expected='{settings_value}', got='{result}'"
             )
-            var_desc._name = var_name
-            var_desc._key = f"DEFAULT->{var_name}"
-            var_desc._owner = type(app)
+        else:
+            testbase.assert_equal(
+                result, default_value,
+                f"Settings value used when SETTINGS flag is NOT set. "
+                f"source={source_flags}, expected default='{default_value}', got='{result}'"
+            )
 
-            result = app.get_variable_value(var_desc)
-
-            if include_settings:
-                # When SETTINGS flag is set and no env var, settings value should be used
-                if result != settings_value:
-                    errmsg = (
-                        f"Iteration {iteration}: Settings value not used when "
-                        f"SETTINGS flag is set. source={source_flags}, "
-                        f"expected='{settings_value}', got='{result}'"
-                    )
-                    raise AssertionError(errmsg)
-            else:
-                # When SETTINGS flag is not set, the default should be used
-                if result != default_value:
-                    errmsg = (
-                        f"Iteration {iteration}: Settings value used when "
-                        f"SETTINGS flag is NOT set. source={source_flags}, "
-                        f"expected default='{default_value}', got='{result}'"
-                    )
-                    raise AssertionError(errmsg)
-
-        finally:
-            cleanup_settings_file(settings_path)
+    finally:
+        cleanup_settings_file(settings_path)
 
     return
 
 
-def test_property_environment_precedes_settings_when_both_set():
+@given(
+    iteration=st.integers(0, 999),
+    var_suffix=var_suffix_strategy,
+    env_value_suffix=random_string_strategy,
+    settings_value_suffix=random_string_strategy,
+    default_value_suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_environment_precedes_settings_when_both_set(
+    iteration, var_suffix, env_value_suffix, settings_value_suffix, default_value_suffix
+):
     """
         Property 8: Variable Override Precedence
 
         For any variable with VariableSource.BOTH flag set, when both an
         environment variable and a settings file value exist, the environment
-        variable SHALL take precedence over the settings file value. This
-        validates the lookup order: environment -> settings -> defaults.
+        variable SHALL take precedence over the settings file value.
 
         **Feature: webapp-persona, Property 8: Variable Override Precedence**
         **Validates: Requirements 3.7, 4.1**
     """
-    env_vars_to_clean = []
+    var_name = f"AM_TEST_{iteration}_{var_suffix}"
+    env_value = f"env_{env_value_suffix}"
+    settings_value = f"settings_{settings_value_suffix}"
+    default_value = f"default_{default_value_suffix}"
+
+    os.environ[var_name] = env_value
+
+    settings_dict = {'DEFAULT': {var_name: settings_value}}
+    app, settings_path = create_app_with_settings(settings_dict)
 
     try:
-        for iteration in range(100):
-            var_name = generate_variable_name(iteration)
-            env_value = f"env_{generate_random_string()}"
-            settings_value = f"settings_{generate_random_string()}"
-            default_value = f"default_{generate_random_string()}"
+        var_desc = AppVarDesc(
+            source=VariableSource.BOTH,
+            default=default_value
+        )
+        var_desc._name = var_name
+        var_desc._key = f"DEFAULT->{var_name}"
+        var_desc._owner = type(app)
 
-            # Set environment variable
-            os.environ[var_name] = env_value
-            env_vars_to_clean.append(var_name)
+        result = app.get_variable_value(var_desc)
 
-            # Create app with settings file containing the same variable
-            settings_dict = {'DEFAULT': {var_name: settings_value}}
-            app, settings_path = create_app_with_settings(settings_dict)
-
-            try:
-                var_desc = AppVarDesc(
-                    source=VariableSource.BOTH,
-                    default=default_value
-                )
-                var_desc._name = var_name
-                var_desc._key = f"DEFAULT->{var_name}"
-                var_desc._owner = type(app)
-
-                result = app.get_variable_value(var_desc)
-
-                # Environment should take precedence over settings
-                if result != env_value:
-                    errmsg = (
-                        f"Iteration {iteration}: Environment did not take precedence "
-                        f"over settings when BOTH flags set. "
-                        f"expected env_value='{env_value}', got='{result}', "
-                        f"settings_value='{settings_value}'"
-                    )
-                    raise AssertionError(errmsg)
-
-            finally:
-                cleanup_settings_file(settings_path)
+        testbase.assert_equal(
+            result, env_value,
+            f"Environment did not take precedence over settings when BOTH flags set. "
+            f"expected env_value='{env_value}', got='{result}', "
+            f"settings_value='{settings_value}'"
+        )
 
     finally:
-        for var_name in env_vars_to_clean:
-            cleanup_env_var(var_name)
+        cleanup_settings_file(settings_path)
+        cleanup_env_var(var_name)
 
     return
 
 
-def test_property_persona_variables_override_via_establish():
+@given(
+    app_name_suffix=random_string_strategy,
+    logger_suffix=random_string_strategy,
+    logbase_suffix=random_string_strategy,
+    presence_suffix=random_string_strategy,
+    service_suffix=random_string_strategy,
+    use_extensions=st.booleans(),
+    ext_suffix=random_string_strategy,
+    constraints={"max_examples": 100},
+)
+def test_property_persona_variables_override_via_establish(
+    app_name_suffix, logger_suffix, logbase_suffix,
+    presence_suffix, service_suffix, use_extensions, ext_suffix
+):
     """
         Property 8: Variable Override Precedence
 
         For any established web application persona, the PersonaVariablesDesc
         variables SHALL have their values set via override_variable_value,
-        and get_variable_value SHALL return those overridden values. This
-        validates that establish_webapp_persona correctly wires overrides
-        for all persona variables.
+        and get_variable_value SHALL return those overridden values.
 
         **Feature: webapp-persona, Property 8: Variable Override Precedence**
         **Validates: Requirements 3.7, 4.1**
@@ -428,89 +416,75 @@ def test_property_persona_variables_override_via_establish():
         reset_webapp_persona,
     )
 
-    for iteration in range(100):
-        # Generate random persona values
-        app_name = f"Prop8App{generate_random_string()}"
-        logger_name = f"logger_{generate_random_string()}"
-        log_basename = f"logbase_{generate_random_string()}"
-        presence_dir = f"/tmp/prop8test_{generate_random_string()}"
-        log_directory = f"{presence_dir}/logs"
-        service_name = f"svc_{generate_random_string()}"
-        extensions = generate_random_string() if random.choice([True, False]) else ""
+    app_name = f"Prop8App{app_name_suffix}"
+    logger_name = f"logger_{logger_suffix}"
+    log_basename = f"logbase_{logbase_suffix}"
+    presence_dir = f"/tmp/prop8test_{presence_suffix}"
+    log_directory = f"{presence_dir}/logs"
+    service_name = f"svc_{service_suffix}"
+    extensions = ext_suffix if use_extensions else ""
 
-        try:
-            # Reset state before each iteration
-            reset_webapp_persona()
+    try:
+        reset_webapp_persona()
 
-            app = establish_webapp_persona(
-                name=app_name,
-                logger_name=logger_name,
-                log_basename=log_basename,
-                presence_dir=presence_dir,
-                log_directory=log_directory,
-                service_name=service_name,
-                extensions=extensions,
-            )
+        app = establish_webapp_persona(
+            name=app_name,
+            logger_name=logger_name,
+            log_basename=log_basename,
+            presence_dir=presence_dir,
+            log_directory=log_directory,
+            service_name=service_name,
+            extensions=extensions,
+        )
 
-            # Verify that all PersonaVariablesDesc variables return the
-            # overridden values via get_variable_value
-            name_val = app.get_variable_value(PersonaVariablesDesc.AM_NAME)
-            if name_val != app_name:
-                errmsg = (
-                    f"Iteration {iteration}: AM_NAME override mismatch. "
-                    f"expected='{app_name}', got='{name_val}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            app.get_variable_value(PersonaVariablesDesc.AM_NAME), app_name,
+            f"AM_NAME override mismatch. expected='{app_name}', "
+            f"got='{app.get_variable_value(PersonaVariablesDesc.AM_NAME)}'"
+        )
 
-            logger_val = app.get_variable_value(PersonaVariablesDesc.AM_LOGGER_NAME)
-            if logger_val != logger_name:
-                errmsg = (
-                    f"Iteration {iteration}: AM_LOGGER_NAME override mismatch. "
-                    f"expected='{logger_name}', got='{logger_val}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            app.get_variable_value(PersonaVariablesDesc.AM_LOGGER_NAME), logger_name,
+            f"AM_LOGGER_NAME override mismatch. expected='{logger_name}', "
+            f"got='{app.get_variable_value(PersonaVariablesDesc.AM_LOGGER_NAME)}'"
+        )
 
-            logbase_val = app.get_variable_value(PersonaVariablesDesc.AM_LOG_BASENAME)
-            if logbase_val != log_basename:
-                errmsg = (
-                    f"Iteration {iteration}: AM_LOG_BASENAME override mismatch. "
-                    f"expected='{log_basename}', got='{logbase_val}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            app.get_variable_value(PersonaVariablesDesc.AM_LOG_BASENAME), log_basename,
+            f"AM_LOG_BASENAME override mismatch. expected='{log_basename}', "
+            f"got='{app.get_variable_value(PersonaVariablesDesc.AM_LOG_BASENAME)}'"
+        )
 
-            logdir_val = app.get_variable_value(PersonaVariablesDesc.AM_LOG_DIRECTORY)
-            if logdir_val != log_directory:
-                errmsg = (
-                    f"Iteration {iteration}: AM_LOG_DIRECTORY override mismatch. "
-                    f"expected='{log_directory}', got='{logdir_val}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            app.get_variable_value(PersonaVariablesDesc.AM_LOG_DIRECTORY), log_directory,
+            f"AM_LOG_DIRECTORY override mismatch. expected='{log_directory}', "
+            f"got='{app.get_variable_value(PersonaVariablesDesc.AM_LOG_DIRECTORY)}'"
+        )
 
-            presence_val = app.get_variable_value(PersonaVariablesDesc.AM_PRESENCE_DIR)
-            if presence_val != presence_dir:
-                errmsg = (
-                    f"Iteration {iteration}: AM_PRESENCE_DIR override mismatch. "
-                    f"expected='{presence_dir}', got='{presence_val}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            app.get_variable_value(PersonaVariablesDesc.AM_PRESENCE_DIR), presence_dir,
+            f"AM_PRESENCE_DIR override mismatch. expected='{presence_dir}', "
+            f"got='{app.get_variable_value(PersonaVariablesDesc.AM_PRESENCE_DIR)}'"
+        )
 
-            svc_val = app.get_variable_value(PersonaVariablesDesc.AM_SERVICE_NAME)
-            if svc_val != service_name:
-                errmsg = (
-                    f"Iteration {iteration}: AM_SERVICE_NAME override mismatch. "
-                    f"expected='{service_name}', got='{svc_val}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            app.get_variable_value(PersonaVariablesDesc.AM_SERVICE_NAME), service_name,
+            f"AM_SERVICE_NAME override mismatch. expected='{service_name}', "
+            f"got='{app.get_variable_value(PersonaVariablesDesc.AM_SERVICE_NAME)}'"
+        )
 
-            ext_val = app.get_variable_value(PersonaVariablesDesc.AM_EXTENSIONS)
-            if ext_val != extensions:
-                errmsg = (
-                    f"Iteration {iteration}: AM_EXTENSIONS override mismatch. "
-                    f"expected='{extensions}', got='{ext_val}'"
-                )
-                raise AssertionError(errmsg)
+        testbase.assert_equal(
+            app.get_variable_value(PersonaVariablesDesc.AM_EXTENSIONS), extensions,
+            f"AM_EXTENSIONS override mismatch. expected='{extensions}', "
+            f"got='{app.get_variable_value(PersonaVariablesDesc.AM_EXTENSIONS)}'"
+        )
 
-        finally:
-            reset_webapp_persona()
+    finally:
+        reset_webapp_persona()
 
     return
+
+
+if __name__ == "__main__":
+    from automojo.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()
