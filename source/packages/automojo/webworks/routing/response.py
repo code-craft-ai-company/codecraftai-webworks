@@ -491,8 +491,13 @@ class StreamingResponse(Response):
         """
             Iterate over body content chunks.
             
+            If the body has already been consumed (e.g. via the ``body``
+            property), yields the cached body as a single chunk.
+            
             :returns: Iterator of bytes chunks.
         """
+        if self._body:
+            return iter([self._body])
         return iter(self._content_iterator)
     
     def to_wsgi(self) -> Tuple[str, List[Tuple[str, str]], Iterable[bytes]]:

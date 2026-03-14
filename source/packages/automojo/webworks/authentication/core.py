@@ -16,7 +16,7 @@ __credits__ = []
 
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional, Set
 
@@ -101,7 +101,7 @@ class AuthenticationContext:
     
     principal: Principal
     scheme: str
-    authenticated_at: datetime = field(default_factory=datetime.utcnow)
+    authenticated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: Optional[datetime] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
     
@@ -114,7 +114,7 @@ class AuthenticationContext:
         """
         if self.expires_at is None:
             return False
-        return datetime.utcnow() > self.expires_at
+        return datetime.now(timezone.utc) > self.expires_at
 
 
 @dataclass

@@ -10,6 +10,7 @@ __author__ = "Automation Mojo LLC"
 __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
+import dataclasses
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 from automojo.webworks.endpoints.accesspolicy import AccessPolicy
@@ -383,11 +384,11 @@ class Endpoint:
             field_type = field_info.type
             properties[field_name] = cls._type_to_schema(field_type)
             
-            # Check if field has a default
-            if field_info.default is field_info.default_factory:
-                # No default - field is required
-                if field_info.default_factory is type(field_info).default_factory:
-                    required.append(field_name)
+            # Check if field has a default — a field is required when
+            # both .default and .default_factory are the MISSING sentinel.
+            if (field_info.default is dataclasses.MISSING
+                    and field_info.default_factory is dataclasses.MISSING):
+                required.append(field_name)
         
         result: Dict[str, Any] = {
             "type": "object",

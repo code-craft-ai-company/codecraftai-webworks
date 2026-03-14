@@ -393,7 +393,12 @@ class ConfigurationModel:
         try:
             value = self.get(key, default)
             if value is None:
-                return default
+                if default is not None:
+                    return default
+                raise ConfigurationError(
+                    f"Configuration key '{key}' resolved to None and no non-None default provided",
+                    key=key
+                )
             return coerce_value(value, str)
         except (ValueError, TypeError) as e:
             raise ConfigurationTypeError(key, str, value) from e
@@ -412,7 +417,12 @@ class ConfigurationModel:
         try:
             value = self.get(key, default)
             if value is None:
-                return default
+                if default is not None:
+                    return default
+                raise ConfigurationError(
+                    f"Configuration key '{key}' resolved to None and no non-None default provided",
+                    key=key
+                )
             return coerce_value(value, int)
         except (ValueError, TypeError) as e:
             raise ConfigurationTypeError(key, int, value) from e
@@ -431,7 +441,12 @@ class ConfigurationModel:
         try:
             value = self.get(key, default)
             if value is None:
-                return default
+                if default is not None:
+                    return default
+                raise ConfigurationError(
+                    f"Configuration key '{key}' resolved to None and no non-None default provided",
+                    key=key
+                )
             return coerce_value(value, float)
         except (ValueError, TypeError) as e:
             raise ConfigurationTypeError(key, float, value) from e
@@ -450,7 +465,12 @@ class ConfigurationModel:
         try:
             value = self.get(key, default)
             if value is None:
-                return default
+                if default is not None:
+                    return default
+                raise ConfigurationError(
+                    f"Configuration key '{key}' resolved to None and no non-None default provided",
+                    key=key
+                )
             return coerce_value(value, bool)
         except (ValueError, TypeError) as e:
             raise ConfigurationTypeError(key, bool, value) from e
@@ -469,7 +489,12 @@ class ConfigurationModel:
         try:
             value = self.get(key, default)
             if value is None:
-                return default
+                if default is not None:
+                    return default
+                raise ConfigurationError(
+                    f"Configuration key '{key}' resolved to None and no non-None default provided",
+                    key=key
+                )
             return coerce_value(value, list)
         except (ValueError, TypeError) as e:
             raise ConfigurationTypeError(key, list, value) from e
@@ -488,7 +513,12 @@ class ConfigurationModel:
         try:
             value = self.get(key, default)
             if value is None:
-                return default
+                if default is not None:
+                    return default
+                raise ConfigurationError(
+                    f"Configuration key '{key}' resolved to None and no non-None default provided",
+                    key=key
+                )
             return coerce_value(value, dict)
         except (ValueError, TypeError) as e:
             raise ConfigurationTypeError(key, dict, value) from e

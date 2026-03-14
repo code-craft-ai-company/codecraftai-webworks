@@ -1138,3 +1138,54 @@ def _json_equal(a, b, epsilon: float = 1e-9) -> bool:
     
     return a == b
 
+
+# =============================================================================
+# BUG-3 Regression: StreamingResponse generator double-consumption
+# =============================================================================
+
+def test_streaming_response_body_then_iter_content():
+    """
+        Test that calling iter_content() after .body returns the cached data
+        rather than yielding nothing from an exhausted generator.
+    """
+    chunks = [b"chunk1", b"chunk2", b"chunk3"]
+    
+    response = StreamingResponse(iter(chunks))
+    
+    # Consume via .body
+    body = response.body
+    if body != b"chunk1chunk2chunk3":
+        errmsg = f"Expected b'chunk1chunk2chunk3', got {body}"
+        raise AssertionError(errmsg)
+    
+    # iter_content() must still return data from the cache
+    iter_chunks = list(response.iter_content())
+    if len(iter_chunks) == 0:
+        errmsg = "iter_content() returned no data after .body consumed the generator"
+        raise AssertionError(errmsg)
+    
+    joined = b"".join(iter_chunks)
+    if joined != body:
+        errmsg = f"Expected iter_content to yield cached body {body}, got {joined}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_streaming_response_iter_content_before_body():
+    """
+        Test that iter_content() works correctly when called before .body.
+    """
+    chunks = [b"a", b"b", b"c"]
+    
+    response = StreamingResponse(iter(chunks))
+    
+    # Consume via iter_content first
+    iter_chunks = list(response.iter_content())
+    if iter_chunks != chunks:
+        errmsg = f"Expected {chunks}, got {iter_chunks}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
