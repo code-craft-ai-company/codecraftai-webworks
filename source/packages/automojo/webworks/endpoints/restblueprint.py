@@ -200,6 +200,7 @@ class RestBlueprint(RestEndpoint):
         # Mark as REST endpoint so the OpenAPI generator can distinguish
         # REST API routes from plain page routes.
         extras["endpoint_type"] = "rest"
+        extras["absolute"] = absolute
 
         return super().attach_at(
             leaf=None if computed_path else leaf,
