@@ -17,7 +17,7 @@ __credits__ = []
 
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, Optional, Protocol, runtime_checkable
 
@@ -64,8 +64,8 @@ class SessionData:
     session_id: str
     principal_id: str
     principal: Principal
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    last_accessed: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_accessed: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: Optional[datetime] = None
     data: Dict[str, Any] = field(default_factory=dict)
     
@@ -78,7 +78,7 @@ class SessionData:
         """
         if self.expires_at is None:
             return False
-        return datetime.utcnow() > self.expires_at
+        return datetime.now(timezone.utc) > self.expires_at
 
 
 @dataclass
@@ -290,7 +290,7 @@ class InMemorySessionStore:
         expiration_seconds = expires_in if expires_in is not None else self._default_expiration
         expires_at = None
         if expiration_seconds is not None:
-            expires_at = datetime.utcnow() + timedelta(seconds=expiration_seconds)
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=expiration_seconds)
         
         session = SessionData(
             session_id=session_id,
@@ -323,7 +323,7 @@ class InMemorySessionStore:
             return None
         
         # Update last accessed time
-        session.last_accessed = datetime.utcnow()
+        session.last_accessed = datetime.now(timezone.utc)
         
         return session
     
@@ -357,11 +357,11 @@ class InMemorySessionStore:
             session.data.update(data)
         
         # Update last accessed
-        session.last_accessed = datetime.utcnow()
+        session.last_accessed = datetime.now(timezone.utc)
         
         # Extend expiration if requested
         if extend_expiration and self._default_expiration is not None:
-            session.expires_at = datetime.utcnow() + timedelta(
+            session.expires_at = datetime.now(timezone.utc) + timedelta(
                 seconds=self._default_expiration
             )
         
@@ -619,7 +619,7 @@ class SessionAuthenticator:
         # Calculate max_age for cookie
         max_age = None
         if session.expires_at is not None:
-            delta = session.expires_at - datetime.utcnow()
+            delta = session.expires_at - datetime.now(timezone.utc)
             max_age = int(delta.total_seconds())
         
         # Create cookie attributes with max_age

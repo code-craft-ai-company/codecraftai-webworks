@@ -541,7 +541,7 @@ class HMACAuthenticator:
         else:
             hash_func = hashlib.sha256
         
-        signature = hmac.new(
+        signature = hmac.HMAC(
             secret.encode("utf-8"),
             canonical_string.encode("utf-8"),
             hash_func
@@ -612,7 +612,7 @@ def compute_hmac_signature(
     else:
         hash_func = hashlib.sha256
     
-    signature = hmac.new(
+    signature = hmac.HMAC(
         secret.encode("utf-8"),
         canonical_string.encode("utf-8"),
         hash_func

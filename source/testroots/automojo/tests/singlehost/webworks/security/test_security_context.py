@@ -6,7 +6,7 @@
     helper methods, the guest() classmethod, and immutability verification.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from automojo.webworks.security.securitycontext import SecurityContext
 
@@ -64,7 +64,7 @@ def test_security_context_with_all_fields():
     """
         Test that Security_Context can be created with all fields populated.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     later = now + timedelta(hours=1)
 
     ctx = SecurityContext(
@@ -175,7 +175,7 @@ def test_is_expired_false_when_not_yet_expired():
     """
         Test that is_expired returns False when expires_at is in the future.
     """
-    future = datetime.utcnow() + timedelta(hours=1)
+    future = datetime.now(timezone.utc) + timedelta(hours=1)
     ctx = SecurityContext(user_id="user-789", expires_at=future)
 
     result = ctx.is_expired
@@ -191,7 +191,7 @@ def test_is_expired_true_when_past_expiration():
     """
         Test that is_expired returns True when expires_at is in the past.
     """
-    past = datetime.utcnow() - timedelta(hours=1)
+    past = datetime.now(timezone.utc) - timedelta(hours=1)
     ctx = SecurityContext(user_id="user-789", expires_at=past)
 
     result = ctx.is_expired
@@ -408,6 +408,35 @@ def test_guest_returns_unauthenticated_context():
 
     if ctx.scopes != ():
         errmsg = f"Expected guest scopes to be empty tuple, got {ctx.scopes}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_guest_returns_security_context_instance():
+    """
+        Regression test for BUG-5: guest() return type annotation used
+        'Security_Context' instead of 'SecurityContext', causing
+        get_type_hints() to fail with NameError.
+    """
+    import typing
+
+    ctx = SecurityContext.guest()
+
+    if not isinstance(ctx, SecurityContext):
+        errmsg = f"Expected guest() to return SecurityContext instance, got {type(ctx).__name__}"
+        raise AssertionError(errmsg)
+
+    # Verify get_type_hints resolves cleanly (would raise NameError with wrong annotation)
+    try:
+        hints = typing.get_type_hints(SecurityContext.guest)
+    except NameError as err:
+        errmsg = f"get_type_hints(SecurityContext.guest) raised NameError: {err}"
+        raise AssertionError(errmsg)
+
+    return_type = hints.get("return")
+    if return_type is not SecurityContext:
+        errmsg = f"Expected return type hint to be SecurityContext, got {return_type}"
         raise AssertionError(errmsg)
 
     return

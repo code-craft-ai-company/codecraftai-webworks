@@ -975,3 +975,48 @@ def test_property_12_valid_jwt_produces_context_with_claims():
     
     return
 
+
+# =============================================================================
+# Regression Tests for BUG-7
+# =============================================================================
+
+def test_bearer_jwt_expiry_is_timezone_aware():
+    """
+        Regression test for BUG-7: BearerAuthenticator must produce a
+        timezone-aware expires_at datetime from the JWT exp claim. A naive
+        datetime.fromtimestamp() would create a timezone-unaware value that
+        causes TypeError when compared with timezone-aware datetimes.
+    """
+    secret = "tz-regression-secret"
+    claims = {
+        "sub": "user-tz-test",
+        "name": "TZ Regression",
+        "exp": int(time.time()) + 3600
+    }
+    token = encode_jwt(claims, secret, "HS256")
+
+    authenticator = BearerAuthenticator(jwt_secret=secret)
+    request = MockRequest(headers={"Authorization": f"Bearer {token}"})
+
+    result = run_async(authenticator.authenticate(request))
+
+    if result.status != AuthenticationStatus.SUCCESS:
+        errmsg = f"BUG-7 regression: Expected SUCCESS, got {result.status}"
+        raise AssertionError(errmsg)
+
+    if result.context is None:
+        errmsg = "BUG-7 regression: Expected context, got None"
+        raise AssertionError(errmsg)
+
+    if result.context.expires_at is None:
+        errmsg = "BUG-7 regression: Expected expires_at, got None"
+        raise AssertionError(errmsg)
+
+    if result.context.expires_at.tzinfo is None:
+        errmsg = (
+            "BUG-7 regression: expires_at must be timezone-aware, "
+            f"got tzinfo=None for {result.context.expires_at!r}"
+        )
+        raise AssertionError(errmsg)
+
+    return

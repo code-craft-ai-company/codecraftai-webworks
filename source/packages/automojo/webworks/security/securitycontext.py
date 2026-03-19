@@ -17,7 +17,7 @@ __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -77,7 +77,7 @@ class SecurityContext:
         if self.expires_at is None:
             return False
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expired = now > self.expires_at
         return expired
 
@@ -128,14 +128,14 @@ class SecurityContext:
         return found
 
     @classmethod
-    def guest(cls) -> "Security_Context":
+    def guest(cls) -> "SecurityContext":
         """
             Create a guest context with no authentication.
 
             The guest context has no user_id, no roles, no scopes, and
             is_authenticated will return False.
 
-            :returns: A new Security_Context representing an unauthenticated guest.
+            :returns: A new SecurityContext representing an unauthenticated guest.
         """
         rtnval = cls()
         return rtnval

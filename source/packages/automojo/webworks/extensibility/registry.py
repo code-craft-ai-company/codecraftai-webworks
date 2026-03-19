@@ -12,7 +12,7 @@ import logging
 import traceback
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from automojo.webworks.extensibility.configuration import apply_config_defaults
@@ -511,7 +511,7 @@ class ExtensionRegistry:
             extension_name=extension_name,
             hook_name=hook_name,
             exception=exception,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             stack_trace=stack_trace
         )
 

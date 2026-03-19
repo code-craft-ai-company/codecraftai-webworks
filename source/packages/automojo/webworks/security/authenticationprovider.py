@@ -141,7 +141,7 @@ def _verify_jwt(token: str, secret_key: str, algorithm: str = "HS256") -> Option
     signing_input_bytes = signing_input.encode("utf-8")
     secret_bytes = secret_key.encode("utf-8")
 
-    expected_signature = hmac.new(secret_bytes, signing_input_bytes, hash_func).digest()
+    expected_signature = hmac.HMAC(secret_bytes, signing_input_bytes, hash_func).digest()
 
     try:
         actual_signature = _base64url_decode(signature_segment)
