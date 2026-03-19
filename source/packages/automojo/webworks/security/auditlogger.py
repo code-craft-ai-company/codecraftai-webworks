@@ -24,7 +24,7 @@ __credits__ = []
 import json
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -239,7 +239,7 @@ class AuditLogger:
             return
 
         entry = AuditEntry(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             event_type="authentication",
             outcome=outcome,
             user_id=context.user_id,
@@ -293,7 +293,7 @@ class AuditLogger:
         )
 
         entry = AuditEntry(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             event_type="authorization",
             outcome=outcome,
             user_id=context.user_id,
@@ -347,7 +347,7 @@ class AuditLogger:
         )
 
         entry = AuditEntry(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             event_type="violation",
             outcome=outcome,
             user_id=context.user_id,

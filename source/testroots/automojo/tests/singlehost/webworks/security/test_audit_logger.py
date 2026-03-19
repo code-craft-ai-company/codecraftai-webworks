@@ -9,7 +9,7 @@
 
 import json
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from automojo.webworks.security.accesspolicy import AccessPolicy
 from automojo.webworks.security.securitycontext import SecurityContext
@@ -897,7 +897,7 @@ def test_query_filters_by_time_range():
         raise AssertionError(errmsg)
 
     # Query with a future start_time should return nothing
-    future_time = datetime.utcnow() + timedelta(hours=1)
+    future_time = datetime.now(timezone.utc) + timedelta(hours=1)
     future_results = logger.query(start_time=future_time)
 
     if len(future_results) != 0:
@@ -907,7 +907,7 @@ def test_query_filters_by_time_range():
         raise AssertionError(errmsg)
 
     # Query with a past end_time should return nothing
-    past_time = datetime.utcnow() - timedelta(hours=1)
+    past_time = datetime.now(timezone.utc) - timedelta(hours=1)
     past_results = logger.query(end_time=past_time)
 
     if len(past_results) != 0:

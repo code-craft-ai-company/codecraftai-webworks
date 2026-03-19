@@ -22,7 +22,7 @@ import json
 import secrets
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, Optional, Protocol, Set, runtime_checkable
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -155,7 +155,7 @@ class OAuth2AuthorizationCode:
     state: Optional[str] = None
     code_challenge: Optional[str] = None
     code_challenge_method: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: Optional[datetime] = None
     user_id: Optional[str] = None
     
@@ -168,7 +168,7 @@ class OAuth2AuthorizationCode:
         """
         if self.expires_at is None:
             return False
-        return datetime.utcnow() > self.expires_at
+        return datetime.now(timezone.utc) > self.expires_at
 
 
 @dataclass
@@ -1118,7 +1118,7 @@ class OAuth2Authenticator:
         expires_at = None
         if "exp" in token_data:
             try:
-                expires_at = datetime.fromtimestamp(token_data["exp"])
+                expires_at = datetime.fromtimestamp(token_data["exp"], tz=timezone.utc)
             except (TypeError, ValueError, OSError):
                 pass
         elif "expires_at" in token_data:
@@ -1127,7 +1127,7 @@ class OAuth2Authenticator:
                 expires_at = exp_val
             elif isinstance(exp_val, (int, float)):
                 try:
-                    expires_at = datetime.fromtimestamp(exp_val)
+                    expires_at = datetime.fromtimestamp(exp_val, tz=timezone.utc)
                 except (TypeError, ValueError, OSError):
                     pass
         

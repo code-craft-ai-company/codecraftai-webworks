@@ -9,7 +9,7 @@
 import asyncio
 import random
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Set
 
 from automojo.webworks.authentication import (
@@ -150,13 +150,13 @@ def test_session_data_default_timestamps():
         Test that SessionData has default timestamps.
     """
     principal = Principal(identifier="user123")
-    before = datetime.utcnow()
+    before = datetime.now(timezone.utc)
     session = SessionData(
         session_id="abc123",
         principal_id="user123",
         principal=principal
     )
-    after = datetime.utcnow()
+    after = datetime.now(timezone.utc)
     
     if session.created_at < before or session.created_at > after:
         errmsg = f"Expected created_at between {before} and {after}"
@@ -192,7 +192,7 @@ def test_session_data_is_expired_false_when_future():
         Test that is_expired returns False when expires_at is in the future.
     """
     principal = Principal(identifier="user123")
-    future_time = datetime.utcnow() + timedelta(hours=1)
+    future_time = datetime.now(timezone.utc) + timedelta(hours=1)
     session = SessionData(
         session_id="abc123",
         principal_id="user123",
@@ -212,7 +212,7 @@ def test_session_data_is_expired_true_when_past():
         Test that is_expired returns True when expires_at is in the past.
     """
     principal = Principal(identifier="user123")
-    past_time = datetime.utcnow() - timedelta(hours=1)
+    past_time = datetime.now(timezone.utc) - timedelta(hours=1)
     session = SessionData(
         session_id="abc123",
         principal_id="user123",
@@ -448,7 +448,7 @@ def test_in_memory_session_store_expired_session_cleanup():
     session = run_async(store.create_session(principal, expires_in=0))
     
     # Manually set expiration to past
-    session.expires_at = datetime.utcnow() - timedelta(seconds=1)
+    session.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     
     # Try to retrieve - should return None and clean up
     retrieved = run_async(store.get_session(session.session_id))
@@ -749,7 +749,7 @@ def test_property_21_session_expiration_enforcement():
         session, _ = run_async(auth.create_session(principal, expires_in=3600))
         
         # Manually expire the session by setting expires_at to the past
-        session.expires_at = datetime.utcnow() - timedelta(seconds=random.randint(1, 3600))
+        session.expires_at = datetime.now(timezone.utc) - timedelta(seconds=random.randint(1, 3600))
         
         # Simulate a request with the expired session
         request = {"cookies": {"session_id": session.session_id}}
@@ -1069,4 +1069,38 @@ def test_in_memory_session_store_clear_all():
         errmsg = f"Expected 0 sessions after clear, got {store.get_session_count()}"
         raise AssertionError(errmsg)
     
+    return
+
+
+# =============================================================================
+# Regression Tests for BUG-6
+# =============================================================================
+
+def test_session_data_default_timestamps_are_timezone_aware():
+    """
+        Regression test for BUG-6: SessionData default datetime fields must
+        be timezone-aware to prevent TypeError when compared with other
+        timezone-aware datetimes (e.g. AuthenticationContext.authenticated_at).
+    """
+    principal = Principal(identifier="user-tz-test")
+    session = SessionData(
+        session_id="tz-test",
+        principal_id="user-tz-test",
+        principal=principal
+    )
+
+    if session.created_at.tzinfo is None:
+        errmsg = (
+            "BUG-6 regression: SessionData.created_at must be timezone-aware, "
+            f"got tzinfo=None for {session.created_at!r}"
+        )
+        raise AssertionError(errmsg)
+
+    if session.last_accessed.tzinfo is None:
+        errmsg = (
+            "BUG-6 regression: SessionData.last_accessed must be timezone-aware, "
+            f"got tzinfo=None for {session.last_accessed!r}"
+        )
+        raise AssertionError(errmsg)
+
     return

@@ -16,7 +16,7 @@ __credits__ = []
 
 
 import copy
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -641,7 +641,7 @@ class ConfigRegistry:
             old_value=old_value,
             new_value=new_value,
             source=source,
-            timestamp=datetime.utcnow()
+            timestamp=datetime.now(timezone.utc)
         )
         
         for callback in self._callbacks:

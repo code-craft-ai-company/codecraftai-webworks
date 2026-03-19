@@ -646,3 +646,76 @@ def test_attach_child_default_tags_behavior():
         raise AssertionError(f"Expected tags=['users'], got {descriptor.tags}")
     
     return
+
+
+# =============================================================================
+# BUG-1 Regression: _dataclass_to_schema required-field detection
+# =============================================================================
+
+def test_dataclass_to_schema_detects_required_fields():
+    """Test that _dataclass_to_schema correctly distinguishes required from optional fields."""
+    _clear_registry()
+    
+    from dataclasses import dataclass, field
+    
+    @dataclass
+    class SampleSchema:
+        name: str              # Required (no default)
+        age: int               # Required (no default)
+        email: str = ""        # Optional (has default)
+        tags: list = field(default_factory=list)  # Optional (has default_factory)
+    
+    schema = Endpoint._dataclass_to_schema(SampleSchema)
+    
+    # Verify basic structure
+    if schema["type"] != "object":
+        raise AssertionError(f"Expected type 'object', got {schema['type']}")
+    
+    if "properties" not in schema:
+        raise AssertionError("Expected 'properties' key in schema")
+    
+    # Verify all four fields are present
+    prop_names = set(schema["properties"].keys())
+    if prop_names != {"name", "age", "email", "tags"}:
+        raise AssertionError(f"Expected properties {{name, age, email, tags}}, got {prop_names}")
+    
+    # Verify required fields
+    if "required" not in schema:
+        raise AssertionError("Expected 'required' key in schema")
+    
+    required = set(schema["required"])
+    
+    if "name" not in required:
+        raise AssertionError("Expected 'name' to be required")
+    
+    if "age" not in required:
+        raise AssertionError("Expected 'age' to be required")
+    
+    if "email" in required:
+        raise AssertionError("Expected 'email' to NOT be required (has default)")
+    
+    if "tags" in required:
+        raise AssertionError("Expected 'tags' to NOT be required (has default_factory)")
+    
+    return
+
+
+def test_dataclass_to_schema_no_required_fields():
+    """Test that _dataclass_to_schema omits 'required' key when all fields have defaults."""
+    _clear_registry()
+    
+    from dataclasses import dataclass, field
+    
+    @dataclass
+    class AllOptional:
+        name: str = "unknown"
+        count: int = 0
+        items: list = field(default_factory=list)
+    
+    schema = Endpoint._dataclass_to_schema(AllOptional)
+    
+    if "required" in schema:
+        raise AssertionError(f"Expected no 'required' key when all fields have defaults, got {schema['required']}")
+    
+    return
+

@@ -8,7 +8,7 @@
 
 import random
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Set
 
 from automojo.webworks.authentication import (
@@ -108,12 +108,12 @@ def generate_random_authentication_context() -> AuthenticationContext:
     """
     principal = generate_random_principal()
     scheme = generate_random_scheme()
-    authenticated_at = datetime.utcnow() - timedelta(seconds=random.randint(0, 3600))
+    authenticated_at = datetime.now(timezone.utc) - timedelta(seconds=random.randint(0, 3600))
     
     # Randomly decide if there's an expiration
     if random.choice([True, False]):
         # Expiration in the future
-        expires_at = datetime.utcnow() + timedelta(seconds=random.randint(60, 86400))
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=random.randint(60, 86400))
     else:
         expires_at = None
     
@@ -332,9 +332,9 @@ def test_authentication_context_default_authenticated_at():
         Test that AuthenticationContext has a default authenticated_at timestamp.
     """
     principal = Principal(identifier="user123")
-    before = datetime.utcnow()
+    before = datetime.now(timezone.utc)
     context = AuthenticationContext(principal=principal, scheme="Basic")
-    after = datetime.utcnow()
+    after = datetime.now(timezone.utc)
     
     if context.authenticated_at < before or context.authenticated_at > after:
         errmsg = f"Expected authenticated_at between {before} and {after}, got {context.authenticated_at}"
@@ -376,7 +376,7 @@ def test_authentication_context_is_expired_false_when_future():
         Test that is_expired returns False when expires_at is in the future.
     """
     principal = Principal(identifier="user123")
-    future_time = datetime.utcnow() + timedelta(hours=1)
+    future_time = datetime.now(timezone.utc) + timedelta(hours=1)
     context = AuthenticationContext(
         principal=principal,
         scheme="Basic",
@@ -395,7 +395,7 @@ def test_authentication_context_is_expired_true_when_past():
         Test that is_expired returns True when expires_at is in the past.
     """
     principal = Principal(identifier="user123")
-    past_time = datetime.utcnow() - timedelta(hours=1)
+    past_time = datetime.now(timezone.utc) - timedelta(hours=1)
     context = AuthenticationContext(
         principal=principal,
         scheme="Basic",
@@ -1501,16 +1501,16 @@ def test_property_30_cross_scheme_context_interface_consistency():
         context1 = AuthenticationContext(
             principal=principal1,
             scheme=scheme1,
-            authenticated_at=datetime.utcnow() - timedelta(seconds=random.randint(0, 3600)),
-            expires_at=datetime.utcnow() + timedelta(seconds=random.randint(60, 86400)) if random.choice([True, False]) else None,
+            authenticated_at=datetime.now(timezone.utc) - timedelta(seconds=random.randint(0, 3600)),
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=random.randint(60, 86400)) if random.choice([True, False]) else None,
             attributes=generate_random_attributes()
         )
         
         context2 = AuthenticationContext(
             principal=principal2,
             scheme=scheme2,
-            authenticated_at=datetime.utcnow() - timedelta(seconds=random.randint(0, 3600)),
-            expires_at=datetime.utcnow() + timedelta(seconds=random.randint(60, 86400)) if random.choice([True, False]) else None,
+            authenticated_at=datetime.now(timezone.utc) - timedelta(seconds=random.randint(0, 3600)),
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=random.randint(60, 86400)) if random.choice([True, False]) else None,
             attributes=generate_random_attributes()
         )
         
@@ -1730,7 +1730,7 @@ def test_verify_authentication_context_compliance_with_expiration():
     context = AuthenticationContext(
         principal=principal,
         scheme="Bearer",
-        expires_at=datetime.utcnow() + timedelta(hours=1)
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1)
     )
     
     result = verify_authentication_context_compliance(context)
@@ -1773,4 +1773,58 @@ def test_verify_authentication_context_compliance_all_schemes():
             raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# BUG-2 Regression: timezone-aware datetime in AuthenticationContext
+# =============================================================================
+
+def test_authentication_context_timestamps_are_timezone_aware():
+    """
+        Test that AuthenticationContext.authenticated_at produces a
+        timezone-aware datetime (not a naive datetime from the deprecated
+        datetime.utcnow()).
+    """
+    principal = Principal(identifier="user-tz-test")
+    context = AuthenticationContext(principal=principal, scheme="Bearer")
+    
+    # The default authenticated_at should be timezone-aware
+    if context.authenticated_at.tzinfo is None:
+        errmsg = (
+            "Expected authenticated_at to be timezone-aware, "
+            "but got a naive datetime (tzinfo is None)"
+        )
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_authentication_context_is_expired_with_timezone_aware_expiry():
+    """
+        Test that is_expired works correctly with timezone-aware expiry times.
+    """
+    principal = Principal(identifier="user-tz-expiry")
+    
+    # Future expiry — should not be expired
+    future_ctx = AuthenticationContext(
+        principal=principal,
+        scheme="Bearer",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1)
+    )
+    if future_ctx.is_expired:
+        errmsg = "Expected is_expired=False for future tz-aware expiry"
+        raise AssertionError(errmsg)
+    
+    # Past expiry — should be expired
+    past_ctx = AuthenticationContext(
+        principal=principal,
+        scheme="Bearer",
+        expires_at=datetime.now(timezone.utc) - timedelta(hours=1)
+    )
+    if not past_ctx.is_expired:
+        errmsg = "Expected is_expired=True for past tz-aware expiry"
+        raise AssertionError(errmsg)
+    
+    return
+
 

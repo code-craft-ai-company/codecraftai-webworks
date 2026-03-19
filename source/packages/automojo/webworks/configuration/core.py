@@ -16,7 +16,7 @@ __credits__ = []
 
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, List, Optional, Type
 
@@ -243,7 +243,7 @@ class ConfigChangeEvent:
     old_value: Any
     new_value: Any
     source: ConfigSourceType
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class SecretValue:

@@ -22,7 +22,7 @@ import json
 import secrets
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple, runtime_checkable
 from urllib.parse import urlencode
@@ -763,7 +763,7 @@ def verify_id_token_signature_hmac(
             return False
         
         # Compute expected signature
-        expected_sig = hmac.new(
+        expected_sig = hmac.HMAC(
             secret.encode('utf-8'),
             signing_input.encode('utf-8'),
             hash_alg
@@ -1222,7 +1222,7 @@ class OIDCAuthenticator(OAuth2Authenticator):
         )
         
         # Determine expiration
-        expires_at = datetime.fromtimestamp(claims.exp)
+        expires_at = datetime.fromtimestamp(claims.exp, tz=timezone.utc)
         
         return AuthenticationResult(
             status=AuthenticationStatus.SUCCESS,

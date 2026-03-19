@@ -20,7 +20,7 @@ import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any, Dict, List, Optional, Pattern, Set, Tuple
 
@@ -676,7 +676,7 @@ class AccountLockoutPolicy:
             if now >= entry.locked_until:
                 return None
             
-            return datetime.utcnow() + timedelta(seconds=entry.locked_until - now)
+            return datetime.now(timezone.utc) + timedelta(seconds=entry.locked_until - now)
     
     def unlock(self, account_id: str) -> None:
         """

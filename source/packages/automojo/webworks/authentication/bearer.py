@@ -21,7 +21,7 @@ import hashlib
 import hmac
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from automojo.webworks.authentication.core import (
@@ -269,19 +269,19 @@ def _compute_signature(signing_input: str, secret: str, algorithm: str) -> bytes
         :raises JWTError: If the algorithm is not supported.
     """
     if algorithm == 'HS256':
-        return hmac.new(
+        return hmac.HMAC(
             secret.encode('utf-8'),
             signing_input.encode('utf-8'),
             hashlib.sha256
         ).digest()
     elif algorithm == 'HS384':
-        return hmac.new(
+        return hmac.HMAC(
             secret.encode('utf-8'),
             signing_input.encode('utf-8'),
             hashlib.sha384
         ).digest()
     elif algorithm == 'HS512':
-        return hmac.new(
+        return hmac.HMAC(
             secret.encode('utf-8'),
             signing_input.encode('utf-8'),
             hashlib.sha512
@@ -588,7 +588,7 @@ class BearerAuthenticator:
         expires_at = None
         if "exp" in claims:
             try:
-                expires_at = datetime.fromtimestamp(claims["exp"])
+                expires_at = datetime.fromtimestamp(claims["exp"], tz=timezone.utc)
             except (TypeError, ValueError, OSError):
                 pass  # Invalid exp value, ignore
         

@@ -1665,3 +1665,104 @@ def test_model_contains():
     return
 
 
+# =============================================================================
+# BUG-4 Regression: Typed getters raise on None instead of silent return
+# =============================================================================
+
+def test_get_int_raises_when_none_and_no_default():
+    """
+        Test that get_int() raises ConfigurationError when the key is missing
+        and no non-None default is provided, instead of silently returning None.
+    """
+    registry = ConfigRegistry()
+    registry.load()
+    
+    model = ConfigurationModel(registry)
+    
+    try:
+        model.get_int("nonexistent.key")
+        errmsg = "Expected ConfigurationError to be raised when key resolves to None"
+        raise AssertionError(errmsg)
+    except ConfigurationError:
+        pass  # Expected
+    
+    return
+
+
+def test_get_str_raises_when_none_and_no_default():
+    """
+        Test that get_str() raises ConfigurationError when the key is missing
+        and no non-None default is provided.
+    """
+    registry = ConfigRegistry()
+    registry.load()
+    
+    model = ConfigurationModel(registry)
+    
+    try:
+        model.get_str("nonexistent.key")
+        errmsg = "Expected ConfigurationError to be raised"
+        raise AssertionError(errmsg)
+    except ConfigurationError:
+        pass  # Expected
+    
+    return
+
+
+def test_get_float_raises_when_none_and_no_default():
+    """
+        Test that get_float() raises ConfigurationError when key is missing.
+    """
+    registry = ConfigRegistry()
+    registry.load()
+    
+    model = ConfigurationModel(registry)
+    
+    try:
+        model.get_float("nonexistent.key")
+        errmsg = "Expected ConfigurationError to be raised"
+        raise AssertionError(errmsg)
+    except ConfigurationError:
+        pass  # Expected
+    
+    return
+
+
+def test_get_bool_raises_when_none_and_no_default():
+    """
+        Test that get_bool() raises ConfigurationError when key is missing.
+    """
+    registry = ConfigRegistry()
+    registry.load()
+    
+    model = ConfigurationModel(registry)
+    
+    try:
+        model.get_bool("nonexistent.key")
+        errmsg = "Expected ConfigurationError to be raised"
+        raise AssertionError(errmsg)
+    except ConfigurationError:
+        pass  # Expected
+    
+    return
+
+
+def test_get_int_returns_default_when_provided():
+    """
+        Test that get_int() returns the non-None default when the key is missing.
+    """
+    registry = ConfigRegistry()
+    registry.load()
+    
+    model = ConfigurationModel(registry)
+    
+    value = model.get_int("nonexistent.key", default=42)
+    
+    if value != 42:
+        errmsg = f"Expected 42, got {value}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+
