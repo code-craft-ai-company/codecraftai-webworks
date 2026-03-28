@@ -7,7 +7,7 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from automojo.webworks.wsgi.request import Request
+from automojo.webworks.routing.request import Request
 from automojo.webworks.asgi.constants import (
     SCOPE_REQUEST,
     SCOPE_ROUTE,
@@ -208,41 +208,7 @@ class ScopeParser:
             
             :returns: Parsed Request object (without body).
         """
-        method = self.get_method(scope)
-        path = self.get_path(scope)
-        query_string = self.get_query_string(scope)
-        scheme = self.get_scheme(scope)
-        server = self.get_server(scope)
-        headers = self.get_headers(scope)
-        
-        host = server[0]
-        port = server[1]
-        
-        # Extract content type and length from headers
-        content_type = headers.get("Content-Type")
-        content_length_str = headers.get("Content-Length")
-        content_length: Optional[int] = None
-        if content_length_str is not None:
-            try:
-                content_length = int(content_length_str)
-            except ValueError:
-                content_length = None
-        
-        # Create Request object with empty body
-        # Body will be populated later via async body reading
-        request = Request(
-            method=method,
-            path=path,
-            query_string=query_string,
-            headers=headers,
-            body=b"",
-            scheme=scheme,
-            host=host,
-            port=port,
-            content_type=content_type,
-            content_length=content_length,
-        )
-        
+        request = Request.from_asgi(scope, body=b"")
         return request
     
     def set_framework_scope(

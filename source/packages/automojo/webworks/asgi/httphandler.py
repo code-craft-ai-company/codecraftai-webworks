@@ -26,7 +26,7 @@ from automojo.webworks.asgi.exceptions import (
     ClientDisconnected,
     RequestEntityTooLarge,
 )
-from automojo.webworks.wsgi.request import Request
+from automojo.webworks.routing.request import Request
 from automojo.webworks.wsgi.response import Response
 
 
@@ -261,14 +261,12 @@ class HTTPHandler:
         new_request = Request(
             method=request.method,
             path=request.path,
-            query_string=request.query_string,
-            headers=request.headers,
+            query_string=request.raw_query_string,
+            headers={name: value for name, value in request.headers.items()},
             body=body,
             scheme=request.scheme,
             host=request.host,
             port=request.port,
-            content_type=request.content_type,
-            content_length=request.content_length,
         )
         return new_request
 

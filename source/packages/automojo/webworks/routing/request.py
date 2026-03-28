@@ -65,6 +65,7 @@ class Request:
         # Lazily initialized
         self._query_params: Optional[QueryParams] = None
         self._cookies: Optional[Dict[str, str]] = None
+        self._background_tasks: Optional[Any] = None
         return
     
     @classmethod
@@ -201,6 +202,147 @@ class Request:
         )
         return request
     
+    @property
+    def query_string(self) -> str:
+        """
+            Get the query string as a string.
+
+            :returns: Query string without leading '?'.
+        """
+        rtnval = self._query_string.decode("utf-8", errors="replace")
+        return rtnval
+
+    @property
+    def raw_query_string(self) -> bytes:
+        """
+            Get the raw query string as bytes.
+
+            :returns: Raw query string without leading '?'.
+        """
+        rtnval = self._query_string
+        return rtnval
+
+    @property
+    def scheme(self) -> str:
+        """
+            Get the URL scheme.
+
+            :returns: URL scheme string ('http' or 'https').
+        """
+        rtnval = self._scheme
+        return rtnval
+
+    @property
+    def host(self) -> str:
+        """
+            Get the server host.
+
+            :returns: Server host string.
+        """
+        rtnval = self._host
+        return rtnval
+
+    @property
+    def port(self) -> int:
+        """
+            Get the server port.
+
+            :returns: Server port number.
+        """
+        rtnval = self._port
+        return rtnval
+
+    @property
+    def content_type(self) -> Optional[str]:
+        """
+            Get the Content-Type header.
+
+            :returns: Content-Type string or None.
+        """
+        rtnval = self._headers.get("Content-Type")
+        return rtnval
+
+    @property
+    def content_length(self) -> Optional[int]:
+        """
+            Get the Content-Length header.
+
+            :returns: Content-Length as integer or None.
+        """
+        value = self._headers.get("Content-Length")
+        if not value:
+            return None
+        try:
+            rtnval = int(value)
+            return rtnval
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def background_tasks(self) -> Optional[Any]:
+        """
+            Get the background tasks manager for this request.
+
+            :returns: BackgroundTasks instance or None.
+        """
+        rtnval = self._background_tasks
+        return rtnval
+
+    @background_tasks.setter
+    def background_tasks(self, value: Optional[Any]) -> None:
+        """
+            Set the background tasks manager for this request.
+
+            :param value: BackgroundTasks instance.
+        """
+        self._background_tasks = value
+        return
+
+    def get_header(self, name: str, default: Optional[str] = None) -> Optional[str]:
+        """
+            Get a header value by name (case-insensitive).
+
+            :param name: Header name.
+            :param default: Default value if header not found.
+
+            :returns: Header value or default.
+        """
+        # Headers are stored with title case, so normalize the lookup
+        normalized_name = name.title()
+        rtnval = self._headers.get(normalized_name, default)
+        return rtnval
+
+    def as_dict(self, brief: bool = False) -> Dict[str, Any]:
+        """
+            Convert the request to a dictionary representation.
+
+            :param brief: If True, return a simplified representation.
+
+            :returns: Dictionary representation of the request.
+        """
+        if brief:
+            rtnval = {
+                "method": self._method,
+                "path": self._path,
+                "url": self.url,
+            }
+        else:
+            rtnval = {
+                "method": self._method,
+                "path": self._path,
+                "query_string": self.query_string,
+                "headers": dict(self._headers.items()),
+                "body_length": len(self._body),
+                "scheme": self._scheme,
+                "host": self._host,
+                "port": self._port,
+                "content_type": self.content_type,
+                "content_length": self.content_length,
+                "url": self.url,
+            }
+
+        return rtnval
+
     @property
     def method(self) -> str:
         """
