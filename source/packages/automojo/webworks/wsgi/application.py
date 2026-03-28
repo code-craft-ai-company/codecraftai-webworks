@@ -17,7 +17,7 @@ from automojo.webworks.wsgi.constants import ENVIRON_REQUEST, ENVIRON_DEBUG
 
 
 if TYPE_CHECKING:
-    from automojo.webworks.wsgi.request import Request
+    from automojo.webworks.routing.request import Request
 
 
 # Type alias for WSGI start_response callable

@@ -6,7 +6,7 @@
 """
 
 from automojo.webworks.wsgi.environparser import EnvironParser
-from automojo.webworks.wsgi.request import Request
+from automojo.webworks.routing.request import Request
 from automojo.webworks.wsgi.response import Response, ResponseBuilder
 from automojo.webworks.wsgi.responseiterator import ResponseIterator
 from automojo.webworks.wsgi.bodyparser import RequestBodyParser, UploadedFile

@@ -21,7 +21,7 @@ from automojo.webworks.wsgi.bodyparser import RequestBodyParser, UploadedFile
 
 
 if TYPE_CHECKING:
-    from automojo.webworks.wsgi.request import Request
+    from automojo.webworks.routing.request import Request
 
 
 class EnvironParser:
@@ -418,7 +418,7 @@ class EnvironParser:
             
             :raises RequestEntityTooLarge: If body exceeds max_body_size.
         """
-        from automojo.webworks.wsgi.request import Request
+        from automojo.webworks.routing.request import Request
         
         method = self.get_method(environ)
         path = self.get_path(environ)
@@ -431,17 +431,22 @@ class EnvironParser:
         content_type = self.get_content_type(environ)
         content_length = self.get_content_length(environ)
         
+        if content_type:
+            headers["Content-Type"] = content_type
+        if content_length is not None:
+            headers["Content-Length"] = str(content_length)
+
+        query_string_bytes = query_string.encode("utf-8") if isinstance(query_string, str) else query_string
+
         request = Request(
             method=method,
             path=path,
-            query_string=query_string,
+            query_string=query_string_bytes,
             headers=headers,
             body=body,
             scheme=scheme,
             host=host,
-            port=port,
-            content_type=content_type,
-            content_length=content_length
+            port=port
         )
         
         return request
