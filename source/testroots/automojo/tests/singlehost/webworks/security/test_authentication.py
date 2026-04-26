@@ -1007,3 +1007,239 @@ def test_property_authentication_provider_chain():
                     raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Claim-shape validation (JWT + Session)
+# =============================================================================
+
+def test_jwt_provider_rejects_string_roles_claim():
+    """
+        Property: a JWT whose ``roles`` claim is a bare string
+        (e.g. "admin,editor") returns None instead of producing
+        a SecurityContext whose roles tuple is the per-character
+        decomposition of the string. Without this guard,
+        ``role in ctx.roles`` permission checks would silently
+        accept innocuous-looking single-character roles.
+    """
+    payload = {
+        "sub": "user-123",
+        "username": "testuser",
+        "roles": "admin,editor",
+        "scopes": ["read"],
+        "exp": time.time() + 3600,
+        "iat": time.time(),
+    }
+    token = _create_jwt_token(payload)
+    request = _create_mock_request(
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY)
+    result = provider.authenticate(request)
+
+    if result is not None:
+        errmsg = (
+            "Expected None for JWT with string roles claim "
+            "(would silently produce per-character roles), "
+            "got SecurityContext with roles={}".format(result.roles)
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_jwt_provider_rejects_dict_roles_claim():
+    """
+        Property: a JWT whose ``roles`` claim is a dict yields
+        None. Without this guard, ``tuple({"admin": True})``
+        would yield ``("admin",)`` — looks correct but only
+        because dict iteration happens to walk keys; for
+        ``{"role_id": 5}`` it would yield ``("role_id",)``,
+        a clearly wrong "role".
+    """
+    payload = {
+        "sub": "user-123",
+        "roles": {"admin": True, "editor": False},
+        "scopes": ["read"],
+        "exp": time.time() + 3600,
+        "iat": time.time(),
+    }
+    token = _create_jwt_token(payload)
+    request = _create_mock_request(
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY)
+    result = provider.authenticate(request)
+
+    if result is not None:
+        errmsg = "Expected None for JWT with dict roles claim"
+        raise AssertionError(errmsg)
+    return
+
+
+def test_jwt_provider_rejects_non_string_role_element():
+    """
+        Property: a JWT whose ``roles`` claim is a list
+        containing non-string elements (e.g. integer role
+        IDs) returns None. SecurityContext.roles is typed
+        ``Tuple[str, ...]`` so a non-string element would
+        violate the type contract downstream.
+    """
+    payload = {
+        "sub": "user-123",
+        "roles": ["admin", 42, "editor"],
+        "scopes": ["read"],
+        "exp": time.time() + 3600,
+        "iat": time.time(),
+    }
+    token = _create_jwt_token(payload)
+    request = _create_mock_request(
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY)
+    result = provider.authenticate(request)
+
+    if result is not None:
+        errmsg = (
+            "Expected None for JWT with non-string role "
+            "element, got roles={}".format(result.roles)
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_jwt_provider_rejects_string_scopes_claim():
+    """
+        Property: same per-character decomposition trap
+        applies to ``scopes``. Reject when the scopes claim
+        is a bare string.
+    """
+    payload = {
+        "sub": "user-123",
+        "roles": ["admin"],
+        "scopes": "read,write",
+        "exp": time.time() + 3600,
+        "iat": time.time(),
+    }
+    token = _create_jwt_token(payload)
+    request = _create_mock_request(
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY)
+    result = provider.authenticate(request)
+
+    if result is not None:
+        errmsg = "Expected None for JWT with string scopes claim"
+        raise AssertionError(errmsg)
+    return
+
+
+def test_jwt_provider_accepts_missing_roles_claim_as_empty():
+    """
+        Property: a JWT with no ``roles`` claim yields a
+        SecurityContext with an empty roles tuple. Missing
+        claims are valid (anonymous-ish bearer); only the
+        malformed shapes are rejected.
+    """
+    payload = {
+        "sub": "user-123",
+        "exp": time.time() + 3600,
+        "iat": time.time(),
+    }
+    token = _create_jwt_token(payload)
+    request = _create_mock_request(
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY)
+    result = provider.authenticate(request)
+
+    if result is None:
+        errmsg = "Expected SecurityContext for JWT with no roles claim"
+        raise AssertionError(errmsg)
+    if result.roles != tuple():
+        errmsg = "Expected empty roles tuple, got {}".format(result.roles)
+        raise AssertionError(errmsg)
+    return
+
+
+def test_session_provider_rejects_string_roles_in_session_data():
+    """
+        Property: a session-store entry whose ``roles`` value
+        is a bare string returns None instead of producing a
+        SecurityContext with per-character roles. Same trap,
+        same fix, applied to the session path.
+    """
+    session_data = {
+        "abc123": {
+            "user_id": "user-123",
+            "username": "testuser",
+            "roles": "admin,editor",
+            "scopes": ["read"],
+        }
+    }
+    store = _create_mock_store(data=session_data)
+    provider = SessionAuthProvider(session_store=store)
+    request = _create_mock_request(cookies={"session_id": "abc123"})
+    result = provider.authenticate(request)
+
+    if result is not None:
+        errmsg = (
+            "Expected None for session with string roles, got "
+            "roles={}".format(result.roles)
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_session_provider_rejects_non_string_role_element_in_session_data():
+    """
+        Property: session-store ``roles`` containing an int
+        element returns None.
+    """
+    session_data = {
+        "abc123": {
+            "user_id": "user-123",
+            "roles": ["admin", 42],
+            "scopes": ["read"],
+        }
+    }
+    store = _create_mock_store(data=session_data)
+    provider = SessionAuthProvider(session_store=store)
+    request = _create_mock_request(cookies={"session_id": "abc123"})
+    result = provider.authenticate(request)
+
+    if result is not None:
+        errmsg = "Expected None for session with int role element"
+        raise AssertionError(errmsg)
+    return
+
+
+def test_session_provider_accepts_set_roles_in_session_data():
+    """
+        Property: session-store ``roles`` supplied as a set
+        (a perfectly valid in-memory shape) is accepted and
+        materialized into a tuple of strings.
+    """
+    session_data = {
+        "abc123": {
+            "user_id": "user-123",
+            "roles": {"admin", "editor"},
+            "scopes": frozenset({"read"}),
+        }
+    }
+    store = _create_mock_store(data=session_data)
+    provider = SessionAuthProvider(session_store=store)
+    request = _create_mock_request(cookies={"session_id": "abc123"})
+    result = provider.authenticate(request)
+
+    if result is None:
+        errmsg = "Expected SecurityContext, got None"
+        raise AssertionError(errmsg)
+    if "admin" not in result.roles or "editor" not in result.roles:
+        errmsg = "Expected admin+editor roles, got {}".format(
+            result.roles,
+        )
+        raise AssertionError(errmsg)
+    if "read" not in result.scopes:
+        errmsg = "Expected 'read' scope, got {}".format(result.scopes)
+        raise AssertionError(errmsg)
+    return

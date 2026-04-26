@@ -27,9 +27,58 @@ import json
 import time
 
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, Optional, Protocol, Tuple, runtime_checkable
 
 from automojo.webworks.security.securitycontext import SecurityContext
+
+
+def _coerce_string_collection(
+        value: Any
+    ) -> Optional[Tuple[str, ...]]:
+    """
+        Convert a JWT-claim or session-store value into a tuple
+        of role / scope strings. Returns ``None`` when the value
+        is malformed (not iterable, contains non-strings, is
+        a bare string, etc.) so the caller can reject the auth
+        attempt rather than silently producing a misleading
+        SecurityContext.
+
+        This guard exists because ``tuple(value)`` accepts:
+
+        - Strings (yields a tuple of single characters — disastrous
+          for ``role in ctx.roles`` permission checks).
+        - Dicts (yields a tuple of dict keys, not values).
+        - Generators (consumed once, then empty on retry).
+
+        Bare-string roles like ``"admin,user"`` would silently
+        decompose into single-character "roles" without this
+        guard.
+
+        :param value: Raw value pulled from a JWT claim or
+                      session-store dict.
+
+        :returns: Tuple of strings on success;
+                  ``None`` when the value isn't a clean
+                  list / tuple / set of strings.
+                  An empty list / tuple / set returns
+                  ``()`` (valid, just empty).
+    """
+    if value is None:
+        return tuple()
+    # Reject bare strings before any iteration logic — Python
+    # iterates strings into characters, which would silently
+    # turn "admin,user" into ("a", "d", "m", "i", "n", ",", ...).
+    if isinstance(value, str):
+        return None
+    # Accept the canonical JSON-decoded shapes (list, tuple, set)
+    # and reject anything else (dict, int, custom object).
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        return None
+    materialized = tuple(value)
+    for element in materialized:
+        if not isinstance(element, str):
+            return None
+    return materialized
 
 
 @runtime_checkable
@@ -250,11 +299,17 @@ class JWTAuthProvider:
         username = payload.get("username")
         email = payload.get("email")
 
-        roles_value = payload.get("roles", ())
-        roles = tuple(roles_value)
+        roles = _coerce_string_collection(payload.get("roles"))
+        if roles is None:
+            # Malformed roles claim (string, dict, non-string
+            # element, etc.) — reject the auth attempt rather
+            # than silently producing a misleading SecurityContext
+            # whose roles would mis-authorize the request.
+            return None
 
-        scopes_value = payload.get("scopes", ())
-        scopes = tuple(scopes_value)
+        scopes = _coerce_string_collection(payload.get("scopes"))
+        if scopes is None:
+            return None
 
         iat_claim = payload.get("iat")
         authenticated_at = None
@@ -374,11 +429,14 @@ class SessionAuthProvider:
         username = session_data.get("username")
         email = session_data.get("email")
 
-        roles_value = session_data.get("roles", ())
-        roles = tuple(roles_value)
+        roles = _coerce_string_collection(session_data.get("roles"))
+        if roles is None:
+            # Malformed session — reject rather than mis-authorize.
+            return None
 
-        scopes_value = session_data.get("scopes", ())
-        scopes = tuple(scopes_value)
+        scopes = _coerce_string_collection(session_data.get("scopes"))
+        if scopes is None:
+            return None
 
         authenticated_at_value = session_data.get("authenticated_at")
         authenticated_at = None
