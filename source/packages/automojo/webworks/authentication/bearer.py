@@ -398,13 +398,30 @@ class BearerAuthenticator:
     ):
         """
             Initialize the BearerAuthenticator.
-            
+
+            At least one of ``token_store`` or ``jwt_secret`` MUST
+            be supplied. An authenticator with neither has no way
+            to validate any Bearer token and would silently reject
+            every request — a footgun configuration that's almost
+            always a deployment bug. Fail loudly at construction
+            time instead.
+
             :param token_store: Optional TokenStore for opaque token validation.
             :param jwt_secret: Optional secret key for JWT signature verification.
             :param jwt_algorithms: List of allowed JWT algorithms. Defaults to ["HS256"].
             :param jwt_issuer: Expected JWT issuer claim value.
             :param jwt_audience: Expected JWT audience claim value.
+
+            :raises ValueError: When neither ``token_store`` nor
+                                ``jwt_secret`` is supplied.
         """
+        if token_store is None and jwt_secret is None:
+            raise ValueError(
+                "BearerAuthenticator requires at least one of "
+                "'token_store' or 'jwt_secret'. An authenticator "
+                "with neither cannot validate any token and would "
+                "silently reject every Bearer request."
+            )
         self._token_store = token_store
         self._jwt_secret = jwt_secret
         self._jwt_algorithms = jwt_algorithms or ["HS256"]

@@ -410,7 +410,11 @@ def test_bearer_authenticator_scheme():
     """
         Test that BearerAuthenticator returns "Bearer" as scheme.
     """
-    authenticator = BearerAuthenticator()
+    # BearerAuthenticator now requires at least one validation
+    # method (jwt_secret or token_store). For the scheme /
+    # can_handle tests we pass a placeholder secret since the
+    # tests don't exercise the validation path.
+    authenticator = BearerAuthenticator(jwt_secret="placeholder")
     
     if authenticator.scheme != "Bearer":
         errmsg = f"Expected scheme 'Bearer', got '{authenticator.scheme}'"
@@ -423,7 +427,11 @@ def test_bearer_authenticator_can_handle_with_bearer_header():
     """
         Test that can_handle returns True for Bearer auth header.
     """
-    authenticator = BearerAuthenticator()
+    # BearerAuthenticator now requires at least one validation
+    # method (jwt_secret or token_store). For the scheme /
+    # can_handle tests we pass a placeholder secret since the
+    # tests don't exercise the validation path.
+    authenticator = BearerAuthenticator(jwt_secret="placeholder")
     request = MockRequest(headers={"Authorization": "Bearer token123"})
     
     if not authenticator.can_handle(request):
@@ -437,7 +445,11 @@ def test_bearer_authenticator_can_handle_case_insensitive():
     """
         Test that can_handle is case-insensitive for scheme.
     """
-    authenticator = BearerAuthenticator()
+    # BearerAuthenticator now requires at least one validation
+    # method (jwt_secret or token_store). For the scheme /
+    # can_handle tests we pass a placeholder secret since the
+    # tests don't exercise the validation path.
+    authenticator = BearerAuthenticator(jwt_secret="placeholder")
     request = MockRequest(headers={"Authorization": "bearer token123"})
     
     if not authenticator.can_handle(request):
@@ -451,7 +463,11 @@ def test_bearer_authenticator_can_handle_without_header():
     """
         Test that can_handle returns False when no Authorization header.
     """
-    authenticator = BearerAuthenticator()
+    # BearerAuthenticator now requires at least one validation
+    # method (jwt_secret or token_store). For the scheme /
+    # can_handle tests we pass a placeholder secret since the
+    # tests don't exercise the validation path.
+    authenticator = BearerAuthenticator(jwt_secret="placeholder")
     request = MockRequest(headers={})
     
     if authenticator.can_handle(request):
@@ -465,7 +481,11 @@ def test_bearer_authenticator_can_handle_with_basic_header():
     """
         Test that can_handle returns False for Basic auth header.
     """
-    authenticator = BearerAuthenticator()
+    # BearerAuthenticator now requires at least one validation
+    # method (jwt_secret or token_store). For the scheme /
+    # can_handle tests we pass a placeholder secret since the
+    # tests don't exercise the validation path.
+    authenticator = BearerAuthenticator(jwt_secret="placeholder")
     request = MockRequest(headers={"Authorization": "Basic dXNlcjpwYXNz"})
     
     if authenticator.can_handle(request):
@@ -1019,4 +1039,82 @@ def test_bearer_jwt_expiry_is_timezone_aware():
         )
         raise AssertionError(errmsg)
 
+    return
+
+
+# =============================================================================
+# Constructor validation: must supply at least one validation method
+# =============================================================================
+
+def test_bearer_authenticator_rejects_no_validation_method_at_construction():
+    """
+        Property: BearerAuthenticator() with neither
+        ``token_store`` nor ``jwt_secret`` raises ValueError at
+        construction time. An authenticator with neither cannot
+        validate any token and would silently reject every Bearer
+        request — a footgun configuration that should fail
+        loudly instead of mid-request.
+    """
+    raised = False
+    try:
+        BearerAuthenticator()
+    except ValueError:
+        raised = True
+
+    if raised is not True:
+        errmsg = (
+            "Expected ValueError when constructing "
+            "BearerAuthenticator() with no validation method, "
+            "but no exception was raised."
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_bearer_authenticator_accepts_jwt_secret_only():
+    """
+        Property: BearerAuthenticator(jwt_secret=...) is valid
+        construction (JWT-only deployment).
+    """
+    authenticator = BearerAuthenticator(jwt_secret="any-secret")
+    if authenticator is None:
+        errmsg = "Constructor returned None"
+        raise AssertionError(errmsg)
+    return
+
+
+def test_bearer_authenticator_accepts_token_store_only():
+    """
+        Property: BearerAuthenticator(token_store=...) is valid
+        construction (opaque-token-only deployment).
+    """
+    class _StubTokenStore:
+        async def validate_token(self, token):
+            return None
+
+    authenticator = BearerAuthenticator(token_store=_StubTokenStore())
+    if authenticator is None:
+        errmsg = "Constructor returned None"
+        raise AssertionError(errmsg)
+    return
+
+
+def test_bearer_authenticator_accepts_both_validation_methods():
+    """
+        Property: BearerAuthenticator(token_store=..., jwt_secret=...)
+        is valid construction (hybrid deployment with JWT primary
+        + opaque fallback).
+    """
+    class _StubTokenStore:
+        async def validate_token(self, token):
+            return None
+
+    authenticator = BearerAuthenticator(
+        token_store=_StubTokenStore(),
+        jwt_secret="any-secret",
+    )
+    if authenticator is None:
+        errmsg = "Constructor returned None"
+        raise AssertionError(errmsg)
     return
