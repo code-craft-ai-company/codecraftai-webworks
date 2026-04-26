@@ -17,6 +17,7 @@ __credits__ = []
 
 
 import hashlib
+import hmac
 import os
 import re
 import secrets
@@ -451,8 +452,14 @@ class DigestAuthenticator:
             algorithm=credentials.algorithm
         )
         
-        # Compare responses
-        if credentials.response.lower() != expected_response.lower():
+        # Compare responses with a constant-time comparison so an
+        # attacker can't infer the correct hash byte-by-byte from
+        # response-time variations. RFC 7616 response values are
+        # lowercase hex, but normalize defensively in case a
+        # client capitalizes them.
+        client_response = credentials.response.lower()
+        server_response = expected_response.lower()
+        if not hmac.compare_digest(client_response, server_response):
             return AuthenticationResult(
                 status=AuthenticationStatus.FAILURE,
                 error_code="invalid_credentials",
