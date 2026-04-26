@@ -578,12 +578,21 @@ class DigestAuthenticator:
         # Parse key="value" pairs
         params = self._parse_digest_params(params_str)
         
-        # Validate required fields
+        # Validate required fields. RFC 7616 requires each of
+        # these to be a non-empty value; an empty quoted string
+        # (e.g. ``username=""``) is treated as missing rather
+        # than passed through to the hash-comparison step. Without
+        # this guard a malformed header would advance through the
+        # rest of the flow and fail later with a less specific
+        # error, leaking timing information about which fields
+        # were valid.
         required_fields = ["username", "realm", "nonce", "uri", "response"]
         for field in required_fields:
             if field not in params:
                 raise ValueError(f"Missing required field: {field}")
-        
+            if len(params[field]) == 0:
+                raise ValueError(f"Missing required field: {field}")
+
         return DigestCredentials(
             username=params["username"],
             realm=params["realm"],
