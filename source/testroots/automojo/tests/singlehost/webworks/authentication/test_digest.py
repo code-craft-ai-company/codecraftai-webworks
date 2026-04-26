@@ -1055,7 +1055,7 @@ def test_property_9_digest_auth_nonce_freshness_validation():
         if new_nonce is None or new_nonce == "":
             errmsg = f"Iteration {iteration}: Expected new nonce in stale challenge"
             raise AssertionError(errmsg)
-        
+
         # Property: New nonce must be different from the stale one
         if new_nonce == nonce:
             errmsg = f"Iteration {iteration}: Expected new nonce to be different from stale nonce"
@@ -1224,6 +1224,157 @@ def test_digest_authenticator_accepts_uppercase_response_hash():
             "got {} (error_code={})".format(
                 result2.status, getattr(result2, "error_code", None),
             )
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+# =============================================================================
+# Empty required-field rejection in header parser
+# =============================================================================
+
+def test_digest_authenticator_rejects_empty_username():
+    """
+        Property: a Digest header with an empty quoted username
+        (``username=""``) is rejected with FAILURE / bad_request,
+        not advanced through the rest of the validation pipeline.
+        Without this guard the empty value would survive the
+        ``field in params`` check (the key is present, the value
+        is empty) and reach the hash-comparison step, where the
+        FAILURE happens at a less specific stage and leaks more
+        timing information about which fields were valid.
+    """
+    realm = "TestRealm"
+    provider = MockDigestIdentityProvider()
+    authenticator = DigestAuthenticator(provider, realm=realm)
+
+    auth_header = (
+        'Digest username="", realm="TestRealm", '
+        'nonce="abc123", uri="/test", response="00000000"'
+    )
+    request = MockRequest(
+        headers={"Authorization": auth_header}, method="GET",
+    )
+    result = run_async(authenticator.authenticate(request))
+
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = (
+            "Expected FAILURE for empty username, got {}".format(
+                result.status,
+            )
+        )
+        raise AssertionError(errmsg)
+    if result.error_code != "bad_request":
+        errmsg = (
+            "Expected error_code='bad_request' for empty "
+            "username, got '{}'".format(result.error_code)
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_digest_authenticator_rejects_empty_realm():
+    """
+        Property: empty realm value is rejected with bad_request.
+    """
+    realm = "TestRealm"
+    provider = MockDigestIdentityProvider()
+    authenticator = DigestAuthenticator(provider, realm=realm)
+
+    auth_header = (
+        'Digest username="alice", realm="", nonce="abc", '
+        'uri="/test", response="00000000"'
+    )
+    request = MockRequest(
+        headers={"Authorization": auth_header}, method="GET",
+    )
+    result = run_async(authenticator.authenticate(request))
+
+    if result.error_code != "bad_request":
+        errmsg = (
+            "Expected error_code='bad_request' for empty "
+            "realm, got '{}'".format(result.error_code)
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_digest_authenticator_rejects_empty_nonce():
+    """
+        Property: empty nonce value is rejected with bad_request.
+    """
+    realm = "TestRealm"
+    provider = MockDigestIdentityProvider()
+    authenticator = DigestAuthenticator(provider, realm=realm)
+
+    auth_header = (
+        'Digest username="alice", realm="TestRealm", nonce="", '
+        'uri="/test", response="00000000"'
+    )
+    request = MockRequest(
+        headers={"Authorization": auth_header}, method="GET",
+    )
+    result = run_async(authenticator.authenticate(request))
+
+    if result.error_code != "bad_request":
+        errmsg = (
+            "Expected error_code='bad_request' for empty "
+            "nonce, got '{}'".format(result.error_code)
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_digest_authenticator_rejects_empty_response():
+    """
+        Property: empty response value is rejected before the
+        constant-time-compare step. Without this guard, an
+        attacker could submit ``response=""`` to probe for
+        timing differences against the empty-string compare.
+    """
+    realm = "TestRealm"
+    provider = MockDigestIdentityProvider()
+    authenticator = DigestAuthenticator(provider, realm=realm)
+
+    auth_header = (
+        'Digest username="alice", realm="TestRealm", '
+        'nonce="abc", uri="/test", response=""'
+    )
+    request = MockRequest(
+        headers={"Authorization": auth_header}, method="GET",
+    )
+    result = run_async(authenticator.authenticate(request))
+
+    if result.error_code != "bad_request":
+        errmsg = (
+            "Expected error_code='bad_request' for empty "
+            "response, got '{}'".format(result.error_code)
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_digest_authenticator_rejects_empty_uri():
+    """
+        Property: empty uri value is rejected with bad_request.
+    """
+    realm = "TestRealm"
+    provider = MockDigestIdentityProvider()
+    authenticator = DigestAuthenticator(provider, realm=realm)
+
+    auth_header = (
+        'Digest username="alice", realm="TestRealm", '
+        'nonce="abc", uri="", response="00000000"'
+    )
+    request = MockRequest(
+        headers={"Authorization": auth_header}, method="GET",
+    )
+    result = run_async(authenticator.authenticate(request))
+
+    if result.error_code != "bad_request":
+        errmsg = (
+            "Expected error_code='bad_request' for empty "
+            "uri, got '{}'".format(result.error_code)
         )
         raise AssertionError(errmsg)
     return
