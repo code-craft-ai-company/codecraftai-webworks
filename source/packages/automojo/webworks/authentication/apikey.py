@@ -171,20 +171,29 @@ class APIKeyAuthenticator:
     async def authenticate(self, request: Any) -> AuthenticationResult:
         """
             Attempt to authenticate the request using API key.
-            
+
             This method:
             1. Extracts the API key from the configured location
             2. Validates the key against the APIKeyStore
             3. Returns the appropriate AuthenticationResult
-            
+
             :param request: The HTTP request containing the API key.
-            
+
             :returns: An AuthenticationResult with:
                      - SUCCESS and context if key is valid
                      - FAILURE with error if key is invalid or missing
         """
         api_key = self._extract_key(request)
-        
+
+        # Treat empty string and whitespace-only values as missing
+        # so APIKeyStore implementations don't have to defend
+        # against blank keys leaking through. The extraction
+        # helpers already coerce empty strings to None, but a
+        # whitespace-only header value (e.g. "X-API-Key:   ")
+        # would otherwise survive and reach validate_key.
+        if api_key is not None and len(api_key.strip()) == 0:
+            api_key = None
+
         if api_key is None:
             return AuthenticationResult(
                 status=AuthenticationStatus.FAILURE,
@@ -375,10 +384,16 @@ def extract_api_key(
     class DummyStore:
         async def validate_key(self, api_key: str) -> Optional[Dict[str, Any]]:
             return None
-    
+
     authenticator = APIKeyAuthenticator(
         key_store=DummyStore(),
         key_name=key_name,
         location=location
     )
-    return authenticator._extract_key(request)
+    extracted = authenticator._extract_key(request)
+    # Apply the same empty / whitespace normalization the
+    # authenticate() boundary applies, so callers using this
+    # standalone helper see consistent None semantics.
+    if extracted is not None and len(extracted.strip()) == 0:
+        return None
+    return extracted

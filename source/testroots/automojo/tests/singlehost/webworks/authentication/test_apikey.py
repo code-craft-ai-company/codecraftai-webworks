@@ -783,5 +783,159 @@ def test_property_15_invalid_api_key_produces_401():
         if result.context is not None:
             errmsg = f"Iteration {iteration}: Expected no context on failure"
             raise AssertionError(errmsg)
-    
+
+    return
+
+
+# =============================================================================
+# Empty / whitespace API key handling
+# =============================================================================
+
+def test_apikey_authenticator_treats_empty_string_header_as_missing():
+    """
+        Property: a request with an empty-string API key header
+        (``X-API-Key: ``) yields FAILURE / missing_api_key, not
+        a generic invalid_api_key. The intent is that the
+        APIKeyStore should never see a blank key — the
+        authenticator boundary normalizes it to a missing-key
+        outcome.
+    """
+    store = MockAPIKeyStore()
+    authenticator = APIKeyAuthenticator(
+        key_store=store, key_name="X-API-Key",
+    )
+    request = MockRequest(headers={"X-API-Key": ""})
+    result = run_async(authenticator.authenticate(request))
+
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = f"Expected FAILURE, got {result.status}"
+        raise AssertionError(errmsg)
+    if result.error_code != "missing_api_key":
+        errmsg = (
+            "Expected error_code='missing_api_key' for empty "
+            "header value, got '{}'".format(result.error_code)
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_apikey_authenticator_treats_whitespace_only_header_as_missing():
+    """
+        Property: a whitespace-only API key header value (e.g.
+        "   " or "\\t\\n") is normalized to missing rather than
+        passed through to the store. Whitespace-only keys
+        survive the empty-string short-circuit in
+        ``_extract_from_header`` (because " " is truthy in
+        Python) — the authenticate() boundary catches them.
+    """
+    store = MockAPIKeyStore()
+    authenticator = APIKeyAuthenticator(
+        key_store=store, key_name="X-API-Key",
+    )
+    request = MockRequest(headers={"X-API-Key": "   \t  "})
+    result = run_async(authenticator.authenticate(request))
+
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = f"Expected FAILURE, got {result.status}"
+        raise AssertionError(errmsg)
+    if result.error_code != "missing_api_key":
+        errmsg = (
+            "Expected error_code='missing_api_key' for "
+            "whitespace-only header value, got '{}'".format(
+                result.error_code,
+            )
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_apikey_authenticator_treats_whitespace_only_query_as_missing():
+    """
+        Property: a whitespace-only API key query parameter is
+        also normalized to missing. The same property holds
+        regardless of where the key was extracted from.
+    """
+    store = MockAPIKeyStore()
+    authenticator = APIKeyAuthenticator(
+        key_store=store,
+        key_name="api_key",
+        location=APIKeyLocation.QUERY,
+    )
+    request = MockRequest(query_params={"api_key": "  "})
+    result = run_async(authenticator.authenticate(request))
+
+    if result.error_code != "missing_api_key":
+        errmsg = (
+            "Expected error_code='missing_api_key' for "
+            "whitespace-only query value, got '{}'".format(
+                result.error_code,
+            )
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_apikey_store_never_receives_blank_key():
+    """
+        Property: a malicious / misconfigured client supplying
+        whitespace-only or empty-string API keys never reaches
+        the APIKeyStore.validate_key call. Store implementors
+        should be able to assume their input is a non-blank
+        string.
+    """
+    received_keys = []
+
+    class _RecordingStore:
+        async def validate_key(
+                self, api_key: str
+            ) -> Optional[Dict[str, Any]]:
+            received_keys.append(api_key)
+            return None
+
+    authenticator = APIKeyAuthenticator(
+        key_store=_RecordingStore(), key_name="X-API-Key",
+    )
+    for blank_value in ("", " ", "\t", "\n", "  \t\n  "):
+        request = MockRequest(headers={"X-API-Key": blank_value})
+        run_async(authenticator.authenticate(request))
+
+    if len(received_keys) > 0:
+        errmsg = (
+            "APIKeyStore.validate_key was called with blank "
+            "values: {!r}".format(received_keys)
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_extract_api_key_helper_returns_none_for_whitespace():
+    """
+        Property: the standalone extract_api_key helper applies
+        the same empty / whitespace normalization as the
+        authenticator boundary, so callers using the helper
+        independently see consistent None semantics.
+    """
+    request = MockRequest(headers={"X-API-Key": "   "})
+    result = extract_api_key(request, key_name="X-API-Key")
+    if result is not None:
+        errmsg = (
+            "Expected None from extract_api_key for "
+            "whitespace-only header, got {!r}".format(result)
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_extract_api_key_helper_returns_value_for_non_blank():
+    """
+        Property: the standalone extract_api_key helper still
+        passes through real API key values unchanged.
+    """
+    request = MockRequest(headers={"X-API-Key": "real-key-abc123"})
+    result = extract_api_key(request, key_name="X-API-Key")
+    if result != "real-key-abc123":
+        errmsg = (
+            "Expected 'real-key-abc123', got {!r}".format(result)
+        )
+        raise AssertionError(errmsg)
     return
