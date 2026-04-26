@@ -1060,5 +1060,170 @@ def test_property_9_digest_auth_nonce_freshness_validation():
         if new_nonce == nonce:
             errmsg = f"Iteration {iteration}: Expected new nonce to be different from stale nonce"
             raise AssertionError(errmsg)
-    
+
+    return
+
+
+# =============================================================================
+# Constant-time response-hash comparison (CVE-class regression)
+# =============================================================================
+
+def test_digest_response_compare_uses_constant_time_compare():
+    """
+        Property: response-hash comparison must use
+        ``hmac.compare_digest`` so an attacker can't infer the
+        correct hash byte-by-byte from response-time variations.
+
+        Implementation guard: this test reads the digest module
+        source and asserts that ``hmac.compare_digest`` appears in
+        the body of ``DigestAuthenticator.authenticate``.
+        Removing the constant-time check or reverting to ``!=`` /
+        ``==`` would re-introduce the timing-attack vulnerability;
+        this test fails fast in that case.
+    """
+    import inspect
+    source = inspect.getsource(DigestAuthenticator.authenticate)
+    if "hmac.compare_digest" not in source:
+        errmsg = (
+            "DigestAuthenticator.authenticate must use "
+            "hmac.compare_digest for the response-hash comparison "
+            "to defend against timing attacks."
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_digest_authenticator_rejects_response_hash_off_by_one_char():
+    """
+        Property: a response hash that differs from the expected
+        value by a single character (e.g. last hex digit flipped)
+        is rejected with the same FAILURE outcome a fully-wrong
+        hash would produce.
+
+        Why: with a non-constant-time compare, a single-character
+        difference at the end of the hash would take measurably
+        longer than a difference at the start. With
+        ``hmac.compare_digest`` both paths must funnel into the
+        same ``invalid_credentials`` outcome.
+    """
+    realm = "TestRealm"
+    username = "testuser"
+    password = "secret"
+    uri = "/protected/resource"
+    method = "GET"
+
+    provider = MockDigestIdentityProvider()
+    provider.add_user(username, realm, password)
+    authenticator = DigestAuthenticator(provider, realm=realm)
+
+    request1 = MockRequest(headers={})
+    result1 = run_async(authenticator.authenticate(request1))
+    nonce = extract_nonce_from_challenge(result1.challenge)
+    opaque = extract_opaque_from_challenge(result1.challenge)
+
+    correct_response = compute_digest_response(
+        username=username,
+        realm=realm,
+        password=password,
+        nonce=nonce,
+        uri=uri,
+        method=method,
+        algorithm="MD5",
+    )
+    # Flip the last hex digit so the hash is one character off.
+    if correct_response[-1] == "0":
+        tampered_last = "1"
+    else:
+        tampered_last = "0"
+    tampered_response = correct_response[:-1] + tampered_last
+
+    auth_header = create_digest_auth_header(
+        username=username,
+        realm=realm,
+        nonce=nonce,
+        uri=uri,
+        response=tampered_response,
+        algorithm="MD5",
+        opaque=opaque,
+    )
+    request2 = MockRequest(
+        headers={"Authorization": auth_header}, method=method,
+    )
+    result2 = run_async(authenticator.authenticate(request2))
+
+    if result2.status != AuthenticationStatus.FAILURE:
+        errmsg = (
+            "Expected FAILURE for response hash differing by one "
+            "char, got {}".format(result2.status)
+        )
+        raise AssertionError(errmsg)
+    if result2.error_code != "invalid_credentials":
+        errmsg = (
+            "Expected error_code 'invalid_credentials' for "
+            "tampered hash, got '{}'".format(result2.error_code)
+        )
+        raise AssertionError(errmsg)
+    return
+
+
+def test_digest_authenticator_accepts_uppercase_response_hash():
+    """
+        Property: a correct response hash submitted in uppercase
+        hex still authenticates. Confirms the case-normalization
+        on both sides of the comparison survived the switch to
+        ``hmac.compare_digest``.
+
+        Why: ``hmac.compare_digest`` requires the two inputs to
+        be the same length AND the same byte values; if the code
+        only lowercased one side, an uppercase-but-correct hash
+        would silently be rejected. RFC 7616 says response is
+        lowercase but tolerant servers normalize.
+    """
+    realm = "TestRealm"
+    username = "testuser"
+    password = "secret"
+    uri = "/protected/resource"
+    method = "GET"
+
+    provider = MockDigestIdentityProvider()
+    provider.add_user(username, realm, password)
+    authenticator = DigestAuthenticator(provider, realm=realm)
+
+    request1 = MockRequest(headers={})
+    result1 = run_async(authenticator.authenticate(request1))
+    nonce = extract_nonce_from_challenge(result1.challenge)
+    opaque = extract_opaque_from_challenge(result1.challenge)
+
+    response = compute_digest_response(
+        username=username,
+        realm=realm,
+        password=password,
+        nonce=nonce,
+        uri=uri,
+        method=method,
+        algorithm="MD5",
+    )
+    upper_response = response.upper()
+    auth_header = create_digest_auth_header(
+        username=username,
+        realm=realm,
+        nonce=nonce,
+        uri=uri,
+        response=upper_response,
+        algorithm="MD5",
+        opaque=opaque,
+    )
+    request2 = MockRequest(
+        headers={"Authorization": auth_header}, method=method,
+    )
+    result2 = run_async(authenticator.authenticate(request2))
+
+    if result2.status != AuthenticationStatus.SUCCESS:
+        errmsg = (
+            "Expected SUCCESS for uppercase-hex correct response, "
+            "got {} (error_code={})".format(
+                result2.status, getattr(result2, "error_code", None),
+            )
+        )
+        raise AssertionError(errmsg)
     return
