@@ -203,3 +203,22 @@ portal_bp.attach_child(PortalEndpoint, leaf="magic/portals")
 - Because every descriptor includes consolidated metadata (path, methods, access_policy, scopes, rate limits), generating a “web map” for review is trivial: `collect()` → render table/JSON describing each endpoint’s security posture.
 - Suggested artifact: CSV/Markdown table with columns `[path, methods, handler, access_policy, scopes, rate_limit, doc.summary]`. This enables reviewers to confirm that sensitive routes (admin, hero, etc.) enforce the correct roles before deployment.
 - Provide tooling hooks (e.g., `EndpointRegistry.export_security_map(filter_tag="admin")`) so CI can diff the map and block changes that weaken security without code reviewers manually tracing decorators.
+
+## Authentication Blueprints
+
+### `SessionAuthBlueprint.establish_session`
+- The credential `login` endpoint is split into two halves: credential validation (delegated to `IdentityProvider.validate_credentials`) and session materialization (cookie + store + response).
+- The materialization half is exposed as a public classmethod `establish_session(principal, *, request=None, remember_me=False, scheme="Session", success_message="Session established", extra_attributes=None)` so sibling auth blueprints can reuse it without re-implementing cookie generation, store wiring, or the `post_authenticate` hook.
+- Intended consumers include the magic-link redemption blueprint, OAuth client callback handlers, and SSO assertion handlers — flows where the principal is established through a channel other than username/password and still needs an HTTP session cookie issued.
+- The `scheme` parameter is recorded on the resulting `AuthenticationContext` so downstream subscribers can distinguish channels (`"Session"` for credential login, `"MagicLink"` for one-time tokens, `"OAuth"` for IdP callbacks, etc.). The `extra_attributes` mapping is merged into `AuthenticationContext.attributes` for channel-specific metadata such as the consumed token id or the issuing IdP.
+- The credential `login` endpoint preserves its historical wire contract (`message="Login successful"`) by passing `success_message="Login successful"` to `establish_session`. New callers default to `"Session established"`.
+
+```python
+# Inside a magic-link redemption handler that has just consumed a one-time token:
+response = SiteSessionAuth.establish_session(
+    principal=Principal(identifier=user.id, display_name=user.display_name, roles={user.role}),
+    scheme="MagicLink",
+    extra_attributes={"token_id": consumed_token.id},
+    success_message="Welcome — your link has been redeemed",
+)
+```
