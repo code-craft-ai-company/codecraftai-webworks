@@ -203,3 +203,26 @@ portal_bp.attach_child(PortalEndpoint, leaf="magic/portals")
 - Because every descriptor includes consolidated metadata (path, methods, access_policy, scopes, rate limits), generating a “web map” for review is trivial: `collect()` → render table/JSON describing each endpoint’s security posture.
 - Suggested artifact: CSV/Markdown table with columns `[path, methods, handler, access_policy, scopes, rate_limit, doc.summary]`. This enables reviewers to confirm that sensitive routes (admin, hero, etc.) enforce the correct roles before deployment.
 - Provide tooling hooks (e.g., `EndpointRegistry.export_security_map(filter_tag="admin")`) so CI can diff the map and block changes that weaken security without code reviewers manually tracing decorators.
+
+## Flash Messaging
+
+### `automojo.webworks.flash`
+- Provides one-shot user-feedback messaging modeled after the classic Flask `flash()` / `get_flashed_messages()` API: a handler emits a message before redirecting, and the next render consumes it.
+- Three composable pieces: `FlashStore` (abstract backend), `InMemoryFlashStore` (process-local default), `FlashManager` (input-validating facade), and `make_flash_context_processor` (templating integration via `ContextProcessorRegistry`).
+- Each message is a `(category, message)` tuple. Category is a free-form string the rendering layer can key on for styling — `info`, `success`, `warning`, `error` are the conventional values, but any string is accepted.
+- The default `consume=True` mode drains the store on read so subsequent renders do not duplicate messages. A `consume=False` peek mode is provided for admin tooling and tests.
+- The store is intentionally session-coupled but storage-independent: implementations of `FlashStore` may share state across workers via Redis or any other backend without changing handler call sites.
+
+```python
+from automojo.webworks.flash import FlashManager, make_flash_context_processor
+
+flash_manager = FlashManager()  # uses InMemoryFlashStore by default
+
+# Inside a postback handler:
+flash_manager.add(session_id=current_session_id, message="Saved.", category="success")
+
+# Wire flash_messages into every template render:
+context_processors.register(make_flash_context_processor(flash_manager))
+```
+
+- Validation: `FlashManager.add` requires both `session_id` and `message` to be non-empty strings and raises `FlashError` otherwise. `consume_all` and `peek_all` are lenient on read paths and return `[]` for missing or empty session ids.
