@@ -429,17 +429,20 @@ def test_property_descriptor_has_constraints_object():
                 f"match the provided rate_limit"
             )
 
-        # Verify scopes and roles are derived from access_policy
+        # Verify scopes and roles are derived from access_policy.
+        # AccessPolicy stores roles/scopes as tuples; EndpointConstraints
+        # stores them as lists. Compare via list() coercion at the
+        # assertion boundary.
         if access_policy is not None:
-            if desc.constraints.scopes != access_policy.scopes:
+            if desc.constraints.scopes != list(access_policy.scopes):
                 raise AssertionError(
                     f"Iteration {iteration}: Constraints scopes mismatch. "
-                    f"Expected {access_policy.scopes}, got {desc.constraints.scopes}"
+                    f"Expected {list(access_policy.scopes)}, got {desc.constraints.scopes}"
                 )
-            if desc.constraints.roles != access_policy.roles:
+            if desc.constraints.roles != list(access_policy.roles):
                 raise AssertionError(
                     f"Iteration {iteration}: Constraints roles mismatch. "
-                    f"Expected {access_policy.roles}, got {desc.constraints.roles}"
+                    f"Expected {list(access_policy.roles)}, got {desc.constraints.roles}"
                 )
         else:
             if desc.constraints.scopes != []:

@@ -365,7 +365,7 @@ def test_attach_child_inherits_parent_access_policy():
     if descriptor.constraints.access_policy is None:
         raise AssertionError("Expected access_policy to be inherited from parent")
     
-    if descriptor.constraints.access_policy.roles != ["admin"]:
+    if descriptor.constraints.access_policy.roles != ("admin",):
         raise AssertionError(f"Expected roles=['admin'], got {descriptor.constraints.access_policy.roles}")
     
     return

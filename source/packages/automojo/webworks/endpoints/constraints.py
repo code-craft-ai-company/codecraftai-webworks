@@ -36,7 +36,24 @@ class EndpointConstraints:
     rate_limit: Optional[RateLimit] = None
     scopes: List[str] = field(default_factory=list)
     roles: List[str] = field(default_factory=list)
-    
+
+    def __post_init__(self) -> None:
+        """
+            Coerce ``scopes`` and ``roles`` to lists.
+
+            ``EndpointConstraints`` is the place where security metadata is
+            handed off from the immutable :class:`AccessPolicy` (which stores
+            tuples) to consumers that expect mutable list semantics — for
+            example, OpenAPI emitters and audit-map generators. Coercion
+            here keeps the dataclass contract consistent regardless of the
+            collection type the caller supplies.
+        """
+        if not isinstance(self.scopes, list):
+            self.scopes = list(self.scopes) if self.scopes is not None else []
+        if not isinstance(self.roles, list):
+            self.roles = list(self.roles) if self.roles is not None else []
+        return
+
     @classmethod
     def merge(
         cls,

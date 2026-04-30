@@ -163,7 +163,7 @@ def test_blueprint_subclass_can_set_constraints():
         access_policy = AccessPolicy(roles=["admin"])
         rate_limit = RateLimit(requests=100, window=60)
     
-    if SecureBlueprint.access_policy.roles != ["admin"]:
+    if SecureBlueprint.access_policy.roles != ("admin",):
         raise AssertionError(f"Expected roles=['admin'], got {SecureBlueprint.access_policy.roles}")
     
     if SecureBlueprint.rate_limit.requests != 100:
@@ -256,7 +256,7 @@ def test_blueprint_attach_at_inherits_constraints():
     descriptors = EndpointRegistry.collect()
     desc = descriptors[0]
     
-    if desc.constraints.access_policy.roles != ["admin"]:
+    if desc.constraints.access_policy.roles != ("admin",):
         raise AssertionError(f"Expected roles=['admin'], got {desc.constraints.access_policy.roles}")
     
     if desc.constraints.rate_limit.requests != 50:

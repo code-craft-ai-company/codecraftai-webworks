@@ -163,12 +163,23 @@ class OAuth2AuthorizationCode:
     def is_expired(self) -> bool:
         """
             Check if the authorization code has expired.
-            
+
+            Naive ``expires_at`` values (no ``tzinfo``) are interpreted as UTC
+            so the comparison against the current time always operates on aware
+            datetimes; otherwise callers passing ``datetime.utcnow()`` would
+            trigger ``TypeError: can't compare offset-naive and offset-aware
+            datetimes``.
+
             :returns: True if expired, False otherwise.
         """
         if self.expires_at is None:
             return False
-        return datetime.now(timezone.utc) > self.expires_at
+
+        expires_at = self.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        return datetime.now(timezone.utc) > expires_at
 
 
 @dataclass

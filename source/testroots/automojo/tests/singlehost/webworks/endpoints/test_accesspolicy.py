@@ -51,11 +51,11 @@ def test_accesspolicy_default_values():
     """
     policy = AccessPolicy()
     
-    if policy.roles != []:
+    if policy.roles != ():
         errmsg = f"Expected empty roles list, got {policy.roles}"
         raise AssertionError(errmsg)
     
-    if policy.scopes != []:
+    if policy.scopes != ():
         errmsg = f"Expected empty scopes list, got {policy.scopes}"
         raise AssertionError(errmsg)
     
@@ -72,7 +72,7 @@ def test_accesspolicy_with_roles():
     """
     policy = AccessPolicy(roles=["admin", "user"])
     
-    if policy.roles != ["admin", "user"]:
+    if policy.roles != ("admin", "user"):
         errmsg = f"Expected roles ['admin', 'user'], got {policy.roles}"
         raise AssertionError(errmsg)
     
@@ -85,7 +85,7 @@ def test_accesspolicy_with_scopes():
     """
     policy = AccessPolicy(scopes=["read", "write"])
     
-    if policy.scopes != ["read", "write"]:
+    if policy.scopes != ("read", "write"):
         errmsg = f"Expected scopes ['read', 'write'], got {policy.scopes}"
         raise AssertionError(errmsg)
     
@@ -208,7 +208,7 @@ def test_merge_with_replace_roles():
     
     result = policy1.merge_with(policy2, replace_roles=True)
     
-    if result.roles != ["user"]:
+    if result.roles != ("user",):
         errmsg = f"Expected roles ['user'], got {result.roles}"
         raise AssertionError(errmsg)
     
@@ -224,7 +224,7 @@ def test_merge_with_replace_scopes():
     
     result = policy1.merge_with(policy2, replace_scopes=True)
     
-    if result.scopes != ["write"]:
+    if result.scopes != ("write",):
         errmsg = f"Expected scopes ['write'], got {result.scopes}"
         raise AssertionError(errmsg)
     
@@ -269,10 +269,10 @@ def test_merge_with_preserves_order():
     """
     policy1 = AccessPolicy(roles=["admin", "user"])
     policy2 = AccessPolicy(roles=["guest"])
-    
+
     result = policy1.merge_with(policy2)
-    
-    expected = ["admin", "user", "guest"]
+
+    expected = ("admin", "user", "guest")
     if result.roles != expected:
         errmsg = f"Expected roles {expected}, got {result.roles}"
         raise AssertionError(errmsg)

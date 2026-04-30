@@ -388,7 +388,7 @@ def test_property_roles_replace_in_access_policy():
 
         merged = policy_a.merge_with(policy_b, replace_roles=True)
 
-        if merged.roles != child_roles:
+        if merged.roles != tuple(child_roles):
             errmsg = (
                 f"Iteration {iteration}: With replace_roles=True, merged roles "
                 f"should equal child roles. "
@@ -416,7 +416,7 @@ def test_property_scopes_replace_in_access_policy():
 
         merged = policy_a.merge_with(policy_b, replace_scopes=True)
 
-        if merged.scopes != child_scopes:
+        if merged.scopes != tuple(child_scopes):
             errmsg = (
                 f"Iteration {iteration}: With replace_scopes=True, merged scopes "
                 f"should equal child scopes. "
@@ -599,7 +599,7 @@ def test_property_replace_flag_independence():
         )
 
         # Roles should be replaced (child only)
-        if merged_roles_replaced.roles != child_roles:
+        if merged_roles_replaced.roles != tuple(child_roles):
             errmsg = (
                 f"Iteration {iteration}: replace_roles=True should replace roles. "
                 f"child_roles={child_roles}, "
@@ -623,7 +623,7 @@ def test_property_replace_flag_independence():
         )
 
         # Scopes should be replaced (child only)
-        if merged_scopes_replaced.scopes != child_scopes:
+        if merged_scopes_replaced.scopes != tuple(child_scopes):
             errmsg = (
                 f"Iteration {iteration}: replace_scopes=True should replace scopes. "
                 f"child_scopes={child_scopes}, "

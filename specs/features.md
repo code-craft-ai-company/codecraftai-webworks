@@ -203,3 +203,17 @@ portal_bp.attach_child(PortalEndpoint, leaf="magic/portals")
 - Because every descriptor includes consolidated metadata (path, methods, access_policy, scopes, rate limits), generating a “web map” for review is trivial: `collect()` → render table/JSON describing each endpoint’s security posture.
 - Suggested artifact: CSV/Markdown table with columns `[path, methods, handler, access_policy, scopes, rate_limit, doc.summary]`. This enables reviewers to confirm that sensitive routes (admin, hero, etc.) enforce the correct roles before deployment.
 - Provide tooling hooks (e.g., `EndpointRegistry.export_security_map(filter_tag="admin")`) so CI can diff the map and block changes that weaken security without code reviewers manually tracing decorators.
+
+## Access Policy (Canonical)
+
+### `automojo.webworks.security.accesspolicy.AccessPolicy`
+- The canonical immutable security constraint for an endpoint. Frozen dataclass; ``roles`` and ``scopes`` are stored as tuples regardless of the iterable type the caller supplies (lists, sets, generators are coerced in ``__post_init__``).
+- ``automojo.webworks.endpoints.accesspolicy.AccessPolicy`` is now a re-export of the security-package class. The two parallel definitions that used to ship with webworks have been unified — the endpoints module retains the import path purely so existing consumers keep resolving without code changes.
+- ``check(subject)`` is polymorphic and accepts any of three subject shapes:
+  - :class:`automojo.webworks.security.securitycontext.SecurityContext` — flat immutable context with ``user_id`` / ``roles`` / ``scopes``.
+  - :class:`automojo.webworks.authentication.core.AuthenticationContext` — wraps a :class:`Principal`. Scopes are evaluated against ``principal.permissions`` since :class:`Principal` carries scope-equivalent grants under that name.
+  - Any duck-typed *User* with ``is_authenticated`` / ``roles`` / ``scopes`` attributes — used by tooling and tests that don't construct full security contexts.
+- Discrimination is performed by attribute presence at call time (``hasattr(subject, 'principal')`` → AuthenticationContext, ``hasattr(subject, 'user_id')`` → SecurityContext, otherwise User). Adding a new subject shape is a matter of routing inside ``check`` — no consumer changes required.
+- Named convenience methods preserved from the legacy endpoints implementation: ``check_authentication_context(ctx)``, ``check_roles(ctx)``, ``check_permissions(ctx)``. ``get_denial_reason(subject)`` is similarly polymorphic.
+- ``merge_with(other, replace_roles=False, replace_scopes=False)`` returns a new ``AccessPolicy`` combining constraints. Roles and scopes default to deduplicated union; ``require_auth`` is the logical OR; the custom ``constraints`` dict is shallow-merged with ``other`` precedence.
+- :class:`automojo.webworks.endpoints.constraints.EndpointConstraints` retains its list-typed ``roles`` and ``scopes`` fields. Its ``__post_init__`` coerces incoming iterables (commonly tuples handed off from an ``AccessPolicy``) to lists so consumer code continues to receive the list shape it has always seen.
