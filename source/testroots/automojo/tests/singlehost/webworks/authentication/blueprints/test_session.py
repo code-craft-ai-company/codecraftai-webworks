@@ -799,3 +799,177 @@ def test_pre_authenticate_hook_blocks_login():
         raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# establish_session() Tests
+#
+# These cover the public class method that sibling blueprints (magic-link,
+# OAuth callback, SSO) use to materialize a session for an already-authenticated
+# principal — i.e. the post-credential-validation half of login.
+# =============================================================================
+
+
+def test_establish_session_without_credentials_returns_session():
+    """
+        Verify that ``establish_session`` produces a fully formed session
+        response when given a Principal directly, without going through the
+        username/password ``login`` endpoint.
+    """
+    blueprint = _create_fresh_blueprint()
+
+    response = blueprint.establish_session(principal=TEST_PRINCIPAL)
+
+    if response["status"] != 200:
+        errmsg = "Expected status 200, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    body = response["body"]
+
+    if "session_id" not in body:
+        errmsg = "Expected session_id in response body"
+        raise AssertionError(errmsg)
+
+    if body.get("principal_id") != "user-001":
+        errmsg = "Expected principal_id 'user-001', got {!r}".format(
+            body.get("principal_id")
+        )
+        raise AssertionError(errmsg)
+
+    cookie = response.get("headers", {}).get("Set-Cookie", "")
+    if "session_id=" not in cookie:
+        errmsg = "Expected session_id= in Set-Cookie header, got {!r}".format(cookie)
+        raise AssertionError(errmsg)
+
+    if body.get("message") != "Session established":
+        errmsg = "Expected default message 'Session established', got {!r}".format(
+            body.get("message")
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_establish_session_persists_to_session_store():
+    """
+        Verify that ``establish_session`` writes the new session through a
+        configured :class:`SessionStore`, not just the in-memory fallback.
+    """
+    blueprint = _create_fresh_blueprint()
+    store = MockSessionStore()
+    blueprint.session_store = store
+
+    response = blueprint.establish_session(principal=TEST_PRINCIPAL)
+
+    session_id = response["body"]["session_id"]
+    persisted = store._sessions.get(session_id)
+
+    if persisted is None:
+        errmsg = "Expected session {!r} to be persisted in store".format(session_id)
+        raise AssertionError(errmsg)
+
+    if persisted.get("principal_id") != "user-001":
+        errmsg = "Expected persisted principal_id 'user-001', got {!r}".format(
+            persisted.get("principal_id")
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_establish_session_remember_me_uses_extended_duration():
+    """
+        Verify that ``remember_me=True`` causes the cookie Max-Age and the
+        session expires_at to use :attr:`remember_me_duration` rather than
+        :attr:`session_duration`.
+    """
+    blueprint = _create_fresh_blueprint()
+    blueprint.session_duration = 60
+    blueprint.remember_me_duration = 7 * 24 * 60 * 60
+
+    response = blueprint.establish_session(
+        principal=TEST_PRINCIPAL,
+        remember_me=True
+    )
+
+    cookie = response.get("headers", {}).get("Set-Cookie", "")
+    expected_max_age = "Max-Age={}".format(7 * 24 * 60 * 60)
+
+    if expected_max_age not in cookie:
+        errmsg = "Expected {!r} in Set-Cookie header, got {!r}".format(
+            expected_max_age, cookie
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_establish_session_invokes_post_authenticate_with_scheme_and_attributes():
+    """
+        Verify that ``establish_session`` invokes the ``post_authenticate``
+        hook with an :class:`AuthenticationContext` that carries the supplied
+        ``scheme`` label and ``extra_attributes`` payload, so sibling
+        blueprints can record channel-specific metadata.
+    """
+    blueprint = _create_fresh_blueprint()
+    captured = {}
+
+    @classmethod
+    def capturing_post_auth(cls, request, context):
+        captured["scheme"] = context.scheme
+        captured["attributes"] = dict(context.attributes)
+        captured["principal_id"] = context.principal.identifier
+        return None
+
+    blueprint.post_authenticate = capturing_post_auth
+
+    blueprint.establish_session(
+        principal=TEST_PRINCIPAL,
+        scheme="MagicLink",
+        extra_attributes={"token_id": "tok-42"},
+    )
+
+    if captured.get("scheme") != "MagicLink":
+        errmsg = "Expected scheme 'MagicLink' on context, got {!r}".format(
+            captured.get("scheme")
+        )
+        raise AssertionError(errmsg)
+
+    if captured.get("attributes", {}).get("token_id") != "tok-42":
+        errmsg = "Expected token_id 'tok-42' in context attributes, got {!r}".format(
+            captured.get("attributes")
+        )
+        raise AssertionError(errmsg)
+
+    if captured.get("principal_id") != "user-001":
+        errmsg = "Expected principal_id 'user-001' on context, got {!r}".format(
+            captured.get("principal_id")
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_login_preserves_login_successful_message():
+    """
+        Regression: the credential ``login`` endpoint must continue to
+        return ``message="Login successful"`` after the body was refactored
+        to delegate to ``establish_session``. Existing API consumers depend
+        on this string.
+    """
+    blueprint = _create_fresh_blueprint()
+
+    request = MockJsonRequest({
+        "username": KNOWN_USERNAME,
+        "password": KNOWN_PASSWORD,
+    })
+
+    response = blueprint.login(request)
+
+    if response["body"].get("message") != "Login successful":
+        errmsg = "Expected message 'Login successful', got {!r}".format(
+            response["body"].get("message")
+        )
+        raise AssertionError(errmsg)
+
+    return

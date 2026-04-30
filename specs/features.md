@@ -217,3 +217,77 @@ portal_bp.attach_child(PortalEndpoint, leaf="magic/portals")
 - Named convenience methods preserved from the legacy endpoints implementation: ``check_authentication_context(ctx)``, ``check_roles(ctx)``, ``check_permissions(ctx)``. ``get_denial_reason(subject)`` is similarly polymorphic.
 - ``merge_with(other, replace_roles=False, replace_scopes=False)`` returns a new ``AccessPolicy`` combining constraints. Roles and scopes default to deduplicated union; ``require_auth`` is the logical OR; the custom ``constraints`` dict is shallow-merged with ``other`` precedence.
 - :class:`automojo.webworks.endpoints.constraints.EndpointConstraints` retains its list-typed ``roles`` and ``scopes`` fields. Its ``__post_init__`` coerces incoming iterables (commonly tuples handed off from an ``AccessPolicy``) to lists so consumer code continues to receive the list shape it has always seen.
+## Flash Messaging
+
+### `automojo.webworks.flash`
+- Provides one-shot user-feedback messaging modeled after the classic Flask `flash()` / `get_flashed_messages()` API: a handler emits a message before redirecting, and the next render consumes it.
+- Three composable pieces: `FlashStore` (abstract backend), `InMemoryFlashStore` (process-local default), `FlashManager` (input-validating facade), and `make_flash_context_processor` (templating integration via `ContextProcessorRegistry`).
+- Each message is a `(category, message)` tuple. Category is a free-form string the rendering layer can key on for styling — `info`, `success`, `warning`, `error` are the conventional values, but any string is accepted.
+- The default `consume=True` mode drains the store on read so subsequent renders do not duplicate messages. A `consume=False` peek mode is provided for admin tooling and tests.
+- The store is intentionally session-coupled but storage-independent: implementations of `FlashStore` may share state across workers via Redis or any other backend without changing handler call sites.
+
+```python
+from automojo.webworks.flash import FlashManager, make_flash_context_processor
+
+flash_manager = FlashManager()  # uses InMemoryFlashStore by default
+
+# Inside a postback handler:
+flash_manager.add(session_id=current_session_id, message="Saved.", category="success")
+
+# Wire flash_messages into every template render:
+context_processors.register(make_flash_context_processor(flash_manager))
+```
+
+- Validation: `FlashManager.add` requires both `session_id` and `message` to be non-empty strings and raises `FlashError` otherwise. `consume_all` and `peek_all` are lenient on read paths and return `[]` for missing or empty session ids.
+## Authentication Blueprints
+
+### `SessionAuthBlueprint.establish_session`
+- The credential `login` endpoint is split into two halves: credential validation (delegated to `IdentityProvider.validate_credentials`) and session materialization (cookie + store + response).
+- The materialization half is exposed as a public classmethod `establish_session(principal, *, request=None, remember_me=False, scheme="Session", success_message="Session established", extra_attributes=None)` so sibling auth blueprints can reuse it without re-implementing cookie generation, store wiring, or the `post_authenticate` hook.
+- Intended consumers include the magic-link redemption blueprint, OAuth client callback handlers, and SSO assertion handlers — flows where the principal is established through a channel other than username/password and still needs an HTTP session cookie issued.
+- The `scheme` parameter is recorded on the resulting `AuthenticationContext` so downstream subscribers can distinguish channels (`"Session"` for credential login, `"MagicLink"` for one-time tokens, `"OAuth"` for IdP callbacks, etc.). The `extra_attributes` mapping is merged into `AuthenticationContext.attributes` for channel-specific metadata such as the consumed token id or the issuing IdP.
+- The credential `login` endpoint preserves its historical wire contract (`message="Login successful"`) by passing `success_message="Login successful"` to `establish_session`. New callers default to `"Session established"`.
+
+```python
+# Inside a magic-link redemption handler that has just consumed a one-time token:
+response = SiteSessionAuth.establish_session(
+    principal=Principal(identifier=user.id, display_name=user.display_name, roles={user.role}),
+    scheme="MagicLink",
+    extra_attributes={"token_id": consumed_token.id},
+    success_message="Welcome — your link has been redeemed",
+)
+```
+
+## CSRF Protection
+
+### `automojo.webworks.security.csrf`
+- Provides synchronizer-token style CSRF protection backed by an HMAC-SHA256 over the session identifier with a server-side secret key. Tokens are deterministically reproducible from the session id alone, so neither the manager nor the application persists per-request token state.
+- The module ships three pieces that compose: `CSRFTokenManager` for the cryptographic primitives, `CSRFMiddleware` for ASGI enforcement on unsafe HTTP methods, and `make_csrf_context_processor` for templating integration via the existing `ContextProcessorRegistry`.
+- Token transport defaults to the `X-CSRF-Token` header. Subclasses of `CSRFMiddleware` may override `_extract_form_token(scope, receive)` to read the token from `application/x-www-form-urlencoded` request bodies. Body parsing is intentionally not done in the base middleware so applications can choose their own body buffering / replay strategy.
+- Threat-model notes: this layer assumes cookie-bound sessions, an in-confidence secret key, and HTTPS in production. It complements `SameSite` cookie attributes and `Origin` checks rather than replacing them.
+
+```python
+from automojo.webworks.security.csrf import (
+    CSRFMiddleware,
+    CSRFTokenManager,
+    cookie_session_id_resolver,
+    make_csrf_context_processor,
+)
+
+token_manager = CSRFTokenManager(secret_key=settings.csrf_secret)
+
+# Wire the ASGI middleware in front of the application stack.
+app = CSRFMiddleware(
+    app=app,
+    token_manager=token_manager,
+    session_id_resolver=cookie_session_id_resolver(cookie_name="session_id"),
+    exempt_paths={"/webhooks/stripe"},
+)
+
+# Make {{ csrf_token }} available in every render that carries
+# session_id in the rendering context.
+context_processors.register(make_csrf_context_processor(token_manager))
+```
+
+- Validation results: `csrf_missing_session` when the resolver returns no session, `csrf_token_missing` when the token is absent, `csrf_token_invalid` when it does not match. All three short-circuit with HTTP 403.
+- The context processor returns an empty mapping when the rendering context has no `session_id`, so anonymous renders succeed without a token. Forms protected by CSRF must therefore only be rendered for authenticated users (or use a separate anti-CSRF mechanism such as captcha for purely public submissions).
