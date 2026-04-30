@@ -94,7 +94,7 @@ def test_endpoint_subclass_can_override_defaults():
         serializers = {"json": "application/json"}
     
     # Verify subclass attributes
-    if CustomEndpoint.access_policy.roles != ["admin"]:
+    if CustomEndpoint.access_policy.roles != ("admin",):
         raise AssertionError(f"Expected roles=['admin'], got {CustomEndpoint.access_policy.roles}")
     
     if CustomEndpoint.rate_limit.requests != 100:
@@ -288,7 +288,7 @@ def test_attach_at_inherits_class_defaults_when_not_specified():
     if desc.tags != ["api"]:
         raise AssertionError(f"Expected tags=['api'], got {desc.tags}")
     
-    if desc.constraints.access_policy.roles != ["user"]:
+    if desc.constraints.access_policy.roles != ("user",):
         raise AssertionError(f"Expected roles=['user'], got {desc.constraints.access_policy.roles}")
     
     if desc.constraints.rate_limit.requests != 50:
@@ -334,7 +334,7 @@ def test_attach_at_accepts_all_documented_parameters():
     if desc.tags != ["test", "full"]:
         raise AssertionError(f"Expected tags=['test', 'full'], got {desc.tags}")
     
-    if desc.constraints.access_policy.roles != ["admin"]:
+    if desc.constraints.access_policy.roles != ("admin",):
         raise AssertionError(f"Expected roles=['admin'], got {desc.constraints.access_policy.roles}")
     
     if desc.constraints.rate_limit.requests != 100:
@@ -496,7 +496,7 @@ def test_attach_child_inherits_parent_constraints():
     descriptor = ParentEndpoint.attach_child(ChildEndpoint, leaf="items")
     
     # Child should inherit parent's constraints
-    if descriptor.constraints.access_policy.roles != ["user"]:
+    if descriptor.constraints.access_policy.roles != ("user",):
         raise AssertionError(f"Expected roles=['user'], got {descriptor.constraints.access_policy.roles}")
     
     if descriptor.constraints.rate_limit.requests != 100:

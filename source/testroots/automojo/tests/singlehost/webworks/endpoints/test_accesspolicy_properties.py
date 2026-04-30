@@ -307,12 +307,14 @@ def test_property_merge_returns_new_instance():
         policy_a = generate_random_access_policy()
         policy_b = generate_random_access_policy()
 
-        # Snapshot original values
-        a_roles_before = list(policy_a.roles)
-        a_scopes_before = list(policy_a.scopes)
+        # Snapshot original values. AccessPolicy stores roles/scopes as
+        # tuples, so snapshot as tuples for direct equality comparison
+        # against the live attributes after merge_with returns.
+        a_roles_before = tuple(policy_a.roles)
+        a_scopes_before = tuple(policy_a.scopes)
         a_auth_before = policy_a.require_auth
-        b_roles_before = list(policy_b.roles)
-        b_scopes_before = list(policy_b.scopes)
+        b_roles_before = tuple(policy_b.roles)
+        b_scopes_before = tuple(policy_b.scopes)
         b_auth_before = policy_b.require_auth
 
         merged = policy_a.merge_with(policy_b)

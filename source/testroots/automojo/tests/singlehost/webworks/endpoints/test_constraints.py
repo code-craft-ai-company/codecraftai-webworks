@@ -116,7 +116,7 @@ def test_merge_with_empty_parent():
     
     merged = EndpointConstraints.merge(parent, child)
     
-    if merged.access_policy.roles != ["admin"]:
+    if merged.access_policy.roles != ("admin",):
         errmsg = f"Expected access_policy.roles ['admin'], got {merged.access_policy.roles}"
         raise AssertionError(errmsg)
     
@@ -149,7 +149,7 @@ def test_merge_with_empty_child():
     
     merged = EndpointConstraints.merge(parent, child)
     
-    if merged.access_policy.roles != ["user"]:
+    if merged.access_policy.roles != ("user",):
         errmsg = f"Expected access_policy.roles ['user'], got {merged.access_policy.roles}"
         raise AssertionError(errmsg)
     
