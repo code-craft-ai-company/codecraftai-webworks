@@ -217,3 +217,19 @@ portal_bp.attach_child(PortalEndpoint, leaf="magic/portals")
 - Named convenience methods preserved from the legacy endpoints implementation: ``check_authentication_context(ctx)``, ``check_roles(ctx)``, ``check_permissions(ctx)``. ``get_denial_reason(subject)`` is similarly polymorphic.
 - ``merge_with(other, replace_roles=False, replace_scopes=False)`` returns a new ``AccessPolicy`` combining constraints. Roles and scopes default to deduplicated union; ``require_auth`` is the logical OR; the custom ``constraints`` dict is shallow-merged with ``other`` precedence.
 - :class:`automojo.webworks.endpoints.constraints.EndpointConstraints` retains its list-typed ``roles`` and ``scopes`` fields. Its ``__post_init__`` coerces incoming iterables (commonly tuples handed off from an ``AccessPolicy``) to lists so consumer code continues to receive the list shape it has always seen.
+
+### Decorator wire-through (`Endpoint.attach_at` / `RestEndpoint.attach_at`)
+- Security decorators (``@require_auth``, ``@require_roles``, ``@require_scopes``, ``@public_endpoint``) attach an :class:`AccessPolicy` to the handler function under the ``_access_policy`` attribute. When the function is then registered via :meth:`Endpoint.attach_at` (or any subclass that inherits this behavior — :class:`RestEndpoint`, :class:`Blueprint`, :class:`RestBlueprint`), the registration logic reads ``_access_policy`` and merges it into the descriptor's effective policy alongside any explicit ``access_policy=`` kwarg and the class-level default.
+- Merge order: ``cls.access_policy`` (class default) → explicit ``access_policy=`` kwarg → handler-attached ``_access_policy``. Each step uses :meth:`AccessPolicy.merge_with`, so roles and scopes accumulate as a deduplicated union; ``require_auth`` is the logical OR.
+
+```python
+class DashboardBlueprint(RestBlueprint):
+    base_path = "/dashboard"
+
+@DashboardBlueprint.attach_at(path="/internal", methods=["GET"])
+@require_roles("authenticated-user", "system-admin")
+def internal_dashboard(request):
+    ...
+```
+
+The handler's effective policy is ``AccessPolicy(roles=("authenticated-user", "system-admin"), require_auth=True)`` and the :class:`SecurityMiddleware` / :class:`AuthenticationMiddleware` reads it from the descriptor.

@@ -20,6 +20,7 @@ from automojo.webworks.endpoints.endpoint import Endpoint
 from automojo.webworks.endpoints.exceptions import EndpointRegistrationError, SchemaInspectionError
 from automojo.webworks.endpoints.ratelimit import RateLimit
 from automojo.webworks.endpoints.registry import EndpointRegistry
+from automojo.webworks.security.decorators import HANDLER_POLICY_ATTR
 
 
 # Type variable for preserving function signatures in decorators
@@ -110,7 +111,16 @@ class RestEndpoint(Endpoint):
             merged_tags = tags if tags is not None else list(cls.tags)
             merged_access_policy = access_policy if access_policy is not None else cls.access_policy
             merged_rate_limit = rate_limit if rate_limit is not None else cls.rate_limit
-            
+
+            # Honor any AccessPolicy attached to the handler by security
+            # decorators. See Endpoint.attach_at for rationale.
+            handler_policy = getattr(func, HANDLER_POLICY_ATTR, None)
+            if handler_policy is not None:
+                if merged_access_policy is None:
+                    merged_access_policy = handler_policy
+                else:
+                    merged_access_policy = merged_access_policy.merge_with(handler_policy)
+
             # Merge REST-specific attributes
             merged_request_schema = request_schema if request_schema is not None else cls.request_schema
             merged_response_schema = response_schema if response_schema is not None else cls.response_schema
