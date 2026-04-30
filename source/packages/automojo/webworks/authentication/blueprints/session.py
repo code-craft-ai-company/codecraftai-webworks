@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from automojo.webworks.authentication.basic import IdentityProvider
-from automojo.webworks.authentication.core import AuthenticationContext
+from automojo.webworks.authentication.core import AuthenticationContext, Principal
 from automojo.webworks.authentication.blueprints.responses import (
     AuthError,
     AuthResponse
@@ -399,22 +399,89 @@ class SessionAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error)
             return response
 
-        # Create authentication context
+        response = cls.establish_session(
+            principal=principal,
+            request=request,
+            remember_me=remember_me,
+            scheme="Session",
+            success_message="Login successful",
+        )
+        return response
+
+    @classmethod
+    def establish_session(
+        cls,
+        principal: Principal,
+        request: Optional[Any] = None,
+        remember_me: bool = False,
+        scheme: str = "Session",
+        success_message: str = "Session established",
+        extra_attributes: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+            Materialize a session for an already-authenticated principal.
+
+            This method performs the post-credential-validation half of a
+            login flow: it builds an :class:`AuthenticationContext`, runs the
+            ``post_authenticate`` hook, persists a new session record via the
+            configured :attr:`session_store` (or the in-memory fallback), and
+            returns a ready-to-send response dict containing the session
+            cookie.
+
+            It is intended for sibling auth blueprints (magic-link redemption,
+            OAuth callback, SSO assertion handlers, etc.) that need to produce
+            a session for a principal they validated through some channel
+            other than the username/password ``login`` endpoint. The
+            ``login`` endpoint itself delegates to this method after
+            ``identity_provider.validate_credentials`` succeeds.
+
+            :param principal: The authenticated :class:`Principal`. Callers
+                              are responsible for verifying credentials before
+                              calling this method.
+            :param request: Optional incoming HTTP request, forwarded to the
+                            ``post_authenticate`` hook so subclasses can
+                            inspect it.
+            :param remember_me: When ``True``, use
+                                :attr:`remember_me_duration` instead of
+                                :attr:`session_duration` for the session and
+                                cookie lifetime.
+            :param scheme: Authentication scheme label recorded on the
+                           :class:`AuthenticationContext`. Sibling blueprints
+                           should pass a label that identifies their channel
+                           (e.g. ``"MagicLink"``, ``"OAuth"``).
+            :param success_message: ``message`` field included in the
+                                    response body. Defaults to
+                                    ``"Session established"``; the
+                                    credential login path overrides this with
+                                    ``"Login successful"`` to preserve its
+                                    historical wire format.
+            :param extra_attributes: Optional mapping merged into the
+                                     :class:`AuthenticationContext` attributes.
+                                     Useful for recording channel-specific
+                                     metadata (token id, idp issuer, etc.).
+
+            :returns: A response dictionary with ``status``, ``body``,
+                      ``content_type`` and ``headers`` keys. The ``Set-Cookie``
+                      header carries the new session id with the configured
+                      security flags.
+        """
+        attributes: Dict[str, Any] = {}
+        if extra_attributes is not None:
+            attributes.update(extra_attributes)
+
         context = AuthenticationContext(
             principal=principal,
-            scheme="Session"
+            scheme=scheme,
+            attributes=attributes
         )
 
-        # Post-authentication hook
         cls.post_authenticate(request, context)
 
-        # Determine session duration
         if remember_me:
             duration = cls.remember_me_duration
         else:
             duration = cls.session_duration
 
-        # Generate session
         session_id = cls._generate_session_id()
         now = datetime.now(tz=timezone.utc)
         created_at = now.isoformat()
@@ -424,7 +491,6 @@ class SessionAuthBlueprint(SecurityBlueprint):
             expires_ts, tz=timezone.utc
         ).isoformat()
 
-        # Store the session
         session_data = {
             "session_id": session_id,
             "principal_id": principal.identifier,
@@ -446,17 +512,15 @@ class SessionAuthBlueprint(SecurityBlueprint):
         else:
             cls._memory_store[session_id] = session_data
 
-        # Build the Set-Cookie header
         cookie_header = cls._build_cookie_header(session_id, duration)
 
-        # Build response
         response_body = {
             "session_id": session_id,
             "principal_id": principal.identifier,
             "created_at": created_at,
             "expires_at": expires_at,
             "last_accessed": last_accessed,
-            "message": "Login successful",
+            "message": success_message,
         }
 
         response = {
