@@ -20,6 +20,7 @@ from automojo.webworks.endpoints.doc import Doc
 from automojo.webworks.endpoints.exceptions import EndpointRegistrationError
 from automojo.webworks.endpoints.ratelimit import RateLimit
 from automojo.webworks.endpoints.registry import EndpointConflictError, EndpointRegistry
+from automojo.webworks.security.decorators import HANDLER_POLICY_ATTR
 
 
 # Type variable for preserving function signatures in decorators
@@ -118,7 +119,20 @@ class Endpoint:
             merged_tags = tags if tags is not None else list(cls.tags)
             merged_access_policy = access_policy if access_policy is not None else cls.access_policy
             merged_rate_limit = rate_limit if rate_limit is not None else cls.rate_limit
-            
+
+            # Honor any AccessPolicy attached to the handler by security
+            # decorators (require_auth, require_roles, require_scopes,
+            # public_endpoint). The decorator's policy is merged into the
+            # one already resolved from explicit kwargs / class attributes
+            # so decorator-supplied roles and scopes accumulate via
+            # AccessPolicy.merge_with rather than being silently dropped.
+            handler_policy = getattr(func, HANDLER_POLICY_ATTR, None)
+            if handler_policy is not None:
+                if merged_access_policy is None:
+                    merged_access_policy = handler_policy
+                else:
+                    merged_access_policy = merged_access_policy.merge_with(handler_policy)
+
             # Build constraints object
             constraints = EndpointConstraints(
                 access_policy=merged_access_policy,
