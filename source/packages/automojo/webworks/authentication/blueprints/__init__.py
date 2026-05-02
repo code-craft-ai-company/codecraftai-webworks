@@ -51,6 +51,10 @@ from automojo.webworks.authentication.blueprints.magiclink import (
     MagicLinkConsumeResult,
     TokenConsumer
 )
+from automojo.webworks.authentication.blueprints.oauthclient import (
+    OAuthCallbackResult,
+    OAuthClientBlueprint
+)
 from automojo.webworks.authentication.blueprints.oauth2 import (
     OAuth2Blueprint,
     OAuth2ClientStore,
@@ -82,6 +86,8 @@ __all__ = [
     "MagicLinkBlueprint",
     "MagicLinkConsumeResult",
     "OAuth2AuthorizeRequest",
+    "OAuthCallbackResult",
+    "OAuthClientBlueprint",
     "OAuth2Blueprint",
     "OAuth2ClientStore",
     "OAuth2TokenRequest",

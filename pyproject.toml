@@ -21,6 +21,22 @@ include = [
 [tool.poetry.dependencies]
 python = ">=3.10,<4.0"
 requests = "^2.32.5"
+# ``authlib`` powers the OAuth 2.0 client wrapper at
+# ``automojo.webworks.authentication.oauth`` and the
+# ``OAuthClientBlueprint``. Hard dep (not an optional extra) because
+# the blueprint module imports ``OAuthClient`` at module scope; a
+# missing optional dep would surface as a confusing ImportError at
+# first request rather than at install time. Sites that don't enable
+# OAuth pay the install cost (~3 MB) but no runtime cost — the OAuth
+# modules don't run unless their handlers are mounted.
+authlib = "^1.6.0"
+# ``itsdangerous`` signs the pre-auth state cookie used by
+# ``OAuthClientBlueprint`` to round-trip
+# ``{provider, state, nonce, register}`` between kickoff and
+# callback (the user has no session when the OAuth flow starts, so
+# the cookie is the only durable carrier). Same hard-dep reasoning
+# as ``authlib``.
+itsdangerous = ">=2.2.0,<3.0.0"
 automojo-this-app = { git = "https://github.com/automationmojo/automojo-this-app.git", branch = "main" }
 automojo-testbase = { git = "https://github.com/automationmojo/automojo-testbase.git", branch = "main" }
 automojo-configuration = { git = "https://github.com/automationmojo/automojo-configuration.git", branch = "main" }
