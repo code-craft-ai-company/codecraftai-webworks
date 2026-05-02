@@ -46,6 +46,11 @@ from automojo.webworks.authentication.blueprints.session import (
     SessionAuthBlueprint,
     SessionStore
 )
+from automojo.webworks.authentication.blueprints.magiclink import (
+    MagicLinkBlueprint,
+    MagicLinkConsumeResult,
+    TokenConsumer
+)
 from automojo.webworks.authentication.blueprints.oauth2 import (
     OAuth2Blueprint,
     OAuth2ClientStore,
@@ -74,6 +79,8 @@ __all__ = [
     "BearerAuthBlueprint",
     "LoginRequest",
     "LoginResponse",
+    "MagicLinkBlueprint",
+    "MagicLinkConsumeResult",
     "OAuth2AuthorizeRequest",
     "OAuth2Blueprint",
     "OAuth2ClientStore",
@@ -85,6 +92,7 @@ __all__ = [
     "SessionInfo",
     "SessionLoginRequest",
     "SessionStore",
+    "TokenConsumer",
     "TokenRequest",
     "TokenResponse",
     "UserInfo",
