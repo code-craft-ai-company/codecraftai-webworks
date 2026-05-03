@@ -405,16 +405,22 @@ class OIDCBlueprint(OAuth2Blueprint):
             :returns: The subject identifier string, or None if no
                       authenticated user is found.
         """
-        # Check for auth_context attribute
-        if hasattr(request, "auth_context"):
-            context = request.auth_context
-            if context is not None:
-                if hasattr(context, "principal"):
-                    principal = context.principal
-                    if hasattr(principal, "identifier"):
-                        return principal.identifier
-                if hasattr(context, "subject"):
-                    return context.subject
+        # Check for auth attribute (Request.auth — the canonical
+        # location for the AuthenticationContext on a webworks
+        # Request); fall back to the historical ``auth_context``
+        # attribute name for any consumer that pre-dates
+        # Request.auth.
+        for attr_name in ("auth", "auth_context"):
+            if hasattr(request, attr_name):
+                context = getattr(request, attr_name)
+                if context is not None:
+                    if hasattr(context, "principal"):
+                        principal = context.principal
+                        if hasattr(principal, "identifier"):
+                            return principal.identifier
+                    if hasattr(context, "subject"):
+                        return context.subject
+                    break
 
         # Check for user attribute
         if hasattr(request, "user"):

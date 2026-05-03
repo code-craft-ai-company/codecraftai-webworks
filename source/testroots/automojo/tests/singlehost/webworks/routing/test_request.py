@@ -7,8 +7,12 @@
 
 import io
 import json
-from typing import Any
+from typing import Any, Dict
 
+from automojo.webworks.authentication.core import (
+    AuthenticationContext,
+    Principal,
+)
 from automojo.webworks.routing.request import Request
 from automojo.webworks.routing.headers import Headers
 from automojo.webworks.routing.queryparams import QueryParams
@@ -1278,4 +1282,210 @@ def test_property_json_round_trip_arrays():
             errmsg = f"Iteration {iteration}: Round-trip failed for array"
             raise AssertionError(errmsg)
     
+    return
+
+
+# =============================================================================
+# Request.scope + Request.auth
+# =============================================================================
+
+
+def test_request_scope_property_returns_empty_dict_when_no_scope_supplied():
+    """
+        Direct construction without a ``scope`` kwarg yields an empty
+        scope dict — consumers can still read ``request.scope`` and
+        get a usable mapping rather than ``None``.
+    """
+    request = Request(method="GET", path="/")
+
+    if request.scope != {}:
+        errmsg = "Expected empty dict scope by default, got {!r}".format(request.scope)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_request_scope_property_round_trips_supplied_scope():
+    """
+        A ``scope`` dict passed to the constructor is exposed by
+        reference (the same identity) so middleware-side mutations
+        are visible to handlers.
+    """
+    supplied: Dict[str, Any] = {
+        "session": "fake-session",
+        "rate_limit_remaining": 99,
+    }
+
+    request = Request(method="GET", path="/", scope=supplied)
+
+    if request.scope is not supplied:
+        errmsg = "Expected scope property to return the supplied dict by reference"
+        raise AssertionError(errmsg)
+
+    if request.scope.get("session") != "fake-session":
+        errmsg = "Expected sibling middleware-injected keys to be readable via scope"
+        raise AssertionError(errmsg)
+
+    if request.scope.get("rate_limit_remaining") != 99:
+        errmsg = "Expected arbitrary middleware-injected keys to be readable"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_request_auth_returns_none_by_default():
+    """
+        Direct construction without a scope / without an ``auth`` key
+        in scope yields ``request.auth is None``.
+    """
+    request = Request(method="GET", path="/")
+
+    if request.auth is not None:
+        errmsg = "Expected auth to be None by default, got {!r}".format(request.auth)
+        raise AssertionError(errmsg)
+
+    request_with_empty_auth = Request(method="GET", path="/", scope={})
+
+    if request_with_empty_auth.auth is not None:
+        errmsg = "Expected auth to be None when scope has no 'auth' key"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_request_auth_returns_value_from_scope():
+    """
+        ``request.auth`` is a typed shortcut for
+        ``request.scope.get("auth")`` when the value is an
+        :class:`AuthenticationContext`.
+    """
+    real_context = AuthenticationContext(
+        principal=Principal(identifier="u-1"),
+        scheme="Session",
+    )
+
+    request = Request(method="GET", path="/", scope={"auth": real_context})
+
+    if request.auth is not real_context:
+        errmsg = "Expected request.auth to return the scope['auth'] value"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_request_auth_returns_none_for_non_authenticationcontext_payload():
+    """
+        Defensive type check: when ``scope["auth"]`` carries
+        something that isn't an :class:`AuthenticationContext` (a
+        misbehaving third-party middleware, for example),
+        ``request.auth`` returns ``None`` rather than mis-reporting
+        an arbitrary object as the expected return type. The raw
+        value remains accessible via :attr:`scope` for callers that
+        need it.
+    """
+    arbitrary_object = {"not": "an AuthenticationContext"}
+
+    request = Request(method="GET", path="/", scope={"auth": arbitrary_object})
+
+    if request.auth is not None:
+        errmsg = (
+            "Expected None when scope['auth'] is not an "
+            "AuthenticationContext, got {!r}".format(request.auth)
+        )
+        raise AssertionError(errmsg)
+
+    if request.scope.get("auth") is not arbitrary_object:
+        errmsg = "Expected the raw scope value to remain accessible via .scope"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_from_asgi_threads_scope_into_request():
+    """
+        ``Request.from_asgi`` retains the source scope dict so
+        middleware-injected keys (e.g. ``"auth"`` set by
+        :class:`AuthenticationMiddleware`) are reachable from the
+        request without a side-channel.
+    """
+    real_context = AuthenticationContext(
+        principal=Principal(identifier="u-2"),
+        scheme="Session",
+    )
+    scope: Dict[str, Any] = {
+        "type": "http",
+        "method": "GET",
+        "path": "/dashboard",
+        "headers": [],
+        "auth": real_context,
+    }
+
+    request = Request.from_asgi(scope)
+
+    if request.scope is not scope:
+        errmsg = "from_asgi should retain the scope by reference"
+        raise AssertionError(errmsg)
+
+    if request.auth is not real_context:
+        errmsg = "Expected request.auth to surface the scope-injected context"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_from_asgi_works_when_scope_has_no_auth_key():
+    """
+        Scopes without an ``"auth"`` key are tolerated — the
+        property returns ``None``.
+    """
+    scope: Dict[str, Any] = {
+        "type": "http",
+        "method": "GET",
+        "path": "/health",
+        "headers": [],
+    }
+
+    request = Request.from_asgi(scope)
+
+    if request.auth is not None:
+        errmsg = "Expected None auth when scope lacks the key, got {!r}".format(
+            request.auth
+        )
+        raise AssertionError(errmsg)
+
+    if request.scope is not scope:
+        errmsg = "Expected scope identity to be preserved even without 'auth'"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_from_wsgi_exposes_environ_as_scope():
+    """
+        WSGI environ is also surfaced via ``request.scope`` so the
+        same access pattern works under both protocol families.
+        Custom WSGI middleware that stashes data in environ remains
+        accessible via ``request.scope``.
+    """
+    environ: Dict[str, Any] = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/dashboard",
+        "QUERY_STRING": "",
+        "SERVER_NAME": "test.example.com",
+        "SERVER_PORT": "443",
+        "wsgi.url_scheme": "https",
+        "wsgi.input": None,
+        "automojo.custom_key": "value-from-wsgi-middleware",
+    }
+
+    request = Request.from_wsgi(environ)
+
+    if request.scope is not environ:
+        errmsg = "from_wsgi should retain the environ by reference"
+        raise AssertionError(errmsg)
+
+    if request.scope.get("automojo.custom_key") != "value-from-wsgi-middleware":
+        errmsg = "Expected custom WSGI environ keys to be accessible via scope"
+        raise AssertionError(errmsg)
+
     return
