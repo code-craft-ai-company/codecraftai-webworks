@@ -633,6 +633,227 @@ def test_error_redirect_appends_to_existing_query_string():
 # =============================================================================
 
 
+# =============================================================================
+# Issuance helpers
+# =============================================================================
+
+
+def test_issue_magic_link_invokes_issuer_and_returns_plaintext_plus_record():
+    """
+        Happy path: ``issue_magic_link`` generates a fresh plaintext,
+        calls the site-supplied ``token_issuer`` with
+        ``(plaintext, user_id, extra)``, and returns
+        ``(plaintext, persisted_record)``.
+    """
+    captured: List[Dict[str, Any]] = []
+
+    def issuer(plaintext, user_id, extra):
+        captured.append({
+            "plaintext": plaintext,
+            "user_id": user_id,
+            "extra": extra,
+        })
+        return {"id": "row-42", "user_id": user_id}
+
+    blueprint = _create_magic_blueprint(token_consumer=lambda t: None)
+    blueprint.token_issuer = staticmethod(issuer)
+
+    plaintext, record = blueprint.issue_magic_link(
+        user_id="user-100",
+        extra={"channel": "welcome-email"},
+    )
+
+    if not isinstance(plaintext, str) or len(plaintext) < 32:
+        errmsg = "Expected URL-safe-base64 plaintext, got {!r}".format(plaintext)
+        raise AssertionError(errmsg)
+
+    if record != {"id": "row-42", "user_id": "user-100"}:
+        errmsg = "Expected persisted record to round-trip, got {!r}".format(record)
+        raise AssertionError(errmsg)
+
+    if len(captured) != 1:
+        errmsg = "Expected token_issuer called exactly once, got {}".format(
+            len(captured),
+        )
+        raise AssertionError(errmsg)
+
+    call = captured[0]
+    if call["plaintext"] != plaintext:
+        errmsg = "Issuer received different plaintext than caller, got {!r}".format(
+            call,
+        )
+        raise AssertionError(errmsg)
+
+    if call["user_id"] != "user-100":
+        errmsg = "Expected user_id 'user-100', got {!r}".format(call)
+        raise AssertionError(errmsg)
+
+    if call["extra"] != {"channel": "welcome-email"}:
+        errmsg = "Expected extra forwarded, got {!r}".format(call)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_issue_magic_link_generates_token_matching_default_pattern():
+    """
+        The plaintext token issued by the helper must pass the
+        defensive format check that ``redeem`` runs on inbound
+        tokens; otherwise tokens issued via the helper would fail
+        their own redemption.
+    """
+    blueprint = _create_magic_blueprint(token_consumer=lambda t: None)
+    blueprint.token_issuer = staticmethod(lambda p, u, e: None)
+
+    for _ in range(20):
+        plaintext, _ = blueprint.issue_magic_link(user_id="u-1")
+        if blueprint.token_pattern.match(plaintext) is None:
+            errmsg = "Issued token {!r} fails format check".format(plaintext)
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_issue_magic_link_generates_distinct_tokens_per_call():
+    blueprint = _create_magic_blueprint(token_consumer=lambda t: None)
+    blueprint.token_issuer = staticmethod(lambda p, u, e: None)
+
+    samples = set()
+    for _ in range(20):
+        plaintext, _ = blueprint.issue_magic_link(user_id="u-1")
+        samples.add(plaintext)
+
+    if len(samples) != 20:
+        errmsg = "Expected 20 distinct plaintexts, got {}".format(len(samples))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_issue_magic_link_raises_when_no_issuer_configured():
+    blueprint = _create_magic_blueprint(token_consumer=lambda t: None)
+    blueprint.token_issuer = None
+
+    raised = False
+    try:
+        blueprint.issue_magic_link(user_id="u-1")
+    except RuntimeError:
+        raised = True
+
+    if not raised:
+        errmsg = "Expected RuntimeError when token_issuer is missing"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_issue_magic_link_coerces_user_id_to_string():
+    captured: List[str] = []
+
+    def issuer(plaintext, user_id, extra):
+        captured.append(user_id)
+        return None
+
+    blueprint = _create_magic_blueprint(token_consumer=lambda t: None)
+    blueprint.token_issuer = staticmethod(issuer)
+
+    blueprint.issue_magic_link(user_id=12345)
+
+    if captured != ["12345"]:
+        errmsg = "Expected stringified user_id '12345', got {!r}".format(captured)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_issue_magic_link_extra_defaults_to_empty_dict():
+    captured: List[Any] = []
+
+    def issuer(plaintext, user_id, extra):
+        captured.append(extra)
+        return None
+
+    blueprint = _create_magic_blueprint(token_consumer=lambda t: None)
+    blueprint.token_issuer = staticmethod(issuer)
+
+    blueprint.issue_magic_link(user_id="u-1")
+
+    if captured != [{}]:
+        errmsg = "Expected extra to default to {{}}, got {!r}".format(captured)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_build_magic_link_url_uses_subclass_base_path():
+    blueprint = _create_magic_blueprint(token_consumer=lambda t: None)
+    blueprint.base_path = "/login/magic"
+
+    url = blueprint.build_magic_link_url(
+        plaintext_token="abcdef0123456789",
+        base_url="https://app.example.com",
+    )
+
+    expected = "https://app.example.com/login/magic/abcdef0123456789"
+    if url != expected:
+        errmsg = "Expected {!r}, got {!r}".format(expected, url)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_build_magic_link_url_tolerates_trailing_slash_on_base():
+    blueprint = _create_magic_blueprint(token_consumer=lambda t: None)
+    blueprint.base_path = "/auth/magic"
+
+    url = blueprint.build_magic_link_url(
+        plaintext_token="tok",
+        base_url="https://app.example.com/",
+    )
+
+    if url != "https://app.example.com/auth/magic/tok":
+        errmsg = "Trailing slash on base_url not stripped, got {!r}".format(url)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_issue_and_build_magic_link_round_trip_format_check():
+    """
+        End-to-end: issuance produces a token that passes the
+        consume-side format check baked into ``redeem`` — meaning a
+        token minted via ``issue_magic_link`` won't trip the
+        defensive ``token_pattern`` regex when it comes back through
+        the redemption endpoint.
+    """
+    blueprint = _create_magic_blueprint(token_consumer=lambda t: None)
+    blueprint.token_issuer = staticmethod(lambda p, u, e: None)
+
+    plaintext, _ = blueprint.issue_magic_link(user_id="u-1")
+    url = blueprint.build_magic_link_url(
+        plaintext_token=plaintext,
+        base_url="https://app.example.com",
+    )
+
+    # Extract the token segment back out of the URL and confirm
+    # the round-trip pattern still matches.
+    suffix = url.rsplit("/", 1)[-1]
+    if suffix != plaintext:
+        errmsg = "URL suffix {!r} != plaintext {!r}".format(suffix, plaintext)
+        raise AssertionError(errmsg)
+
+    if blueprint.token_pattern.match(suffix) is None:
+        errmsg = "Round-trip token failed format check: {!r}".format(suffix)
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Descriptor registration
+# =============================================================================
+
+
 def test_blueprint_register_resolves_token_path_against_base():
     """
         The redeem handler is registered at ``{base_path}/{token}``;

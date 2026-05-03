@@ -49,7 +49,8 @@ from automojo.webworks.authentication.blueprints.session import (
 from automojo.webworks.authentication.blueprints.magiclink import (
     MagicLinkBlueprint,
     MagicLinkConsumeResult,
-    TokenConsumer
+    TokenConsumer,
+    TokenIssuer
 )
 from automojo.webworks.authentication.blueprints.oauthclient import (
     OAuthCallbackResult,
@@ -99,6 +100,7 @@ __all__ = [
     "SessionLoginRequest",
     "SessionStore",
     "TokenConsumer",
+    "TokenIssuer",
     "TokenRequest",
     "TokenResponse",
     "UserInfo",
