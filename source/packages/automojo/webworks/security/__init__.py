@@ -93,6 +93,14 @@ from automojo.webworks.security.policyattachment import (
 from automojo.webworks.security.middleware import SecurityMiddleware
 from automojo.webworks.security.middleware import validate_security_completeness
 
+# Password hashing (stdlib-only; werkzeug.security-compatible wire format)
+from automojo.webworks.security.passwords import (
+    DEFAULT_ITERATIONS,
+    DEFAULT_SALT_LENGTH,
+    hash_password,
+    verify_password,
+)
+
 
 __all__ = [
     # Core data models
@@ -138,4 +146,9 @@ __all__ = [
     # Middleware
     "SecurityMiddleware",
     "validate_security_completeness",
+    # Password hashing
+    "DEFAULT_ITERATIONS",
+    "DEFAULT_SALT_LENGTH",
+    "hash_password",
+    "verify_password",
 ]
