@@ -420,6 +420,172 @@ def test_parse_id_token_rejects_empty_id_token():
     return
 
 
+def test_parse_id_token_round_trip_validates_signed_jwt(monkeypatch):
+    """
+        End-to-end: sign a JWT with a generated RSA key, construct
+        the JWKS that publishes its public half, mock the JWKS HTTP
+        fetch, and confirm :meth:`parse_id_token` decodes + validates
+        the token cleanly under the joserfc-backed implementation.
+    """
+    import time
+
+    from joserfc import jwt as joserfc_jwt
+    from joserfc.jwk import RSAKey
+
+    # Generate a fresh RSA key. Issue an id_token with the iss / aud /
+    # nonce values the OAuthClient will assert against.
+    signing_key = RSAKey.generate_key(
+        2048,
+        parameters={"kid": "round-trip-key"},
+    )
+
+    issuer = "https://provider.example.com"
+    client_id = "id-12345"
+    nonce_value = "round-trip-nonce"
+
+    claims = {
+        "iss": issuer,
+        "aud": client_id,
+        "nonce": nonce_value,
+        "sub": "subject-1",
+        "email": "user@example.com",
+        "exp": int(time.time()) + 3600,
+        "iat": int(time.time()),
+    }
+    id_token_str = joserfc_jwt.encode(
+        {"alg": "RS256"},
+        claims,
+        signing_key,
+    )
+
+    # Public-half JWKS the provider would advertise.
+    jwks = {"keys": [signing_key.as_dict(private=False)]}
+
+    client = _make_client()
+
+    # Stub server metadata + the JWKS HTTP fetch.
+    monkeypatch.setattr(
+        client,
+        "_resolve_server_metadata",
+        lambda: {
+            "issuer": issuer,
+            "jwks_uri": "https://provider.example.com/.well-known/jwks.json",
+        },
+    )
+
+    class _StubResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    from automojo.webworks.authentication import oauth as oauth_module
+
+    monkeypatch.setattr(
+        oauth_module.http_requests,
+        "get",
+        lambda url, timeout=None: _StubResponse(jwks),
+    )
+
+    decoded = client.parse_id_token(
+        {"id_token": id_token_str},
+        nonce=nonce_value,
+    )
+
+    if decoded.get("sub") != "subject-1":
+        errmsg = "Expected sub claim, got {!r}".format(decoded)
+        raise AssertionError(errmsg)
+
+    if decoded.get("email") != "user@example.com":
+        errmsg = "Expected email claim, got {!r}".format(decoded)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_parse_id_token_rejects_wrong_nonce(monkeypatch):
+    """
+        joserfc must reject a JWT whose ``nonce`` claim doesn't match
+        the value the kickoff handler stored on the state cookie.
+    """
+    import time
+
+    from joserfc import jwt as joserfc_jwt
+    from joserfc.jwk import RSAKey
+
+    signing_key = RSAKey.generate_key(
+        2048,
+        parameters={"kid": "wrong-nonce-key"},
+    )
+
+    issuer = "https://provider.example.com"
+    client_id = "id-12345"
+
+    claims = {
+        "iss": issuer,
+        "aud": client_id,
+        "nonce": "actual-nonce",
+        "sub": "subject-1",
+        "exp": int(time.time()) + 3600,
+        "iat": int(time.time()),
+    }
+    id_token_str = joserfc_jwt.encode(
+        {"alg": "RS256"},
+        claims,
+        signing_key,
+    )
+
+    jwks = {"keys": [signing_key.as_dict(private=False)]}
+
+    client = _make_client()
+
+    monkeypatch.setattr(
+        client,
+        "_resolve_server_metadata",
+        lambda: {
+            "issuer": issuer,
+            "jwks_uri": "https://provider.example.com/.well-known/jwks.json",
+        },
+    )
+
+    class _StubResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    from automojo.webworks.authentication import oauth as oauth_module
+
+    monkeypatch.setattr(
+        oauth_module.http_requests,
+        "get",
+        lambda url, timeout=None: _StubResponse(jwks),
+    )
+
+    raised = False
+    try:
+        client.parse_id_token(
+            {"id_token": id_token_str},
+            nonce="expected-different-nonce",
+        )
+    except Exception:
+        raised = True
+
+    if not raised:
+        errmsg = "Expected parse_id_token to reject nonce mismatch"
+        raise AssertionError(errmsg)
+
+    return
+
+
 def test_parse_id_token_rejects_when_metadata_lacks_jwks_uri(monkeypatch):
     client = _make_client(
         config_overrides={

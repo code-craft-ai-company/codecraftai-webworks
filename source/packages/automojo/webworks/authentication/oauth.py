@@ -521,6 +521,13 @@ class OAuthClient:
             Algorithms are restricted to RS256 / ES256 / ES384 /
             ES512 to defend against algorithm-confusion attacks.
 
+            Uses :mod:`joserfc` for JWT decoding and claims
+            validation. ``joserfc`` is the actively-maintained
+            successor to ``authlib.jose`` (which authlib now
+            deprecates and will drop in 2.0); using it directly
+            keeps this module's JOSE surface stable across the
+            authlib upgrade.
+
             :param token: Token payload returned by
                           :meth:`exchange_code_for_token`. Must
                           contain an ``id_token`` key.
@@ -537,7 +544,8 @@ class OAuthClient:
                                 needed for validation.
         """
         try:
-            from authlib.jose import JsonWebToken
+            from joserfc import jwt as joserfc_jwt
+            from joserfc.jwk import KeySet
         except ImportError as exc:
             errmsg = (
                 "OIDC id_token validation requires the 'oauth' "
@@ -570,6 +578,20 @@ class OAuthClient:
         jwks_response.raise_for_status()
         jwks = jwks_response.json()
 
+        # Decode the JWT against the provider's JWKS, restricting
+        # acceptable signing algorithms up front to defeat
+        # algorithm-confusion attacks (a JWKS that advertises
+        # ``alg: HS256`` for an asymmetric key, etc.).
+        key_set = KeySet.import_key_set(jwks)
+        decoded = joserfc_jwt.decode(
+            id_token_str,
+            key=key_set,
+            algorithms=_ACCEPTED_ID_TOKEN_ALGORITHMS,
+        )
+
+        # Build the claims registry. ``essential: True, value: …``
+        # asserts the claim is present and equals the expected
+        # value; missing or mismatched claims raise.
         claims_options: Dict[str, Any] = {
             "iss": {
                 "essential": True,
@@ -589,15 +611,10 @@ class OAuthClient:
                     "value": nonce_value,
                 }
 
-        jwt = JsonWebToken(_ACCEPTED_ID_TOKEN_ALGORITHMS)
-        claims = jwt.decode(
-            id_token_str,
-            key=jwks,
-            claims_options=claims_options,
-        )
-        claims.validate()
+        registry = joserfc_jwt.JWTClaimsRegistry(**claims_options)
+        registry.validate(decoded.claims)
 
-        rtnval = dict(claims)
+        rtnval = dict(decoded.claims)
         return rtnval
 
     def fetch_userinfo(self, token: Dict[str, Any]) -> Dict[str, Any]:
