@@ -11,6 +11,8 @@
 
 import random
 
+import pytest
+
 from automojo.webworks.endpoints.registry import EndpointRegistry
 from automojo.webworks.routing.router import Router
 from automojo.webworks.routing.request import Request
@@ -20,6 +22,55 @@ from automojo.webworks.authentication.blueprints.apikey import APIKeyBlueprint
 from automojo.webworks.authentication.blueprints.session import SessionAuthBlueprint
 from automojo.webworks.authentication.blueprints.oauth2 import OAuth2Blueprint
 from automojo.webworks.authentication.blueprints.oidc import OIDCBlueprint
+
+
+# =============================================================================
+# Fixtures
+# =============================================================================
+
+
+# All :class:`SecurityBlueprint` subclasses whose endpoints participate
+# in Property 21's router-integration assertions. The registration order
+# is deterministic so any conflict diagnostic mentions handlers in a
+# stable order.
+_SECURITY_BLUEPRINT_CLASSES = [
+    BasicAuthBlueprint,
+    BearerAuthBlueprint,
+    APIKeyBlueprint,
+    SessionAuthBlueprint,
+    OAuth2Blueprint,
+    OIDCBlueprint,
+]
+
+
+@pytest.fixture(autouse=True)
+def _populated_registry():
+    """
+        Populate the global :class:`EndpointRegistry` for each test in
+        this module.
+
+        :class:`SecurityBlueprint` subclasses deliberately defer
+        registration to an explicit :meth:`register` call (their
+        decorator overrides only attach metadata to the handler — see
+        ``security.py`` for the rationale: sibling blueprints share
+        leaf names like ``"login"``, so eager class-definition-time
+        registration would raise :class:`EndpointConflictError`).
+
+        Property 21's assertions exercise the *populated* registry, so
+        each test needs the six blueprint classes registered before it
+        runs. The fixture clears any pollution from earlier tests, then
+        registers the canonical blueprint set with
+        ``on_conflict="replace"`` so a re-run within the same process
+        is idempotent. Teardown clears the registry again to keep this
+        module's side effects contained.
+    """
+    EndpointRegistry.clear()
+    for blueprint_cls in _SECURITY_BLUEPRINT_CLASSES:
+        blueprint_cls.register_with_registry(on_conflict="replace")
+
+    yield
+
+    EndpointRegistry.clear()
 
 
 # =============================================================================
