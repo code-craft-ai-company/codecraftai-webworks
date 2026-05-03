@@ -39,9 +39,10 @@ __credits__ = []
 import json
 import logging
 import re
+import secrets
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 from urllib.parse import urlencode
 
 from automojo.webworks.authentication.core import Principal
@@ -117,6 +118,23 @@ class MagicLinkConsumeResult:
 TokenConsumer = Callable[[str], MagicLinkConsumeResult]
 
 
+# Type alias for the site-supplied callable that persists a freshly-
+# issued magic-link token. Receives ``(plaintext_token, user_id,
+# extra)`` and returns the persisted record (whatever shape the site's
+# ORM uses) so the caller can attach the record id to the email or
+# audit log. Sites are expected to hash the plaintext before storage
+# — the framework hands them the plaintext unchanged.
+TokenIssuer = Callable[[str, str, Dict[str, Any]], Any]
+
+
+# Default plaintext-token byte length passed to ``secrets.token_urlsafe``.
+# 48 bytes -> 64-character URL-safe-base64 strings, comfortably within
+# :data:`DEFAULT_TOKEN_PATTERN` (8..256) and providing 384 bits of
+# entropy — well above any provider's documented minimum and above the
+# 256 bits the OAuth state token uses.
+DEFAULT_TOKEN_BYTE_LENGTH = 48
+
+
 class MagicLinkBlueprint(SecurityBlueprint):
     """
         Blueprint for magic-link authentication endpoints.
@@ -177,12 +195,153 @@ class MagicLinkBlueprint(SecurityBlueprint):
     tags: List[str] = ["Authentication", "MagicLink"]
 
     token_consumer: Optional[TokenConsumer] = None
+    token_issuer: Optional[TokenIssuer] = None
     session_blueprint: Optional[Type[SessionAuthBlueprint]] = None
     post_redemption_redirect_url: str = "/set-password"
     error_redirect_url: str = "/login"
     scheme_label: str = "MagicLink"
     success_message: str = "Welcome — your link has been redeemed"
     token_pattern: "re.Pattern[str]" = DEFAULT_TOKEN_PATTERN
+    token_byte_length: int = DEFAULT_TOKEN_BYTE_LENGTH
+
+    # --------------------------------------------------------------
+    # Token issuance API (the inverse of the redemption flow).
+    # --------------------------------------------------------------
+    #
+    # ``issue_magic_link`` and ``build_magic_link_url`` together let
+    # site code mint a single-use magic-link URL during user
+    # provisioning without re-implementing the plaintext-generation,
+    # format-validation, and URL-shape invariants in every site.
+    # Token *storage* stays site-side via the ``token_issuer``
+    # callable — the framework can't know the site's ORM, hashing
+    # policy, or expiration window — but the framework owns the
+    # plaintext-generation step and the URL composition so the
+    # invariants stay consistent with what ``redeem`` will accept on
+    # the other end.
+
+    @classmethod
+    def _generate_plaintext_token(cls) -> str:
+        """
+            Generate a fresh URL-safe random plaintext token suitable
+            for embedding in a magic-link URL.
+
+            Length is controlled by :attr:`token_byte_length` (default
+            48 bytes ≈ 64 base64 characters; 384 bits of entropy).
+            The output is guaranteed to match
+            :data:`DEFAULT_TOKEN_PATTERN` so a token issued via this
+            helper will pass the redemption-side defensive format check.
+
+            :returns: A URL-safe random string.
+        """
+        rtnval = secrets.token_urlsafe(cls.token_byte_length)
+        return rtnval
+
+    @classmethod
+    def issue_magic_link(
+        cls,
+        user_id: str,
+        *,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, Any]:
+        """
+            Mint a fresh single-use magic-link token for a user.
+
+            Generates a plaintext URL-safe-base64 token, hands it
+            (along with the user id and any caller-supplied extras)
+            to the site-supplied :attr:`token_issuer` callable for
+            persistence, and returns the plaintext + the persisted
+            record together so the caller can:
+
+              * Embed the plaintext in the magic-link URL via
+                :meth:`build_magic_link_url`.
+              * Use the persisted record's id (or other attributes)
+                in the welcome email's audit-log entry.
+
+            Sites are expected to **hash** the plaintext before
+            storage. The framework hands them the raw plaintext
+            unchanged because the plaintext is what the user clicks;
+            it must round-trip back to the redemption endpoint
+            verbatim.
+
+            :param user_id: Site identifier for the user the token
+                            authenticates. Forwarded to
+                            :attr:`token_issuer` unchanged after
+                            being coerced to a string.
+            :param extra: Optional dict of provisioning-time metadata
+                          the site wants to record alongside the
+                          token (channel, source IP, audit caller,
+                          expiration override, etc.). Defaults to an
+                          empty dict.
+
+            :returns: ``(plaintext_token, persisted_record)``. The
+                      first element is suitable for
+                      :meth:`build_magic_link_url`; the second is
+                      whatever the issuer returned (typically the
+                      ORM row, or ``None`` if the issuer doesn't
+                      surface one).
+            :raises RuntimeError: When :attr:`token_issuer` is not
+                                  configured.
+        """
+        if cls.token_issuer is None:
+            errmsg_lines = [
+                "MagicLinkBlueprint.issue_magic_link called but "
+                "no token_issuer is configured.",
+                "Wire a callable on the subclass before issuing "
+                "tokens, e.g.:",
+                "    SiteMagicLink.token_issuer = staticmethod("
+                "_persist_magic_link_token)",
+            ]
+            errmsg = "\n".join(errmsg_lines)
+            raise RuntimeError(errmsg)
+
+        plaintext = cls._generate_plaintext_token()
+        user_id_value = str(user_id)
+        extra_value: Dict[str, Any] = dict(extra or {})
+
+        persisted = cls.token_issuer(
+            plaintext,
+            user_id_value,
+            extra_value,
+        )
+
+        rtnval = (plaintext, persisted)
+        return rtnval
+
+    @classmethod
+    def build_magic_link_url(
+        cls,
+        plaintext_token: str,
+        *,
+        base_url: str,
+    ) -> str:
+        """
+            Compose the redemption URL the site should embed in the
+            welcome email.
+
+            Centralising the URL shape here means
+            :meth:`issue_magic_link` callers can't drift from
+            :meth:`redeem`'s expected path layout — both sides
+            resolve against the same :attr:`base_path`.
+
+            :param plaintext_token: The plaintext token returned by
+                                    :meth:`issue_magic_link`.
+            :param base_url: Public origin (scheme + host + optional
+                             port) of the site, e.g.
+                             ``"https://app.example.com"``. Trailing
+                             slashes are tolerated.
+
+            :returns: A fully-qualified URL of the form
+                      ``{base_url}{base_path}/{plaintext_token}``.
+        """
+        host_root = str(base_url or "").rstrip("/")
+        path_root = (cls._get_base_path() or "").rstrip("/")
+
+        rtnval = "{}{}/{}".format(host_root, path_root, plaintext_token)
+        return rtnval
+
+    # --------------------------------------------------------------
+    # Redemption-side helpers + endpoint (pre-existing).
+    # --------------------------------------------------------------
 
     @classmethod
     def _extract_raw_token(cls, request: Any) -> str:
@@ -516,6 +675,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
 
 
 __all__ = [
+    "DEFAULT_TOKEN_BYTE_LENGTH",
     "DEFAULT_TOKEN_PATTERN",
     "ERROR_CODE_CONSUMED",
     "ERROR_CODE_EXPIRED",
@@ -524,4 +684,5 @@ __all__ = [
     "MagicLinkBlueprint",
     "MagicLinkConsumeResult",
     "TokenConsumer",
+    "TokenIssuer",
 ]
