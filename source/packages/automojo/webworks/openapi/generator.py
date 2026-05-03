@@ -410,30 +410,38 @@ class OpenAPIGenerator:
 
     def _should_include_descriptor(self, descriptor, openapi_path: str) -> bool:
         """
-            Determine whether a descriptor should be included in the spec
-            based on the configured path and tag filters.
+            Determine whether a descriptor should be included in the
+            spec based on the configured path and tag filters.
 
-            When ``rest_only`` is True (the default), only descriptors whose
-            ``extras`` contain ``endpoint_type == "rest"`` are included.
-            This ensures that plain page routes registered via
-            ``Endpoint.attach_at`` are excluded while REST API routes
-            registered via ``RestBlueprint.attach_at`` are included.
+            When ``rest_only`` is ``True`` (the default), only
+            descriptors whose ``extras["endpoint_type"]`` is one of
+            ``{"rest", "auth"}`` are included. This ensures that
+            plain page routes registered via :meth:`Endpoint.attach_at`
+            are excluded while REST API routes registered via
+            :meth:`RestBlueprint.attach_at` (``"rest"``) and
+            authentication-flow routes registered via
+            :class:`SecurityBlueprint` subclasses (``"auth"``) are
+            both included. Despite the misleading attribute name
+            ``rest_only``, the auth flows belong in the generated
+            API docs alongside REST endpoints — they're documented
+            HTTP routes consumers care about.
 
-            When ``include_paths`` is set, the endpoint path must start with
-            at least one of the listed prefixes.  When ``exclude_paths`` is
-            set, the endpoint path must not start with any of the listed
-            prefixes.  Tag filters work similarly against the descriptor's
-            tag list.
+            When ``include_paths`` is set, the endpoint path must
+            start with at least one of the listed prefixes. When
+            ``exclude_paths`` is set, the endpoint path must not
+            start with any of the listed prefixes. Tag filters work
+            similarly against the descriptor's tag list.
 
             :param descriptor: The endpoint descriptor.
             :param openapi_path: The normalised OpenAPI path string.
 
             :returns: True if the descriptor passes all filters.
         """
-        # REST-only filter: skip non-REST endpoints
+        # Documented-endpoint filter: skip plain page routes that
+        # weren't registered via a documented-endpoint family.
         if self.rest_only:
             endpoint_type = descriptor.extras.get("endpoint_type")
-            if endpoint_type != "rest":
+            if endpoint_type not in ("rest", "auth"):
                 return False
         # Path prefix inclusion filter
         if self.include_paths is not None:

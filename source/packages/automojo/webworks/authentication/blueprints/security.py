@@ -720,6 +720,19 @@ class SecurityBlueprint(RestBlueprint):
         ep_tags = meta.get("tags") or []
         merged_tags = cls._merge_blueprint_tags(ep_tags)
 
+        # Mark every SecurityBlueprint descriptor as ``"auth"`` so
+        # the OpenAPI generator's default filter (which only emits
+        # endpoints with ``endpoint_type in {"rest", "auth"}``)
+        # includes auth flows in the generated spec. Without this
+        # mark the magic-link / OAuth / session endpoints would be
+        # silently excluded from the API docs even though they
+        # carry full :class:`Doc` metadata. Subclasses that already
+        # set their own ``endpoint_type`` (e.g. via
+        # ``@attach_at(..., endpoint_type="rest")``) win — their
+        # value is preserved.
+        descriptor_extras: Dict[str, Any] = dict(meta.get("extras", {}))
+        descriptor_extras.setdefault("endpoint_type", "auth")
+
         descriptor = EndpointDescriptor(
             handler=handler,
             module=handler.__module__,
@@ -730,7 +743,7 @@ class SecurityBlueprint(RestBlueprint):
             tags=merged_tags if merged_tags else [],
             constraints=constraints,
             doc=meta.get("doc"),
-            extras=dict(meta.get("extras", {}))
+            extras=descriptor_extras,
         )
 
         return descriptor
