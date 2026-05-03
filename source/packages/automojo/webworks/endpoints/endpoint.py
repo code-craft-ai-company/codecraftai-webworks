@@ -53,10 +53,240 @@ class Endpoint:
     version: Optional[str] = None
     tags: List[str] = []
     serializers: Dict[str, Any] = {}
-    
+
     # Blueprint-related attributes (used by attach_child)
     base_path: Optional[str] = None
     base_leaf: Optional[str] = None
+
+    # Function-attribute name used to record the original
+    # ``leaf`` / ``path`` / ``absolute`` arguments passed to
+    # :meth:`attach_at`, plus the class on which the decorator was
+    # *invoked*. Read by :meth:`__init_subclass__` to detect the
+    # inside-class-body decoration pattern (decorator invoked against
+    # a parent class because the subclass isn't yet defined at
+    # decorator-evaluation time) and re-resolve the registered
+    # descriptor's path against the actual subclass's base.
+    _ATTACH_AT_METADATA_ATTR: str = "_endpoint_attach_at_metadata"
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """
+            Repair endpoint paths for methods whose ``attach_at``
+            decorator was invoked against a *parent* class.
+
+            Decorator expressions inside a class body run *before*
+            the enclosing class is fully defined, so a method
+            written as::
+
+                class MyBP(RestBlueprint):
+                    base_path = "/inner"
+
+                    @RestBlueprint.attach_at(leaf="thing", methods=["GET"])
+                    def thing(self, request): ...
+
+            invokes ``attach_at`` with ``cls = RestBlueprint`` rather
+            than ``cls = MyBP``. The descriptor that lands in the
+            registry therefore carries ``RestBlueprint``'s
+            (``None``-valued) ``base_path``, producing ``/thing``
+            when the user clearly meant ``/inner/thing``.
+
+            This hook walks ``cls.__dict__`` (only methods defined
+            *directly* on this subclass — inherited methods were
+            fixed when their owning class was first created), looks
+            for the metadata marker
+            :data:`_ATTACH_AT_METADATA_ATTR` that
+            :meth:`attach_at` stashes on each decorated function, and
+            when the marker says decoration happened on a strict
+            ancestor of ``cls`` re-resolves the path via
+            :meth:`_compose_path_for_attach` and patches the
+            descriptor in place via
+            :meth:`EndpointRegistry.update_descriptor_path`.
+
+            Methods decorated with ``absolute=True`` are intentionally
+            outside any blueprint base prefix; subclasses can return
+            the original path from
+            :meth:`_compose_path_for_attach` to skip re-resolution.
+
+            The walk is bounded by ``len(cls.__dict__)``, so the cost
+            is O(methods on this subclass) regardless of how many
+            other endpoints exist in the registry.
+
+            :param kwargs: Forwarded to :class:`type.__init_subclass__`.
+        """
+        super().__init_subclass__(**kwargs)
+
+        marker_attr = cls._ATTACH_AT_METADATA_ATTR
+
+        for attr_value in list(cls.__dict__.values()):
+            # Unwrap ``classmethod`` / ``staticmethod`` wrappers so
+            # the marker check sees the underlying function.
+            handler = attr_value
+            if isinstance(handler, (classmethod, staticmethod)):
+                handler = handler.__func__
+
+            if not callable(handler):
+                continue
+
+            metadata = getattr(handler, marker_attr, None)
+            if metadata is None:
+                continue
+
+            owner = metadata.get("owner")
+            if owner is None or owner is cls:
+                # Decoration happened on this exact class. The path
+                # was already composed against the right base.
+                continue
+
+            if not issubclass(cls, owner):
+                # Decoration wasn't from an ancestor — leave it
+                # alone. (This branch shouldn't fire in practice;
+                # the marker is only set by ``attach_at`` on
+                # ``cls`` or its ancestors.)
+                continue
+
+            corrected_path = cls._compose_path_for_attach(
+                leaf=metadata.get("leaf"),
+                path=metadata.get("path"),
+                absolute=bool(metadata.get("absolute")),
+            )
+            if corrected_path is None:
+                continue
+
+            descriptors = cls._find_descriptors_for_handler(handler)
+            if len(descriptors) == 0:
+                continue
+
+            for descriptor in descriptors:
+                EndpointRegistry.update_descriptor_path(
+                    descriptor=descriptor,
+                    new_path=corrected_path,
+                )
+
+            # Anchor the marker to the resolved subclass so deeper
+            # subclasses that don't override this method won't try
+            # to re-resolve it. (They wouldn't anyway — the walk
+            # only inspects ``cls.__dict__`` — but explicit is
+            # better.)
+            metadata["owner"] = cls
+
+        return
+
+    @classmethod
+    def _compose_path_for_attach(
+        cls,
+        leaf: Optional[str],
+        path: Optional[str],
+        absolute: bool,
+    ) -> Optional[str]:
+        """
+            Hook called by :meth:`__init_subclass__` to compute the
+            corrected path for a parent-class-decorated method.
+
+            The default implementation returns ``None``, signalling
+            "no path correction" — appropriate for plain
+            :class:`Endpoint` subclasses that don't have a base path.
+            Subclass families with a base path (:class:`Blueprint`,
+            :class:`RestBlueprint`) override this hook to delegate to
+            their respective composition methods.
+
+            :param leaf: Original leaf passed to :meth:`attach_at`.
+            :param path: Original path passed to :meth:`attach_at`.
+            :param absolute: ``True`` when the caller declared the
+                             path absolute (no base composition).
+
+            :returns: Corrected path, or ``None`` to skip
+                      re-resolution.
+        """
+        return None
+
+    @classmethod
+    def _wrap_inner_decorator_with_marker(
+        cls,
+        inner_decorator: Callable[[F], F],
+        leaf: Optional[str],
+        path: Optional[str],
+        absolute: bool,
+    ) -> Callable[[F], F]:
+        """
+            Wrap an :meth:`attach_at` inner decorator so the function
+            it returns carries the metadata marker that
+            :meth:`__init_subclass__` reads.
+
+            Used by subclasses (:class:`Blueprint`,
+            :class:`RestBlueprint`) that compose paths against a
+            ``base_path``. The marker captures the *original*
+            uncomposed ``leaf`` / ``path`` so the post-class-creation
+            walk can re-resolve the path when decoration happened
+            against an ancestor.
+
+            Stacked decorators on the same function leave only the
+            first marker. That covers the common case (multiple
+            methods on a single handler with the same leaf / path).
+            Stacked decorators with *different* leaves or paths
+            against a parent class are not all re-resolved correctly
+            — a deliberate scope limitation.
+
+            :param inner_decorator: Decorator returned by the
+                                    superclass ``attach_at`` that
+                                    actually registers the descriptor.
+            :param leaf: Original leaf passed to the outer ``attach_at``.
+            :param path: Original path passed to the outer ``attach_at``.
+            :param absolute: ``True`` when the caller declared the
+                             path absolute.
+
+            :returns: A decorator that runs the inner decorator and
+                      stamps the metadata marker on the resulting
+                      function.
+        """
+        marker_attr = cls._ATTACH_AT_METADATA_ATTR
+        owner_class = cls
+
+        def stamping_decorator(func: F) -> F:
+            decorated = inner_decorator(func)
+
+            if not hasattr(decorated, marker_attr):
+                setattr(
+                    decorated,
+                    marker_attr,
+                    {
+                        "owner": owner_class,
+                        "leaf": leaf,
+                        "path": path,
+                        "absolute": absolute,
+                    },
+                )
+
+            return decorated
+
+        return stamping_decorator
+
+    @classmethod
+    def _find_descriptors_for_handler(
+        cls,
+        handler: Callable[..., Any],
+    ) -> List[EndpointDescriptor]:
+        """
+            Locate every registered descriptor produced by
+            :meth:`attach_at` invocations against *handler*.
+
+            The registry is keyed by ``(path, method)`` rather than
+            by handler identity, so we scan linearly. Cardinality is
+            small (one or two descriptors per handler — stacked
+            decorators with multiple methods on the same handler);
+            the scan runs once per handler at class-definition time,
+            never on the request path.
+
+            :param handler: Callable that was passed through
+                            :meth:`attach_at`.
+
+            :returns: List of matching descriptors. Empty when the
+                      handler is not registered.
+        """
+        rtnval: List[EndpointDescriptor] = []
+        for descriptor in EndpointRegistry.collect():
+            if descriptor.handler is handler:
+                rtnval.append(descriptor)
+
+        return rtnval
 
     @classmethod
     def attach_at(

@@ -198,10 +198,14 @@ class RestBlueprint(RestEndpoint):
         
         # Call parent attach_at with computed path
         # Mark as REST endpoint so the OpenAPI generator can distinguish
-        # REST API routes from plain page routes.
+        # REST API routes from plain page routes. ``absolute`` is
+        # also recorded so the inside-class-body re-resolution path
+        # in :meth:`Endpoint.__init_subclass__` can short-circuit
+        # for explicitly-absolute paths.
         extras["endpoint_type"] = "rest"
+        extras["absolute"] = absolute
 
-        return super().attach_at(
+        inner_decorator = super().attach_at(
             leaf=None if computed_path else leaf,
             path=computed_path,
             methods=methods,
@@ -216,6 +220,56 @@ class RestBlueprint(RestEndpoint):
             on_conflict=on_conflict,
             **extras
         )
+
+        # Stamp the inside-class-body metadata marker so
+        # :meth:`Endpoint.__init_subclass__` can re-resolve the path
+        # when this decoration was invoked against a parent class
+        # (e.g. ``@RestBlueprint.attach_at(...)`` inside a subclass
+        # body, where ``cls = RestBlueprint`` and ``base_path`` is
+        # therefore ``None``). The marker captures the *original*
+        # uncomposed ``leaf`` / ``path`` so the corrected path can
+        # be computed against the subclass's base via
+        # :meth:`_compose_path_for_attach`.
+        return cls._wrap_inner_decorator_with_marker(
+            inner_decorator=inner_decorator,
+            leaf=leaf,
+            path=path,
+            absolute=absolute,
+        )
+
+    @classmethod
+    def _compose_path_for_attach(
+        cls,
+        leaf: Optional[str],
+        path: Optional[str],
+        absolute: bool,
+    ) -> Optional[str]:
+        """
+            Hook used by :meth:`Endpoint.__init_subclass__` to
+            re-resolve the registered path of a method whose
+            ``attach_at`` decorator was invoked against a parent
+            class.
+
+            Returns the path :class:`RestBlueprint` would have
+            produced had the decoration been invoked against this
+            subclass directly. ``absolute=True`` decorations
+            short-circuit because their ``path`` was registered
+            verbatim and should not be re-prefixed.
+
+            :param leaf: Original leaf segment passed to
+                         :meth:`attach_at`.
+            :param path: Original path passed to :meth:`attach_at`.
+            :param absolute: ``True`` when the caller passed
+                             ``absolute=True``.
+
+            :returns: Corrected path, or ``None`` to skip
+                      re-resolution (the absolute case).
+        """
+        if absolute:
+            return None
+
+        rtnval = cls._compute_full_path(leaf=leaf, path=path)
+        return rtnval
 
     @classmethod
     def register(

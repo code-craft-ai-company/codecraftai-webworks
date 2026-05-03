@@ -100,9 +100,42 @@ class Blueprint(Endpoint):
     # Internal tracking of registered descriptors per blueprint class
     # This is a dict keyed by class name to avoid sharing across subclasses
     _blueprint_descriptors: Dict[str, List[EndpointDescriptor]] = {}
-    
+
     # Legacy storage for child descriptors registered via attach_at
     _child_descriptors: List[EndpointDescriptor] = []
+
+    @classmethod
+    def _compose_path_for_attach(
+        cls,
+        leaf: Optional[str],
+        path: Optional[str],
+        absolute: bool,
+    ) -> Optional[str]:
+        """
+            Hook used by :meth:`Endpoint.__init_subclass__` to
+            re-resolve the registered path of a method whose
+            ``attach_at`` decorator was invoked against a parent
+            class.
+
+            Returns the path :class:`Blueprint` would have produced
+            had the decoration been invoked against this subclass
+            directly. Absolute paths are passed through unchanged so
+            ``absolute=True`` semantics are preserved.
+
+            :param leaf: Original leaf segment passed to
+                         :meth:`attach_at`.
+            :param path: Original path passed to :meth:`attach_at`.
+            :param absolute: ``True`` when the caller declared the
+                             path absolute (no base-path composition).
+
+            :returns: The corrected path string, or ``None`` to skip
+                      re-resolution.
+        """
+        if absolute:
+            return path
+
+        rtnval = cls._compose_path(leaf=leaf, path=path)
+        return rtnval
     
     @classmethod
     def register(
@@ -441,9 +474,9 @@ class Blueprint(Endpoint):
         # This applies inheritance rules for access_policy, rate_limit, tags, etc.
         merged = cls._merge_constraints(child_kwargs)
         
-        # Step 5: Call parent attach_at with merged values
-        # Pass computed_path as path (leaf is None since we computed full path)
-        return super().attach_at(
+        # Step 5: Call parent attach_at with merged values to obtain
+        # the inner decorator that registers the descriptor.
+        inner_decorator = super().attach_at(
             leaf=None,  # We use computed path instead
             path=computed_path,
             methods=merged.get("methods"),
@@ -457,6 +490,22 @@ class Blueprint(Endpoint):
             doc=doc,
             on_conflict=on_conflict,
             **extras
+        )
+
+        # Step 6: Stamp the inside-class-body metadata marker so
+        # :meth:`Endpoint.__init_subclass__` can re-resolve the path
+        # when this decoration was invoked against a parent class
+        # (the bug: ``@Blueprint.attach_at(...)`` inside a subclass
+        # body sees ``cls = Blueprint`` rather than the subclass, so
+        # the registered path is missing the subclass's
+        # ``base_path`` prefix). The marker captures the *original*
+        # uncomposed ``leaf`` / ``path`` so the corrected path can
+        # be computed against the subclass's base.
+        return cls._wrap_inner_decorator_with_marker(
+            inner_decorator=inner_decorator,
+            leaf=leaf,
+            path=path,
+            absolute=bool(extras.get("absolute", False)),
         )
     
     @classmethod
