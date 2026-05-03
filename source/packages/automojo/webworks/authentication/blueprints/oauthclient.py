@@ -328,9 +328,21 @@ class OAuthClientBlueprint(SecurityBlueprint):
                       ``oauth_not_configured``).
         """
         # Lazy import keeps the module's top-level import cheap when
-        # the blueprint is mounted but never exercised — the
-        # itsdangerous import has measurable cost on cold start.
-        from itsdangerous import URLSafeTimedSerializer
+        # the blueprint is mounted but never exercised, *and* lets
+        # consumers that don't enable the ``oauth`` extra import the
+        # blueprint module without crashing. Reaching this code path
+        # without ``itsdangerous`` installed surfaces a diagnostic
+        # ``ImportError`` pointing at the right ``pip install``
+        # invocation.
+        try:
+            from itsdangerous import URLSafeTimedSerializer
+        except ImportError as exc:
+            errmsg = (
+                "OAuth state-cookie signing requires the 'oauth' "
+                "extra. Install it with: "
+                "pip install automojo-webworks[oauth]"
+            )
+            raise ImportError(errmsg) from exc
 
         if cls.state_cookie_secret_resolver is None:
             return None
