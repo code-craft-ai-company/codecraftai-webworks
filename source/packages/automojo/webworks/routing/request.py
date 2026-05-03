@@ -11,6 +11,7 @@ from http.cookies import SimpleCookie
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlencode
 
+from automojo.webworks.authentication.core import AuthenticationContext
 from automojo.webworks.routing.headers import Headers
 from automojo.webworks.routing.queryparams import QueryParams
 
@@ -35,13 +36,14 @@ class Request:
         body: bytes = b"",
         scheme: str = "http",
         host: str = "localhost",
-        port: int = 80
+        port: int = 80,
+        scope: Optional[Dict[str, Any]] = None
     ):
         """
             Construct a Request from components.
-            
+
             For WSGI/ASGI construction, use from_wsgi() or from_asgi().
-            
+
             :param method: HTTP method (GET, POST, etc.).
             :param path: Request path without query string.
             :param query_string: Query string as bytes (without leading '?').
@@ -50,6 +52,13 @@ class Request:
             :param scheme: URL scheme (http or https).
             :param host: Server hostname.
             :param port: Server port.
+            :param scope: Optional underlying ASGI / WSGI scope dict.
+                          When supplied, it is exposed read-only via
+                          :attr:`scope` so middleware-injected keys
+                          (e.g. ``"auth"`` populated by
+                          :class:`AuthenticationMiddleware`) can be
+                          read directly from the request. Defaults to
+                          an empty dict for direct construction (tests).
         """
         self._method = method.upper()
         self._path = path
@@ -61,7 +70,8 @@ class Request:
         self._port = port
         self._path_params: Dict[str, Any] = {}
         self._middleware_context: Optional["MiddlewareContext"] = None
-        
+        self._scope: Dict[str, Any] = scope if scope is not None else {}
+
         # Lazily initialized
         self._query_params: Optional[QueryParams] = None
         self._cookies: Optional[Dict[str, str]] = None
@@ -137,11 +147,12 @@ class Request:
             body=body,
             scheme=scheme,
             host=host,
-            port=port
+            port=port,
+            scope=environ
         )
         return request
 
-    
+
     @classmethod
     def from_asgi(cls, scope: Dict[str, Any], body: bytes = b"") -> "Request":
         """
@@ -189,7 +200,7 @@ class Request:
         else:
             host = "localhost"
             port = 80
-        
+
         request = cls(
             method=method,
             path=path,
@@ -198,10 +209,78 @@ class Request:
             body=body,
             scheme=scheme,
             host=host,
-            port=port
+            port=port,
+            scope=scope
         )
         return request
     
+    @property
+    def scope(self) -> Dict[str, Any]:
+        """
+            The underlying ASGI scope (or WSGI ``environ``) the
+            request was constructed from.
+
+            Exposes the same dict that the application server gave to
+            :meth:`from_asgi` / :meth:`from_wsgi`. Middleware that
+            stashes data on the scope dict — typically the
+            authentication, session, or rate-limit middleware —
+            makes that data available here so handlers can read it
+            without reaching for a separate side-channel.
+
+            For requests constructed directly via the public
+            constructor (e.g. unit tests), the value is the ``scope``
+            dict supplied as a keyword argument, or an empty dict
+            when none was provided.
+
+            The dict is intentionally exposed by reference rather
+            than by copy so middleware-side mutations are visible to
+            handlers (this is the contract every ASGI scope
+            consumer relies on). Consumers should treat the dict as
+            read-only by convention; mutations should go through the
+            originating middleware, not directly here.
+
+            For typed shortcuts to specific keys, use the dedicated
+            property (e.g. :attr:`auth` for ``scope["auth"]``); reach
+            for the dict for keys that don't have one yet.
+
+            :returns: The scope dict (never ``None``).
+        """
+        rtnval = self._scope
+        return rtnval
+
+    @property
+    def auth(self) -> Optional[AuthenticationContext]:
+        """
+            Authentication context resolved for this request, or
+            ``None``.
+
+            Typed shortcut for ``self.scope.get("auth")``.
+            :class:`AuthenticationMiddleware` writes the resolved
+            :class:`AuthenticationContext` to ``scope["auth"]``
+            after the :class:`AuthenticationSystem` runs. ``None``
+            is written for excluded paths and for optional paths
+            where authentication didn't succeed.
+
+            ``None`` is also returned for requests constructed
+            without scope context (direct unit-test construction,
+            requests synthesised from a non-middleware code path).
+
+            Defensive type check: when ``scope["auth"]`` is set but
+            isn't an :class:`AuthenticationContext` (a misbehaving
+            third-party middleware, for example), this property
+            returns ``None`` rather than mis-reporting a typed
+            value.  Code that wants to inspect non-conforming
+            ``scope["auth"]`` payloads should read them via
+            :attr:`scope` directly.
+
+            :returns: The bound :class:`AuthenticationContext`, or
+                      ``None``.
+        """
+        candidate = self._scope.get("auth")
+        if isinstance(candidate, AuthenticationContext):
+            return candidate
+        return None
+
     @property
     def query_string(self) -> str:
         """
