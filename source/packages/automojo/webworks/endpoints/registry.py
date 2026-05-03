@@ -171,13 +171,97 @@ class EndpointRegistry:
     def collect(cls) -> List[EndpointDescriptor]:
         """
             Return all registered descriptors.
-            
+
             This method returns a copy of the internal descriptors list
             to prevent external modification of the registry state.
-            
+
             :returns: List of all EndpointDescriptor objects.
         """
         return cls._descriptors.copy()
+
+    @classmethod
+    def update_descriptor_path(
+        cls,
+        descriptor: EndpointDescriptor,
+        new_path: str,
+    ) -> None:
+        """
+            Update an already-registered descriptor's ``path`` and move
+            its entries in the ``(path, method)`` lookup index.
+
+            This helper exists to support deferred path resolution from
+            :meth:`Blueprint.__init_subclass__`: when a subclass-body
+            decorator is invoked against a *parent* class (so the
+            originally-registered path is missing the subclass's
+            ``base_path`` prefix), the subclass corrects the path after
+            it is fully defined.
+
+            The descriptor object identity is preserved so any holder of
+            the reference (the registry, blueprint caches, the OpenAPI
+            generator) sees the updated path immediately.
+
+            ``leaf`` is cleared because once an explicit ``path`` is
+            assigned the registry's index uses the path directly.
+
+            :param descriptor: The :class:`EndpointDescriptor` to mutate.
+                               Must already be in the registry; raises
+                               ``ValueError`` otherwise.
+            :param new_path: Replacement path string.
+
+            :raises ValueError: When *descriptor* is not in the registry.
+            :raises EndpointConflictError: When ``(new_path, method)``
+                                           already maps to a different
+                                           descriptor for any of the
+                                           descriptor's methods.
+        """
+        if descriptor not in cls._descriptors:
+            errmsg = (
+                "Cannot update path for a descriptor that is not "
+                "registered: handler={!r}, current_path={!r}".format(
+                    descriptor.handler,
+                    descriptor.path,
+                )
+            )
+            raise ValueError(errmsg)
+
+        old_index_path = cls._get_index_path(descriptor)
+        new_index_path = new_path
+
+        # Short-circuit when the path is unchanged. Avoids touching the
+        # index for the no-op case.
+        if old_index_path == new_index_path:
+            descriptor.path = new_path
+            descriptor.leaf = None
+            return
+
+        # Validate first — if any of the new keys conflict with a
+        # different descriptor, abort before mutating any state.
+        for method in descriptor.methods:
+            new_key = (new_index_path, method.upper())
+            existing = cls._path_method_index.get(new_key)
+            if existing is not None and existing is not descriptor:
+                raise EndpointConflictError(
+                    path=new_index_path,
+                    method=method.upper(),
+                    existing_handler=existing.handler,
+                    new_handler=descriptor.handler,
+                )
+
+        # All clear — remove old index keys, mutate the descriptor,
+        # install new index keys.
+        for method in descriptor.methods:
+            old_key = (old_index_path, method.upper())
+            if cls._path_method_index.get(old_key) is descriptor:
+                del cls._path_method_index[old_key]
+
+        descriptor.path = new_path
+        descriptor.leaf = None
+
+        for method in descriptor.methods:
+            new_key = (new_index_path, method.upper())
+            cls._path_method_index[new_key] = descriptor
+
+        return
     
     @classmethod
     def clear(cls) -> None:
