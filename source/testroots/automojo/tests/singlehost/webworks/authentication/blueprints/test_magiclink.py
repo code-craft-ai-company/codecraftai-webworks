@@ -8,6 +8,8 @@
     misconfigured collaborators.
 """
 
+import json
+
 from typing import Any, Dict, List, Optional
 
 from automojo.webworks.authentication.blueprints.magiclink import (
@@ -147,11 +149,11 @@ def test_redeem_success_returns_redirect_with_cookie():
 
     response = blueprint.redeem(request)
 
-    if response["status"] != 302:
-        errmsg = "Expected status 302, got {}".format(response["status"])
+    if response.status_code != 302:
+        errmsg = "Expected status 302, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    headers = response.get("headers", {})
+    headers = response.headers
 
     location = headers.get("Location")
     if location != "/set-password":
@@ -226,8 +228,8 @@ def test_redeem_success_records_token_id_attribute():
 
     response = blueprint.redeem(request)
 
-    if response["status"] != 302:
-        errmsg = "Expected status 302, got {}".format(response["status"])
+    if response.status_code != 302:
+        errmsg = "Expected status 302, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
     if len(captured) != 1:
@@ -280,11 +282,11 @@ def test_redeem_missing_token_redirects_with_invalid_error():
 
     response = blueprint.redeem(request)
 
-    if response["status"] != 302:
-        errmsg = "Expected status 302, got {}".format(response["status"])
+    if response.status_code != 302:
+        errmsg = "Expected status 302, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    location = response["headers"].get("Location", "")
+    location = response.headers.get("Location", "")
     if "/login?error=magic_link_invalid" not in location:
         errmsg = "Expected error redirect, got Location {!r}".format(location)
         raise AssertionError(errmsg)
@@ -309,11 +311,11 @@ def test_redeem_malformed_token_redirects_with_invalid_error():
 
     response = blueprint.redeem(request)
 
-    if response["status"] != 302:
-        errmsg = "Expected status 302, got {}".format(response["status"])
+    if response.status_code != 302:
+        errmsg = "Expected status 302, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    location = response["headers"].get("Location", "")
+    location = response.headers.get("Location", "")
     if "error=magic_link_invalid" not in location:
         errmsg = "Expected magic_link_invalid in Location, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -336,16 +338,16 @@ def test_redeem_consumer_returns_expired_error():
 
     response = blueprint.redeem(request)
 
-    if response["status"] != 302:
-        errmsg = "Expected status 302, got {}".format(response["status"])
+    if response.status_code != 302:
+        errmsg = "Expected status 302, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    location = response["headers"].get("Location", "")
+    location = response.headers.get("Location", "")
     if "error=magic_link_expired" not in location:
         errmsg = "Expected magic_link_expired in Location, got {!r}".format(location)
         raise AssertionError(errmsg)
 
-    if "Set-Cookie" in response["headers"]:
+    if "Set-Cookie" in response.headers:
         errmsg = "Failure redirect must not carry a Set-Cookie header"
         raise AssertionError(errmsg)
 
@@ -367,7 +369,7 @@ def test_redeem_consumer_returns_consumed_error():
 
     response = blueprint.redeem(request)
 
-    location = response["headers"].get("Location", "")
+    location = response.headers.get("Location", "")
     if "error=magic_link_consumed" not in location:
         errmsg = "Expected magic_link_consumed in Location, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -390,7 +392,7 @@ def test_redeem_consumer_raises_redirects_with_internal_error():
 
     response = blueprint.redeem(request)
 
-    location = response["headers"].get("Location", "")
+    location = response.headers.get("Location", "")
     if "error=magic_link_failed" not in location:
         errmsg = "Expected magic_link_failed in Location, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -415,7 +417,7 @@ def test_redeem_consumer_returns_wrong_type_redirects_with_internal_error():
 
     response = blueprint.redeem(request)
 
-    location = response["headers"].get("Location", "")
+    location = response.headers.get("Location", "")
     if "error=magic_link_failed" not in location:
         errmsg = "Expected magic_link_failed in Location, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -439,7 +441,7 @@ def test_redeem_consumer_returns_no_principal_and_no_error():
 
     response = blueprint.redeem(request)
 
-    location = response["headers"].get("Location", "")
+    location = response.headers.get("Location", "")
     if "error=magic_link_failed" not in location:
         errmsg = "Expected magic_link_failed in Location, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -464,7 +466,7 @@ def test_redeem_without_token_consumer_redirects_with_internal_error():
 
     response = blueprint.redeem(request)
 
-    location = response["headers"].get("Location", "")
+    location = response.headers.get("Location", "")
     if "error=magic_link_failed" not in location:
         errmsg = "Expected magic_link_failed in Location, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -488,7 +490,7 @@ def test_redeem_without_session_blueprint_redirects_with_internal_error():
 
     response = blueprint.redeem(request)
 
-    location = response["headers"].get("Location", "")
+    location = response.headers.get("Location", "")
     if "error=magic_link_failed" not in location:
         errmsg = "Expected magic_link_failed in Location, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -513,8 +515,8 @@ def test_redeem_disabled_endpoint_returns_404():
 
     response = blueprint.redeem(request)
 
-    if response["status"] != 404:
-        errmsg = "Expected status 404, got {}".format(response["status"])
+    if response.status_code != 404:
+        errmsg = "Expected status 404, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
     return
@@ -551,11 +553,11 @@ def test_pre_authenticate_hook_can_short_circuit_redemption():
 
     response = blueprint.redeem(request)
 
-    if response["status"] != 401:
-        errmsg = "Expected status 401, got {}".format(response["status"])
+    if response.status_code != 401:
+        errmsg = "Expected status 401, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    body = response["body"]
+    body = json.loads(response.body)
     if body.get("error") != "rate_limited":
         errmsg = "Expected rate_limited error, got {!r}".format(body.get("error"))
         raise AssertionError(errmsg)
@@ -583,11 +585,11 @@ def test_redeem_handles_dict_style_request():
 
     response = blueprint.redeem(dict_request)
 
-    if response["status"] != 302:
-        errmsg = "Expected status 302, got {}".format(response["status"])
+    if response.status_code != 302:
+        errmsg = "Expected status 302, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    location = response["headers"].get("Location")
+    location = response.headers.get("Location")
     if location != "/set-password":
         errmsg = "Expected /set-password, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -617,7 +619,7 @@ def test_error_redirect_appends_to_existing_query_string():
 
     response = blueprint.redeem(request)
 
-    location = response["headers"].get("Location", "")
+    location = response.headers.get("Location", "")
     expected = "/login?source=email&error=magic_link_invalid"
     if location != expected:
         errmsg = "Expected Location {!r}, got {!r}".format(expected, location)

@@ -36,6 +36,7 @@ __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
 
+import json
 import logging
 import re
 
@@ -52,6 +53,7 @@ from automojo.webworks.authentication.blueprints.session import (
     SessionAuthBlueprint
 )
 from automojo.webworks.endpoints.doc import Doc
+from automojo.webworks.routing.response import Response
 
 
 logger = logging.getLogger(__name__)
@@ -220,21 +222,24 @@ class MagicLinkBlueprint(SecurityBlueprint):
         cls,
         location: str,
         set_cookie: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> Response:
         """
-            Build a 302 redirect response dictionary.
+            Build a 302 redirect :class:`Response`.
 
-            The shape mirrors the ``establish_session`` response shape so
-            ASGI adapters that consume blueprint responses can apply the
-            same headers / status pipeline. The ``Set-Cookie`` header is
-            attached only when *set_cookie* is a non-empty string.
+            Returns a real :class:`Response` object (not a dict) so
+            the webworks request dispatcher can pass it through
+            unchanged — dict-shape returns get JSON-serialised by
+            ``Dispatcher.dispatch`` and lose their status / headers.
+            The ``Set-Cookie`` header is attached only when
+            *set_cookie* is a non-empty string.
 
             :param location: The URL to redirect to.
             :param set_cookie: Optional ``Set-Cookie`` header value to
                                attach to the redirect.
 
-            :returns: A response dictionary with ``status``, ``body``,
-                      ``content_type``, and ``headers`` keys.
+            :returns: A 302 :class:`Response` with the supplied
+                      ``Location`` header (and ``Set-Cookie`` when
+                      provided) and an empty body.
         """
         headers: Dict[str, str] = {"Location": location}
 
@@ -243,28 +248,24 @@ class MagicLinkBlueprint(SecurityBlueprint):
             if cookie_value != "":
                 headers["Set-Cookie"] = cookie_value
 
-        response = {
-            "status": 302,
-            "body": b"",
-            "content_type": "text/html; charset=utf-8",
-            "headers": headers,
-        }
+        response = Response(status_code=302, headers=headers, body=b"")
         return response
 
     @classmethod
-    def _build_error_redirect(cls, error_code: str) -> Dict[str, Any]:
+    def _build_error_redirect(cls, error_code: str) -> Response:
         """
-            Build a 302 redirect to :attr:`error_redirect_url` with an
-            ``?error=<code>`` query parameter.
+            Build a 302 redirect to :attr:`error_redirect_url` with
+            an ``?error=<code>`` query parameter.
 
             The query parameter is always URL-encoded. When the error
-            redirect URL already contains a query string the parameter is
-            appended with ``&``; otherwise it is appended with ``?``.
+            redirect URL already contains a query string the
+            parameter is appended with ``&``; otherwise it is
+            appended with ``?``.
 
-            :param error_code: A short, URL-safe error code identifying
-                               the failure mode.
+            :param error_code: A short, URL-safe error code
+                               identifying the failure mode.
 
-            :returns: A redirect response dictionary.
+            :returns: A redirect :class:`Response`.
         """
         encoded_pair = urlencode({"error": str(error_code)})
 
@@ -279,6 +280,41 @@ class MagicLinkBlueprint(SecurityBlueprint):
         return response
 
     @classmethod
+    def _build_auth_error_response(
+        cls,
+        error: AuthError,
+        status_code: int,
+    ) -> Response:
+        """
+            Build a JSON :class:`Response` carrying an
+            :class:`AuthError` body.
+
+            Replaces the dict-form return that
+            :meth:`SecurityBlueprint.format_error` produces, which
+            does not survive the request dispatcher (the dispatcher
+            wraps non-Response returns in ``JSONResponse`` and
+            ignores the ``status`` key).
+
+            :param error: The :class:`AuthError` to surface.
+            :param status_code: HTTP status code for the response.
+
+            :returns: A :class:`Response` with a JSON body and the
+                      requested status code.
+        """
+        body_bytes = json.dumps(error.to_dict()).encode("utf-8")
+
+        headers: Dict[str, str] = {
+            "Content-Type": "application/json; charset=utf-8",
+        }
+
+        response = Response(
+            status_code=status_code,
+            headers=headers,
+            body=body_bytes,
+        )
+        return response
+
+    @classmethod
     @SecurityBlueprint.read(
         path="/{token}",
         doc=Doc(
@@ -290,7 +326,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
         ),
         on_conflict="replace"
     )
-    def redeem(cls, request: Any) -> Dict[str, Any]:
+    def redeem(cls, request: Any) -> Response:
         """
             Handle a magic-link redemption request.
 
@@ -300,35 +336,43 @@ class MagicLinkBlueprint(SecurityBlueprint):
 
               * On success — calls
                 :meth:`SessionAuthBlueprint.establish_session` on
-                :attr:`session_blueprint` and returns a 302 redirect to
-                :attr:`post_redemption_redirect_url` with the
+                :attr:`session_blueprint` and returns a 302 redirect
+                to :attr:`post_redemption_redirect_url` with the
                 ``Set-Cookie`` header attached.
               * On failure — returns a 302 redirect to
                 :attr:`error_redirect_url` with an ``?error=<code>``
                 query parameter.
 
             The endpoint can be disabled via the ``enabled_endpoints``
-            configuration. When disabled, a 404 response is returned.
+            configuration. When disabled, a 404 :class:`Response` is
+            returned.
 
-            :param request: The incoming HTTP request object. The token
-                            is read from the ``token`` path parameter.
+            :param request: The incoming HTTP request object. The
+                            token is read from the ``token`` path
+                            parameter.
 
-            :returns: A response dictionary with ``status``, ``body``,
-                      ``content_type``, and ``headers`` keys.
+            :returns: A :class:`Response` ready for the request
+                      dispatcher to emit.
         """
         if not cls.is_endpoint_enabled("redeem"):
             error = AuthError(
                 error="endpoint_disabled",
                 error_description="Magic-link redemption is disabled"
             )
-            response = cls.format_error(error, status_code=404)
+            response = cls._build_auth_error_response(
+                error=error,
+                status_code=404,
+            )
             return response
 
         # Pre-redemption hook (subclasses can short-circuit with
         # rate-limiting / IP gating / etc.).
         pre_error = cls.pre_authenticate(request)
         if pre_error is not None:
-            response = cls.format_error(pre_error)
+            response = cls._build_auth_error_response(
+                error=pre_error,
+                status_code=401,
+            )
             return response
 
         # Defensive token-format check — saves the consumer from having

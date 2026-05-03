@@ -34,6 +34,7 @@
           ``enabled_endpoints`` and returns 404.
 """
 
+import json
 import time
 
 from typing import Any, Dict, List, Optional
@@ -393,16 +394,16 @@ def test_kickoff_success_redirects_with_signed_cookie(monkeypatch):
 
     response = blueprint.kickoff(request)
 
-    if response["status"] != 302:
-        errmsg = "Expected 302, got {}".format(response["status"])
+    if response.status_code != 302:
+        errmsg = "Expected 302, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if location != "https://provider.example.com/o/authorize?ok=1":
         errmsg = "Expected provider authorization URL, got {!r}".format(location)
         raise AssertionError(errmsg)
 
-    cookie = response["headers"].get("Set-Cookie", "")
+    cookie = response.headers.get("Set-Cookie", "")
     if DEFAULT_STATE_COOKIE_NAME not in cookie:
         errmsg = "Expected state cookie in Set-Cookie, got {!r}".format(cookie)
         raise AssertionError(errmsg)
@@ -448,8 +449,8 @@ def test_kickoff_defaults_to_default_provider_when_query_omits_it(monkeypatch):
 
     response = blueprint.kickoff(request)
 
-    if response["status"] != 302:
-        errmsg = "Expected 302, got {}".format(response["status"])
+    if response.status_code != 302:
+        errmsg = "Expected 302, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
     return
@@ -466,7 +467,7 @@ def test_kickoff_no_secret_resolver_redirects_with_not_configured():
 
     response = blueprint.kickoff(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_NOT_CONFIGURED) not in location:
         errmsg = "Expected oauth_not_configured, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -484,7 +485,7 @@ def test_kickoff_no_providers_configured_redirects_with_unavailable():
 
     response = blueprint.kickoff(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_PROVIDER_UNAVAILABLE) not in location:
         errmsg = "Expected oauth_provider_unavailable, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -502,7 +503,7 @@ def test_kickoff_unknown_provider_redirects_with_unknown_provider():
 
     response = blueprint.kickoff(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_UNKNOWN_PROVIDER) not in location:
         errmsg = "Expected unknown_provider, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -570,7 +571,7 @@ def test_kickoff_authorization_url_build_failure_redirects_with_unavailable(monk
 
     response = blueprint.kickoff(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_PROVIDER_UNAVAILABLE) not in location:
         errmsg = "Expected oauth_provider_unavailable, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -593,12 +594,12 @@ def test_register_missing_captcha_returns_400():
 
     response = blueprint.register_intent(request)
 
-    if response["status"] != 400:
-        errmsg = "Expected 400, got {}".format(response["status"])
+    if response.status_code != 400:
+        errmsg = "Expected 400, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    if response["body"].get("error") != "missing_captcha":
-        errmsg = "Expected missing_captcha, got {!r}".format(response["body"])
+    if json.loads(response.body).get("error") != "missing_captcha":
+        errmsg = "Expected missing_captcha, got {!r}".format(json.loads(response.body))
         raise AssertionError(errmsg)
 
     return
@@ -616,12 +617,12 @@ def test_register_failed_captcha_returns_400():
 
     response = blueprint.register_intent(request)
 
-    if response["status"] != 400:
-        errmsg = "Expected 400, got {}".format(response["status"])
+    if response.status_code != 400:
+        errmsg = "Expected 400, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    if response["body"].get("error") != "captcha_failed":
-        errmsg = "Expected captcha_failed, got {!r}".format(response["body"])
+    if json.loads(response.body).get("error") != "captcha_failed":
+        errmsg = "Expected captcha_failed, got {!r}".format(json.loads(response.body))
         raise AssertionError(errmsg)
 
     return
@@ -639,11 +640,11 @@ def test_register_success_returns_kickoff_url():
 
     response = blueprint.register_intent(request)
 
-    if response["status"] != 200:
-        errmsg = "Expected 200, got {}".format(response["status"])
+    if response.status_code != 200:
+        errmsg = "Expected 200, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    body = response["body"]
+    body = json.loads(response.body)
     if body.get("success") is not True:
         errmsg = "Expected success=True, got {!r}".format(body)
         raise AssertionError(errmsg)
@@ -676,8 +677,8 @@ def test_register_no_verifier_skips_captcha_check():
 
     response = blueprint.register_intent(request)
 
-    if response["status"] != 200:
-        errmsg = "Expected 200, got {}".format(response["status"])
+    if response.status_code != 200:
+        errmsg = "Expected 200, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
     return
@@ -748,7 +749,7 @@ def test_callback_provider_returned_error_redirects_with_authorization_failed():
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_AUTHORIZATION_FAILED) not in location:
         errmsg = "Expected oauth_authorization_failed, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -770,7 +771,7 @@ def test_callback_missing_provider_redirects_with_provider_missing():
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_PROVIDER_MISSING_ON_CALLBACK) not in location:
         errmsg = "Expected provider_missing_callback, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -790,7 +791,7 @@ def test_callback_missing_state_cookie_redirects_with_token_parse_failed():
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_TOKEN_PARSE_FAILED) not in location:
         errmsg = "Expected token_parse_failed, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -812,7 +813,7 @@ def test_callback_provider_mismatch_redirects_with_token_parse_failed():
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_TOKEN_PARSE_FAILED) not in location:
         errmsg = "Expected token_parse_failed for provider mismatch, got {!r}".format(
             location,
@@ -836,7 +837,7 @@ def test_callback_state_mismatch_redirects_with_token_parse_failed():
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_TOKEN_PARSE_FAILED) not in location:
         errmsg = "Expected token_parse_failed for state mismatch, got {!r}".format(
             location,
@@ -856,7 +857,7 @@ def test_callback_missing_code_redirects_with_no_token():
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_NO_TOKEN) not in location:
         errmsg = "Expected oauth_no_token, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -874,7 +875,7 @@ def test_callback_unknown_provider_after_state_validation(monkeypatch):
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_UNKNOWN_PROVIDER) not in location:
         errmsg = "Expected unknown_provider, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -900,7 +901,7 @@ def test_callback_token_exchange_failure_redirects_with_authorization_failed(mon
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_AUTHORIZATION_FAILED) not in location:
         errmsg = "Expected oauth_authorization_failed, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -928,7 +929,7 @@ def test_callback_id_token_parse_failure_redirects_with_token_parse_failed(monke
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_TOKEN_PARSE_FAILED) not in location:
         errmsg = "Expected token_parse_failed, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -981,8 +982,8 @@ def test_callback_non_oidc_provider_uses_fetch_userinfo(monkeypatch):
 
     response = blueprint.callback(request)
 
-    if response["status"] != 302:
-        errmsg = "Expected 302, got {}".format(response["status"])
+    if response.status_code != 302:
+        errmsg = "Expected 302, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
     if len(stub_client.calls["fetch_userinfo"]) != 1:
@@ -1020,13 +1021,13 @@ def test_callback_user_resolver_error_code_propagates(monkeypatch):
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error=user-already-exists" not in location:
         errmsg = "Expected user-already-exists, got {!r}".format(location)
         raise AssertionError(errmsg)
 
     # State-clear cookie should be attached on every callback exit path.
-    cookie_header = response["headers"].get("Set-Cookie", "")
+    cookie_header = response.headers.get("Set-Cookie", "")
     if "Max-Age=0" not in cookie_header:
         errmsg = "Expected state-clear cookie on error redirect, got {!r}".format(cookie_header)
         raise AssertionError(errmsg)
@@ -1054,13 +1055,13 @@ def test_callback_user_resolver_short_circuit_redirect(monkeypatch):
 
     response = blueprint.callback(request)
 
-    if response["status"] != 302:
-        errmsg = "Expected 302, got {}".format(response["status"])
+    if response.status_code != 302:
+        errmsg = "Expected 302, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    if response["headers"]["Location"] != "/convert-user-to-oauth":
+    if response.headers["Location"] != "/convert-user-to-oauth":
         errmsg = "Expected short-circuit URL, got {!r}".format(
-            response["headers"]["Location"],
+            response.headers["Location"],
         )
         raise AssertionError(errmsg)
 
@@ -1085,7 +1086,7 @@ def test_callback_user_resolver_returns_wrong_type_redirects_with_authorization_
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_AUTHORIZATION_FAILED) not in location:
         errmsg = "Expected oauth_authorization_failed, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -1138,15 +1139,15 @@ def test_callback_success_invokes_token_persister_and_establishes_session(monkey
 
     response = blueprint.callback(request)
 
-    if response["status"] != 302:
-        errmsg = "Expected 302, got {}".format(response["status"])
+    if response.status_code != 302:
+        errmsg = "Expected 302, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    if response["headers"]["Location"] != "/dashboard/":
-        errmsg = "Expected /dashboard/, got {!r}".format(response["headers"]["Location"])
+    if response.headers["Location"] != "/dashboard/":
+        errmsg = "Expected /dashboard/, got {!r}".format(response.headers["Location"])
         raise AssertionError(errmsg)
 
-    cookie_header = response["headers"].get("Set-Cookie", "")
+    cookie_header = response.headers.get("Set-Cookie", "")
     if "site_session=" not in cookie_header:
         errmsg = "Expected session cookie, got {!r}".format(cookie_header)
         raise AssertionError(errmsg)
@@ -1200,15 +1201,15 @@ def test_callback_token_persister_failure_is_non_fatal(monkeypatch):
 
     response = blueprint.callback(request)
 
-    if response["status"] != 302:
+    if response.status_code != 302:
         errmsg = "Expected 302 success even when token_persister fails, got {}".format(
-            response["status"],
+            response.status_code,
         )
         raise AssertionError(errmsg)
 
-    if response["headers"]["Location"] != "/dashboard/":
+    if response.headers["Location"] != "/dashboard/":
         errmsg = "Expected /dashboard/, got {!r}".format(
-            response["headers"]["Location"],
+            response.headers["Location"],
         )
         raise AssertionError(errmsg)
 
@@ -1233,7 +1234,7 @@ def test_callback_no_user_resolver_redirects_with_not_configured(monkeypatch):
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_NOT_CONFIGURED) not in location:
         errmsg = "Expected oauth_not_configured, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -1262,7 +1263,7 @@ def test_callback_no_session_blueprint_redirects_with_not_configured(monkeypatch
 
     response = blueprint.callback(request)
 
-    location = response["headers"]["Location"]
+    location = response.headers["Location"]
     if "error={}".format(ERROR_NOT_CONFIGURED) not in location:
         errmsg = "Expected oauth_not_configured, got {!r}".format(location)
         raise AssertionError(errmsg)
@@ -1285,8 +1286,8 @@ def test_kickoff_disabled_returns_404():
 
     response = blueprint.kickoff(request)
 
-    if response["status"] != 404:
-        errmsg = "Expected 404, got {}".format(response["status"])
+    if response.status_code != 404:
+        errmsg = "Expected 404, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
     return
@@ -1303,8 +1304,8 @@ def test_register_disabled_returns_404():
 
     response = blueprint.register_intent(request)
 
-    if response["status"] != 404:
-        errmsg = "Expected 404, got {}".format(response["status"])
+    if response.status_code != 404:
+        errmsg = "Expected 404, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
     return
@@ -1320,8 +1321,8 @@ def test_callback_disabled_returns_404():
 
     response = blueprint.callback(request)
 
-    if response["status"] != 404:
-        errmsg = "Expected 404, got {}".format(response["status"])
+    if response.status_code != 404:
+        errmsg = "Expected 404, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
     return
