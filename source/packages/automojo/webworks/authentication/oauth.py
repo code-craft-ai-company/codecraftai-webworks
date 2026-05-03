@@ -343,9 +343,20 @@ class OAuthClient:
             :returns: The absolute URL to redirect the browser to.
         """
         # Lazy import keeps the module import-light when the OAuth
-        # methods are not exercised — relevant for sites that build
-        # an :class:`OAuthClient` only on demand.
-        from authlib.integrations.requests_client import OAuth2Session
+        # methods are not exercised — and lets consumers that don't
+        # enable the ``oauth`` extra import this module without
+        # crashing. Consumers that reach this code path without
+        # ``authlib`` installed get a diagnostic message pointing
+        # them at the right ``pip install`` invocation.
+        try:
+            from authlib.integrations.requests_client import OAuth2Session
+        except ImportError as exc:
+            errmsg = (
+                "OAuth client functionality requires the 'oauth' "
+                "extra. Install it with: "
+                "pip install automojo-webworks[oauth]"
+            )
+            raise ImportError(errmsg) from exc
 
         scope_value = self._resolve_scope(override=scope)
 
@@ -404,7 +415,15 @@ class OAuthClient:
             :raises authlib.integrations.base_client.OAuthError:
                        When the provider rejects the token request.
         """
-        from authlib.integrations.requests_client import OAuth2Session
+        try:
+            from authlib.integrations.requests_client import OAuth2Session
+        except ImportError as exc:
+            errmsg = (
+                "OAuth client functionality requires the 'oauth' "
+                "extra. Install it with: "
+                "pip install automojo-webworks[oauth]"
+            )
+            raise ImportError(errmsg) from exc
 
         session = OAuth2Session(
             client_id=self._client_id,
@@ -453,7 +472,15 @@ class OAuthClient:
                        (e.g. ``invalid_grant`` after the user has
                        revoked consent).
         """
-        from authlib.integrations.requests_client import OAuth2Session
+        try:
+            from authlib.integrations.requests_client import OAuth2Session
+        except ImportError as exc:
+            errmsg = (
+                "OAuth client functionality requires the 'oauth' "
+                "extra. Install it with: "
+                "pip install automojo-webworks[oauth]"
+            )
+            raise ImportError(errmsg) from exc
 
         refresh_value = str(refresh_token or "").strip()
         if refresh_value == "":
@@ -509,7 +536,15 @@ class OAuthClient:
                                 the ``jwks_uri`` / ``issuer`` fields
                                 needed for validation.
         """
-        from authlib.jose import JsonWebToken
+        try:
+            from authlib.jose import JsonWebToken
+        except ImportError as exc:
+            errmsg = (
+                "OIDC id_token validation requires the 'oauth' "
+                "extra. Install it with: "
+                "pip install automojo-webworks[oauth]"
+            )
+            raise ImportError(errmsg) from exc
 
         id_token_value = token.get("id_token")
         if id_token_value is None:
