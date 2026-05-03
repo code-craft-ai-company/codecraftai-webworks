@@ -16,9 +16,13 @@ from automojo.webworks.routing.headers import Headers
 from automojo.webworks.routing.queryparams import QueryParams
 
 # Avoid circular import; use TYPE_CHECKING for MiddlewareContext
+# and UploadedFile (the latter to keep the email parser cost out of
+# the import-time critical path — see the lazy imports inside
+# :meth:`form` / :meth:`files`).
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from automojo.webworks.routing.middlewarecontext import MiddlewareContext
+    from automojo.webworks.routing.multipart import UploadedFile
 
 
 class Request:
@@ -488,17 +492,92 @@ class Request:
     
     def form(self) -> Dict[str, str]:
         """
-            Parse body as form-encoded data and return dict.
-            
-            :returns: Dictionary of form field names to values.
+            Parse the body as form data and return the form fields as
+            a flat ``dict``.
+
+            Two body shapes are recognised:
+
+              * ``application/x-www-form-urlencoded`` — the body is
+                URL-decoded and split on ``&`` / ``=``.
+              * ``multipart/form-data`` — the body is parsed by
+                :func:`automojo.webworks.routing.multipart.parse_multipart`.
+                Only the *form-field* parts (no ``filename``) are
+                surfaced here; uploaded files are read separately
+                via :meth:`files`.
+
+            For both shapes, when a field appears more than once,
+            the **first** occurrence wins (matching the long-standing
+            behaviour of this method). Consumers that need
+            duplicate-name semantics should call
+            :func:`parse_multipart` directly and walk
+            :attr:`MultipartResult.form_parts`.
+
+            :returns: Dict of field name to first-value string.
+                      Empty dict for non-form bodies (JSON, etc.) or
+                      when the body could not be parsed.
         """
+        content_type_header = self._headers.get("Content-Type", "") or ""
+        content_type_lower = str(content_type_header).split(";", 1)[0].strip().lower()
+
+        if content_type_lower == "multipart/form-data":
+            from automojo.webworks.routing.multipart import parse_multipart
+
+            multipart_result = parse_multipart(
+                body=self._body,
+                content_type=str(content_type_header),
+            )
+
+            rtnval: Dict[str, str] = {}
+            for field_name, value in multipart_result.form_parts:
+                if field_name not in rtnval:
+                    rtnval[field_name] = value
+
+            return rtnval
+
         body_str = self._body.decode("utf-8")
         parsed = parse_qs(body_str, keep_blank_values=True)
         # Convert lists to single values (first value)
-        rtnval: Dict[str, str] = {}
+        rtnval = {}
         for key, values in parsed.items():
             if len(values) > 0:
                 rtnval[key] = values[0]
+        return rtnval
+
+    def files(self) -> Dict[str, "UploadedFile"]:
+        """
+            Parse the body as ``multipart/form-data`` and return the
+            uploaded files keyed by form-field name.
+
+            Returns an empty dict for non-multipart bodies, so
+            callers can unconditionally read this method without a
+            content-type pre-check. When a file part appears more
+            than once under the same field name, the **last**
+            occurrence wins; consumers that need every part should
+            call :func:`parse_multipart` directly and walk
+            :attr:`MultipartResult.file_parts`.
+
+            :returns: Dict of form-field name to
+                      :class:`UploadedFile`. Empty dict for
+                      non-multipart bodies.
+        """
+        from automojo.webworks.routing.multipart import (
+            UploadedFile as _UploadedFile,
+            parse_multipart,
+        )
+
+        content_type_header = self._headers.get("Content-Type", "") or ""
+        content_type_lower = str(content_type_header).split(";", 1)[0].strip().lower()
+
+        if content_type_lower != "multipart/form-data":
+            empty: Dict[str, "_UploadedFile"] = {}
+            return empty
+
+        multipart_result = parse_multipart(
+            body=self._body,
+            content_type=str(content_type_header),
+        )
+
+        rtnval = multipart_result.files
         return rtnval
     
     @property

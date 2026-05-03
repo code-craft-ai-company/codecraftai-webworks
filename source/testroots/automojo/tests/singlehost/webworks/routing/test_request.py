@@ -1489,3 +1489,127 @@ def test_from_wsgi_exposes_environ_as_scope():
         raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Request.form() + Request.files() — multipart integration
+# =============================================================================
+
+
+def test_request_form_handles_urlencoded_body():
+    """
+        ``Request.form()`` continues to handle the long-standing
+        ``application/x-www-form-urlencoded`` body shape — no
+        regression from the multipart additions.
+    """
+    request = Request(
+        method="POST",
+        path="/",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        body=b"username=alice&token=secret",
+    )
+
+    form = request.form()
+
+    if form.get("username") != "alice":
+        errmsg = "Expected form['username'] == 'alice', got {!r}".format(form.get("username"))
+        raise AssertionError(errmsg)
+
+    if form.get("token") != "secret":
+        errmsg = "Expected form['token'] == 'secret', got {!r}".format(form.get("token"))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_request_form_extracts_multipart_form_fields():
+    boundary = "----WebworksRequestTestBoundary"
+    body_lines = [
+        b"--" + boundary.encode("latin-1"),
+        b'Content-Disposition: form-data; name="package"',
+        b"",
+        b"examplepkg",
+        b"--" + boundary.encode("latin-1"),
+        b'Content-Disposition: form-data; name=":action"',
+        b"",
+        b"file_upload",
+        b"--" + boundary.encode("latin-1") + b"--",
+        b"",
+    ]
+    body = b"\r\n".join(body_lines)
+
+    request = Request(
+        method="POST",
+        path="/repository/legacy",
+        headers={"Content-Type": "multipart/form-data; boundary=" + boundary},
+        body=body,
+    )
+
+    form = request.form()
+
+    if form.get("package") != "examplepkg":
+        errmsg = "Expected form['package'] == 'examplepkg', got {!r}".format(form.get("package"))
+        raise AssertionError(errmsg)
+
+    if form.get(":action") != "file_upload":
+        errmsg = "Expected form[':action'] == 'file_upload'"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_request_files_returns_uploaded_file():
+    boundary = "----WebworksRequestFileBoundary"
+    file_bytes = b"binary\x00content here"
+
+    body_lines = [
+        b"--" + boundary.encode("latin-1"),
+        b'Content-Disposition: form-data; name="content"; filename="payload.bin"',
+        b"Content-Type: application/octet-stream",
+        b"",
+        file_bytes,
+        b"--" + boundary.encode("latin-1") + b"--",
+        b"",
+    ]
+    body = b"\r\n".join(body_lines)
+
+    request = Request(
+        method="POST",
+        path="/upload",
+        headers={"Content-Type": "multipart/form-data; boundary=" + boundary},
+        body=body,
+    )
+
+    files = request.files()
+
+    upload = files.get("content")
+    if upload is None:
+        errmsg = "Expected request.files() to surface the uploaded part"
+        raise AssertionError(errmsg)
+
+    if upload.filename != "payload.bin":
+        errmsg = "Expected filename 'payload.bin', got {!r}".format(upload.filename)
+        raise AssertionError(errmsg)
+
+    if upload.content != file_bytes:
+        errmsg = "Expected file bytes round-trip"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_request_files_returns_empty_dict_for_non_multipart_request():
+    request = Request(
+        method="POST",
+        path="/",
+        headers={"Content-Type": "application/json"},
+        body=b'{"foo": "bar"}',
+    )
+
+    files = request.files()
+
+    if files != {}:
+        errmsg = "Expected empty dict for non-multipart request, got {!r}".format(files)
+        raise AssertionError(errmsg)
+
+    return
