@@ -614,25 +614,56 @@ class SecurityBlueprint(RestBlueprint):
             for attr_name in list(vars(klass)):
                 obj = vars(klass).get(attr_name)
 
-                # Unwrap classmethod / staticmethod wrappers
-                handler = obj
-                if isinstance(handler, classmethod):
-                    handler = handler.__func__
+                # The underlying function is where ``attach_at``
+                # stashes its metadata marker; we read the metadata
+                # from there. ``staticmethod`` / ``classmethod``
+                # wrappers store the function on ``__func__``;
+                # plain functions are themselves the underlying.
+                if isinstance(obj, (classmethod, staticmethod)):
+                    underlying = obj.__func__
+                else:
+                    underlying = obj
 
-                if not callable(handler):
+                if not callable(underlying):
                     continue
 
-                meta = getattr(handler, _ENDPOINT_META_ATTR, None)
+                meta = getattr(underlying, _ENDPOINT_META_ATTR, None)
                 if meta is None:
                     continue
 
-                # Avoid duplicates when a subclass overrides a parent method
-                handler_id = id(handler)
+                # Avoid duplicates when a subclass overrides a parent
+                # method (de-dup on the underlying function so a
+                # bound-method instance per access doesn't fool us).
+                handler_id = id(underlying)
                 if handler_id in seen_handlers:
                     continue
                 seen_handlers.add(handler_id)
 
-                descriptor = cls._build_descriptor(handler, meta, base)
+                # Resolve the bound form so the request dispatcher
+                # can call ``descriptor.handler(request)`` directly:
+                #
+                # * ``classmethod`` ⇒ bound method that injects the
+                #   *most-derived* subclass as the first argument
+                #   (so site-supplied collaborators on the subclass
+                #   are visible inside the handler — anchoring to the
+                #   ``klass`` we found the method on would freeze
+                #   ``cls`` at the ancestor that *defined* the
+                #   method, hiding subclass overrides).
+                # * ``staticmethod`` ⇒ unwrapped function (no
+                #   implicit ``self`` / ``cls`` to thread).
+                # * plain function ⇒ the function itself.
+                #
+                # Using ``getattr(cls, attr_name)`` triggers Python's
+                # descriptor binding, which produces the right
+                # shape for each case without us reproducing the
+                # binding rules by hand.
+                bound_handler = getattr(cls, attr_name)
+
+                descriptor = cls._build_descriptor(
+                    bound_handler,
+                    meta,
+                    base,
+                )
                 descriptors.append(descriptor)
 
         # Add to router if provided

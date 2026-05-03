@@ -72,6 +72,7 @@ __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
 
+import json
 import logging
 
 from dataclasses import dataclass
@@ -92,6 +93,7 @@ from automojo.webworks.authentication.oauth import (
     generate_oauth_state,
 )
 from automojo.webworks.endpoints.doc import Doc
+from automojo.webworks.routing.response import Response
 
 
 logger = logging.getLogger(__name__)
@@ -601,25 +603,31 @@ class OAuthClientBlueprint(SecurityBlueprint):
         cls,
         location: str,
         set_cookies: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
+    ) -> Response:
         """
-            Build a 302 redirect response dictionary.
+            Build a 302 redirect :class:`Response`.
+
+            Returns a real :class:`Response` (not a dict) so the
+            webworks request dispatcher can pass it through unchanged
+            — dict-shape returns get JSON-serialised by
+            ``Dispatcher.dispatch`` and lose their status / headers.
 
             Multiple ``Set-Cookie`` headers are joined with ``\\r\\n``
-            because most ASGI adapters accept a single string
-            containing multiple cookies separated that way and
-            convert it to two distinct ``set-cookie`` headers on the
-            wire. The blueprint emits at most two cookies
-            simultaneously (the new session cookie and the OAuth
-            state-clear cookie on the callback success path).
+            because the underlying :class:`Response` exposes a
+            ``Dict[str, str]`` header surface; the joining string is
+            recognised by most ASGI adapters as the boundary between
+            distinct ``Set-Cookie`` lines on the wire. The blueprint
+            emits at most two cookies simultaneously (the new session
+            cookie and the OAuth state-clear cookie on the callback
+            success path).
 
             :param location: The URL to redirect to.
             :param set_cookies: Optional list of ``Set-Cookie``
                                 header values.
 
-            :returns: A response dictionary with ``status``,
-                      ``body``, ``content_type`` and ``headers``
-                      keys.
+            :returns: A 302 :class:`Response` with the supplied
+                      ``Location`` header (and joined ``Set-Cookie``
+                      lines when provided).
         """
         headers: Dict[str, str] = {"Location": location}
 
@@ -632,12 +640,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
             if len(non_empty) > 0:
                 headers["Set-Cookie"] = "\r\n".join(non_empty)
 
-        response = {
-            "status": 302,
-            "body": b"",
-            "content_type": "text/html; charset=utf-8",
-            "headers": headers,
-        }
+        response = Response(status_code=302, headers=headers, body=b"")
         return response
 
     @classmethod
@@ -646,7 +649,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
         error_code: str,
         extra_query: Optional[Dict[str, str]] = None,
         set_cookies: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
+    ) -> Response:
         """
             Build a 302 redirect to :attr:`error_redirect_url` with
             ``?error=<code>`` and optional additional query
@@ -654,13 +657,13 @@ class OAuthClientBlueprint(SecurityBlueprint):
 
             :param error_code: Short, URL-safe error code.
             :param extra_query: Additional query parameters to merge.
-            :param set_cookies: Optional ``Set-Cookie`` header
-                                values to attach (e.g. the
-                                state-clear cookie when the error
-                                arises after the callback has
-                                already validated state).
+            :param set_cookies: Optional ``Set-Cookie`` header values
+                                to attach (e.g. the state-clear
+                                cookie when the error arises after
+                                the callback has already validated
+                                state).
 
-            :returns: A redirect response dictionary.
+            :returns: A redirect :class:`Response`.
         """
         params: Dict[str, str] = {"error": str(error_code)}
         if extra_query is not None:
@@ -684,22 +687,92 @@ class OAuthClientBlueprint(SecurityBlueprint):
         return rtnval
 
     @classmethod
-    def _build_disabled_response(cls, endpoint_name: str) -> Dict[str, Any]:
+    def _build_disabled_response(cls, endpoint_name: str) -> Response:
         """
-            Build the 404 response returned when an endpoint is
-            disabled via ``enabled_endpoints``.
+            Build the 404 :class:`Response` returned when an endpoint
+            is disabled via ``enabled_endpoints``.
 
             :param endpoint_name: Endpoint identifier used in the
                                   error description.
 
-            :returns: A 404 ``AuthError`` response dictionary.
+            :returns: A 404 :class:`Response` with a JSON body
+                      carrying an ``endpoint_disabled``
+                      :class:`AuthError`.
         """
         error = AuthError(
             error="endpoint_disabled",
             error_description="OAuth {} endpoint is disabled".format(endpoint_name),
         )
-        rtnval = cls.format_error(error, status_code=404)
+        rtnval = cls._build_auth_error_response(
+            error=error,
+            status_code=404,
+        )
         return rtnval
+
+    @classmethod
+    def _build_auth_error_response(
+        cls,
+        error: AuthError,
+        status_code: int,
+    ) -> Response:
+        """
+            Build a JSON :class:`Response` carrying an
+            :class:`AuthError` body.
+
+            Replaces the dict-form return that
+            :meth:`SecurityBlueprint.format_error` produces, which
+            does not survive the request dispatcher (the dispatcher
+            wraps non-Response returns in ``JSONResponse`` and
+            ignores the ``status`` key).
+
+            :param error: The :class:`AuthError` to surface.
+            :param status_code: HTTP status code.
+
+            :returns: A :class:`Response` with a JSON body and the
+                      requested status code.
+        """
+        body_bytes = json.dumps(error.to_dict()).encode("utf-8")
+
+        headers: Dict[str, str] = {
+            "Content-Type": "application/json; charset=utf-8",
+        }
+
+        response = Response(
+            status_code=status_code,
+            headers=headers,
+            body=body_bytes,
+        )
+        return response
+
+    @classmethod
+    def _build_json_response(
+        cls,
+        body: Any,
+        status_code: int,
+    ) -> Response:
+        """
+            Build a JSON :class:`Response` for handlers that emit
+            structured JSON bodies (the ``register`` endpoint).
+
+            :param body: JSON-serialisable Python object.
+            :param status_code: HTTP status code.
+
+            :returns: A :class:`Response` with the body
+                      JSON-serialised and a
+                      ``Content-Type: application/json`` header.
+        """
+        body_bytes = json.dumps(body).encode("utf-8")
+
+        headers: Dict[str, str] = {
+            "Content-Type": "application/json; charset=utf-8",
+        }
+
+        response = Response(
+            status_code=status_code,
+            headers=headers,
+            body=body_bytes,
+        )
+        return response
 
     # --------------------------------------------------------------
     # Provider lookup and extras.
@@ -843,7 +916,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
 
         pre_error = cls.pre_authenticate(request)
         if pre_error is not None:
-            response = cls.format_error(pre_error)
+            response = cls._build_auth_error_response(error=pre_error, status_code=401)
             return response
 
         if cls.state_cookie_secret_resolver is None:
@@ -1000,7 +1073,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
 
         pre_error = cls.pre_authenticate(request)
         if pre_error is not None:
-            response = cls.format_error(pre_error)
+            response = cls._build_auth_error_response(error=pre_error, status_code=401)
             return response
 
         body = cls._read_request_body(request)
@@ -1013,11 +1086,10 @@ class OAuthClientBlueprint(SecurityBlueprint):
         )
 
         if captcha_token == "":
-            response = {
-                "status": 400,
-                "body": {"success": False, "error": "missing_captcha"},
-                "content_type": "application/json",
-            }
+            response = cls._build_json_response(
+                body={"success": False, "error": "missing_captcha"},
+                status_code=400,
+            )
             return response
 
         if cls.captcha_verifier is not None:
@@ -1028,11 +1100,10 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 captcha_ok = False
 
             if not captcha_ok:
-                response = {
-                    "status": 400,
-                    "body": {"success": False, "error": "captcha_failed"},
-                    "content_type": "application/json",
-                }
+                response = cls._build_json_response(
+                    body={"success": False, "error": "captcha_failed"},
+                    status_code=400,
+                )
                 return response
 
         provider_name = str(body.get("provider") or "").strip()
@@ -1045,11 +1116,10 @@ class OAuthClientBlueprint(SecurityBlueprint):
             urlencode({"provider": provider_name, "register": "1"}),
         )
 
-        response = {
-            "status": 200,
-            "body": {"success": True, "redirect_url": redirect_url},
-            "content_type": "application/json",
-        }
+        response = cls._build_json_response(
+            body={"success": True, "redirect_url": redirect_url},
+            status_code=200,
+        )
         return response
 
     # --------------------------------------------------------------
@@ -1094,7 +1164,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
 
         pre_error = cls.pre_authenticate(request)
         if pre_error is not None:
-            response = cls.format_error(pre_error)
+            response = cls._build_auth_error_response(error=pre_error, status_code=401)
             return response
 
         provider_error = cls._read_query_param(request, "error")
