@@ -27,18 +27,32 @@
 
 from typing import Any, Dict, Iterator, Optional
 
+from automojo.webworks.routing.response import Response
 from automojo.webworks.templating.renderer import TemplateRenderer
 
 
-class TemplateResponse:
+class TemplateResponse(Response):
     """
         HTTP response containing a rendered template body.
-        
-        This is a lightweight response class that holds the rendered
-        template output along with HTTP metadata such as status code,
-        content type, and headers. It does not depend on any external
-        web framework, making it suitable for use as a library component.
-        
+
+        Subclass of :class:`automojo.webworks.routing.response.Response`
+        so the routing dispatcher and ASGI / WSGI senders recognise
+        rendered-template responses as the same kind of object as
+        every other framework response — no parallel hierarchy, no
+        type-list maintenance.
+
+        The body is stored as ``str`` rather than ``bytes`` because
+        templates always render to text. The ASGI ``ResponseSender``
+        and the WSGI response builder both duck-type ``str`` /
+        ``bytes`` body content and encode as UTF-8 on the wire.
+
+        Construction matches the historical signature
+        (``body, status_code, content_type, headers``) so existing
+        callers continue to work unchanged. ``content_type`` is
+        merged into the headers dict (and remains accessible via the
+        :attr:`content_type` property) so the on-the-wire response
+        carries the correct ``Content-Type`` header.
+
         :param body: The rendered template content as a string.
         :param status_code: The HTTP status code for the response.
         :param content_type: The Content-Type header value.
@@ -54,60 +68,55 @@ class TemplateResponse:
     ) -> None:
         """
             Construct a TemplateResponse.
-            
+
             :param body: The rendered template content as a string.
             :param status_code: The HTTP status code for the response.
             :param content_type: The Content-Type header value.
             :param headers: Optional dictionary of additional HTTP headers.
         """
-        self._body = body
-        self._status_code = status_code
-        self._content_type = content_type
-        self._headers: Dict[str, str] = {}
-        
-        # Always set Content-Type in headers
-        self._headers["Content-Type"] = content_type
-        
+        merged_headers: Dict[str, str] = {"Content-Type": content_type}
         if headers is not None:
-            self._headers.update(headers)
-        
+            merged_headers.update(headers)
+
+        super().__init__(
+            status_code=status_code,
+            headers=merged_headers,
+            body=body,
+        )
+
+        # Surface ``content_type`` separately so callers can read the
+        # value without re-parsing the headers dict. The
+        # ``Content-Type`` entry in the inherited ``self._headers`` is
+        # the source of truth on the wire.
+        self._content_type = content_type
         return
-    
-    @property
-    def body(self) -> str:
-        """
-            Get the rendered template body.
-            
-            :returns: The rendered template content as a string.
-        """
-        return self._body
-    
-    @property
-    def status_code(self) -> int:
-        """
-            Get the HTTP status code.
-            
-            :returns: The HTTP status code for this response.
-        """
-        return self._status_code
-    
+
     @property
     def content_type(self) -> str:
         """
             Get the Content-Type header value.
-            
+
             :returns: The Content-Type header value.
         """
-        return self._content_type
-    
+        rtnval = self._content_type
+        return rtnval
+
     @property
     def headers(self) -> Dict[str, str]:
         """
-            Get the response headers.
-            
+            Get the response headers as a fresh copy.
+
+            Overrides the base :class:`Response.headers` (which returns
+            the internal dict by reference) to preserve the
+            copy-on-read contract :class:`TemplateResponse` has shipped
+            with since it was a standalone class. Templating callers
+            occasionally mutate the dict they get back here; the copy
+            isolates that mutation from the response's internal state.
+
             :returns: A copy of the response headers dictionary.
         """
-        return dict(self._headers)
+        rtnval = dict(self._headers)
+        return rtnval
 
 
 class StreamingTemplateResponse:

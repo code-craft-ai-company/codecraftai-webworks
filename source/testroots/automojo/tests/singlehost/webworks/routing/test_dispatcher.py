@@ -1006,3 +1006,81 @@ def test_property_dispatcher_debug_mode_hides_details():
     
     return
 
+
+
+# =============================================================================
+# Regression: handlers returning TemplateResponse
+# =============================================================================
+#
+# Before :class:`TemplateResponse` inherited from :class:`Response`, the
+# dispatcher's ``handler_wrapper`` did ``isinstance(result, Response)``
+# and fell through to ``JSONResponse(result)`` for any other type.
+# ``TemplateResponse`` was a standalone class with the same duck-typed
+# ``status_code`` / ``headers`` / ``body`` shape but no shared base.
+# The wrapper hit ``JSONResponse(template_response)``, JSON
+# serialisation raised, the dispatcher's outer ``except Exception``
+# swallowed it, and clients got the generic 500 — silent in
+# production because ``debug=False`` suppresses the traceback.
+#
+# Making ``TemplateResponse`` a ``Response`` subclass restores the
+# isinstance check; the dispatcher needs no changes. This test
+# locks in that contract: handlers can return a TemplateResponse
+# and the dispatcher round-trips it verbatim.
+
+
+def test_dispatch_handler_returns_template_response():
+    """
+        Handlers returning :class:`TemplateResponse` flow through the
+        dispatcher unchanged (no JSONResponse wrap, no 500).
+    """
+    from automojo.webworks.templating.response import TemplateResponse
+
+    def template_handler(request):
+        return TemplateResponse(
+            body="<h1>Hello</h1>",
+            status_code=200,
+            content_type="text/html; charset=utf-8",
+        )
+
+    router = Router()
+    descriptor = create_test_descriptor("/page", ["GET"], template_handler)
+    router.add_endpoint(descriptor)
+
+    dispatcher = Dispatcher(router)
+
+    request = Request(method="GET", path="/page")
+    response = dispatcher.dispatch(request)
+
+    if not isinstance(response, TemplateResponse):
+        errmsg = "Expected TemplateResponse to flow through verbatim, got {!r}".format(
+            type(response).__name__
+        )
+        raise AssertionError(errmsg)
+
+    # The whole point of the inheritance fix: TemplateResponse must
+    # also satisfy the base ``Response`` isinstance check that the
+    # dispatcher uses today.
+    if not isinstance(response, Response):
+        errmsg = (
+            "TemplateResponse must inherit from Response so the "
+            "dispatcher's existing isinstance(result, Response) check "
+            "recognises it"
+        )
+        raise AssertionError(errmsg)
+
+    if response.status_code != 200:
+        errmsg = "Expected 200, got {}".format(response.status_code)
+        raise AssertionError(errmsg)
+
+    if response.body != "<h1>Hello</h1>":
+        errmsg = "Expected body to round-trip, got {!r}".format(response.body)
+        raise AssertionError(errmsg)
+
+    if response.headers.get("Content-Type") != "text/html; charset=utf-8":
+        errmsg = (
+            "Expected Content-Type header to be set from constructor "
+            "argument, got {!r}".format(response.headers.get("Content-Type"))
+        )
+        raise AssertionError(errmsg)
+
+    return
