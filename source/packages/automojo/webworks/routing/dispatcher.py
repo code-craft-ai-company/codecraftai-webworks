@@ -31,6 +31,19 @@ from automojo.webworks.routing.response import (
 from automojo.webworks.routing.router import Router, RouteMatch
 from automojo.webworks.routing.middleware import MiddlewarePipeline
 from automojo.webworks.routing.exceptions import HTTPException, MethodNotAllowed, NotFound
+from automojo.webworks.templating.response import (
+    StreamingTemplateResponse,
+    TemplateResponse,
+)
+
+
+# Response shapes the dispatcher accepts back from a handler. Each
+# carries the ``status_code`` / ``headers`` / ``body`` triple the
+# ASGI :class:`automojo.webworks.asgi.responsesender.ResponseSender`
+# duck-types over, so any of them flow through the rest of the
+# pipeline unchanged. Anything else returned by a handler is
+# wrapped in :class:`JSONResponse`.
+_RESPONSE_TYPES = (Response, TemplateResponse, StreamingTemplateResponse)
 
 
 class Dispatcher:
@@ -172,10 +185,11 @@ class Dispatcher:
             def handler_wrapper(req: Request) -> Response:
                 try:
                     result = match.handler(req)
-                    # If handler returns a Response, use it directly
-                    if isinstance(result, Response):
+                    # If handler returns a known response shape (Response,
+                    # TemplateResponse, StreamingTemplateResponse), use it
+                    # directly. Anything else is wrapped in JSONResponse.
+                    if isinstance(result, _RESPONSE_TYPES):
                         return result
-                    # If handler returns something else, wrap it in JSONResponse
                     return JSONResponse(result)
                 except HTTPException as exc:
                     return self._handle_http_exception(exc)
@@ -228,10 +242,11 @@ class Dispatcher:
                     import asyncio
                     if asyncio.iscoroutine(result):
                         result = await result
-                    # If handler returns a Response, use it directly
-                    if isinstance(result, Response):
+                    # If handler returns a known response shape (Response,
+                    # TemplateResponse, StreamingTemplateResponse), use it
+                    # directly. Anything else is wrapped in JSONResponse.
+                    if isinstance(result, _RESPONSE_TYPES):
                         return result
-                    # If handler returns something else, wrap it in JSONResponse
                     return JSONResponse(result)
                 except HTTPException as exc:
                     return self._handle_http_exception(exc)

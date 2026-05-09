@@ -1006,3 +1006,100 @@ def test_property_dispatcher_debug_mode_hides_details():
     
     return
 
+
+
+# =============================================================================
+# Regression: handlers returning TemplateResponse / StreamingTemplateResponse
+# =============================================================================
+#
+# Before the dispatcher accepted these types, handlers that returned a
+# rendered template (the canonical webworks pattern for HTML pages)
+# silently produced 500s in production. The dispatcher's
+# ``handler_wrapper`` did ``isinstance(result, Response)``, which is False
+# for ``TemplateResponse`` (a parallel hierarchy with the same duck-typed
+# shape but no shared base class). The wrapper then fell through to
+# ``JSONResponse(result)``, which raised at JSON serialisation, the
+# dispatcher's outer ``except Exception`` swallowed it, and the client
+# got "Internal Server Error". The ASGI ``ResponseSender`` already
+# duck-types these — only the dispatcher's isinstance check stood in
+# the way.
+
+
+def test_dispatch_handler_returns_template_response():
+    """
+        Handlers returning :class:`TemplateResponse` flow through the
+        dispatcher unchanged (no JSONResponse wrap, no 500).
+    """
+    from automojo.webworks.templating.response import TemplateResponse
+
+    def template_handler(request):
+        return TemplateResponse(
+            body="<h1>Hello</h1>",
+            status_code=200,
+            content_type="text/html; charset=utf-8",
+        )
+
+    router = Router()
+    descriptor = create_test_descriptor("/page", ["GET"], template_handler)
+    router.add_endpoint(descriptor)
+
+    dispatcher = Dispatcher(router)
+
+    request = Request(method="GET", path="/page")
+    response = dispatcher.dispatch(request)
+
+    if not isinstance(response, TemplateResponse):
+        errmsg = "Expected TemplateResponse to flow through verbatim, got {!r}".format(
+            type(response).__name__
+        )
+        raise AssertionError(errmsg)
+
+    if response.status_code != 200:
+        errmsg = "Expected 200, got {}".format(response.status_code)
+        raise AssertionError(errmsg)
+
+    if response.body != "<h1>Hello</h1>":
+        errmsg = "Expected body to round-trip, got {!r}".format(response.body)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_dispatch_handler_returns_streaming_template_response():
+    """
+        Handlers returning :class:`StreamingTemplateResponse` also flow
+        through unchanged.
+    """
+    from automojo.webworks.templating.response import StreamingTemplateResponse
+
+    def streaming_handler(request):
+        def chunks():
+            yield "<h1>"
+            yield "Hello"
+            yield "</h1>"
+        return StreamingTemplateResponse(
+            body_iterator=chunks(),
+            status_code=200,
+            content_type="text/html; charset=utf-8",
+        )
+
+    router = Router()
+    descriptor = create_test_descriptor("/stream", ["GET"], streaming_handler)
+    router.add_endpoint(descriptor)
+
+    dispatcher = Dispatcher(router)
+
+    request = Request(method="GET", path="/stream")
+    response = dispatcher.dispatch(request)
+
+    if not isinstance(response, StreamingTemplateResponse):
+        errmsg = "Expected StreamingTemplateResponse, got {!r}".format(
+            type(response).__name__
+        )
+        raise AssertionError(errmsg)
+
+    if response.status_code != 200:
+        errmsg = "Expected 200, got {}".format(response.status_code)
+        raise AssertionError(errmsg)
+
+    return
