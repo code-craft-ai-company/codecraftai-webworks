@@ -43,7 +43,7 @@ __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
+from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from automojo.webworks.security.securitycontext import SecurityContext
 
@@ -98,6 +98,20 @@ class AccessPolicy:
             Callers should treat this as read-only to preserve the immutability
             intent of the policy.
     """
+
+    # Class-level convention. When set to a non-empty role name, any
+    # principal whose roles set contains that name satisfies
+    # :meth:`check_roles` regardless of the policy's ``roles`` tuple.
+    # The default ``None`` preserves the strict-intersection
+    # behaviour for sites that don't use a "do-everything" role.
+    # Sites opt in by assigning the class attribute at boot, e.g.::
+    #
+    #     from automojo.webworks.security.accesspolicy import AccessPolicy
+    #     AccessPolicy.SUPERUSER_ROLE_NAME = "superuser"
+    #
+    # The check is purely additive — no existing behaviour changes
+    # for sites that leave it unset.
+    SUPERUSER_ROLE_NAME: ClassVar[Optional[str]] = None
 
     roles: Tuple[str, ...] = field(default_factory=tuple)
     scopes: Tuple[str, ...] = field(default_factory=tuple)
@@ -326,6 +340,15 @@ class AccessPolicy:
             return False
 
         principal_roles = set(context.principal.roles)
+
+        # Optional class-level "do everything" role. When the site
+        # has opted in via :data:`SUPERUSER_ROLE_NAME`, a principal
+        # carrying that role satisfies any role-required policy.
+        # See the class docstring for the convention.
+        superuser_role = type(self).SUPERUSER_ROLE_NAME
+        if superuser_role is not None and superuser_role in principal_roles:
+            return True
+
         required_roles = set(self.roles)
 
         rtnval = len(principal_roles.intersection(required_roles)) > 0
