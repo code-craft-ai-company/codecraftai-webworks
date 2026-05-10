@@ -13,10 +13,19 @@ __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
 import dataclasses
+import logging
+
 from typing import Any, Dict, List, Optional, Type, get_type_hints, get_origin, get_args, Union
 
 from automojo.webworks.endpoints.rest.exceptions import ValidationError
 from automojo.webworks.endpoints.rest.models import FieldError
+
+
+# Module-level logger. ``get_type_hints`` can fail on schemas that
+# reference forward strings whose modules failed to import — falling
+# back to an empty dict keeps validation moving but the operator
+# wants the breadcrumb so a chronically-broken schema is visible.
+logger = logging.getLogger(__name__)
 
 
 def _is_dataclass_type(obj_type: Type) -> bool:
@@ -339,7 +348,12 @@ class Validator:
         # Try to get type hints for better type checking
         try:
             type_hints = get_type_hints(schema)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Validator: get_type_hints(%s) failed (%s); falling back to dc_field.type",
+                getattr(schema, "__name__", schema),
+                exc,
+            )
             type_hints = {}
         
         for dc_field in fields:

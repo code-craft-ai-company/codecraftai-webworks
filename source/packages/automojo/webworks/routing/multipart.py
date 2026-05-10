@@ -39,6 +39,7 @@ __copyright__ = "Copyright 2026, Automation Mojo LLC"
 __credits__ = []
 
 
+import logging
 import os
 import re
 import unicodedata
@@ -47,6 +48,14 @@ from dataclasses import dataclass, field
 from email.parser import BytesParser
 from email.policy import default as _default_email_policy
 from typing import Dict, List, Optional, Tuple
+
+
+# Module-level logger. ``parse_multipart`` returns an empty result
+# rather than raising on parser failure (so a malformed upload
+# becomes "no fields" instead of a 500), but the operator wants the
+# breadcrumb in the journal so a sudden surge of empty parses isn't
+# silently shrugged off as "the client sent nothing".
+logger = logging.getLogger(__name__)
 
 
 # Characters allowed in a "safe" filename. Everything else is
@@ -319,7 +328,12 @@ def parse_multipart(
 
     try:
         message = BytesParser(policy=_default_email_policy).parsebytes(message_bytes)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "parse_multipart: BytesParser failed (boundary=%r): %s",
+            boundary,
+            exc,
+        )
         return MultipartResult()
 
     if not message.is_multipart():

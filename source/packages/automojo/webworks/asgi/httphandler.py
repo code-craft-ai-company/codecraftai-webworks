@@ -7,7 +7,9 @@
 """
 
 import asyncio
+import logging
 import traceback
+
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from automojo.webworks.asgi.scopeparser import ScopeParser
@@ -28,6 +30,12 @@ from automojo.webworks.asgi.exceptions import (
 )
 from automojo.webworks.routing.request import Request
 from automojo.webworks.wsgi.response import Response
+
+
+# Module-level logger. The ASGI HTTP handler turns unhandled
+# exceptions into 500 responses; without this the operator only
+# sees the wire response and loses the underlying traceback.
+logger = logging.getLogger(__name__)
 
 
 # Type aliases for clarity
@@ -185,25 +193,47 @@ class HTTPHandler:
             return
         
         except RequestEntityTooLarge as err:
-            # Send 413 response
+            # Send 413 response. Log at warning so an operator can
+            # see a sustained surge of oversize uploads without
+            # dropping into the 500 catch-all branch.
+            logger.warning(
+                "ASGI HTTP handler: 413 for %s %s: %s",
+                scope.get("method", "?"),
+                scope.get("path", "?"),
+                err,
+            )
             response = self._create_error_response(
                 status_code=413,
                 message="Request Entity Too Large",
                 detail=str(err) if self._debug else None,
             )
             await self._response_sender.send(send, response)
-        
+
         except BadRequestBody as err:
-            # Send 400 response
+            # Send 400 response. The wire body is generic when debug
+            # is off — log so the operator can correlate a 400 with
+            # the underlying parse failure.
+            logger.warning(
+                "ASGI HTTP handler: 400 for %s %s: %s",
+                scope.get("method", "?"),
+                scope.get("path", "?"),
+                err,
+            )
             response = self._create_error_response(
                 status_code=400,
                 message="Bad Request",
                 detail=str(err) if self._debug else None,
             )
             await self._response_sender.send(send, response)
-        
+
         except asyncio.TimeoutError:
-            # Send 504 response for timeout
+            # Send 504 response for timeout. Log so a recurring
+            # timeout pattern is visible in the journal.
+            logger.warning(
+                "ASGI HTTP handler: 504 timeout for %s %s",
+                scope.get("method", "?"),
+                scope.get("path", "?"),
+            )
             response = self._create_error_response(
                 status_code=504,
                 message="Gateway Timeout",
@@ -212,11 +242,20 @@ class HTTPHandler:
             await self._response_sender.send(send, response)
         
         except Exception as err:
-            # Send 500 response for unhandled exceptions
+            # Send 500 response for unhandled exceptions. Log
+            # unconditionally so the operator sees the traceback in
+            # the journal even when ``_debug`` is off and the wire
+            # response carries only the generic message.
+            logger.exception(
+                "ASGI HTTP handler: unhandled %s for %s %s",
+                type(err).__name__,
+                scope.get("method", "?"),
+                scope.get("path", "?"),
+            )
             detail: Optional[str] = None
             if self._debug:
                 detail = f"{type(err).__name__}: {err}\n{traceback.format_exc()}"
-            
+
             response = self._create_error_response(
                 status_code=500,
                 message="Internal Server Error",

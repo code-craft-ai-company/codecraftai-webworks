@@ -17,7 +17,9 @@ __credits__ = []
 
 import configparser
 import json
+import logging
 import os
+
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
@@ -27,6 +29,13 @@ from automojo.webworks.configuration.exceptions import (
     ConfigurationError,
     ConfigurationFileNotFoundError
 )
+
+
+# Module-level logger. Source loaders translate parser exceptions
+# into ``ConfigurationError`` for the caller, but the operator wants
+# the journal to carry the original parse failure so a malformed
+# YAML / TOML / INI file is debuggable without re-running the load.
+logger = logging.getLogger(__name__)
 
 
 class ConfigSource(ABC):
@@ -342,7 +351,8 @@ class IniLoader(ConfigLoader):
         try:
             parser.read_string(content)
         except configparser.Error as e:
-            raise ConfigurationError(f"Failed to parse INI content: {e}")
+            logger.warning("INI loader: parse failure: %s", e)
+            raise ConfigurationError(f"Failed to parse INI content: {e}") from e
         
         result: Dict[str, Any] = {}
         
@@ -522,7 +532,8 @@ class YamlLoader(ConfigLoader):
         try:
             data = yaml.safe_load(content)
         except yaml.YAMLError as e:
-            raise ConfigurationError(f"Failed to parse YAML content: {e}")
+            logger.warning("YAML loader: parse failure: %s", e)
+            raise ConfigurationError(f"Failed to parse YAML content: {e}") from e
         
         if data is None:
             return {}
@@ -550,7 +561,8 @@ class YamlLoader(ConfigLoader):
             nested = _unflatten_dict(data)
             return yaml.safe_dump(nested, default_flow_style=False)
         except yaml.YAMLError as e:
-            raise ConfigurationError(f"Failed to serialize to YAML: {e}")
+            logger.warning("YAML loader: serialization failure: %s", e)
+            raise ConfigurationError(f"Failed to serialize to YAML: {e}") from e
 
 
 class JsonLoader(ConfigLoader):
@@ -596,7 +608,8 @@ class JsonLoader(ConfigLoader):
         try:
             data = json.loads(content)
         except json.JSONDecodeError as e:
-            raise ConfigurationError(f"Failed to parse JSON content: {e}")
+            logger.warning("JSON loader: parse failure: %s", e)
+            raise ConfigurationError(f"Failed to parse JSON content: {e}") from e
         
         if not isinstance(data, dict):
             raise ConfigurationError(
@@ -621,7 +634,8 @@ class JsonLoader(ConfigLoader):
             nested = _unflatten_dict(data)
             return json.dumps(nested, indent=2)
         except (TypeError, ValueError) as e:
-            raise ConfigurationError(f"Failed to serialize to JSON: {e}")
+            logger.warning("JSON loader: serialization failure: %s", e)
+            raise ConfigurationError(f"Failed to serialize to JSON: {e}") from e
 
 
 # Try to import tomllib (Python 3.11+) or tomli as fallback
@@ -706,7 +720,8 @@ class TomlLoader(ConfigLoader):
             else:
                 data = tomllib.loads(content)
         except Exception as e:
-            raise ConfigurationError(f"Failed to parse TOML content: {e}")
+            logger.warning("TOML loader: parse failure: %s", e)
+            raise ConfigurationError(f"Failed to parse TOML content: {e}") from e
         
         return _flatten_dict(data)
     
@@ -731,7 +746,8 @@ class TomlLoader(ConfigLoader):
             nested = _unflatten_dict(data)
             return tomli_w.dumps(nested)
         except Exception as e:
-            raise ConfigurationError(f"Failed to serialize to TOML: {e}")
+            logger.warning("TOML loader: serialization failure: %s", e)
+            raise ConfigurationError(f"Failed to serialize to TOML: {e}") from e
 
 
 # Mapping of file extensions to loader classes
@@ -1206,7 +1222,10 @@ class SecretsProvider(ConfigSource):
         try:
             return json.loads(decrypted_content)
         except json.JSONDecodeError as e:
-            raise ConfigurationError(f"Failed to parse secrets file: {e}")
+            logger.warning(
+                "SecretsProvider: decrypted secrets payload is not valid JSON: %s", e
+            )
+            raise ConfigurationError(f"Failed to parse secrets file: {e}") from e
     
     def load(self) -> Dict[str, Any]:
         """
@@ -1382,7 +1401,11 @@ class SecretsProvider(ConfigSource):
             
             return plaintext.decode('utf-8')
         except Exception as e:
-            raise ConfigurationError(f"Failed to decrypt secrets: {e}")
+            logger.warning(
+                "SecretsProvider: decryption failed (%s); raising ConfigurationError",
+                type(e).__name__,
+            )
+            raise ConfigurationError(f"Failed to decrypt secrets: {e}") from e
     
     def _derive_key(self, password: bytes, salt: bytes) -> bytes:
         """

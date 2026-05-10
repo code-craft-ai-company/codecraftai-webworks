@@ -7,6 +7,7 @@
 """
 
 import json
+import logging
 from http.cookies import SimpleCookie
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlencode
@@ -23,6 +24,14 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from automojo.webworks.routing.middlewarecontext import MiddlewareContext
     from automojo.webworks.routing.multipart import UploadedFile
+
+
+# Module-level logger. Body parsing, cookie parsing, and port
+# coercion failures are all swallowed by the Request class to keep
+# the request handler from blowing up on malformed input — but the
+# operator still wants the breadcrumb in the journal so a sudden
+# spike of unparseable cookies / Content-Length values is visible.
+logger = logging.getLogger(__name__)
 
 
 class Request:
@@ -123,13 +132,29 @@ class Request:
                 try:
                     content_length = int(content_length_str)
                     body = wsgi_input.read(content_length)
-                except (ValueError, TypeError):
+                except (ValueError, TypeError) as exc:
+                    # Bad Content-Length — fall back to a full read so
+                    # the handler still sees the body, but the
+                    # operator gets a breadcrumb pointing at the
+                    # malformed header.
+                    logger.warning(
+                        "Request.from_wsgi: invalid CONTENT_LENGTH=%r (%s); "
+                        "falling back to full wsgi.input read",
+                        content_length_str,
+                        exc,
+                    )
                     body = wsgi_input.read()
             else:
                 # Try to read without content length
                 try:
                     body = wsgi_input.read()
-                except Exception:
+                except Exception as exc:
+                    # wsgi.input may have been exhausted or closed by
+                    # an upstream component; emit a warning so a
+                    # silently-empty body stops being mysterious.
+                    logger.warning(
+                        "Request.from_wsgi: failed to read wsgi.input: %s", exc
+                    )
                     body = b""
         
         # Extract scheme
@@ -140,7 +165,15 @@ class Request:
         port_str = environ.get("SERVER_PORT", "80")
         try:
             port = int(port_str)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError) as exc:
+            # SERVER_PORT was non-integer — defaulting to 80 keeps
+            # the request usable but the operator should know the
+            # WSGI environ was malformed.
+            logger.warning(
+                "Request.from_wsgi: invalid SERVER_PORT=%r (%s); defaulting to 80",
+                port_str,
+                exc,
+            )
             port = 80
         
         request = cls(
@@ -636,9 +669,16 @@ class Request:
                     simple_cookie.load(cookie_header)
                     for key, morsel in simple_cookie.items():
                         self._cookies[key] = morsel.value
-                except Exception:
-                    # If parsing fails, return empty dict
-                    pass
+                except Exception as exc:
+                    # Malformed cookie header — return empty dict so
+                    # the handler still works, but log enough context
+                    # for the operator to spot a misbehaving client
+                    # without leaking the cookie value itself.
+                    logger.warning(
+                        "Request.cookies: failed to parse Cookie header (path=%s): %s",
+                        getattr(self, "_path", "<unknown>"),
+                        exc,
+                    )
         rtnval = self._cookies
         return rtnval
     

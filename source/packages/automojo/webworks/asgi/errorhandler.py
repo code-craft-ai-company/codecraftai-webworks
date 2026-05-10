@@ -324,9 +324,14 @@ class ErrorHandler:
         
         try:
             await send(close_message)
-        except Exception:
-            # Connection may already be closed
-            pass
+        except Exception as send_exc:
+            # Connection may already be closed — keep the breadcrumb
+            # at debug level so the journal carries the context
+            # without overwhelming a busy server.
+            self._logger.debug(
+                "WebSocket close send failed (connection likely closed): %s",
+                send_exc,
+            )
         
         return
     

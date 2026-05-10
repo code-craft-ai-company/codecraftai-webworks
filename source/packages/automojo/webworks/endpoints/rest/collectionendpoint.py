@@ -11,6 +11,8 @@ __author__ = "Automation Mojo LLC"
 __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
+import logging
+
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from automojo.webworks.endpoints.rest.resourceendpoint import ResourceEndpoint
@@ -21,6 +23,14 @@ from automojo.webworks.endpoints.rest.models import (
     PaginationInfo,
     RESTError,
 )
+
+
+# Module-level logger. Bulk operations swallow per-item exceptions
+# so a single failed item doesn't kill the batch — the operator
+# wants the underlying traceback so they can investigate the cause
+# (database error, validation gap, etc.) without re-running the
+# bulk job.
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from automojo.webworks.endpoints.descriptor import EndpointDescriptor
@@ -377,6 +387,11 @@ class CollectionEndpoint(ResourceEndpoint):
                 processed_results.append((index, item, result, None))
                 succeeded.append(result)
             except Exception as e:
+                logger.exception(
+                    "CollectionEndpoint bulk: item %d (%s) failed",
+                    index,
+                    type(e).__name__,
+                )
                 error = RESTError(
                     error="operation_failed",
                     message=str(e),

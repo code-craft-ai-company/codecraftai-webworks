@@ -28,6 +28,7 @@ __credits__ = []
 
 
 import asyncio
+import logging
 import secrets
 import time
 
@@ -48,6 +49,40 @@ from automojo.webworks.authentication.blueprints.security import (
     SecurityBlueprint
 )
 from automojo.webworks.endpoints.doc import Doc
+
+
+# Module-level logger used by the session-blueprint handlers when an
+# error is converted into an HTTP error response. Without it the
+# operator sees only the wire-format error code in the journal,
+# never the underlying cause (e.g. malformed expires_at, identity
+# provider raising, session-store backend crashing).
+logger = logging.getLogger(__name__)
+
+
+def _session_id_prefix(session_id: Optional[str]) -> str:
+    """
+        Truncate a session identifier to a journal-safe prefix.
+
+        Logs should not contain live session ids — a leak of the
+        journal must not be sufficient to hijack a session. This
+        helper returns the first 8 characters of *session_id* with
+        an ellipsis suffix so the operator can correlate journal
+        lines with a session without exposing the full secret.
+
+        :param session_id: The session identifier, or None.
+
+        :returns: A short prefix string suitable for inclusion in
+                  log messages, or ``"<none>"`` when the input is
+                  ``None``/empty.
+    """
+    if session_id is None:
+        return "<none>"
+    if len(session_id) == 0:
+        return "<empty>"
+    if len(session_id) <= 8:
+        return "{}…".format(session_id[:4])
+    rtnval = "{}…".format(session_id[:8])
+    return rtnval
 
 
 def _run_async(coro: Any) -> Any:
@@ -431,6 +466,13 @@ class SessionAuthBlueprint(SecurityBlueprint):
 
         # Validate credentials via the identity provider
         if cls.identity_provider is None:
+            # Misconfigured deployment — log so the operator sees the
+            # 500 in the journal even when the wire body is generic.
+            logger.error(
+                "Session login: identity_provider is not configured on %s; "
+                "returning 500",
+                cls.__name__,
+            )
             error = AuthError(
                 error=cls.SERVER_ERROR_CODE,
                 error_description="No identity provider configured"
@@ -732,7 +774,16 @@ class SessionAuthBlueprint(SecurityBlueprint):
                     response = cls.format_error(error, status_code=401)
                     return response
             except (ValueError, TypeError):
-                pass
+                # Stored expires_at is malformed (legacy session, store
+                # corruption, clock-skew round-tripping issues). The
+                # session is salvageable but the operator wants to know
+                # the store is producing bad timestamps.
+                logger.warning(
+                    "Session info: failed to parse expires_at=%r for session=%s; "
+                    "skipping expiry check",
+                    expires_at,
+                    _session_id_prefix(session_id),
+                )
 
         # Renew session — update last_accessed timestamp
         now_str = datetime.now(tz=timezone.utc).isoformat()

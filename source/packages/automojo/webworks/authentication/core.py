@@ -233,14 +233,14 @@ def verify_authentication_context_compliance(context: AuthenticationContext) -> 
     # Verify principal roles and permissions are iterable
     try:
         list(context.principal.roles)
-    except TypeError:
-        raise ValueError("Principal.roles must be iterable")
-    
+    except TypeError as exc:
+        raise ValueError("Principal.roles must be iterable") from exc
+
     try:
         list(context.principal.permissions)
-    except TypeError:
-        raise ValueError("Principal.permissions must be iterable")
-    
+    except TypeError as exc:
+        raise ValueError("Principal.permissions must be iterable") from exc
+
     return True
 
 
@@ -283,14 +283,14 @@ def verify_principal_compliance(principal: Principal) -> bool:
     # Verify roles is iterable
     try:
         list(principal.roles)
-    except TypeError:
-        raise ValueError("Principal.roles must be iterable")
-    
+    except TypeError as exc:
+        raise ValueError("Principal.roles must be iterable") from exc
+
     # Verify permissions is iterable
     try:
         list(principal.permissions)
-    except TypeError:
-        raise ValueError("Principal.permissions must be iterable")
+    except TypeError as exc:
+        raise ValueError("Principal.permissions must be iterable") from exc
     
     # Verify attributes is a dict
     if not isinstance(principal.attributes, dict):

@@ -15,12 +15,21 @@ __credits__ = []
 
 
 import json
+import logging
+
 from typing import Any, Callable, Dict, List, Optional, Type, Union
 
 from automojo.webworks.configuration.core import (
     ConfigKeyDefinition,
     ValidationError
 )
+
+
+# Module-level logger. Custom validator exceptions are translated
+# into ValidationError objects rather than propagated, but the
+# operator wants the original traceback so a misbehaving validator
+# is debuggable from the journal.
+logger = logging.getLogger(__name__)
 
 
 # Sentinel value for missing defaults
@@ -266,6 +275,9 @@ class ConfigSchema:
                             constraint="custom"
                         ))
                 except Exception as e:
+                    logger.exception(
+                        "ConfigSchema: custom validator for key=%s raised", key
+                    )
                     errors.append(ValidationError(
                         key=key,
                         message=f"Custom validator raised exception: {e}",

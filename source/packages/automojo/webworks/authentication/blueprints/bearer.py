@@ -24,6 +24,7 @@ __credits__ = []
 
 
 import asyncio
+import logging
 import secrets
 import time
 
@@ -49,6 +50,38 @@ from automojo.webworks.authentication.blueprints.security import (
     SecurityBlueprint
 )
 from automojo.webworks.endpoints.doc import Doc
+
+
+# Module-level logger used by the bearer-blueprint handlers when an
+# error is converted into an HTTP error response. Keeping the
+# operator visible into JWT decode failures and identity-provider
+# misconfiguration is what lets us debug a 500 / 401 / 403 from
+# the journal alone.
+logger = logging.getLogger(__name__)
+
+
+def _token_prefix(token_value: Optional[str]) -> str:
+    """
+        Truncate a token to a journal-safe prefix.
+
+        Logs must not contain live access / refresh tokens. This
+        helper returns the first 8 characters of the token followed
+        by an ellipsis so the operator can correlate log lines with
+        an issued token (or with a client's failing request) without
+        exposing the secret.
+
+        :param token_value: The token, or ``None``.
+
+        :returns: A short prefix string suitable for logging.
+    """
+    if token_value is None:
+        return "<none>"
+    if len(token_value) == 0:
+        return "<empty>"
+    if len(token_value) <= 8:
+        return "{}…".format(token_value[:4])
+    rtnval = "{}…".format(token_value[:8])
+    return rtnval
 
 
 def _run_async(coro: Any) -> Any:
@@ -409,7 +442,17 @@ class BearerAuthBlueprint(SecurityBlueprint):
             }
             return response
 
-        except JWTError:
+        except JWTError as exc:
+            # Introspection contract returns ``{"active": false}`` for
+            # any decode failure (RFC 7662 §2.2). Operator still wants
+            # the cause in the journal because a sudden surge of
+            # JWTErrors usually means a misconfigured secret, a clock
+            # skew problem, or a client sending the wrong token.
+            logger.warning(
+                "Token introspection: JWT decode failed for token=%s: %s",
+                _token_prefix(token_value),
+                exc,
+            )
             response = {
                 "status": 200,
                 "body": {"active": False},
@@ -542,7 +585,17 @@ class BearerAuthBlueprint(SecurityBlueprint):
                     cls.jwt_secret,
                     algorithms=[cls.jwt_algorithm]
                 )
-            except JWTError:
+            except JWTError as exc:
+                # The wire response is the standard "invalid_grant" but
+                # the operator wants to know whether this is a normal
+                # expired-token case or a misconfigured server-side
+                # secret. Log at warning so the cause is recoverable
+                # from the journal without exposing the token.
+                logger.warning(
+                    "Refresh-grant: JWT decode failed for refresh_token=%s: %s",
+                    _token_prefix(refresh_token),
+                    exc,
+                )
                 error = AuthError(
                     error=cls.INVALID_GRANT_ERROR_CODE,
                     error_description="Invalid or expired refresh token"

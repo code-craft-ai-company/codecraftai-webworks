@@ -19,6 +19,7 @@ __credits__ = []
 import base64
 import hashlib
 import json
+import logging
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -33,6 +34,13 @@ from automojo.webworks.authentication.core import (
     AuthenticationStatus,
     Principal
 )
+
+
+# Module-level logger. Token-data ``exp`` claims are tolerated with
+# a fallback (``expires_at = None``) when they're not parseable, but
+# the operator wants to know when an issuer is producing malformed
+# expiry values.
+logger = logging.getLogger(__name__)
 
 
 class OAuth2GrantType(Enum):
@@ -1130,8 +1138,12 @@ class OAuth2Authenticator:
         if "exp" in token_data:
             try:
                 expires_at = datetime.fromtimestamp(token_data["exp"], tz=timezone.utc)
-            except (TypeError, ValueError, OSError):
-                pass
+            except (TypeError, ValueError, OSError) as exc:
+                logger.warning(
+                    "OAuth2: invalid 'exp' claim %r: %s",
+                    token_data.get("exp"),
+                    exc,
+                )
         elif "expires_at" in token_data:
             exp_val = token_data["expires_at"]
             if isinstance(exp_val, datetime):
@@ -1139,8 +1151,12 @@ class OAuth2Authenticator:
             elif isinstance(exp_val, (int, float)):
                 try:
                     expires_at = datetime.fromtimestamp(exp_val, tz=timezone.utc)
-                except (TypeError, ValueError, OSError):
-                    pass
+                except (TypeError, ValueError, OSError) as exc:
+                    logger.warning(
+                        "OAuth2: invalid 'expires_at' value %r: %s",
+                        exp_val,
+                        exc,
+                    )
         
         return AuthenticationResult(
             status=AuthenticationStatus.SUCCESS,

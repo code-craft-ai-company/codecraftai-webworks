@@ -14,14 +14,23 @@ __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
 
+import logging
 import os
 import threading
 import time
+
 from pathlib import Path
 from typing import Callable, Dict, Optional, Set, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from automojo.webworks.configuration.registry import ConfigRegistry
+
+
+# Module-level logger. The watcher swallows OSError/Exception so a
+# transient filesystem hiccup doesn't kill the background thread —
+# breadcrumbs in the journal let the operator see whether config
+# reloads are silently being skipped.
+logger = logging.getLogger(__name__)
 
 
 class ConfigWatcher:
@@ -265,8 +274,12 @@ class ConfigWatcher:
             try:
                 self._check_for_changes()
             except Exception:
-                # Don't let exceptions kill the watcher thread
-                pass
+                # Don't let exceptions kill the watcher thread, but
+                # surface them so a watcher that's silently
+                # skipping every poll is visible in the journal.
+                logger.exception(
+                    "ConfigWatcher: _check_for_changes raised; continuing"
+                )
             
             # Wait for the poll interval or until stop is signaled
             self._stop_event.wait(timeout=self._poll_interval)
@@ -350,15 +363,25 @@ class ConfigWatcher:
             try:
                 self._on_change(path)
             except Exception:
-                # Don't let callback exceptions break the watcher
-                pass
+                # Don't let callback exceptions break the watcher,
+                # but surface them so a misbehaving subscriber is
+                # visible in the journal.
+                logger.exception(
+                    "ConfigWatcher: on_change callback raised for path=%s",
+                    path,
+                )
         else:
             # Default behavior: reload the registry
             try:
                 self._registry.load(validate=False)
             except Exception:
-                # Don't let reload exceptions break the watcher
-                pass
+                # Don't let reload exceptions break the watcher.
+                # Operator must be able to see why a config-file
+                # change isn't being picked up.
+                logger.exception(
+                    "ConfigWatcher: registry.load() raised after change to %s",
+                    path,
+                )
     
     def check_now(self) -> Set[Path]:
         """
