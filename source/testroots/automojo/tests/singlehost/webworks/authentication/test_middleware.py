@@ -274,7 +274,7 @@ def run_async(coro):
     """
     loop = asyncio.new_event_loop()
     try:
-        return loop.run_until_complete(coro)
+        return asyncio.run(coro)
     finally:
         loop.close()
 
