@@ -46,6 +46,85 @@ from automojo.webworks.templating.response import (
 _RESPONSE_TYPES = (Response, TemplateResponse, StreamingTemplateResponse)
 
 
+# Keys present on the ``{status, body, content_type}`` dict shape
+# that :class:`automojo.webworks.authentication.blueprints.security.SecurityBlueprint`
+# helpers (``format_error``, ``format_success``, ``establish_session``)
+# return from auth handlers. The dispatcher recognises this shape and
+# translates it into a real :class:`JSONResponse` with the embedded
+# status code, optional headers, and body so the wire response carries
+# the right HTTP status. Without this translation a handler that
+# returns ``{"status": 401, "body": {...}}`` would surface as ``HTTP
+# 200`` with the status code embedded in the JSON body — which is what
+# was happening to ``POST /auth/session/login`` before this change.
+_AUTH_RESPONSE_DICT_KEYS = frozenset(("status", "body", "content_type"))
+
+
+def _is_auth_response_dict(result: object) -> bool:
+    """
+        Return ``True`` when ``result`` matches the auth-blueprint
+        response-dict shape produced by
+        :meth:`SecurityBlueprint.format_error`,
+        :meth:`SecurityBlueprint.format_success`, and
+        :meth:`SessionAuthBlueprint.establish_session`.
+
+        The shape is::
+
+            {"status": <int>, "body": <jsonable>,
+             "content_type": <str>, "headers": <dict, optional>}
+
+        Recognition is intentionally narrow — both ``status`` and
+        ``body`` must be present, ``status`` must be an ``int``, and
+        the dict must declare ``content_type``. Any other dict
+        returned by a handler falls through to the default
+        ``JSONResponse(result)`` wrapping with status 200.
+
+        :param result: The handler return value.
+
+        :returns: ``True`` if the dict should be translated into a
+                  :class:`JSONResponse` with the embedded status.
+    """
+    if not isinstance(result, dict):
+        return False
+
+    if not _AUTH_RESPONSE_DICT_KEYS.issubset(result.keys()):
+        return False
+
+    status_value = result.get("status")
+    if not isinstance(status_value, int):
+        return False
+
+    return True
+
+
+def _auth_response_dict_to_response(result: dict) -> JSONResponse:
+    """
+        Translate an auth-blueprint response-dict into a
+        :class:`JSONResponse` that carries the embedded HTTP status
+        and any ``headers`` the handler attached (e.g. the
+        ``Set-Cookie`` issued by
+        :meth:`SessionAuthBlueprint.establish_session`).
+
+        :param result: A dict matching :func:`_is_auth_response_dict`.
+
+        :returns: A :class:`JSONResponse` with ``status_code`` set to
+                  ``result["status"]``, ``content`` set to
+                  ``result["body"]``, and ``headers`` merged from
+                  ``result.get("headers", {})``.
+    """
+    status_code = int(result["status"])
+    body = result["body"]
+    headers = result.get("headers")
+    if not isinstance(headers, dict):
+        headers = {}
+
+    response = JSONResponse(
+        content=body,
+        status_code=status_code,
+        headers=headers,
+    )
+    return response
+
+
 class Dispatcher:
     """
         Orchestrates routing and middleware execution for incoming requests.
@@ -187,9 +266,16 @@ class Dispatcher:
                     result = match.handler(req)
                     # If handler returns a known response shape (Response,
                     # TemplateResponse, StreamingTemplateResponse), use it
-                    # directly. Anything else is wrapped in JSONResponse.
+                    # directly. The auth blueprints return the
+                    # ``{status, body, content_type}`` dict shape — translate
+                    # it so the wire response carries the embedded status code
+                    # and any attached headers (e.g. ``Set-Cookie`` from
+                    # ``establish_session``). Everything else is wrapped in a
+                    # default ``JSONResponse``.
                     if isinstance(result, _RESPONSE_TYPES):
                         return result
+                    if _is_auth_response_dict(result):
+                        return _auth_response_dict_to_response(result)
                     return JSONResponse(result)
                 except HTTPException as exc:
                     return self._handle_http_exception(exc)
@@ -244,9 +330,16 @@ class Dispatcher:
                         result = await result
                     # If handler returns a known response shape (Response,
                     # TemplateResponse, StreamingTemplateResponse), use it
-                    # directly. Anything else is wrapped in JSONResponse.
+                    # directly. The auth blueprints return the
+                    # ``{status, body, content_type}`` dict shape — translate
+                    # it so the wire response carries the embedded status code
+                    # and any attached headers (e.g. ``Set-Cookie`` from
+                    # ``establish_session``). Everything else is wrapped in a
+                    # default ``JSONResponse``.
                     if isinstance(result, _RESPONSE_TYPES):
                         return result
+                    if _is_auth_response_dict(result):
+                        return _auth_response_dict_to_response(result)
                     return JSONResponse(result)
                 except HTTPException as exc:
                     return self._handle_http_exception(exc)
