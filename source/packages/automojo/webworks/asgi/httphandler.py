@@ -291,10 +291,25 @@ class HTTPHandler:
     ) -> Request:
         """
             Create a new Request with the given body.
-            
+
+            ``request`` was constructed before the body was read (so
+            handlers can be passed a Request with the actual body
+            attached). The new Request must inherit the ORIGINAL
+            ASGI scope dict so that anything middleware wrote onto
+            ``scope[...]`` (e.g. ``scope['auth']`` from
+            :class:`AuthenticationMiddleware`,
+            ``scope['session']`` from session middleware,
+            ``scope['request_id']`` from the request-id middleware)
+            stays visible to handlers via :attr:`Request.scope` /
+            :attr:`Request.auth` etc. Without ``scope=`` here the
+            new Request has a fresh empty ``_scope`` dict and every
+            ``request.auth`` read on the handler side returns
+            ``None`` — exactly what was happening to ``/dashboard/``
+            on a freshly-logged-in admin.
+
             :param request: Original request without body.
             :param body: Request body bytes.
-            
+
             :returns: New Request with body.
         """
         new_request = Request(
@@ -306,6 +321,7 @@ class HTTPHandler:
             scheme=request.scheme,
             host=request.host,
             port=request.port,
+            scope=request.scope,
         )
         return new_request
 
