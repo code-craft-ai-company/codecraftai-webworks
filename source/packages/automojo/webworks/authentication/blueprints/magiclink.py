@@ -204,6 +204,37 @@ class MagicLinkBlueprint(SecurityBlueprint):
     token_pattern: "re.Pattern[str]" = DEFAULT_TOKEN_PATTERN
     token_byte_length: int = DEFAULT_TOKEN_BYTE_LENGTH
 
+    # --- Class constants ---
+    # Override these on a subclass to rebrand wire-format strings without
+    # rewriting the handler bodies. Module-level ``ERROR_CODE_*`` constants
+    # stay in place for backward compatibility; the class attributes mirror
+    # them so subclasses can override individual codes without touching the
+    # module.
+
+    # Magic-link error codes (mirrored from module constants for
+    # backward-compatibility — overriding the class attribute on a
+    # subclass takes precedence over the module value).
+    INVALID_ERROR_CODE: str = ERROR_CODE_INVALID
+    EXPIRED_ERROR_CODE: str = ERROR_CODE_EXPIRED
+    CONSUMED_ERROR_CODE: str = ERROR_CODE_CONSUMED
+    INTERNAL_ERROR_CODE: str = ERROR_CODE_INTERNAL
+
+    # Endpoint-disabled error code / message
+    ENDPOINT_DISABLED_ERROR_CODE: str = "endpoint_disabled"
+    ENDPOINT_DISABLED_MESSAGE: str = "Magic-link redemption is disabled"
+
+    # Header / content-type literals
+    JSON_CONTENT_TYPE_UTF8: str = "application/json; charset=utf-8"
+    LOCATION_HEADER: str = "Location"
+    SET_COOKIE_HEADER: str = "Set-Cookie"
+    CONTENT_TYPE_HEADER: str = "Content-Type"
+
+    # Error redirect query parameter name
+    ERROR_QUERY_PARAM: str = "error"
+
+    # AuthenticationContext attribute key for the optional token id
+    TOKEN_ID_ATTRIBUTE: str = "token_id"
+
     # --------------------------------------------------------------
     # Token issuance API (the inverse of the redemption flow).
     # --------------------------------------------------------------
@@ -400,12 +431,12 @@ class MagicLinkBlueprint(SecurityBlueprint):
                       ``Location`` header (and ``Set-Cookie`` when
                       provided) and an empty body.
         """
-        headers: Dict[str, str] = {"Location": location}
+        headers: Dict[str, str] = {cls.LOCATION_HEADER: location}
 
         if set_cookie is not None:
             cookie_value = str(set_cookie).strip()
             if cookie_value != "":
-                headers["Set-Cookie"] = cookie_value
+                headers[cls.SET_COOKIE_HEADER] = cookie_value
 
         response = Response(status_code=302, headers=headers, body=b"")
         return response
@@ -426,7 +457,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
 
             :returns: A redirect :class:`Response`.
         """
-        encoded_pair = urlencode({"error": str(error_code)})
+        encoded_pair = urlencode({cls.ERROR_QUERY_PARAM: str(error_code)})
 
         base = cls.error_redirect_url
 
@@ -463,7 +494,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
         body_bytes = json.dumps(error.to_dict()).encode("utf-8")
 
         headers: Dict[str, str] = {
-            "Content-Type": "application/json; charset=utf-8",
+            cls.CONTENT_TYPE_HEADER: cls.JSON_CONTENT_TYPE_UTF8,
         }
 
         response = Response(
@@ -515,8 +546,8 @@ class MagicLinkBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("redeem"):
             error = AuthError(
-                error="endpoint_disabled",
-                error_description="Magic-link redemption is disabled"
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
+                error_description=cls.ENDPOINT_DISABLED_MESSAGE
             )
             response = cls._build_auth_error_response(
                 error=error,
@@ -543,7 +574,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
                 "magiclink redemption rejected: missing token"
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_CODE_INVALID
+                error_code=cls.INVALID_ERROR_CODE
             )
             return response
 
@@ -554,7 +585,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
                     "magiclink redemption rejected: token failed format check"
                 )
                 response = cls._build_error_redirect(
-                    error_code=ERROR_CODE_INVALID
+                    error_code=cls.INVALID_ERROR_CODE
                 )
                 return response
 
@@ -564,7 +595,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
                 "magiclink redemption: token_consumer is not configured"
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_CODE_INTERNAL
+                error_code=cls.INTERNAL_ERROR_CODE
             )
             return response
 
@@ -573,7 +604,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
                 "magiclink redemption: session_blueprint is not configured"
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_CODE_INTERNAL
+                error_code=cls.INTERNAL_ERROR_CODE
             )
             return response
 
@@ -587,7 +618,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
                 "magiclink redemption: token_consumer raised"
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_CODE_INTERNAL
+                error_code=cls.INTERNAL_ERROR_CODE
             )
             return response
 
@@ -598,7 +629,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
                 type(consume_result).__name__,
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_CODE_INTERNAL
+                error_code=cls.INTERNAL_ERROR_CODE
             )
             return response
 
@@ -622,7 +653,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
                 "principal and no error_code"
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_CODE_INTERNAL
+                error_code=cls.INTERNAL_ERROR_CODE
             )
             return response
 
@@ -635,7 +666,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
         if consume_result.token_id is not None:
             token_id_value = str(consume_result.token_id).strip()
             if token_id_value != "":
-                extra_attributes["token_id"] = token_id_value
+                extra_attributes[cls.TOKEN_ID_ATTRIBUTE] = token_id_value
 
         try:
             session_response = cls.session_blueprint.establish_session(
@@ -650,7 +681,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
                 "magiclink redemption: establish_session raised"
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_CODE_INTERNAL
+                error_code=cls.INTERNAL_ERROR_CODE
             )
             return response
 
@@ -659,7 +690,7 @@ class MagicLinkBlueprint(SecurityBlueprint):
             session_headers = session_response.get("headers")
             if isinstance(session_headers, dict):
                 set_cookie_value = str(
-                    session_headers.get("Set-Cookie") or ""
+                    session_headers.get(cls.SET_COOKIE_HEADER) or ""
                 )
 
         logger.info(

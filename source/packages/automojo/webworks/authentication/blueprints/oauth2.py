@@ -291,6 +291,62 @@ class OAuth2Blueprint(SecurityBlueprint):
     supported_response_types: List[str] = ["code"]
     require_pkce: bool = False
 
+    # --- Class constants ---
+    # Override these on a subclass to rebrand wire-format strings without
+    # rewriting handler bodies.
+
+    # Error codes
+    ENDPOINT_DISABLED_ERROR_CODE: str = "endpoint_disabled"
+    INVALID_REQUEST_ERROR_CODE: str = "invalid_request"
+    INVALID_CLIENT_ERROR_CODE: str = "invalid_client"
+    INVALID_GRANT_ERROR_CODE: str = "invalid_grant"
+    UNSUPPORTED_GRANT_TYPE_ERROR_CODE: str = "unsupported_grant_type"
+    UNSUPPORTED_RESPONSE_TYPE_ERROR_CODE: str = "unsupported_response_type"
+    UNAUTHORIZED_CLIENT_ERROR_CODE: str = "unauthorized_client"
+    SERVER_ERROR_CODE: str = "server_error"
+
+    # OAuth response & PKCE method literals
+    RESPONSE_TYPE_CODE: str = "code"
+    PKCE_METHOD_S256: str = "S256"
+    PKCE_METHOD_PLAIN: str = "plain"
+
+    # Grant type literals
+    GRANT_TYPE_AUTHORIZATION_CODE: str = "authorization_code"
+    GRANT_TYPE_CLIENT_CREDENTIALS: str = "client_credentials"
+    GRANT_TYPE_REFRESH_TOKEN: str = "refresh_token"
+
+    # Token type literal
+    TOKEN_TYPE_BEARER: str = "Bearer"
+
+    # JWT claim keys
+    JWT_CLAIM_SUB: str = "sub"
+    JWT_CLAIM_IAT: str = "iat"
+    JWT_CLAIM_EXP: str = "exp"
+    JWT_CLAIM_TOKEN_TYPE: str = "token_type"
+    JWT_CLAIM_SCOPE: str = "scope"
+
+    # Token-type values stored on JWT claims
+    TOKEN_TYPE_ACCESS: str = "access"
+    TOKEN_TYPE_REFRESH: str = "refresh"
+
+    # OAuth wire parameter names
+    OAUTH_PARAM_CODE: str = "code"
+    OAUTH_PARAM_STATE: str = "state"
+    OAUTH_PARAM_CLIENT_ID: str = "client_id"
+    OAUTH_PARAM_REDIRECT_URI: str = "redirect_uri"
+    OAUTH_PARAM_RESPONSE_TYPE: str = "response_type"
+    OAUTH_PARAM_SCOPE: str = "scope"
+    OAUTH_PARAM_CODE_CHALLENGE: str = "code_challenge"
+    OAUTH_PARAM_CODE_CHALLENGE_METHOD: str = "code_challenge_method"
+    OAUTH_PARAM_ERROR: str = "error"
+    OAUTH_PARAM_ERROR_DESCRIPTION: str = "error_description"
+
+    # Header literals
+    LOCATION_HEADER: str = "Location"
+
+    # Random byte length used for authorization-code generation
+    AUTHORIZATION_CODE_BYTE_LENGTH: int = 32
+
     # In-memory fallback stores
     _memory_code_store: Dict[str, Dict[str, Any]] = {}
     _memory_client_store: Dict[str, Dict[str, Any]] = {}
@@ -303,7 +359,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
             :returns: A random URL-safe string of 32 bytes.
         """
-        code = secrets.token_urlsafe(32)
+        code = secrets.token_urlsafe(cls.AUTHORIZATION_CODE_BYTE_LENGTH)
         return code
 
     @classmethod
@@ -371,28 +427,28 @@ class OAuth2Blueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("authorize"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Authorization endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
             return response
 
         # Extract query parameters
-        response_type = cls._get_query_param(request, "response_type")
-        client_id = cls._get_query_param(request, "client_id")
-        redirect_uri = cls._get_query_param(request, "redirect_uri")
-        scope = cls._get_query_param(request, "scope")
-        state = cls._get_query_param(request, "state")
-        code_challenge = cls._get_query_param(request, "code_challenge")
+        response_type = cls._get_query_param(request, cls.OAUTH_PARAM_RESPONSE_TYPE)
+        client_id = cls._get_query_param(request, cls.OAUTH_PARAM_CLIENT_ID)
+        redirect_uri = cls._get_query_param(request, cls.OAUTH_PARAM_REDIRECT_URI)
+        scope = cls._get_query_param(request, cls.OAUTH_PARAM_SCOPE)
+        state = cls._get_query_param(request, cls.OAUTH_PARAM_STATE)
+        code_challenge = cls._get_query_param(request, cls.OAUTH_PARAM_CODE_CHALLENGE)
         code_challenge_method = cls._get_query_param(
-            request, "code_challenge_method"
+            request, cls.OAUTH_PARAM_CODE_CHALLENGE_METHOD
         )
 
         # Validate required parameters
         if not response_type:
             return cls._build_error_redirect(
                 redirect_uri=redirect_uri,
-                error_code="invalid_request",
+                error_code=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="response_type is required",
                 state=state
             )
@@ -400,14 +456,14 @@ class OAuth2Blueprint(SecurityBlueprint):
         if not client_id:
             return cls._build_error_redirect(
                 redirect_uri=redirect_uri,
-                error_code="invalid_request",
+                error_code=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="client_id is required",
                 state=state
             )
 
         if not redirect_uri:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="redirect_uri is required"
             )
             response = cls.format_error(error, status_code=400)
@@ -417,7 +473,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         if response_type not in cls.supported_response_types:
             return cls._build_error_redirect(
                 redirect_uri=redirect_uri,
-                error_code="unsupported_response_type",
+                error_code=cls.UNSUPPORTED_RESPONSE_TYPE_ERROR_CODE,
                 error_description="Response type '{}' is not supported".format(
                     response_type
                 ),
@@ -429,7 +485,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         if client is None:
             return cls._build_error_redirect(
                 redirect_uri=redirect_uri,
-                error_code="invalid_client",
+                error_code=cls.INVALID_CLIENT_ERROR_CODE,
                 error_description="Unknown client",
                 state=state
             )
@@ -438,7 +494,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         allowed_uris = client.get("redirect_uris", [])
         if not _validate_redirect_uri(redirect_uri, allowed_uris):
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Invalid redirect URI"
             )
             response = cls.format_error(error, status_code=400)
@@ -448,17 +504,17 @@ class OAuth2Blueprint(SecurityBlueprint):
         if cls.require_pkce and not code_challenge:
             return cls._build_error_redirect(
                 redirect_uri=redirect_uri,
-                error_code="invalid_request",
+                error_code=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="PKCE code_challenge is required",
                 state=state
             )
 
         # Validate code_challenge_method if code_challenge is provided
         if code_challenge and code_challenge_method:
-            if code_challenge_method not in ("S256", "plain"):
+            if code_challenge_method not in (cls.PKCE_METHOD_S256, cls.PKCE_METHOD_PLAIN):
                 return cls._build_error_redirect(
                     redirect_uri=redirect_uri,
-                    error_code="invalid_request",
+                    error_code=cls.INVALID_REQUEST_ERROR_CODE,
                     error_description="Unsupported code_challenge_method",
                     state=state
                 )
@@ -494,17 +550,17 @@ class OAuth2Blueprint(SecurityBlueprint):
             cls._memory_code_store[code] = code_data
 
         # Build redirect response with code and state
-        redirect_params = {"code": code}
+        redirect_params = {cls.OAUTH_PARAM_CODE: code}
         if state is not None:
-            redirect_params["state"] = state
+            redirect_params[cls.OAUTH_PARAM_STATE] = state
 
         redirect_url = _build_redirect_url(redirect_uri, redirect_params)
 
         response = {
             "status": 302,
-            "headers": {"Location": redirect_url},
+            "headers": {cls.LOCATION_HEADER: redirect_url},
             "body": {},
-            "content_type": "application/json",
+            "content_type": cls.JSON_CONTENT_TYPE,
         }
         return response
 
@@ -539,7 +595,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("token"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Token endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -550,7 +606,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         if not grant_type:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="grant_type is required"
             )
             response = cls.format_error(error, status_code=400)
@@ -558,7 +614,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         if grant_type not in cls.supported_grant_types:
             error = AuthError(
-                error="unsupported_grant_type",
+                error=cls.UNSUPPORTED_GRANT_TYPE_ERROR_CODE,
                 error_description="Grant type '{}' is not supported".format(
                     grant_type
                 )
@@ -566,20 +622,20 @@ class OAuth2Blueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=400)
             return response
 
-        if grant_type == "authorization_code":
+        if grant_type == cls.GRANT_TYPE_AUTHORIZATION_CODE:
             response = cls._handle_authorization_code_grant(body)
             return response
 
-        if grant_type == "client_credentials":
+        if grant_type == cls.GRANT_TYPE_CLIENT_CREDENTIALS:
             response = cls._handle_client_credentials_grant(body)
             return response
 
-        if grant_type == "refresh_token":
+        if grant_type == cls.GRANT_TYPE_REFRESH_TOKEN:
             response = cls._handle_refresh_token_grant(body)
             return response
 
         error = AuthError(
-            error="unsupported_grant_type",
+            error=cls.UNSUPPORTED_GRANT_TYPE_ERROR_CODE,
             error_description="Grant type '{}' is not supported".format(
                 grant_type
             )
@@ -617,35 +673,35 @@ class OAuth2Blueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("callback"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Callback endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
             return response
 
         # Check for error response from provider
-        error_code = cls._get_query_param(request, "error")
+        error_code = cls._get_query_param(request, cls.OAUTH_PARAM_ERROR)
         if error_code is not None:
             error_description = cls._get_query_param(
-                request, "error_description"
+                request, cls.OAUTH_PARAM_ERROR_DESCRIPTION
             )
-            state = cls._get_query_param(request, "state")
+            state = cls._get_query_param(request, cls.OAUTH_PARAM_STATE)
             error = AuthError(
                 error=error_code,
                 error_description=error_description
             )
             response = cls.format_error(error, status_code=400)
             if state is not None:
-                response["body"]["state"] = state
+                response["body"][cls.OAUTH_PARAM_STATE] = state
             return response
 
         # Extract code and state
-        code = cls._get_query_param(request, "code")
-        state = cls._get_query_param(request, "state")
+        code = cls._get_query_param(request, cls.OAUTH_PARAM_CODE)
+        state = cls._get_query_param(request, cls.OAUTH_PARAM_STATE)
 
         if not code:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Authorization code is required"
             )
             response = cls.format_error(error, status_code=400)
@@ -656,7 +712,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         if code_data is None:
             error = AuthError(
-                error="invalid_grant",
+                error=cls.INVALID_GRANT_ERROR_CODE,
                 error_description="Invalid or expired authorization code"
             )
             response = cls.format_error(error, status_code=400)
@@ -666,7 +722,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         stored_state = code_data.get("state")
         if stored_state is not None and stored_state != state:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="State parameter mismatch"
             )
             response = cls.format_error(error, status_code=400)
@@ -679,12 +735,12 @@ class OAuth2Blueprint(SecurityBlueprint):
             "scope": code_data.get("scope"),
         }
         if state is not None:
-            response_body["state"] = state
+            response_body[cls.OAUTH_PARAM_STATE] = state
 
         response = {
             "status": 200,
             "body": response_body,
-            "content_type": "application/json",
+            "content_type": cls.JSON_CONTENT_TYPE,
         }
         return response
 
@@ -714,7 +770,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("revoke"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Revoke endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -725,7 +781,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         if not token_value:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Token is required"
             )
             response = cls.format_error(error, status_code=400)
@@ -739,7 +795,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         response = {
             "status": 200,
             "body": {},
-            "content_type": "application/json",
+            "content_type": cls.JSON_CONTENT_TYPE,
         }
         return response
 
@@ -819,19 +875,19 @@ class OAuth2Blueprint(SecurityBlueprint):
             return response
 
         params = {
-            "error": error_code,
-            "error_description": error_description,
+            cls.OAUTH_PARAM_ERROR: error_code,
+            cls.OAUTH_PARAM_ERROR_DESCRIPTION: error_description,
         }
         if state is not None:
-            params["state"] = state
+            params[cls.OAUTH_PARAM_STATE] = state
 
         redirect_url = _build_redirect_url(redirect_uri, params)
 
         response = {
             "status": 302,
-            "headers": {"Location": redirect_url},
+            "headers": {cls.LOCATION_HEADER: redirect_url},
             "body": {},
-            "content_type": "application/json",
+            "content_type": cls.JSON_CONTENT_TYPE,
         }
         return response
 
@@ -859,7 +915,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         if not code:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Authorization code is required"
             )
             response = cls.format_error(error, status_code=400)
@@ -870,7 +926,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         if code_data is None:
             error = AuthError(
-                error="invalid_grant",
+                error=cls.INVALID_GRANT_ERROR_CODE,
                 error_description="Invalid or expired authorization code"
             )
             response = cls.format_error(error, status_code=400)
@@ -879,7 +935,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         # Validate client_id matches
         if client_id and code_data.get("client_id") != client_id:
             error = AuthError(
-                error="invalid_grant",
+                error=cls.INVALID_GRANT_ERROR_CODE,
                 error_description="Client ID mismatch"
             )
             response = cls.format_error(error, status_code=400)
@@ -888,7 +944,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         # Validate redirect_uri matches
         if redirect_uri and code_data.get("redirect_uri") != redirect_uri:
             error = AuthError(
-                error="invalid_grant",
+                error=cls.INVALID_GRANT_ERROR_CODE,
                 error_description="Redirect URI mismatch"
             )
             response = cls.format_error(error, status_code=400)
@@ -899,7 +955,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         if stored_challenge is not None:
             if not code_verifier:
                 error = AuthError(
-                    error="invalid_request",
+                    error=cls.INVALID_REQUEST_ERROR_CODE,
                     error_description="code_verifier is required"
                 )
                 response = cls.format_error(error, status_code=400)
@@ -908,14 +964,14 @@ class OAuth2Blueprint(SecurityBlueprint):
             stored_method = code_data.get("code_challenge_method")
             if not _verify_pkce(code_verifier, stored_challenge, stored_method):
                 error = AuthError(
-                    error="invalid_grant",
+                    error=cls.INVALID_GRANT_ERROR_CODE,
                     error_description="PKCE verification failed"
                 )
                 response = cls.format_error(error, status_code=400)
                 return response
         elif cls.require_pkce:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="PKCE is required but no code_challenge was provided"
             )
             response = cls.format_error(error, status_code=400)
@@ -931,7 +987,7 @@ class OAuth2Blueprint(SecurityBlueprint):
             )
             if not is_valid:
                 error = AuthError(
-                    error="invalid_client",
+                    error=cls.INVALID_CLIENT_ERROR_CODE,
                     error_description="Invalid client credentials"
                 )
                 response = cls.format_error(error, status_code=401)
@@ -964,7 +1020,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         if not client_id or not client_secret:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="client_id and client_secret are required"
             )
             response = cls.format_error(error, status_code=400)
@@ -974,7 +1030,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         client = cls._get_client(client_id)
         if client is None:
             error = AuthError(
-                error="invalid_client",
+                error=cls.INVALID_CLIENT_ERROR_CODE,
                 error_description="Unknown client"
             )
             response = cls.format_error(error, status_code=401)
@@ -993,7 +1049,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         if not is_valid:
             error = AuthError(
-                error="invalid_client",
+                error=cls.INVALID_CLIENT_ERROR_CODE,
                 error_description="Invalid client credentials"
             )
             response = cls.format_error(error, status_code=401)
@@ -1001,9 +1057,9 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         # Check that client is allowed to use this grant type
         allowed_grants = client.get("grant_types", [])
-        if allowed_grants and "client_credentials" not in allowed_grants:
+        if allowed_grants and cls.GRANT_TYPE_CLIENT_CREDENTIALS not in allowed_grants:
             error = AuthError(
-                error="unauthorized_client",
+                error=cls.UNAUTHORIZED_CLIENT_ERROR_CODE,
                 error_description="Client not authorized for client_credentials grant"
             )
             response = cls.format_error(error, status_code=400)
@@ -1033,7 +1089,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         if not refresh_token:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="refresh_token is required"
             )
             response = cls.format_error(error, status_code=400)
@@ -1041,7 +1097,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         if cls.jwt_secret is None:
             error = AuthError(
-                error="server_error",
+                error=cls.SERVER_ERROR_CODE,
                 error_description="JWT secret is not configured"
             )
             response = cls.format_error(error, status_code=500)
@@ -1054,54 +1110,54 @@ class OAuth2Blueprint(SecurityBlueprint):
             )
             if claims is None:
                 error = AuthError(
-                    error="invalid_grant",
+                    error=cls.INVALID_GRANT_ERROR_CODE,
                     error_description="Invalid or expired refresh token"
                 )
                 response = cls.format_error(error)
                 return response
-            subject = claims.get("sub")
+            subject = claims.get(cls.JWT_CLAIM_SUB)
         else:
             # Check in-memory store
             token_data = cls._memory_token_store.get(refresh_token)
             if token_data is None:
                 error = AuthError(
-                    error="invalid_grant",
+                    error=cls.INVALID_GRANT_ERROR_CODE,
                     error_description="Invalid or expired refresh token"
                 )
                 response = cls.format_error(error)
                 return response
 
             # Check expiration
-            if token_data.get("exp", 0) < time.time():
+            if token_data.get(cls.JWT_CLAIM_EXP, 0) < time.time():
                 cls._memory_token_store.pop(refresh_token, None)
                 error = AuthError(
-                    error="invalid_grant",
+                    error=cls.INVALID_GRANT_ERROR_CODE,
                     error_description="Refresh token has expired"
                 )
                 response = cls.format_error(error)
                 return response
 
-            subject = token_data.get("sub")
+            subject = token_data.get(cls.JWT_CLAIM_SUB)
 
         if not subject:
             error = AuthError(
-                error="invalid_grant",
+                error=cls.INVALID_GRANT_ERROR_CODE,
                 error_description="Refresh token missing subject"
             )
             response = cls.format_error(error)
             return response
 
         # Issue a new access token
-        scope = body.get("scope")
+        scope = body.get(cls.JWT_CLAIM_SCOPE)
         now = time.time()
         access_payload = {
-            "sub": subject,
-            "iat": int(now),
-            "exp": int(now) + cls.access_token_expires,
-            "token_type": "access",
+            cls.JWT_CLAIM_SUB: subject,
+            cls.JWT_CLAIM_IAT: int(now),
+            cls.JWT_CLAIM_EXP: int(now) + cls.access_token_expires,
+            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_ACCESS,
         }
         if scope:
-            access_payload["scope"] = scope
+            access_payload[cls.JWT_CLAIM_SCOPE] = scope
 
         access_token = encode_jwt(
             access_payload,
@@ -1111,7 +1167,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         auth_response = AuthResponse(
             access_token=access_token,
-            token_type="Bearer",
+            token_type=cls.TOKEN_TYPE_BEARER,
             expires_in=cls.access_token_expires,
             scope=scope
         )
@@ -1134,7 +1190,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         """
         if cls.jwt_secret is None:
             error = AuthError(
-                error="server_error",
+                error=cls.SERVER_ERROR_CODE,
                 error_description="JWT secret is not configured"
             )
             response = cls.format_error(error, status_code=500)
@@ -1144,13 +1200,13 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         # Build access token
         access_payload = {
-            "sub": subject,
-            "iat": int(now),
-            "exp": int(now) + cls.access_token_expires,
-            "token_type": "access",
+            cls.JWT_CLAIM_SUB: subject,
+            cls.JWT_CLAIM_IAT: int(now),
+            cls.JWT_CLAIM_EXP: int(now) + cls.access_token_expires,
+            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_ACCESS,
         }
         if scope:
-            access_payload["scope"] = scope
+            access_payload[cls.JWT_CLAIM_SCOPE] = scope
 
         access_token = encode_jwt(
             access_payload,
@@ -1160,13 +1216,13 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         # Build refresh token
         refresh_payload = {
-            "sub": subject,
-            "iat": int(now),
-            "exp": int(now) + cls.refresh_token_expires,
-            "token_type": "refresh",
+            cls.JWT_CLAIM_SUB: subject,
+            cls.JWT_CLAIM_IAT: int(now),
+            cls.JWT_CLAIM_EXP: int(now) + cls.refresh_token_expires,
+            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_REFRESH,
         }
         if scope:
-            refresh_payload["scope"] = scope
+            refresh_payload[cls.JWT_CLAIM_SCOPE] = scope
 
         refresh_token = encode_jwt(
             refresh_payload,
@@ -1188,7 +1244,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         auth_response = AuthResponse(
             access_token=access_token,
-            token_type="Bearer",
+            token_type=cls.TOKEN_TYPE_BEARER,
             expires_in=cls.access_token_expires,
             refresh_token=refresh_token,
             scope=scope
@@ -1215,7 +1271,7 @@ class OAuth2Blueprint(SecurityBlueprint):
         """
         if cls.jwt_secret is None:
             error = AuthError(
-                error="server_error",
+                error=cls.SERVER_ERROR_CODE,
                 error_description="JWT secret is not configured"
             )
             response = cls.format_error(error, status_code=500)
@@ -1224,13 +1280,13 @@ class OAuth2Blueprint(SecurityBlueprint):
         now = time.time()
 
         access_payload = {
-            "sub": subject,
-            "iat": int(now),
-            "exp": int(now) + cls.access_token_expires,
-            "token_type": "access",
+            cls.JWT_CLAIM_SUB: subject,
+            cls.JWT_CLAIM_IAT: int(now),
+            cls.JWT_CLAIM_EXP: int(now) + cls.access_token_expires,
+            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_ACCESS,
         }
         if scope:
-            access_payload["scope"] = scope
+            access_payload[cls.JWT_CLAIM_SCOPE] = scope
 
         access_token = encode_jwt(
             access_payload,
@@ -1240,7 +1296,7 @@ class OAuth2Blueprint(SecurityBlueprint):
 
         auth_response = AuthResponse(
             access_token=access_token,
-            token_type="Bearer",
+            token_type=cls.TOKEN_TYPE_BEARER,
             expires_in=cls.access_token_expires,
             scope=scope
         )

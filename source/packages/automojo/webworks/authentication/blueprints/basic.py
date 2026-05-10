@@ -92,6 +92,23 @@ class BasicAuthBlueprint(SecurityBlueprint):
     identity_provider: Optional[IdentityProvider] = None
     issue_token: bool = False
 
+    # --- Class constants ---
+    # Override these on a subclass to rebrand wire-format strings without
+    # rewriting the handler bodies.
+
+    # Error codes
+    ENDPOINT_DISABLED_ERROR_CODE: str = "endpoint_disabled"
+    INVALID_REQUEST_ERROR_CODE: str = "invalid_request"
+    SERVER_ERROR_CODE: str = "server_error"
+    INVALID_CREDENTIALS_ERROR_CODE: str = "invalid_credentials"
+
+    # Success / response messages
+    LOGIN_SUCCESS_MESSAGE: str = "Login successful"
+    LOGOUT_MESSAGE: str = "Logged out"
+
+    # Authentication scheme label written into AuthenticationContext
+    SCHEME_LABEL: str = "Basic"
+
     @classmethod
     @SecurityBlueprint.create(
         leaf="login",
@@ -124,7 +141,7 @@ class BasicAuthBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("login"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Login endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -143,7 +160,7 @@ class BasicAuthBlueprint(SecurityBlueprint):
 
         if username is None or password is None:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Username and password required"
             )
             response = cls.format_error(error)
@@ -151,7 +168,7 @@ class BasicAuthBlueprint(SecurityBlueprint):
 
         if len(username) == 0 or len(password) == 0:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Username and password must not be empty"
             )
             response = cls.format_error(error)
@@ -160,7 +177,7 @@ class BasicAuthBlueprint(SecurityBlueprint):
         # Validate credentials via the identity provider
         if cls.identity_provider is None:
             error = AuthError(
-                error="server_error",
+                error=cls.SERVER_ERROR_CODE,
                 error_description="No identity provider configured"
             )
             response = cls.format_error(error, status_code=500)
@@ -172,7 +189,7 @@ class BasicAuthBlueprint(SecurityBlueprint):
 
         if principal is None:
             error = AuthError(
-                error="invalid_credentials",
+                error=cls.INVALID_CREDENTIALS_ERROR_CODE,
                 error_description="Invalid username or password"
             )
             response = cls.format_error(error)
@@ -181,7 +198,7 @@ class BasicAuthBlueprint(SecurityBlueprint):
         # Create authentication context
         context = AuthenticationContext(
             principal=principal,
-            scheme="Basic"
+            scheme=cls.SCHEME_LABEL
         )
 
         # Post-authentication hook
@@ -191,7 +208,7 @@ class BasicAuthBlueprint(SecurityBlueprint):
         login_response = LoginResponse(
             authenticated=True,
             principal_id=principal.identifier,
-            message="Login successful"
+            message=cls.LOGIN_SUCCESS_MESSAGE
         )
 
         auth_response = AuthResponse()
@@ -227,7 +244,7 @@ class BasicAuthBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("logout"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Logout endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -235,7 +252,7 @@ class BasicAuthBlueprint(SecurityBlueprint):
 
         response = {
             "status": 200,
-            "body": {"message": "Logged out"},
-            "content_type": "application/json"
+            "body": {"message": cls.LOGOUT_MESSAGE},
+            "content_type": cls.JSON_CONTENT_TYPE
         }
         return response

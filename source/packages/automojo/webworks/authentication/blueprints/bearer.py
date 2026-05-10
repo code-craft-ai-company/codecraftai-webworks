@@ -121,6 +121,38 @@ class BearerAuthBlueprint(SecurityBlueprint):
     token_store: Optional[TokenStore] = None
     identity_provider: Optional[IdentityProvider] = None
 
+    # --- Class constants ---
+    # Override these on a subclass to rebrand wire-format strings without
+    # rewriting the handler bodies.
+
+    # Error codes
+    ENDPOINT_DISABLED_ERROR_CODE: str = "endpoint_disabled"
+    INVALID_REQUEST_ERROR_CODE: str = "invalid_request"
+    SERVER_ERROR_CODE: str = "server_error"
+    INVALID_GRANT_ERROR_CODE: str = "invalid_grant"
+    INVALID_CLIENT_ERROR_CODE: str = "invalid_client"
+    UNSUPPORTED_GRANT_TYPE_ERROR_CODE: str = "unsupported_grant_type"
+
+    # Authentication scheme label written into AuthenticationContext
+    SCHEME_LABEL: str = "Bearer"
+
+    # JWT claim keys
+    JWT_CLAIM_SUB: str = "sub"
+    JWT_CLAIM_IAT: str = "iat"
+    JWT_CLAIM_EXP: str = "exp"
+    JWT_CLAIM_TOKEN_TYPE: str = "token_type"
+    JWT_CLAIM_SCOPE: str = "scope"
+
+    # Token type literals
+    TOKEN_TYPE_ACCESS: str = "access"
+    TOKEN_TYPE_REFRESH: str = "refresh"
+    TOKEN_TYPE_BEARER: str = "Bearer"
+
+    # Grant type literals
+    GRANT_TYPE_PASSWORD: str = "password"
+    GRANT_TYPE_REFRESH_TOKEN: str = "refresh_token"
+    GRANT_TYPE_CLIENT_CREDENTIALS: str = "client_credentials"
+
     @classmethod
     @SecurityBlueprint.create(
         path="",
@@ -154,7 +186,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("token"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Token endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -163,20 +195,20 @@ class BearerAuthBlueprint(SecurityBlueprint):
         body = request.json()
         grant_type = body.get("grant_type")
 
-        if grant_type == "password":
+        if grant_type == cls.GRANT_TYPE_PASSWORD:
             response = cls._handle_password_grant(request, body)
             return response
 
-        if grant_type == "refresh_token":
+        if grant_type == cls.GRANT_TYPE_REFRESH_TOKEN:
             response = cls._handle_refresh_grant(body)
             return response
 
-        if grant_type == "client_credentials":
+        if grant_type == cls.GRANT_TYPE_CLIENT_CREDENTIALS:
             response = cls._handle_client_credentials_grant(body)
             return response
 
         error = AuthError(
-            error="unsupported_grant_type",
+            error=cls.UNSUPPORTED_GRANT_TYPE_ERROR_CODE,
             error_description="Grant type '{}' is not supported".format(
                 grant_type
             )
@@ -211,7 +243,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("refresh"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Refresh endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -222,7 +254,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         if not refresh_token:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Refresh token is required"
             )
             response = cls.format_error(error, status_code=400)
@@ -259,7 +291,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("revoke"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Revoke endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -270,7 +302,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         if not token_value:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Token is required"
             )
             response = cls.format_error(error, status_code=400)
@@ -282,7 +314,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
         response = {
             "status": 200,
             "body": {},
-            "content_type": "application/json"
+            "content_type": cls.JSON_CONTENT_TYPE
         }
         return response
 
@@ -314,7 +346,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("introspect"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Introspect endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -325,7 +357,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         if not token_value:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Token is required"
             )
             response = cls.format_error(error, status_code=400)
@@ -333,7 +365,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         if cls.jwt_secret is None:
             error = AuthError(
-                error="server_error",
+                error=cls.SERVER_ERROR_CODE,
                 error_description="JWT secret is not configured"
             )
             response = cls.format_error(error, status_code=500)
@@ -351,7 +383,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = {
                 "status": 200,
                 "body": response_body,
-                "content_type": "application/json"
+                "content_type": cls.JSON_CONTENT_TYPE
             }
             return response
 
@@ -359,7 +391,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = {
                 "status": 200,
                 "body": {"active": False},
-                "content_type": "application/json"
+                "content_type": cls.JSON_CONTENT_TYPE
             }
             return response
 
@@ -383,7 +415,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         if not username or not password:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Username and password are required for password grant"
             )
             response = cls.format_error(error, status_code=400)
@@ -398,7 +430,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         if provider is None:
             error = AuthError(
-                error="server_error",
+                error=cls.SERVER_ERROR_CODE,
                 error_description="No identity provider configured"
             )
             response = cls.format_error(error, status_code=500)
@@ -416,7 +448,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         if principal is None:
             error = AuthError(
-                error="invalid_grant",
+                error=cls.INVALID_GRANT_ERROR_CODE,
                 error_description="Invalid username or password"
             )
             response = cls.format_error(error)
@@ -425,7 +457,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
         # Post-authentication hook
         context = AuthenticationContext(
             principal=principal,
-            scheme="Bearer"
+            scheme=cls.SCHEME_LABEL
         )
         cls.post_authenticate(request, context)
 
@@ -452,7 +484,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         if not refresh_token:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Refresh token is required"
             )
             response = cls.format_error(error, status_code=400)
@@ -460,7 +492,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         if cls.jwt_secret is None:
             error = AuthError(
-                error="server_error",
+                error=cls.SERVER_ERROR_CODE,
                 error_description="JWT secret is not configured"
             )
             response = cls.format_error(error, status_code=500)
@@ -473,13 +505,13 @@ class BearerAuthBlueprint(SecurityBlueprint):
             )
             if claims is None:
                 error = AuthError(
-                    error="invalid_grant",
+                    error=cls.INVALID_GRANT_ERROR_CODE,
                     error_description="Invalid or expired refresh token"
                 )
                 response = cls.format_error(error)
                 return response
 
-            subject = claims.get("sub")
+            subject = claims.get(cls.JWT_CLAIM_SUB)
         else:
             # Decode the refresh token as a JWT
             try:
@@ -490,25 +522,25 @@ class BearerAuthBlueprint(SecurityBlueprint):
                 )
             except JWTError:
                 error = AuthError(
-                    error="invalid_grant",
+                    error=cls.INVALID_GRANT_ERROR_CODE,
                     error_description="Invalid or expired refresh token"
                 )
                 response = cls.format_error(error)
                 return response
 
-            if claims.get("token_type") != "refresh":
+            if claims.get(cls.JWT_CLAIM_TOKEN_TYPE) != cls.TOKEN_TYPE_REFRESH:
                 error = AuthError(
-                    error="invalid_grant",
+                    error=cls.INVALID_GRANT_ERROR_CODE,
                     error_description="Token is not a refresh token"
                 )
                 response = cls.format_error(error)
                 return response
 
-            subject = claims.get("sub")
+            subject = claims.get(cls.JWT_CLAIM_SUB)
 
         if not subject:
             error = AuthError(
-                error="invalid_grant",
+                error=cls.INVALID_GRANT_ERROR_CODE,
                 error_description="Refresh token missing subject claim"
             )
             response = cls.format_error(error)
@@ -517,15 +549,15 @@ class BearerAuthBlueprint(SecurityBlueprint):
         # Issue a new access token
         now = time.time()
         access_payload = {
-            "sub": subject,
-            "iat": int(now),
-            "exp": int(now) + cls.access_token_expires,
-            "token_type": "access"
+            cls.JWT_CLAIM_SUB: subject,
+            cls.JWT_CLAIM_IAT: int(now),
+            cls.JWT_CLAIM_EXP: int(now) + cls.access_token_expires,
+            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_ACCESS
         }
 
-        scope = body.get("scope")
+        scope = body.get(cls.JWT_CLAIM_SCOPE)
         if scope:
-            access_payload["scope"] = scope
+            access_payload[cls.JWT_CLAIM_SCOPE] = scope
 
         access_token = encode_jwt(
             access_payload,
@@ -535,7 +567,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         auth_response = AuthResponse(
             access_token=access_token,
-            token_type="Bearer",
+            token_type=cls.TOKEN_TYPE_BEARER,
             expires_in=cls.access_token_expires,
             scope=scope
         )
@@ -561,7 +593,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         if not client_id or not client_secret:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Client ID and client secret are required"
             )
             response = cls.format_error(error, status_code=400)
@@ -580,7 +612,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
             )
             if principal is None:
                 error = AuthError(
-                    error="invalid_client",
+                    error=cls.INVALID_CLIENT_ERROR_CODE,
                     error_description="Invalid client credentials"
                 )
                 response = cls.format_error(error)
@@ -593,7 +625,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         if cls.jwt_secret is None:
             error = AuthError(
-                error="server_error",
+                error=cls.SERVER_ERROR_CODE,
                 error_description="JWT secret is not configured"
             )
             response = cls.format_error(error, status_code=500)
@@ -601,15 +633,15 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         now = time.time()
         access_payload = {
-            "sub": subject,
-            "iat": int(now),
-            "exp": int(now) + cls.access_token_expires,
-            "token_type": "access"
+            cls.JWT_CLAIM_SUB: subject,
+            cls.JWT_CLAIM_IAT: int(now),
+            cls.JWT_CLAIM_EXP: int(now) + cls.access_token_expires,
+            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_ACCESS
         }
 
-        scope = body.get("scope")
+        scope = body.get(cls.JWT_CLAIM_SCOPE)
         if scope:
-            access_payload["scope"] = scope
+            access_payload[cls.JWT_CLAIM_SCOPE] = scope
 
         access_token = encode_jwt(
             access_payload,
@@ -620,7 +652,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
         # Client credentials grant does not issue a refresh token
         auth_response = AuthResponse(
             access_token=access_token,
-            token_type="Bearer",
+            token_type=cls.TOKEN_TYPE_BEARER,
             expires_in=cls.access_token_expires,
             scope=scope
         )
@@ -646,7 +678,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
         """
         if cls.jwt_secret is None:
             error = AuthError(
-                error="server_error",
+                error=cls.SERVER_ERROR_CODE,
                 error_description="JWT secret is not configured"
             )
             response = cls.format_error(error, status_code=500)
@@ -656,13 +688,13 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         # Build access token payload
         access_payload = {
-            "sub": subject,
-            "iat": int(now),
-            "exp": int(now) + cls.access_token_expires,
-            "token_type": "access"
+            cls.JWT_CLAIM_SUB: subject,
+            cls.JWT_CLAIM_IAT: int(now),
+            cls.JWT_CLAIM_EXP: int(now) + cls.access_token_expires,
+            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_ACCESS
         }
         if scope:
-            access_payload["scope"] = scope
+            access_payload[cls.JWT_CLAIM_SCOPE] = scope
 
         access_token = encode_jwt(
             access_payload,
@@ -672,13 +704,13 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         # Build refresh token payload
         refresh_payload = {
-            "sub": subject,
-            "iat": int(now),
-            "exp": int(now) + cls.refresh_token_expires,
-            "token_type": "refresh"
+            cls.JWT_CLAIM_SUB: subject,
+            cls.JWT_CLAIM_IAT: int(now),
+            cls.JWT_CLAIM_EXP: int(now) + cls.refresh_token_expires,
+            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_REFRESH
         }
         if scope:
-            refresh_payload["scope"] = scope
+            refresh_payload[cls.JWT_CLAIM_SCOPE] = scope
 
         refresh_token = encode_jwt(
             refresh_payload,
@@ -698,7 +730,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         auth_response = AuthResponse(
             access_token=access_token,
-            token_type="Bearer",
+            token_type=cls.TOKEN_TYPE_BEARER,
             expires_in=cls.access_token_expires,
             refresh_token=refresh_token,
             scope=scope

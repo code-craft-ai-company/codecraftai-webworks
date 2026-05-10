@@ -108,6 +108,32 @@ class SecurityBlueprint(RestBlueprint):
     error_format: str = "json"
     cors_origins: Optional[List[str]] = None
 
+    # --- Class constants ---
+    # Override these on a subclass to rebrand error codes / response shape
+    # without rewriting the handler bodies. Every literal a handler used to
+    # emit lives here as an UPPERCASE attribute referenced via ``cls.NAME``.
+
+    # Response content types
+    JSON_CONTENT_TYPE: str = "application/json"
+
+    # Generic error codes / messages used by base-class handlers
+    SERVER_ERROR_CODE: str = "server_error"
+    SERVER_ERROR_MESSAGE: str = "An internal error occurred"
+
+    # CORS literals
+    CORS_DEFAULT_METHODS: str = "GET, POST, PUT, DELETE, OPTIONS"
+    CORS_DEFAULT_HEADERS: str = "Authorization, Content-Type"
+    CORS_ALLOW_CREDENTIALS: str = "true"
+    CORS_ALLOW_ORIGIN_HEADER: str = "Access-Control-Allow-Origin"
+    CORS_ALLOW_METHODS_HEADER: str = "Access-Control-Allow-Methods"
+    CORS_ALLOW_HEADERS_HEADER: str = "Access-Control-Allow-Headers"
+    CORS_ALLOW_CREDENTIALS_HEADER: str = "Access-Control-Allow-Credentials"
+    CORS_WILDCARD_ORIGIN: str = "*"
+
+    # Endpoint enablement / metadata
+    ENABLE_ALL_TOKEN: str = "all"
+    DEFAULT_ENDPOINT_TYPE: str = "auth"
+
     @classmethod
     def configure(
         cls,
@@ -173,9 +199,9 @@ class SecurityBlueprint(RestBlueprint):
         """
         endpoints = cls.enabled_endpoints
         if endpoints is None:
-            endpoints = {"all"}
+            endpoints = {cls.ENABLE_ALL_TOKEN}
 
-        is_enabled = "all" in endpoints or endpoint_name in endpoints
+        is_enabled = cls.ENABLE_ALL_TOKEN in endpoints or endpoint_name in endpoints
         return is_enabled
 
     @classmethod
@@ -235,7 +261,7 @@ class SecurityBlueprint(RestBlueprint):
         response = {
             "status": status_code,
             "body": error.to_dict(),
-            "content_type": "application/json"
+            "content_type": cls.JSON_CONTENT_TYPE
         }
         return response
 
@@ -259,7 +285,7 @@ class SecurityBlueprint(RestBlueprint):
         result = {
             "status": status_code,
             "body": response.to_dict(),
-            "content_type": "application/json"
+            "content_type": cls.JSON_CONTENT_TYPE
         }
         return result
 
@@ -305,8 +331,8 @@ class SecurityBlueprint(RestBlueprint):
                       generic error body safe for client consumption.
         """
         safe_error = AuthError(
-            error="server_error",
-            error_description="An internal error occurred"
+            error=cls.SERVER_ERROR_CODE,
+            error_description=cls.SERVER_ERROR_MESSAGE
         )
         response = cls.format_error(safe_error, status_code=500)
         return response
@@ -337,18 +363,18 @@ class SecurityBlueprint(RestBlueprint):
             return {}
 
         # Check if the origin is allowed
-        if "*" in cors_origins:
-            allowed_origin = "*"
+        if cls.CORS_WILDCARD_ORIGIN in cors_origins:
+            allowed_origin = cls.CORS_WILDCARD_ORIGIN
         elif origin in cors_origins:
             allowed_origin = origin
         else:
             return {}
 
         headers = {
-            "Access-Control-Allow-Origin": allowed_origin,
-            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Authorization, Content-Type",
-            "Access-Control-Allow-Credentials": "true",
+            cls.CORS_ALLOW_ORIGIN_HEADER: allowed_origin,
+            cls.CORS_ALLOW_METHODS_HEADER: cls.CORS_DEFAULT_METHODS,
+            cls.CORS_ALLOW_HEADERS_HEADER: cls.CORS_DEFAULT_HEADERS,
+            cls.CORS_ALLOW_CREDENTIALS_HEADER: cls.CORS_ALLOW_CREDENTIALS,
         }
         return headers
 
@@ -731,7 +757,7 @@ class SecurityBlueprint(RestBlueprint):
         # ``@attach_at(..., endpoint_type="rest")``) win — their
         # value is preserved.
         descriptor_extras: Dict[str, Any] = dict(meta.get("extras", {}))
-        descriptor_extras.setdefault("endpoint_type", "auth")
+        descriptor_extras.setdefault("endpoint_type", cls.DEFAULT_ENDPOINT_TYPE)
 
         descriptor = EndpointDescriptor(
             handler=handler,

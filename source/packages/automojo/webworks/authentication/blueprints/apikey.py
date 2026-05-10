@@ -167,6 +167,22 @@ class APIKeyBlueprint(SecurityBlueprint):
     key_store: Optional[APIKeyStore] = None
     default_expiration: Optional[int] = None
 
+    # --- Class constants ---
+    # Override these on a subclass to rebrand wire-format strings or change
+    # entropy bit-widths without rewriting handler bodies.
+
+    # Error codes
+    ENDPOINT_DISABLED_ERROR_CODE: str = "endpoint_disabled"
+    INVALID_REQUEST_ERROR_CODE: str = "invalid_request"
+    NOT_FOUND_ERROR_CODE: str = "not_found"
+
+    # Success / response messages
+    KEY_REVOKED_MESSAGE: str = "API key revoked"
+
+    # Random-byte lengths used for key generation
+    KEY_VALUE_BYTE_LENGTH: int = 32
+    KEY_ID_BYTE_LENGTH: int = 16
+
     # In-memory fallback store when no key_store is configured
     _memory_store: Dict[str, Dict[str, Any]] = {}
 
@@ -180,7 +196,7 @@ class APIKeyBlueprint(SecurityBlueprint):
 
             :returns: A random API key string.
         """
-        key_value = secrets.token_urlsafe(32)
+        key_value = secrets.token_urlsafe(cls.KEY_VALUE_BYTE_LENGTH)
         return key_value
 
     @classmethod
@@ -193,7 +209,7 @@ class APIKeyBlueprint(SecurityBlueprint):
 
             :returns: A random key identifier string.
         """
-        key_id = secrets.token_urlsafe(16)
+        key_id = secrets.token_urlsafe(cls.KEY_ID_BYTE_LENGTH)
         return key_id
 
     @classmethod
@@ -255,7 +271,7 @@ class APIKeyBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("create"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Create key endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -272,7 +288,7 @@ class APIKeyBlueprint(SecurityBlueprint):
 
         if not name:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Key name is required"
             )
             response = cls.format_error(error, status_code=400)
@@ -329,7 +345,7 @@ class APIKeyBlueprint(SecurityBlueprint):
         response = {
             "status": 201,
             "body": response_body,
-            "content_type": "application/json"
+            "content_type": cls.JSON_CONTENT_TYPE
         }
         return response
 
@@ -362,7 +378,7 @@ class APIKeyBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("list"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="List keys endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -388,7 +404,7 @@ class APIKeyBlueprint(SecurityBlueprint):
         response = {
             "status": 200,
             "body": {"keys": sanitized_keys},
-            "content_type": "application/json"
+            "content_type": cls.JSON_CONTENT_TYPE
         }
         return response
 
@@ -421,7 +437,7 @@ class APIKeyBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("get"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Get key endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -434,7 +450,7 @@ class APIKeyBlueprint(SecurityBlueprint):
 
         if key_record is None:
             error = AuthError(
-                error="not_found",
+                error=cls.NOT_FOUND_ERROR_CODE,
                 error_description="API key not found"
             )
             response = cls.format_error(error, status_code=404)
@@ -452,7 +468,7 @@ class APIKeyBlueprint(SecurityBlueprint):
         response = {
             "status": 200,
             "body": response_body,
-            "content_type": "application/json"
+            "content_type": cls.JSON_CONTENT_TYPE
         }
         return response
 
@@ -483,7 +499,7 @@ class APIKeyBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("revoke"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Revoke key endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -498,7 +514,7 @@ class APIKeyBlueprint(SecurityBlueprint):
 
         if not revoked:
             error = AuthError(
-                error="not_found",
+                error=cls.NOT_FOUND_ERROR_CODE,
                 error_description="API key not found"
             )
             response = cls.format_error(error, status_code=404)
@@ -506,7 +522,7 @@ class APIKeyBlueprint(SecurityBlueprint):
 
         response = {
             "status": 200,
-            "body": {"message": "API key revoked"},
-            "content_type": "application/json"
+            "body": {"message": cls.KEY_REVOKED_MESSAGE},
+            "content_type": cls.JSON_CONTENT_TYPE
         }
         return response
