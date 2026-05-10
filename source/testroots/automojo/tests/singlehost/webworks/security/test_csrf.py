@@ -87,6 +87,108 @@ class MockReceive:
         return {"type": "http.request", "body": b"", "more_body": False}
 
 
+class FormBodyReceive:
+    """
+        Yields a form-encoded request body in one or more chunks.
+
+        :param body: Full body bytes to deliver.
+        :param chunk_size: When greater than zero, splits ``body`` into
+                           consecutive chunks of at most this many bytes,
+                           each emitted with ``more_body=True`` until the
+                           final chunk. ``0`` (default) emits the whole
+                           body as a single message.
+    """
+
+    def __init__(self, body: bytes, chunk_size: int = 0):
+        self._body = body
+        self._chunk_size = chunk_size
+        self._cursor = 0
+        self._exhausted = False
+        self._call_count = 0
+
+    @property
+    def call_count(self) -> int:
+        return self._call_count
+
+    async def __call__(self) -> Dict[str, Any]:
+        self._call_count = self._call_count + 1
+
+        if self._exhausted:
+            return {"type": "http.disconnect"}
+
+        if self._chunk_size <= 0:
+            self._exhausted = True
+            return {
+                "type": "http.request",
+                "body": self._body,
+                "more_body": False,
+            }
+
+        end = self._cursor + self._chunk_size
+        chunk = self._body[self._cursor:end]
+        self._cursor = end
+
+        more_body = self._cursor < len(self._body)
+        if not more_body:
+            self._exhausted = True
+
+        return {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": more_body,
+        }
+
+
+class CapturingASGIApp:
+    """
+        Captures the scope and any body chunks delivered through the
+        wrapped ``receive`` callable. Used to assert that the CSRF
+        middleware's body replay re-delivers the original payload to
+        the downstream app.
+    """
+
+    def __init__(self):
+        self._called = False
+        self._scope: Optional[Dict[str, Any]] = None
+        self._body_chunks: List[bytes] = []
+
+    async def __call__(
+        self,
+        scope: Dict[str, Any],
+        receive: Callable,
+        send: Callable
+    ) -> None:
+        self._called = True
+        self._scope = scope
+
+        # Drain the receive callable so we can verify that the body
+        # buffered by the middleware is replayed to the downstream app.
+        while True:
+            message = await receive()
+            message_type = message.get("type", "")
+            if message_type != "http.request":
+                break
+
+            chunk = message.get("body", b"") or b""
+            if isinstance(chunk, (bytes, bytearray)) and len(chunk) > 0:
+                self._body_chunks.append(bytes(chunk))
+
+            if not message.get("more_body", False):
+                break
+
+        return
+
+    @property
+    def was_called(self) -> bool:
+        return self._called
+
+    @property
+    def captured_body(self) -> bytes:
+        if len(self._body_chunks) == 0:
+            return b""
+        return b"".join(self._body_chunks)
+
+
 def run_async(coro):
     """
         Drive a coroutine to completion on a fresh event loop.
@@ -476,6 +578,343 @@ def test_middleware_exempt_path_bypasses_validation():
 
     if not app.was_called:
         errmsg = "Expected wrapped app to be called for exempt path"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def _build_form_body(field_name: str, field_value: str) -> bytes:
+    """
+        Build a minimal ``application/x-www-form-urlencoded`` body
+        containing the supplied field/value pair.
+    """
+    from urllib.parse import urlencode
+
+    body_str = urlencode({field_name: field_value})
+    rtnval = body_str.encode("utf-8")
+    return rtnval
+
+
+def test_middleware_accepts_form_token_in_request_body():
+    """
+        The happy path for traditional ``<form>`` posts: a session
+        cookie plus a hidden ``csrf_token`` field in the form body
+        validates and forwards through to the wrapped app, which
+        observes the original request body via the wrapped receive.
+    """
+    app = CapturingASGIApp()
+    middleware, manager = _build_middleware(app)
+
+    valid_token = manager.generate(SESSION_ID)
+    body = _build_form_body("csrf_token", valid_token) + b"&name=widget&price=9"
+    receive = FormBodyReceive(body=body)
+
+    scope = create_http_scope(
+        method="POST",
+        path="/dashboard/postback-internal-create-product",
+        headers=[
+            (b"cookie", b"session_id=" + SESSION_ID.encode("ascii")),
+            (b"content-type", b"application/x-www-form-urlencoded"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ],
+    )
+    send = MockSend()
+    run_async(middleware(scope, receive, send))
+
+    if not app.was_called:
+        errmsg = "Expected wrapped app to be called when form-body CSRF token validates"
+        raise AssertionError(errmsg)
+
+    if len(send.messages) != 0:
+        errmsg = "Expected no middleware-side response on success, got {}".format(send.messages)
+        raise AssertionError(errmsg)
+
+    if app.captured_body != body:
+        errmsg = (
+            "Expected wrapped app to observe the original body; "
+            "got {!r} vs original {!r}".format(app.captured_body, body)
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_middleware_accepts_form_token_with_charset_in_content_type():
+    """
+        ``application/x-www-form-urlencoded; charset=utf-8`` must still
+        be recognised as a form body — the prefix match should ignore
+        any explicit charset suffix.
+    """
+    app = CapturingASGIApp()
+    middleware, manager = _build_middleware(app)
+
+    valid_token = manager.generate(SESSION_ID)
+    body = _build_form_body("csrf_token", valid_token)
+    receive = FormBodyReceive(body=body)
+
+    scope = create_http_scope(
+        method="POST",
+        path="/postback",
+        headers=[
+            (b"cookie", b"session_id=" + SESSION_ID.encode("ascii")),
+            (b"content-type", b"application/x-www-form-urlencoded; charset=utf-8"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ],
+    )
+    send = MockSend()
+    run_async(middleware(scope, receive, send))
+
+    if not app.was_called:
+        errmsg = "Expected wrapped app to be called when content-type carries charset suffix"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_middleware_replays_chunked_form_body_to_wrapped_app():
+    """
+        The middleware reassembles a multi-chunk request body and
+        replays the full original payload to the wrapped app via the
+        wrapped receive callable. Exercises the chunk-handling and
+        replay path together.
+    """
+    app = CapturingASGIApp()
+    middleware, manager = _build_middleware(app)
+
+    valid_token = manager.generate(SESSION_ID)
+    body = _build_form_body("csrf_token", valid_token) + b"&payload=" + (b"x" * 200)
+    receive = FormBodyReceive(body=body, chunk_size=64)
+
+    scope = create_http_scope(
+        method="POST",
+        path="/postback",
+        headers=[
+            (b"cookie", b"session_id=" + SESSION_ID.encode("ascii")),
+            (b"content-type", b"application/x-www-form-urlencoded"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ],
+    )
+    send = MockSend()
+    run_async(middleware(scope, receive, send))
+
+    if not app.was_called:
+        errmsg = "Expected wrapped app to be called for chunked form body"
+        raise AssertionError(errmsg)
+
+    if app.captured_body != body:
+        errmsg = (
+            "Expected wrapped app to observe the original body across chunks; "
+            "got {} bytes vs original {} bytes".format(
+                len(app.captured_body), len(body)
+            )
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_middleware_rejects_form_body_with_invalid_token():
+    """
+        A form body that carries a ``csrf_token`` field but the value
+        does not match the session must be rejected with
+        ``csrf_token_invalid`` — confirming that form-body extraction
+        feeds the same validation path as the header.
+    """
+    app = MockASGIApp()
+    middleware, _manager = _build_middleware(app)
+
+    body = _build_form_body("csrf_token", "this-is-not-a-valid-token")
+    receive = FormBodyReceive(body=body)
+
+    scope = create_http_scope(
+        method="POST",
+        path="/postback",
+        headers=[
+            (b"cookie", b"session_id=" + SESSION_ID.encode("ascii")),
+            (b"content-type", b"application/x-www-form-urlencoded"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ],
+    )
+    send = MockSend()
+    run_async(middleware(scope, receive, send))
+
+    if app.was_called:
+        errmsg = "Expected wrapped app NOT to be called for invalid form token"
+        raise AssertionError(errmsg)
+
+    decoded = _decode_json_body(send.messages)
+    if decoded.get("error") != "csrf_token_invalid":
+        errmsg = "Expected error 'csrf_token_invalid', got {!r}".format(decoded.get("error"))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_middleware_rejects_form_body_without_token_field():
+    """
+        A form body that does not carry the configured CSRF field must
+        be rejected with ``csrf_token_missing``.
+    """
+    app = MockASGIApp()
+    middleware, _manager = _build_middleware(app)
+
+    body = b"name=widget&price=9"
+    receive = FormBodyReceive(body=body)
+
+    scope = create_http_scope(
+        method="POST",
+        path="/postback",
+        headers=[
+            (b"cookie", b"session_id=" + SESSION_ID.encode("ascii")),
+            (b"content-type", b"application/x-www-form-urlencoded"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ],
+    )
+    send = MockSend()
+    run_async(middleware(scope, receive, send))
+
+    if app.was_called:
+        errmsg = "Expected wrapped app NOT to be called when form lacks csrf_token field"
+        raise AssertionError(errmsg)
+
+    decoded = _decode_json_body(send.messages)
+    if decoded.get("error") != "csrf_token_missing":
+        errmsg = "Expected error 'csrf_token_missing', got {!r}".format(decoded.get("error"))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_middleware_skips_form_extraction_when_body_exceeds_cap():
+    """
+        When ``Content-Length`` declares a body larger than
+        ``max_form_body_bytes``, the middleware skips form-body
+        extraction without consuming the receive stream. The result
+        is a ``csrf_token_missing`` rejection (no header was supplied),
+        and crucially the receive callable was not drained — verified
+        here by counting how many messages the receive emitted.
+    """
+    app = MockASGIApp()
+    manager = CSRFTokenManager(secret_key=SECRET_KEY)
+    resolver = cookie_session_id_resolver(cookie_name="session_id")
+    middleware = CSRFMiddleware(
+        app=app,
+        token_manager=manager,
+        session_id_resolver=resolver,
+        max_form_body_bytes=128,
+    )
+
+    big_body = b"csrf_token=" + (b"a" * 200)
+    receive = FormBodyReceive(body=big_body)
+
+    scope = create_http_scope(
+        method="POST",
+        path="/postback",
+        headers=[
+            (b"cookie", b"session_id=" + SESSION_ID.encode("ascii")),
+            (b"content-type", b"application/x-www-form-urlencoded"),
+            (b"content-length", str(len(big_body)).encode("ascii")),
+        ],
+    )
+    send = MockSend()
+    run_async(middleware(scope, receive, send))
+
+    if app.was_called:
+        errmsg = "Expected wrapped app NOT to be called when oversized body skips extraction"
+        raise AssertionError(errmsg)
+
+    decoded = _decode_json_body(send.messages)
+    if decoded.get("error") != "csrf_token_missing":
+        errmsg = "Expected error 'csrf_token_missing', got {!r}".format(decoded.get("error"))
+        raise AssertionError(errmsg)
+
+    if receive.call_count != 0:
+        errmsg = (
+            "Expected receive stream NOT to be consumed when body exceeds cap; "
+            "got {} calls".format(receive.call_count)
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_middleware_does_not_consume_body_for_non_form_content_type():
+    """
+        Requests with a non-form ``Content-Type`` (e.g. JSON) must not
+        have their body consumed by the CSRF middleware when the
+        ``X-CSRF-Token`` header is missing — JSON clients often send
+        the token via the header, and consuming the body would break
+        the downstream JSON handler.
+    """
+    app = MockASGIApp()
+    middleware, _manager = _build_middleware(app)
+
+    json_body = b'{"name": "widget"}'
+    receive = FormBodyReceive(body=json_body)
+
+    scope = create_http_scope(
+        method="POST",
+        path="/postback",
+        headers=[
+            (b"cookie", b"session_id=" + SESSION_ID.encode("ascii")),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(json_body)).encode("ascii")),
+        ],
+    )
+    send = MockSend()
+    run_async(middleware(scope, receive, send))
+
+    # Header missing + body not consumed → csrf_token_missing.
+    decoded = _decode_json_body(send.messages)
+    if decoded.get("error") != "csrf_token_missing":
+        errmsg = "Expected error 'csrf_token_missing', got {!r}".format(decoded.get("error"))
+        raise AssertionError(errmsg)
+
+    if receive.call_count != 0:
+        errmsg = (
+            "Expected receive stream NOT to be consumed for non-form content type; "
+            "got {} calls".format(receive.call_count)
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_middleware_header_token_takes_precedence_over_form_body():
+    """
+        When both a valid header token and a form body are present,
+        the middleware accepts on the header without consuming the
+        request body — preserving the body for the downstream app.
+    """
+    app = MockASGIApp()
+    middleware, manager = _build_middleware(app)
+
+    valid_token = manager.generate(SESSION_ID)
+    body = b"name=widget"
+    receive = FormBodyReceive(body=body)
+
+    scope = create_http_scope(
+        method="POST",
+        path="/postback",
+        headers=[
+            (b"cookie", b"session_id=" + SESSION_ID.encode("ascii")),
+            (b"x-csrf-token", valid_token.encode("ascii")),
+            (b"content-type", b"application/x-www-form-urlencoded"),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ],
+    )
+    send = MockSend()
+    run_async(middleware(scope, receive, send))
+
+    if not app.was_called:
+        errmsg = "Expected wrapped app to be called when header token validates"
+        raise AssertionError(errmsg)
+
+    if receive.call_count != 0:
+        errmsg = (
+            "Expected receive stream NOT to be consumed when header token is present; "
+            "got {} calls".format(receive.call_count)
+        )
         raise AssertionError(errmsg)
 
     return

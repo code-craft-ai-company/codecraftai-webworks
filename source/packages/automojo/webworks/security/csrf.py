@@ -19,9 +19,11 @@ Components:
     - :class:`CSRFMiddleware` — ASGI middleware that requires a valid CSRF
       token on unsafe HTTP methods (configurable; defaults to
       ``POST``/``PUT``/``PATCH``/``DELETE``). Token transport defaults to
-      the ``X-CSRF-Token`` header. Subclasses may override
-      :meth:`CSRFMiddleware._extract_form_token` to support
-      ``application/x-www-form-urlencoded`` request bodies.
+      the ``X-CSRF-Token`` header, with built-in fallback to a hidden
+      ``csrf_token`` field in ``application/x-www-form-urlencoded``
+      request bodies. Subclasses may override
+      :meth:`CSRFMiddleware._extract_form_token` to support additional
+      body shapes (e.g. ``multipart/form-data``).
     - :func:`make_csrf_context_processor` — factory that returns a context
       processor compatible with :class:`automojo.webworks.templating.context.ContextProcessorRegistry`.
       The processor injects ``csrf_token`` into the template context when
@@ -31,16 +33,21 @@ Token transport
 ---------------
 
 The middleware extracts the candidate token from the ``X-CSRF-Token``
-header by default. This is the recommended transport for AJAX/fetch
-calls and works without inspecting the request body. For traditional
-``<form>`` posts, applications may either:
+header first. This is the recommended transport for AJAX/fetch calls
+and works without inspecting the request body. When the header is
+absent on an unsafe method, the middleware also looks at the request
+body: for ``application/x-www-form-urlencoded`` posts it parses out a
+hidden ``csrf_token`` field, buffers the body, and replays it to the
+wrapped application via a wrapped ``receive`` callable so the
+downstream handler can still read its form fields. The maximum body
+size that the middleware is willing to buffer is bounded by
+``max_form_body_bytes`` (64 KiB by default); requests exceeding that
+limit skip form-token extraction and must use the header transport.
 
-    1. Submit the token via JavaScript using the ``X-CSRF-Token`` header.
-    2. Subclass :class:`CSRFMiddleware` and override
-       :meth:`CSRFMiddleware._extract_form_token` to read the token from
-       a form-encoded body field. Body parsing is intentionally not done
-       in the base middleware so applications can choose their own body
-       buffering / replay strategy.
+Subclasses may override :meth:`CSRFMiddleware._extract_form_token` to
+add support for other body shapes (e.g. ``multipart/form-data``). The
+override returns a ``(token, replay_receive)`` tuple — see the method
+docstring for the contract.
 
 Threat model
 ------------
@@ -72,7 +79,8 @@ import json
 import logging
 import secrets
 
-from typing import Any, Awaitable, Callable, Dict, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, Optional, Set, Tuple
+from urllib.parse import parse_qsl
 
 
 # Type aliases for ASGI callables — match the conventions in
@@ -88,6 +96,26 @@ ASGIApplication = Callable[
 DEFAULT_HEADER_NAME = "X-CSRF-Token"
 DEFAULT_FORM_FIELD_NAME = "csrf_token"
 DEFAULT_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# Content-Type prefix that the base middleware will parse as a form
+# body when looking for a token. The match is on the prefix only so
+# that explicit charset suffixes (e.g.
+# ``application/x-www-form-urlencoded; charset=utf-8``) still match.
+FORM_URLENCODED_CONTENT_TYPE = "application/x-www-form-urlencoded"
+
+# Default ceiling on the request body size the middleware will buffer
+# for form-token extraction. CSRF-protected dashboard forms are tiny
+# in practice (a few KiB at most); this cap protects the middleware
+# from being asked to buffer large file uploads or pathological
+# request bodies just to look for a hidden field.
+DEFAULT_MAX_FORM_BODY_BYTES = 65536
+
+# Sentinel ASGI message-type strings; mirrors the constants in
+# :mod:`automojo.webworks.asgi.constants` but kept local so this
+# module remains free of cross-module imports inside the security
+# subtree.
+_HTTP_REQUEST_MESSAGE_TYPE = "http.request"
+_HTTP_DISCONNECT_MESSAGE_TYPE = "http.disconnect"
 
 
 # Module-level logger used by free functions and the
@@ -311,8 +339,15 @@ class CSRFMiddleware:
             1. Resolves the session identifier from the request via the
                configured ``session_id_resolver``.
             2. Extracts the candidate token from the configured header
-               (``X-CSRF-Token`` by default), falling back to the
-               :meth:`_extract_form_token` hook if the header is absent.
+               (``X-CSRF-Token`` by default). If the header is absent
+               and the request body is
+               ``application/x-www-form-urlencoded``, the middleware
+               buffers the body, parses out the hidden ``csrf_token``
+               field (configurable via ``form_field_name``), and
+               wraps the ``receive`` callable so the downstream
+               application still observes the original body. Other
+               body shapes (e.g. multipart) fall through to the
+               :meth:`_extract_form_token` hook for subclasses.
             3. Validates the token against the session id using the
                configured :class:`CSRFTokenManager`.
 
@@ -327,6 +362,18 @@ class CSRFMiddleware:
                                     ``None``.
         :param header_name: HTTP header that carries the candidate token.
                             Defaults to ``X-CSRF-Token``.
+        :param form_field_name: Name of the form field that carries the
+                                token in
+                                ``application/x-www-form-urlencoded``
+                                bodies. Defaults to ``csrf_token``.
+        :param max_form_body_bytes: Maximum number of body bytes the
+                                    middleware will buffer when
+                                    extracting a form-encoded token.
+                                    Requests with a larger
+                                    ``Content-Length`` skip form-body
+                                    extraction and must transport the
+                                    token via the header. Defaults to
+                                    64 KiB.
         :param unsafe_methods: Iterable of HTTP method names that require
                                token validation. Defaults to
                                ``{"POST", "PUT", "PATCH", "DELETE"}``.
@@ -343,6 +390,8 @@ class CSRFMiddleware:
         token_manager: CSRFTokenManager,
         session_id_resolver: SessionIdResolver,
         header_name: str = DEFAULT_HEADER_NAME,
+        form_field_name: str = DEFAULT_FORM_FIELD_NAME,
+        max_form_body_bytes: int = DEFAULT_MAX_FORM_BODY_BYTES,
         unsafe_methods: Optional[Set[str]] = None,
         exempt_paths: Optional[Set[str]] = None,
         logger: Optional[logging.Logger] = None
@@ -355,6 +404,10 @@ class CSRFMiddleware:
             :param session_id_resolver: Callable returning the current
                                         session identifier from the scope.
             :param header_name: Header name used to transport the token.
+            :param form_field_name: Form field name used to transport
+                                    the token in form-encoded bodies.
+            :param max_form_body_bytes: Maximum body size to buffer
+                                        when looking for a form token.
             :param unsafe_methods: HTTP methods that require validation.
             :param exempt_paths: Request paths that bypass validation.
             :param logger: Logger for diagnostic messages.
@@ -373,6 +426,12 @@ class CSRFMiddleware:
         self._session_id_resolver = session_id_resolver
         self._header_name = str(header_name or DEFAULT_HEADER_NAME)
         self._header_name_lower = self._header_name.lower()
+        self._form_field_name = str(form_field_name or DEFAULT_FORM_FIELD_NAME)
+
+        if max_form_body_bytes is None:
+            self._max_form_body_bytes = DEFAULT_MAX_FORM_BODY_BYTES
+        else:
+            self._max_form_body_bytes = int(max_form_body_bytes)
 
         if unsafe_methods is None:
             self._unsafe_methods = set(DEFAULT_UNSAFE_METHODS)
@@ -398,6 +457,14 @@ class CSRFMiddleware:
         return self._header_name
 
     @property
+    def form_field_name(self) -> str:
+        return self._form_field_name
+
+    @property
+    def max_form_body_bytes(self) -> int:
+        return self._max_form_body_bytes
+
+    @property
     def unsafe_methods(self) -> Set[str]:
         return set(self._unsafe_methods)
 
@@ -412,7 +479,31 @@ class CSRFMiddleware:
             :param scope: ASGI scope dictionary for the current request.
 
             :returns: The header value as a string, or ``None`` when the
-                      header is absent.
+                      header is absent or empty.
+        """
+        value = self._read_request_header(scope, self._header_name_lower)
+        if value is None:
+            return None
+
+        if len(value) == 0:
+            return None
+
+        return value
+
+    def _read_request_header(
+        self,
+        scope: Dict[str, Any],
+        target_name_lower: str
+    ) -> Optional[str]:
+        """
+            Read a single request header out of the ASGI scope.
+
+            :param scope: ASGI scope dictionary for the current request.
+            :param target_name_lower: Header name to look for, in
+                                      lowercase.
+
+            :returns: The decoded header value as a string, or ``None``
+                      when the header is absent.
         """
         headers = scope.get("headers", []) or []
         for header_pair in headers:
@@ -429,7 +520,7 @@ class CSRFMiddleware:
             else:
                 name = str(name_bytes).lower()
 
-            if name != self._header_name_lower:
+            if name != target_name_lower:
                 continue
 
             if isinstance(value_bytes, (bytes, bytearray)):
@@ -437,34 +528,225 @@ class CSRFMiddleware:
             else:
                 value = str(value_bytes)
 
-            if len(value) > 0:
+            return value
+
+        return None
+
+    def _resolve_content_type(self, scope: Dict[str, Any]) -> str:
+        """
+            Read the ``Content-Type`` request header, normalised to
+            lowercase. Returns an empty string when the header is
+            absent.
+
+            :param scope: ASGI scope dictionary for the current request.
+
+            :returns: Lowercased content-type value, or empty string.
+        """
+        raw = self._read_request_header(scope, "content-type")
+        if raw is None:
+            return ""
+
+        rtnval = raw.strip().lower()
+        return rtnval
+
+    def _resolve_content_length(self, scope: Dict[str, Any]) -> Optional[int]:
+        """
+            Read the ``Content-Length`` request header as an integer.
+
+            :param scope: ASGI scope dictionary for the current request.
+
+            :returns: The parsed length, or ``None`` when the header is
+                      absent or malformed.
+        """
+        raw = self._read_request_header(scope, "content-length")
+        if raw is None:
+            return None
+
+        try:
+            rtnval = int(raw.strip())
+        except ValueError:
+            return None
+
+        if rtnval < 0:
+            return None
+
+        return rtnval
+
+    async def _buffer_request_body(
+        self,
+        receive: ReceiveCallable
+    ) -> Optional[bytes]:
+        """
+            Drain the ASGI request stream into a bytes buffer, capped
+            at ``self._max_form_body_bytes``.
+
+            :param receive: Original ASGI receive callable.
+
+            :returns: The accumulated body bytes when fully buffered
+                      under the cap, or ``None`` when the cap was
+                      exceeded mid-stream or a disconnect arrived
+                      before the body completed.
+        """
+        chunks: list = []
+        total = 0
+
+        while True:
+            message = await receive()
+            message_type = message.get("type", "")
+
+            if message_type == _HTTP_DISCONNECT_MESSAGE_TYPE:
+                return None
+
+            if message_type != _HTTP_REQUEST_MESSAGE_TYPE:
+                continue
+
+            body_chunk = message.get("body", b"") or b""
+            if isinstance(body_chunk, (bytes, bytearray)) and len(body_chunk) > 0:
+                chunk_bytes = bytes(body_chunk)
+                total = total + len(chunk_bytes)
+                if total > self._max_form_body_bytes:
+                    return None
+                chunks.append(chunk_bytes)
+
+            more_body = message.get("more_body", False)
+            if not more_body:
+                break
+
+        if len(chunks) == 0:
+            buffered = b""
+        elif len(chunks) == 1:
+            buffered = chunks[0]
+        else:
+            buffered = b"".join(chunks)
+
+        return buffered
+
+    def _build_replay_receive(
+        self,
+        buffered_body: bytes,
+        original_receive: ReceiveCallable
+    ) -> ReceiveCallable:
+        """
+            Wrap ``original_receive`` with a callable that first replays
+            ``buffered_body`` as a single ``http.request`` message, then
+            delegates further calls to the original receive.
+
+            :param buffered_body: Body bytes to replay on the first call.
+            :param original_receive: The receive callable that this
+                                     middleware originally consumed.
+
+            :returns: An ASGI-compatible receive callable.
+        """
+        delivered = False
+
+        async def replay_receive() -> Dict[str, Any]:
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                rtnmsg = {
+                    "type": _HTTP_REQUEST_MESSAGE_TYPE,
+                    "body": buffered_body,
+                    "more_body": False,
+                }
+                return rtnmsg
+
+            rtnmsg = await original_receive()
+            return rtnmsg
+
+        return replay_receive
+
+    def _parse_form_token(self, body: bytes) -> Optional[str]:
+        """
+            Parse a buffered form-encoded body and return the value of
+            the configured CSRF form field, if present.
+
+            :param body: Buffered request body bytes.
+
+            :returns: The token string when the form field is present,
+                      ``None`` otherwise.
+        """
+        try:
+            body_text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
+        try:
+            pairs = parse_qsl(
+                body_text,
+                keep_blank_values=True,
+                strict_parsing=False
+            )
+        except ValueError:
+            return None
+
+        for name, value in pairs:
+            if name == self._form_field_name:
+                if value is None or len(value) == 0:
+                    return None
                 return value
 
         return None
 
-    def _extract_form_token(
+    async def _extract_form_token(
         self,
         scope: Dict[str, Any],
         receive: ReceiveCallable
-    ) -> Optional[str]:
+    ) -> Tuple[Optional[str], Optional[ReceiveCallable]]:
         """
-            Hook that subclasses may override to read the candidate token
-            from a form-encoded request body.
+            Extract the candidate CSRF token from the request body when
+            the body is ``application/x-www-form-urlencoded``.
 
-            The base implementation returns ``None`` and does not consume
-            the receive stream. Subclasses that override this method are
-            responsible for buffering the body and re-yielding it to the
-            wrapped application via a wrapped ``receive`` callable, since
-            ASGI does not allow re-reading messages from the original
-            ``receive``.
+            The base implementation handles only form-urlencoded bodies.
+            When invoked it:
+
+                1. Inspects the ``Content-Type`` header. Non-form
+                   content types short-circuit to ``(None, None)`` and
+                   the body is left untouched for the downstream app.
+                2. Inspects the ``Content-Length`` header. Bodies
+                   declared larger than ``max_form_body_bytes`` are
+                   skipped without consuming the receive stream.
+                3. Drains the body into a bounded buffer, parses the
+                   configured form field, and constructs a replacement
+                   ``receive`` callable that replays the buffered body
+                   before delegating to the original.
+
+            Subclasses may override to support additional body shapes
+            (e.g. ``multipart/form-data``). An override **must** return
+            ``(None, None)`` when it does not consume the request body,
+            and must return ``(token_or_None, replay_receive)`` when it
+            does consume the body, so the wrapped application can still
+            read the original payload.
 
             :param scope: ASGI scope dictionary for the current request.
             :param receive: Original ASGI receive callable.
 
-            :returns: The candidate token string, or ``None`` when not
-                      present.
+            :returns: A ``(token, replay_receive)`` tuple. When the
+                      body was not consumed, ``replay_receive`` is
+                      ``None`` and the caller forwards the original
+                      ``receive`` to the wrapped application.
         """
-        return None
+        content_type = self._resolve_content_type(scope)
+        if not content_type.startswith(FORM_URLENCODED_CONTENT_TYPE):
+            return None, None
+
+        content_length = self._resolve_content_length(scope)
+        if content_length is not None and content_length > self._max_form_body_bytes:
+            self._logger.debug(
+                "CSRF form-token extraction skipped: declared body length "
+                "%d exceeds cap %d for path %r",
+                content_length,
+                self._max_form_body_bytes,
+                scope.get("path", "")
+            )
+            return None, None
+
+        buffered = await self._buffer_request_body(receive)
+        if buffered is None:
+            return None, None
+
+        token = self._parse_form_token(buffered)
+        replay_receive = self._build_replay_receive(buffered, receive)
+        return token, replay_receive
 
     def _is_exempt(self, scope: Dict[str, Any]) -> bool:
         """
@@ -562,8 +844,17 @@ class CSRFMiddleware:
             return
 
         token = self._extract_header_token(scope)
+        downstream_receive = receive
+
         if token is None:
-            token = self._extract_form_token(scope, receive)
+            form_token, replay_receive = await self._extract_form_token(
+                scope=scope,
+                receive=receive
+            )
+            if form_token is not None:
+                token = form_token
+            if replay_receive is not None:
+                downstream_receive = replay_receive
 
         if token is None:
             self._logger.debug(
@@ -590,7 +881,7 @@ class CSRFMiddleware:
             )
             return
 
-        await self._app(scope, receive, send)
+        await self._app(scope, downstream_receive, send)
         return
 
 
