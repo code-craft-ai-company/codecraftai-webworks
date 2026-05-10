@@ -19,6 +19,7 @@
         response = dispatcher.dispatch(request)
 """
 
+import logging
 import traceback
 from typing import Awaitable, Callable, Optional, TYPE_CHECKING
 
@@ -44,6 +45,14 @@ from automojo.webworks.templating.response import (
 # pipeline unchanged. Anything else returned by a handler is
 # wrapped in :class:`JSONResponse`.
 _RESPONSE_TYPES = (Response, TemplateResponse, StreamingTemplateResponse)
+
+
+# Module-level logger used when the dispatcher's catch-all converts
+# an unhandled handler/middleware exception into a 500. Without
+# this, every production 500 was silent — the response body said
+# "Internal Server Error" with no record of the underlying
+# exception in the journal, making post-hoc debugging impossible.
+logger = logging.getLogger(__name__)
 
 
 # Keys present on the ``{status, body, content_type}`` dict shape
@@ -408,16 +417,28 @@ class Dispatcher:
     def _handle_unhandled_exception(self, exc: Exception) -> Response:
         """
             Handle unhandled exceptions.
-            
+
             In debug mode, includes the full stack trace in the response.
             In production mode, returns a generic error message.
-            
+
+            Always logs the exception via :data:`logger` so the
+            traceback survives in the journal even when the response
+            body is the generic "Internal Server Error" string —
+            without this, every production 500 was opaque.
+
             :param exc: The unhandled exception.
-            
+
             :returns: 500 Internal Server Error response.
         """
+        # Log the exception unconditionally — debug mode controls
+        # what reaches the client, but the operator always wants the
+        # traceback in the journal.
+        logger.exception(
+            "Unhandled exception in dispatcher: %s", exc
+        )
+
         status_code = 500
-        
+
         if self._debug:
             # Include stack trace in debug mode
             detail = traceback.format_exc()
