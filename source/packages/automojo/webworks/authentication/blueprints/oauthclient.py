@@ -312,6 +312,78 @@ class OAuthClientBlueprint(SecurityBlueprint):
 
     success_message_template: str = "Welcome — signed in via {provider}"
 
+    # --- Class constants ---
+    # Override these on a subclass to rebrand wire-format strings without
+    # rewriting handler bodies. Module-level ``ERROR_*`` constants stay in
+    # place for backward compatibility; the class attributes mirror them so
+    # subclasses can override individual codes without touching the module.
+
+    # OAuth client-side error codes (mirrored from module constants).
+    PROVIDER_UNAVAILABLE_ERROR_CODE: str = ERROR_PROVIDER_UNAVAILABLE
+    UNKNOWN_PROVIDER_ERROR_CODE: str = ERROR_UNKNOWN_PROVIDER
+    PROVIDER_MISSING_ON_CALLBACK_ERROR_CODE: str = ERROR_PROVIDER_MISSING_ON_CALLBACK
+    TOKEN_PARSE_FAILED_ERROR_CODE: str = ERROR_TOKEN_PARSE_FAILED
+    NO_TOKEN_ERROR_CODE: str = ERROR_NO_TOKEN
+    AUTHORIZATION_FAILED_ERROR_CODE: str = ERROR_AUTHORIZATION_FAILED
+    NOT_CONFIGURED_ERROR_CODE: str = ERROR_NOT_CONFIGURED
+
+    # Endpoint-disabled error code / message template
+    ENDPOINT_DISABLED_ERROR_CODE: str = "endpoint_disabled"
+    ENDPOINT_DISABLED_MESSAGE_TEMPLATE: str = "OAuth {} endpoint is disabled"
+
+    # Captcha-related error codes
+    MISSING_CAPTCHA_ERROR_CODE: str = "missing_captcha"
+    CAPTCHA_FAILED_ERROR_CODE: str = "captcha_failed"
+
+    # Cookie attribute literals
+    COOKIE_PATH: str = "/"
+    COOKIE_HTTPONLY_FLAG: str = "HttpOnly"
+    COOKIE_SECURE_FLAG: str = "Secure"
+    COOKIE_SAMESITE_LAX: str = "SameSite=Lax"
+    COOKIE_EXPIRED_DATE: str = "Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+    COOKIE_MAX_AGE_ZERO: str = "Max-Age=0"
+    COOKIE_PART_SEPARATOR: str = "; "
+    COOKIE_HEADER_NAME: str = "Cookie"
+    SET_COOKIE_HEADER: str = "Set-Cookie"
+    LOCATION_HEADER: str = "Location"
+    CONTENT_TYPE_HEADER: str = "Content-Type"
+    JSON_CONTENT_TYPE_UTF8: str = "application/json; charset=utf-8"
+
+    # URL leaves used by callback / kickoff URL builders
+    CALLBACK_LEAF: str = "/callback"
+    LOGIN_LEAF: str = "/login"
+    REGISTER_LEAF: str = "/register"
+
+    # Default scheme / host fallbacks for callback URL construction
+    DEFAULT_SCHEME: str = "https"
+    DEFAULT_HOST: str = "localhost"
+
+    # Truthy values accepted on the kickoff query string ``register=``
+    # parameter.
+    REGISTER_FLAG_TRUTHY_VALUES: tuple = ("1", "true", "yes", "on")
+
+    # Provider-id claim names attempted in order when the resolver does
+    # not surface an explicit provider_ref_id.
+    PROVIDER_ID_CLAIM_FALLBACKS: tuple = ("sub", "id", "user_id")
+
+    # AuthenticationContext attribute key for the OAuth provider name.
+    OAUTH_PROVIDER_ATTRIBUTE: str = "oauth_provider"
+
+    # OAuth wire parameter names referenced by handlers
+    OAUTH_PARAM_PROVIDER: str = "provider"
+    OAUTH_PARAM_REGISTER: str = "register"
+    OAUTH_PARAM_STATE: str = "state"
+    OAUTH_PARAM_NONCE: str = "nonce"
+    OAUTH_PARAM_CODE: str = "code"
+    OAUTH_PARAM_ERROR: str = "error"
+    OAUTH_PARAM_PROVIDER_ERROR: str = "provider_error"
+    OAUTH_PARAM_CAPTCHA_RESPONSE: str = "captcha_response"
+    OAUTH_PARAM_ID_TOKEN: str = "id_token"
+
+    # Multi-Set-Cookie joining literal used when emitting two cookies
+    # simultaneously on the wire.
+    MULTI_SET_COOKIE_SEPARATOR: str = "\r\n"
+
     # --------------------------------------------------------------
     # State cookie helpers (sign / unsign / build / read).
     # --------------------------------------------------------------
@@ -430,14 +502,14 @@ class OAuthClientBlueprint(SecurityBlueprint):
         """
         parts = [
             "{}={}".format(cls.state_cookie_name, value),
-            "Path=/",
+            "Path={}".format(cls.COOKIE_PATH),
             "Max-Age={}".format(cls.state_cookie_max_age_seconds),
-            "HttpOnly",
-            "Secure",
-            "SameSite=Lax",
+            cls.COOKIE_HTTPONLY_FLAG,
+            cls.COOKIE_SECURE_FLAG,
+            cls.COOKIE_SAMESITE_LAX,
         ]
 
-        rtnval = "; ".join(parts)
+        rtnval = cls.COOKIE_PART_SEPARATOR.join(parts)
         return rtnval
 
     @classmethod
@@ -450,15 +522,15 @@ class OAuthClientBlueprint(SecurityBlueprint):
         """
         parts = [
             "{}=".format(cls.state_cookie_name),
-            "Path=/",
-            "Max-Age=0",
-            "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
-            "HttpOnly",
-            "Secure",
-            "SameSite=Lax",
+            "Path={}".format(cls.COOKIE_PATH),
+            cls.COOKIE_MAX_AGE_ZERO,
+            cls.COOKIE_EXPIRED_DATE,
+            cls.COOKIE_HTTPONLY_FLAG,
+            cls.COOKIE_SECURE_FLAG,
+            cls.COOKIE_SAMESITE_LAX,
         ]
 
-        rtnval = "; ".join(parts)
+        rtnval = cls.COOKIE_PART_SEPARATOR.join(parts)
         return rtnval
 
     @classmethod
@@ -484,7 +556,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
         headers = getattr(request, "headers", None)
         cookie_header = ""
         if headers is not None and hasattr(headers, "get"):
-            raw = headers.get("Cookie") or headers.get("cookie") or ""
+            raw = headers.get(cls.COOKIE_HEADER_NAME) or headers.get(cls.COOKIE_HEADER_NAME.lower()) or ""
             cookie_header = str(raw)
 
         if cookie_header == "":
@@ -591,17 +663,18 @@ class OAuthClientBlueprint(SecurityBlueprint):
 
             :returns: A fully-qualified URL.
         """
-        scheme = str(getattr(request, "scheme", "https") or "https")
+        scheme = str(getattr(request, "scheme", cls.DEFAULT_SCHEME) or cls.DEFAULT_SCHEME)
         host = str(getattr(request, "host", "") or "")
         if host == "":
-            host = "localhost"
+            host = cls.DEFAULT_HOST
 
-        callback_path = "{}/callback".format(cls._get_base_path() or "")
+        callback_path = "{}{}".format(cls._get_base_path() or "", cls.CALLBACK_LEAF)
 
-        rtnval = "{}://{}{}?provider={}".format(
+        rtnval = "{}://{}{}?{}={}".format(
             scheme,
             host,
             callback_path,
+            cls.OAUTH_PARAM_PROVIDER,
             provider_name,
         )
         return rtnval
@@ -641,7 +714,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
                       ``Location`` header (and joined ``Set-Cookie``
                       lines when provided).
         """
-        headers: Dict[str, str] = {"Location": location}
+        headers: Dict[str, str] = {cls.LOCATION_HEADER: location}
 
         if set_cookies is not None:
             non_empty = [
@@ -650,7 +723,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 if c is not None and str(c).strip() != ""
             ]
             if len(non_empty) > 0:
-                headers["Set-Cookie"] = "\r\n".join(non_empty)
+                headers[cls.SET_COOKIE_HEADER] = cls.MULTI_SET_COOKIE_SEPARATOR.join(non_empty)
 
         response = Response(status_code=302, headers=headers, body=b"")
         return response
@@ -677,7 +750,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
 
             :returns: A redirect :class:`Response`.
         """
-        params: Dict[str, str] = {"error": str(error_code)}
+        params: Dict[str, str] = {cls.OAUTH_PARAM_ERROR: str(error_code)}
         if extra_query is not None:
             for key, value in extra_query.items():
                 if value is None:
@@ -712,8 +785,8 @@ class OAuthClientBlueprint(SecurityBlueprint):
                       :class:`AuthError`.
         """
         error = AuthError(
-            error="endpoint_disabled",
-            error_description="OAuth {} endpoint is disabled".format(endpoint_name),
+            error=cls.ENDPOINT_DISABLED_ERROR_CODE,
+            error_description=cls.ENDPOINT_DISABLED_MESSAGE_TEMPLATE.format(endpoint_name),
         )
         rtnval = cls._build_auth_error_response(
             error=error,
@@ -746,7 +819,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
         body_bytes = json.dumps(error.to_dict()).encode("utf-8")
 
         headers: Dict[str, str] = {
-            "Content-Type": "application/json; charset=utf-8",
+            cls.CONTENT_TYPE_HEADER: cls.JSON_CONTENT_TYPE_UTF8,
         }
 
         response = Response(
@@ -776,7 +849,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
         body_bytes = json.dumps(body).encode("utf-8")
 
         headers: Dict[str, str] = {
-            "Content-Type": "application/json; charset=utf-8",
+            cls.CONTENT_TYPE_HEADER: cls.JSON_CONTENT_TYPE_UTF8,
         }
 
         response = Response(
@@ -937,7 +1010,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 "not configured."
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_NOT_CONFIGURED,
+                error_code=cls.NOT_CONFIGURED_ERROR_CODE,
             )
             return response
 
@@ -945,12 +1018,12 @@ class OAuthClientBlueprint(SecurityBlueprint):
         # when the query string omits it; this preserves the
         # legacy "/login-oauth-local" link shape that some sites'
         # button widgets emit).
-        provider_name = cls._read_query_param(request, "provider")
+        provider_name = cls._read_query_param(request, cls.OAUTH_PARAM_PROVIDER)
         if provider_name == "":
             provider_name = cls.default_provider_name
 
-        register_raw = cls._read_query_param(request, "register").lower()
-        is_register_flow = register_raw in ("1", "true", "yes", "on")
+        register_raw = cls._read_query_param(request, cls.OAUTH_PARAM_REGISTER).lower()
+        is_register_flow = register_raw in cls.REGISTER_FLAG_TRUTHY_VALUES
 
         client = cls._resolve_oauth_client(provider_name)
         if client is None:
@@ -970,7 +1043,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
                     "configured."
                 )
                 response = cls._build_error_redirect(
-                    error_code=ERROR_PROVIDER_UNAVAILABLE,
+                    error_code=cls.PROVIDER_UNAVAILABLE_ERROR_CODE,
                 )
                 return response
 
@@ -981,7 +1054,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 sorted(configured),
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_UNKNOWN_PROVIDER,
+                error_code=cls.UNKNOWN_PROVIDER_ERROR_CODE,
             )
             return response
 
@@ -1012,20 +1085,20 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 provider_name,
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_PROVIDER_UNAVAILABLE,
+                error_code=cls.PROVIDER_UNAVAILABLE_ERROR_CODE,
             )
             return response
 
         cookie_value = cls._sign_state_payload({
-            "provider": provider_name,
-            "state": state_value,
-            "nonce": nonce_value,
-            "register": is_register_flow,
+            cls.OAUTH_PARAM_PROVIDER: provider_name,
+            cls.OAUTH_PARAM_STATE: state_value,
+            cls.OAUTH_PARAM_NONCE: nonce_value,
+            cls.OAUTH_PARAM_REGISTER: is_register_flow,
         })
 
         if cookie_value is None:
             response = cls._build_error_redirect(
-                error_code=ERROR_NOT_CONFIGURED,
+                error_code=cls.NOT_CONFIGURED_ERROR_CODE,
             )
             return response
 
@@ -1090,7 +1163,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
 
         body = cls._read_request_body(request)
 
-        captcha_token_raw = body.get("captcha_response")
+        captcha_token_raw = body.get(cls.OAUTH_PARAM_CAPTCHA_RESPONSE)
         captcha_token = (
             str(captcha_token_raw).strip()
             if captcha_token_raw is not None
@@ -1099,7 +1172,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
 
         if captcha_token == "":
             response = cls._build_json_response(
-                body={"success": False, "error": "missing_captcha"},
+                body={"success": False, "error": cls.MISSING_CAPTCHA_ERROR_CODE},
                 status_code=400,
             )
             return response
@@ -1113,19 +1186,19 @@ class OAuthClientBlueprint(SecurityBlueprint):
 
             if not captcha_ok:
                 response = cls._build_json_response(
-                    body={"success": False, "error": "captcha_failed"},
+                    body={"success": False, "error": cls.CAPTCHA_FAILED_ERROR_CODE},
                     status_code=400,
                 )
                 return response
 
-        provider_name = str(body.get("provider") or "").strip()
+        provider_name = str(body.get(cls.OAUTH_PARAM_PROVIDER) or "").strip()
         if provider_name == "":
             provider_name = cls.default_provider_name
 
-        kickoff_path = "{}/login".format(cls._get_base_path() or "")
+        kickoff_path = "{}{}".format(cls._get_base_path() or "", cls.LOGIN_LEAF)
         redirect_url = "{}?{}".format(
             kickoff_path,
-            urlencode({"provider": provider_name, "register": "1"}),
+            urlencode({cls.OAUTH_PARAM_PROVIDER: provider_name, cls.OAUTH_PARAM_REGISTER: "1"}),
         )
 
         response = cls._build_json_response(
@@ -1179,11 +1252,11 @@ class OAuthClientBlueprint(SecurityBlueprint):
             response = cls._build_auth_error_response(error=pre_error, status_code=401)
             return response
 
-        provider_error = cls._read_query_param(request, "error")
+        provider_error = cls._read_query_param(request, cls.OAUTH_PARAM_ERROR)
         if provider_error != "":
             provider_name_for_log = cls._read_query_param(
                 request,
-                "provider",
+                cls.OAUTH_PARAM_PROVIDER,
             )
             logger.warning(
                 "OAuth provider %r returned error: %s",
@@ -1191,16 +1264,16 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 provider_error,
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_AUTHORIZATION_FAILED,
-                extra_query={"provider_error": provider_error},
+                error_code=cls.AUTHORIZATION_FAILED_ERROR_CODE,
+                extra_query={cls.OAUTH_PARAM_PROVIDER_ERROR: provider_error},
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
 
-        provider_name = cls._read_query_param(request, "provider")
+        provider_name = cls._read_query_param(request, cls.OAUTH_PARAM_PROVIDER)
         if provider_name == "":
             response = cls._build_error_redirect(
-                error_code=ERROR_PROVIDER_MISSING_ON_CALLBACK,
+                error_code=cls.PROVIDER_MISSING_ON_CALLBACK_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
@@ -1209,18 +1282,18 @@ class OAuthClientBlueprint(SecurityBlueprint):
         payload = cls._unsign_state_payload(cookie_value)
         if payload is None:
             response = cls._build_error_redirect(
-                error_code=ERROR_TOKEN_PARSE_FAILED,
+                error_code=cls.TOKEN_PARSE_FAILED_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
 
-        expected_state = str(payload.get("state") or "").strip()
-        expected_nonce_raw = str(payload.get("nonce") or "").strip()
+        expected_state = str(payload.get(cls.OAUTH_PARAM_STATE) or "").strip()
+        expected_nonce_raw = str(payload.get(cls.OAUTH_PARAM_NONCE) or "").strip()
         expected_nonce: Optional[str] = (
             expected_nonce_raw if expected_nonce_raw != "" else None
         )
-        expected_provider = str(payload.get("provider") or "").strip()
-        is_register_flow = bool(payload.get("register"))
+        expected_provider = str(payload.get(cls.OAUTH_PARAM_PROVIDER) or "").strip()
+        is_register_flow = bool(payload.get(cls.OAUTH_PARAM_REGISTER))
 
         if expected_provider != "" and expected_provider != provider_name:
             logger.warning(
@@ -1230,12 +1303,12 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 provider_name,
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_TOKEN_PARSE_FAILED,
+                error_code=cls.TOKEN_PARSE_FAILED_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
 
-        state_from_provider = cls._read_query_param(request, "state")
+        state_from_provider = cls._read_query_param(request, cls.OAUTH_PARAM_STATE)
         if (
             expected_state == ""
             or state_from_provider == ""
@@ -1246,15 +1319,15 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 provider_name,
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_TOKEN_PARSE_FAILED,
+                error_code=cls.TOKEN_PARSE_FAILED_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
 
-        code_value = cls._read_query_param(request, "code")
+        code_value = cls._read_query_param(request, cls.OAUTH_PARAM_CODE)
         if code_value == "":
             response = cls._build_error_redirect(
-                error_code=ERROR_NO_TOKEN,
+                error_code=cls.NO_TOKEN_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
@@ -1262,7 +1335,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
         client = cls._resolve_oauth_client(provider_name)
         if client is None:
             response = cls._build_error_redirect(
-                error_code=ERROR_UNKNOWN_PROVIDER,
+                error_code=cls.UNKNOWN_PROVIDER_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
@@ -1284,14 +1357,14 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 provider_name,
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_AUTHORIZATION_FAILED,
+                error_code=cls.AUTHORIZATION_FAILED_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
 
         if token is None or not isinstance(token, dict):
             response = cls._build_error_redirect(
-                error_code=ERROR_NO_TOKEN,
+                error_code=cls.NO_TOKEN_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
@@ -1300,7 +1373,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
         # an id_token; non-OIDC providers (GitHub) need a follow-up
         # userinfo fetch.
         user_info: Dict[str, Any] = {}
-        if "id_token" in token:
+        if cls.OAUTH_PARAM_ID_TOKEN in token:
             try:
                 user_info = client.parse_id_token(
                     token,
@@ -1312,7 +1385,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
                     provider_name,
                 )
                 response = cls._build_error_redirect(
-                    error_code=ERROR_TOKEN_PARSE_FAILED,
+                    error_code=cls.TOKEN_PARSE_FAILED_ERROR_CODE,
                     set_cookies=[cls._build_state_clear_cookie()],
                 )
                 return response
@@ -1325,14 +1398,14 @@ class OAuthClientBlueprint(SecurityBlueprint):
                     provider_name,
                 )
                 response = cls._build_error_redirect(
-                    error_code=ERROR_TOKEN_PARSE_FAILED,
+                    error_code=cls.TOKEN_PARSE_FAILED_ERROR_CODE,
                     set_cookies=[cls._build_state_clear_cookie()],
                 )
                 return response
 
         if not isinstance(user_info, dict) or len(user_info) == 0:
             response = cls._build_error_redirect(
-                error_code=ERROR_TOKEN_PARSE_FAILED,
+                error_code=cls.TOKEN_PARSE_FAILED_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
@@ -1342,7 +1415,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 "OAuth callback: user_resolver is not configured."
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_NOT_CONFIGURED,
+                error_code=cls.NOT_CONFIGURED_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
@@ -1360,7 +1433,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 provider_name,
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_AUTHORIZATION_FAILED,
+                error_code=cls.AUTHORIZATION_FAILED_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
@@ -1372,7 +1445,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 type(resolve_result).__name__,
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_AUTHORIZATION_FAILED,
+                error_code=cls.AUTHORIZATION_FAILED_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
@@ -1417,7 +1490,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 "error_code, and no short-circuit URL."
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_AUTHORIZATION_FAILED,
+                error_code=cls.AUTHORIZATION_FAILED_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
@@ -1436,12 +1509,12 @@ class OAuthClientBlueprint(SecurityBlueprint):
             if provider_ref_id is None:
                 # Falls back to the standard claim names; sites can
                 # also pre-resolve and pass via the result.
-                fallback = (
-                    user_info.get("sub")
-                    or user_info.get("id")
-                    or user_info.get("user_id")
-                    or ""
-                )
+                fallback = ""
+                for claim_name in cls.PROVIDER_ID_CLAIM_FALLBACKS:
+                    candidate = user_info.get(claim_name)
+                    if candidate:
+                        fallback = candidate
+                        break
                 provider_ref_id = str(fallback).strip()
 
             try:
@@ -1465,12 +1538,12 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 "OAuth callback: session_blueprint is not configured."
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_NOT_CONFIGURED,
+                error_code=cls.NOT_CONFIGURED_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
 
-        extra_attributes: Dict[str, Any] = {"oauth_provider": provider_name}
+        extra_attributes: Dict[str, Any] = {cls.OAUTH_PROVIDER_ATTRIBUTE: provider_name}
         if resolve_result.extra_attributes is not None:
             extra_attributes.update(resolve_result.extra_attributes)
 
@@ -1491,7 +1564,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 "OAuth callback: establish_session raised."
             )
             response = cls._build_error_redirect(
-                error_code=ERROR_AUTHORIZATION_FAILED,
+                error_code=cls.AUTHORIZATION_FAILED_ERROR_CODE,
                 set_cookies=[cls._build_state_clear_cookie()],
             )
             return response
@@ -1501,7 +1574,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
             session_headers = session_response.get("headers")
             if isinstance(session_headers, dict):
                 session_cookie = str(
-                    session_headers.get("Set-Cookie") or "",
+                    session_headers.get(cls.SET_COOKIE_HEADER) or "",
                 )
 
         logger.info(
@@ -1541,7 +1614,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
                       registration endpoint.
         """
         base = cls._get_base_path() or ""
-        rtnval = ["{}/register".format(base)]
+        rtnval = ["{}{}".format(base, cls.REGISTER_LEAF)]
         return rtnval
 
 

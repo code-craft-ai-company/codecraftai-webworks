@@ -198,6 +198,35 @@ class SessionAuthBlueprint(SecurityBlueprint):
     cookie_httponly: bool = True
     cookie_samesite: str = "Lax"
 
+    # --- Class constants ---
+    # Override these on a subclass to rebrand wire-format strings without
+    # rewriting the handler bodies.
+
+    # Error codes
+    ENDPOINT_DISABLED_ERROR_CODE: str = "endpoint_disabled"
+    SERVER_ERROR_CODE: str = "server_error"
+    INVALID_CREDENTIALS_ERROR_CODE: str = "invalid_credentials"
+    INVALID_SESSION_ERROR_CODE: str = "invalid_session"
+    SESSION_EXPIRED_ERROR_CODE: str = "session_expired"
+    INVALID_REQUEST_ERROR_CODE: str = "invalid_request"
+
+    # Success / response messages
+    LOGIN_SUCCESS_MESSAGE: str = "Login successful"
+    SESSION_ESTABLISHED_MESSAGE: str = "Session established"
+    LOGOUT_MESSAGE: str = "Logged out"
+
+    # Authentication scheme label written into AuthenticationContext
+    SCHEME_LABEL: str = "Session"
+
+    # Cookie attribute literals
+    COOKIE_PATH: str = "/"
+    COOKIE_HTTPONLY_FLAG: str = "HttpOnly"
+    COOKIE_SECURE_FLAG: str = "Secure"
+    COOKIE_SAMESITE_PREFIX: str = "SameSite="
+    COOKIE_PART_SEPARATOR: str = "; "
+    COOKIE_HEADER_NAME: str = "Cookie"
+    SET_COOKIE_HEADER: str = "Set-Cookie"
+
     # In-memory fallback store when no session_store is configured
     _memory_store: Dict[str, Dict[str, Any]] = {}
 
@@ -231,18 +260,18 @@ class SessionAuthBlueprint(SecurityBlueprint):
         parts = []
         parts.append("{}={}".format(cls.cookie_name, session_id))
         parts.append("Max-Age={}".format(max_age))
-        parts.append("Path=/")
+        parts.append("Path={}".format(cls.COOKIE_PATH))
 
         if cls.cookie_httponly:
-            parts.append("HttpOnly")
+            parts.append(cls.COOKIE_HTTPONLY_FLAG)
 
         if cls.cookie_secure:
-            parts.append("Secure")
+            parts.append(cls.COOKIE_SECURE_FLAG)
 
         if cls.cookie_samesite:
-            parts.append("SameSite={}".format(cls.cookie_samesite))
+            parts.append("{}{}".format(cls.COOKIE_SAMESITE_PREFIX, cls.cookie_samesite))
 
-        cookie_header = "; ".join(parts)
+        cookie_header = cls.COOKIE_PART_SEPARATOR.join(parts)
         return cookie_header
 
     @classmethod
@@ -258,18 +287,18 @@ class SessionAuthBlueprint(SecurityBlueprint):
         parts = []
         parts.append("{}=".format(cls.cookie_name))
         parts.append("Max-Age=0")
-        parts.append("Path=/")
+        parts.append("Path={}".format(cls.COOKIE_PATH))
 
         if cls.cookie_httponly:
-            parts.append("HttpOnly")
+            parts.append(cls.COOKIE_HTTPONLY_FLAG)
 
         if cls.cookie_secure:
-            parts.append("Secure")
+            parts.append(cls.COOKIE_SECURE_FLAG)
 
         if cls.cookie_samesite:
-            parts.append("SameSite={}".format(cls.cookie_samesite))
+            parts.append("{}{}".format(cls.COOKIE_SAMESITE_PREFIX, cls.cookie_samesite))
 
-        cookie_header = "; ".join(parts)
+        cookie_header = cls.COOKIE_PART_SEPARATOR.join(parts)
         return cookie_header
 
     @classmethod
@@ -292,7 +321,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
             headers = request.headers
             cookie_header = None
             if isinstance(headers, dict):
-                cookie_header = headers.get("Cookie") or headers.get("cookie")
+                cookie_header = headers.get(cls.COOKIE_HEADER_NAME) or headers.get(cls.COOKIE_HEADER_NAME.lower())
             if cookie_header is not None:
                 cookies = {}
                 for pair in cookie_header.split(";"):
@@ -344,7 +373,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("login"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Login endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -364,7 +393,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
 
         if username is None or password is None:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Username and password required"
             )
             response = cls.format_error(error)
@@ -372,7 +401,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
 
         if len(username) == 0 or len(password) == 0:
             error = AuthError(
-                error="invalid_request",
+                error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Username and password must not be empty"
             )
             response = cls.format_error(error)
@@ -381,7 +410,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
         # Validate credentials via the identity provider
         if cls.identity_provider is None:
             error = AuthError(
-                error="server_error",
+                error=cls.SERVER_ERROR_CODE,
                 error_description="No identity provider configured"
             )
             response = cls.format_error(error, status_code=500)
@@ -393,7 +422,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
 
         if principal is None:
             error = AuthError(
-                error="invalid_credentials",
+                error=cls.INVALID_CREDENTIALS_ERROR_CODE,
                 error_description="Invalid username or password"
             )
             response = cls.format_error(error)
@@ -403,8 +432,8 @@ class SessionAuthBlueprint(SecurityBlueprint):
             principal=principal,
             request=request,
             remember_me=remember_me,
-            scheme="Session",
-            success_message="Login successful",
+            scheme=cls.SCHEME_LABEL,
+            success_message=cls.LOGIN_SUCCESS_MESSAGE,
         )
         return response
 
@@ -414,8 +443,8 @@ class SessionAuthBlueprint(SecurityBlueprint):
         principal: Principal,
         request: Optional[Any] = None,
         remember_me: bool = False,
-        scheme: str = "Session",
-        success_message: str = "Session established",
+        scheme: Optional[str] = None,
+        success_message: Optional[str] = None,
         extra_attributes: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
@@ -465,6 +494,11 @@ class SessionAuthBlueprint(SecurityBlueprint):
                       header carries the new session id with the configured
                       security flags.
         """
+        if scheme is None:
+            scheme = cls.SCHEME_LABEL
+        if success_message is None:
+            success_message = cls.SESSION_ESTABLISHED_MESSAGE
+
         attributes: Dict[str, Any] = {}
         if extra_attributes is not None:
             attributes.update(extra_attributes)
@@ -526,9 +560,9 @@ class SessionAuthBlueprint(SecurityBlueprint):
         response = {
             "status": 200,
             "body": response_body,
-            "content_type": "application/json",
+            "content_type": cls.JSON_CONTENT_TYPE,
             "headers": {
-                "Set-Cookie": cookie_header,
+                cls.SET_COOKIE_HEADER: cookie_header,
             },
         }
         return response
@@ -562,7 +596,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("logout"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Logout endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -583,10 +617,10 @@ class SessionAuthBlueprint(SecurityBlueprint):
 
         response = {
             "status": 200,
-            "body": {"message": "Logged out"},
-            "content_type": "application/json",
+            "body": {"message": cls.LOGOUT_MESSAGE},
+            "content_type": cls.JSON_CONTENT_TYPE,
             "headers": {
-                "Set-Cookie": clear_cookie,
+                cls.SET_COOKIE_HEADER: clear_cookie,
             },
         }
         return response
@@ -621,7 +655,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
         """
         if not cls.is_endpoint_enabled("info"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Session info endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -632,7 +666,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
 
         if session_id is None:
             error = AuthError(
-                error="invalid_session",
+                error=cls.INVALID_SESSION_ERROR_CODE,
                 error_description="No session cookie found"
             )
             response = cls.format_error(error, status_code=401)
@@ -648,7 +682,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
 
         if session_data is None:
             error = AuthError(
-                error="invalid_session",
+                error=cls.INVALID_SESSION_ERROR_CODE,
                 error_description="Session not found or expired"
             )
             response = cls.format_error(error, status_code=401)
@@ -670,7 +704,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
                         cls._memory_store.pop(session_id, None)
 
                     error = AuthError(
-                        error="session_expired",
+                        error=cls.SESSION_EXPIRED_ERROR_CODE,
                         error_description="Session has expired"
                     )
                     response = cls.format_error(error, status_code=401)
@@ -701,6 +735,6 @@ class SessionAuthBlueprint(SecurityBlueprint):
         response = {
             "status": 200,
             "body": response_body,
-            "content_type": "application/json",
+            "content_type": cls.JSON_CONTENT_TYPE,
         }
         return response

@@ -89,6 +89,47 @@ class OIDCBlueprint(OAuth2Blueprint):
     id_token_lifetime: int = 3600
     claim_mappings: Optional[Dict[str, Callable]] = None
 
+    # --- Class constants ---
+    # Override these on a subclass to rebrand wire-format strings without
+    # rewriting handler bodies.
+
+    # Default scheme / host fallbacks for base-URL resolution
+    DEFAULT_HOST: str = "localhost"
+    DEFAULT_SCHEME: str = "https"
+    HOST_HEADER_NAME: str = "Host"
+
+    # Well-known / endpoint paths
+    DISCOVERY_PATH: str = "/.well-known/openid-configuration"
+    JWKS_PATH: str = "/.well-known/jwks.json"
+    AUTHORIZE_LEAF: str = "/authorize"
+    TOKEN_LEAF: str = "/token"
+    USERINFO_LEAF: str = "/userinfo"
+
+    # Subject types reported in the discovery document
+    SUBJECT_TYPES_SUPPORTED: List[str] = ["public"]
+
+    # ID-token claim keys
+    ID_TOKEN_CLAIM_SUB: str = "sub"
+    ID_TOKEN_CLAIM_ISS: str = "iss"
+    ID_TOKEN_CLAIM_AUD: str = "aud"
+    ID_TOKEN_CLAIM_EXP: str = "exp"
+    ID_TOKEN_CLAIM_IAT: str = "iat"
+
+    # Default issuer fallback when neither cls.issuer nor request can
+    # provide one (only reached in unit-test paths in practice).
+    DEFAULT_ISSUER_FALLBACK: str = "https://localhost"
+
+    # Token-response key used to attach the id_token onto the parent
+    # token response body.
+    ID_TOKEN_RESPONSE_KEY: str = "id_token"
+
+    # Error codes
+    ENDPOINT_DISABLED_ERROR_CODE: str = "endpoint_disabled"
+    INVALID_TOKEN_ERROR_CODE: str = "invalid_token"
+
+    # Empty JWKS sentinel returned when no keys are configured.
+    EMPTY_JWKS_KEY: str = "keys"
+
     # In-memory user info store for testing
     _memory_user_store: Dict[str, Dict[str, Any]] = {}
 
@@ -110,8 +151,8 @@ class OIDCBlueprint(OAuth2Blueprint):
             base_url = str(request.base_url).rstrip("/")
             return base_url
 
-        scheme = "https"
-        host = "localhost"
+        scheme = cls.DEFAULT_SCHEME
+        host = cls.DEFAULT_HOST
 
         if hasattr(request, "scheme"):
             scheme = request.scheme
@@ -121,7 +162,7 @@ class OIDCBlueprint(OAuth2Blueprint):
         elif hasattr(request, "headers"):
             headers = request.headers
             if isinstance(headers, dict):
-                host = headers.get("Host", headers.get("host", "localhost"))
+                host = headers.get(cls.HOST_HEADER_NAME, headers.get(cls.HOST_HEADER_NAME.lower(), cls.DEFAULT_HOST))
 
         base_url = "{}://{}".format(scheme, host)
         return base_url
@@ -152,7 +193,7 @@ class OIDCBlueprint(OAuth2Blueprint):
         """
         if not cls.is_endpoint_enabled("discovery"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="Discovery endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -162,16 +203,18 @@ class OIDCBlueprint(OAuth2Blueprint):
 
         discovery_doc = OIDCDiscovery(
             issuer=cls.issuer or base_url,
-            authorization_endpoint="{}{}/authorize".format(
-                base_url, cls.base_path
+            authorization_endpoint="{}{}{}".format(
+                base_url, cls.base_path, cls.AUTHORIZE_LEAF
             ),
-            token_endpoint="{}{}/token".format(base_url, cls.base_path),
-            userinfo_endpoint="{}{}/userinfo".format(
-                base_url, cls.base_path
+            token_endpoint="{}{}{}".format(
+                base_url, cls.base_path, cls.TOKEN_LEAF
             ),
-            jwks_uri="{}/.well-known/jwks.json".format(base_url),
+            userinfo_endpoint="{}{}{}".format(
+                base_url, cls.base_path, cls.USERINFO_LEAF
+            ),
+            jwks_uri="{}{}".format(base_url, cls.JWKS_PATH),
             response_types_supported=list(cls.supported_response_types),
-            subject_types_supported=["public"],
+            subject_types_supported=list(cls.SUBJECT_TYPES_SUPPORTED),
             id_token_signing_alg_values_supported=[cls.jwt_algorithm],
             scopes_supported=list(cls.supported_scopes),
             claims_supported=list(cls.supported_claims)
@@ -180,7 +223,7 @@ class OIDCBlueprint(OAuth2Blueprint):
         response = {
             "status": 200,
             "body": asdict(discovery_doc),
-            "content_type": "application/json"
+            "content_type": cls.JSON_CONTENT_TYPE
         }
         return response
 
@@ -211,7 +254,7 @@ class OIDCBlueprint(OAuth2Blueprint):
         """
         if not cls.is_endpoint_enabled("userinfo"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="UserInfo endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
@@ -222,7 +265,7 @@ class OIDCBlueprint(OAuth2Blueprint):
 
         if subject is None:
             error = AuthError(
-                error="invalid_token",
+                error=cls.INVALID_TOKEN_ERROR_CODE,
                 error_description="Authentication required"
             )
             response = cls.format_error(error, status_code=401)
@@ -233,16 +276,16 @@ class OIDCBlueprint(OAuth2Blueprint):
 
         if user_data is None:
             error = AuthError(
-                error="invalid_token",
+                error=cls.INVALID_TOKEN_ERROR_CODE,
                 error_description="User not found"
             )
             response = cls.format_error(error, status_code=401)
             return response
 
         # Build UserInfo response with supported claims
-        user_info_data = {"sub": subject}
+        user_info_data = {cls.ID_TOKEN_CLAIM_SUB: subject}
         for claim in cls.supported_claims:
-            if claim == "sub":
+            if claim == cls.ID_TOKEN_CLAIM_SUB:
                 continue
             if claim in user_data:
                 user_info_data[claim] = user_data[claim]
@@ -250,7 +293,7 @@ class OIDCBlueprint(OAuth2Blueprint):
         response = {
             "status": 200,
             "body": user_info_data,
-            "content_type": "application/json"
+            "content_type": cls.JSON_CONTENT_TYPE
         }
         return response
 
@@ -277,18 +320,18 @@ class OIDCBlueprint(OAuth2Blueprint):
         """
         if not cls.is_endpoint_enabled("jwks"):
             error = AuthError(
-                error="endpoint_disabled",
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
                 error_description="JWKS endpoint is disabled"
             )
             response = cls.format_error(error, status_code=404)
             return response
 
-        jwks_data = cls.jwks or {"keys": []}
+        jwks_data = cls.jwks or {cls.EMPTY_JWKS_KEY: []}
 
         response = {
             "status": 200,
             "body": jwks_data,
-            "content_type": "application/json"
+            "content_type": cls.JSON_CONTENT_TYPE
         }
         return response
 
@@ -326,7 +369,7 @@ class OIDCBlueprint(OAuth2Blueprint):
         # Build and attach the id_token
         id_token = cls._build_id_token(subject, scope)
         if id_token is not None:
-            response["body"]["id_token"] = id_token
+            response["body"][cls.ID_TOKEN_RESPONSE_KEY] = id_token
 
         return response
 
@@ -357,11 +400,11 @@ class OIDCBlueprint(OAuth2Blueprint):
         now = time.time()
 
         id_token_payload = {
-            "iss": cls.issuer or "https://localhost",
-            "sub": subject,
-            "aud": subject,
-            "exp": int(now) + cls.id_token_lifetime,
-            "iat": int(now),
+            cls.ID_TOKEN_CLAIM_ISS: cls.issuer or cls.DEFAULT_ISSUER_FALLBACK,
+            cls.ID_TOKEN_CLAIM_SUB: subject,
+            cls.ID_TOKEN_CLAIM_AUD: subject,
+            cls.ID_TOKEN_CLAIM_EXP: int(now) + cls.id_token_lifetime,
+            cls.ID_TOKEN_CLAIM_IAT: int(now),
         }
 
         # Add additional claims from user data if available
@@ -375,7 +418,7 @@ class OIDCBlueprint(OAuth2Blueprint):
             else:
                 # Include supported claims from user data
                 for claim in cls.supported_claims:
-                    if claim in ("sub",):
+                    if claim == cls.ID_TOKEN_CLAIM_SUB:
                         continue
                     if claim in user_data:
                         id_token_payload[claim] = user_data[claim]
