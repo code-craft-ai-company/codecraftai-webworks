@@ -16,6 +16,8 @@ __credits__ = []
 
 
 import copy
+import logging
+
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -39,6 +41,14 @@ from automojo.webworks.configuration.sources import (
     ConfigLoader,
     FORMAT_LOADERS
 )
+
+
+# Module-level logger. Loader-init failures (missing optional deps
+# like PyYAML / tomllib), failed change-callbacks, and the bare
+# remove-callback-not-found path all leave breadcrumbs in the
+# journal so the operator can correlate config behaviour with
+# environment quirks.
+logger = logging.getLogger(__name__)
 
 
 class ConfigRegistry:
@@ -127,9 +137,19 @@ class ConfigRegistry:
         for fmt, loader_class in FORMAT_LOADERS.items():
             try:
                 self._loaders[fmt] = loader_class()
-            except ConfigurationError:
-                # Loader not available (e.g., YAML without PyYAML)
-                pass
+            except ConfigurationError as exc:
+                # Loader not available (e.g., YAML without PyYAML).
+                # Log at debug — this is the expected outcome for
+                # consumers that haven't installed the optional
+                # extras, but the breadcrumb lets an operator
+                # confirm "yaml file ignored because PyYAML missing"
+                # without having to bisect the load path.
+                logger.debug(
+                    "ConfigRegistry: loader %s for format %r unavailable: %s",
+                    loader_class.__name__,
+                    fmt,
+                    exc,
+                )
     
     @property
     def schema(self) -> Optional[ConfigSchema]:
@@ -648,8 +668,15 @@ class ConfigRegistry:
             try:
                 callback(event)
             except Exception:
-                # Don't let callback errors break the registry
-                pass
+                # Don't let callback errors break the registry — but
+                # do surface them in the journal so a misbehaving
+                # subscriber doesn't silently corrupt downstream
+                # state.
+                logger.exception(
+                    "ConfigRegistry: change-event callback %r raised for key=%s",
+                    callback,
+                    key,
+                )
     
     def update(self, values: Dict[str, Any], atomic: bool = True) -> None:
         """

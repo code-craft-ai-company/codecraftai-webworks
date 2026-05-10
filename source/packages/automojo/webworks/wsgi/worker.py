@@ -306,11 +306,15 @@ class Worker:
             # Ensure socket is closed
             try:
                 client_sock.close()
-            except OSError:
-                pass
-        
+            except OSError as close_exc:
+                _logger.debug(
+                    "Worker %d: socket close raised: %s",
+                    self._worker_id,
+                    close_exc,
+                )
+
         return
-    
+
     def _reject_connection(self, client_sock: socket.socket) -> None:
         """
             Reject a connection due to max connections limit.
@@ -322,13 +326,24 @@ class Worker:
         try:
             writer = HTTPWriter(client_sock, self._config)
             writer.write_error_response(503, "Server too busy")
-        except Exception:
-            pass
+        except Exception as exc:
+            # The 503 write may fail if the client has already closed
+            # the socket; log at debug because this is the expected
+            # outcome for over-quota traffic.
+            _logger.debug(
+                "Worker %d: failed to send 503 reject response: %s",
+                self._worker_id,
+                exc,
+            )
         finally:
             try:
                 client_sock.close()
-            except OSError:
-                pass
+            except OSError as exc:
+                _logger.debug(
+                    "Worker %d: socket close raised during reject: %s",
+                    self._worker_id,
+                    exc,
+                )
         
         return
     
@@ -537,8 +552,16 @@ class Worker:
                 if hasattr(response_iter, "close"):
                     try:
                         response_iter.close()
-                    except Exception:
-                        pass
+                    except Exception as close_exc:
+                        # Iterator close errors don't change the
+                        # response we sent, but a sustained pattern
+                        # suggests a leaking resource — log at debug
+                        # so it's at least visible in the journal.
+                        _logger.debug(
+                            "Worker %d: response iterator close raised: %s",
+                            self._worker_id,
+                            close_exc,
+                        )
             
             # Increment request count
             with self._lock:
@@ -578,8 +601,12 @@ class Worker:
             )
             try:
                 self._send_error_response(client_sock, 500, "Internal Server Error")
-            except Exception:
-                pass
+            except Exception as send_exc:
+                _logger.debug(
+                    "Worker %d: 500 send-error path also failed: %s",
+                    self._worker_id,
+                    send_exc,
+                )
             keep_alive = False
             status_code = 500
         
@@ -648,9 +675,14 @@ class Worker:
         try:
             writer = HTTPWriter(client_sock, self._config)
             writer.write_error_response(status_code, message)
-        except Exception:
-            pass
-        
+        except Exception as exc:
+            _logger.debug(
+                "Worker %d: failed to send %d error response: %s",
+                self._worker_id,
+                status_code,
+                exc,
+            )
+
         return
     
     def _log_request(

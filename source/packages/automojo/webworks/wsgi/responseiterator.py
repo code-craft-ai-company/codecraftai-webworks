@@ -6,7 +6,16 @@
     and handles resource cleanup via the close() method.
 """
 
+import logging
+
 from typing import Any, Callable, Generator, IO, Iterable, Iterator, List, Optional, Union
+
+
+# Module-level logger. close() swallows file-handle and callback
+# errors so a failure during cleanup doesn't mask the real
+# response, but the operator wants the breadcrumb so a leaking
+# resource is visible in the journal.
+logger = logging.getLogger(__name__)
 
 
 class ResponseIterator:
@@ -126,18 +135,23 @@ class ResponseIterator:
         if self._file_handle is not None:
             try:
                 self._file_handle.close()
-            except Exception:
-                # Ignore errors during close
-                pass
+            except Exception as exc:
+                # Don't propagate close errors — but log so a
+                # consistently-failing close pattern is recoverable
+                # from the journal.
+                logger.debug(
+                    "ResponseIterator.close: file handle close raised: %s", exc
+                )
             self._file_handle = None
-        
+
         # Invoke close callback if provided
         if self._close_callback is not None:
             try:
                 self._close_callback()
             except Exception:
-                # Ignore errors during callback
-                pass
+                logger.exception(
+                    "ResponseIterator.close: close_callback raised"
+                )
         
         # Clear iterator reference
         self._iterator = None

@@ -238,7 +238,8 @@ class ApplicationLoader:
                 return worker_app
             except Exception as ex:
                 errmsg = f"Failed to create application for worker: {ex}"
-                raise ApplicationLoadError(errmsg, original_error=ex)
+                _logger.error(errmsg, exc_info=True)
+                raise ApplicationLoadError(errmsg, original_error=ex) from ex
 
         if self._app is not None:
             return self._app

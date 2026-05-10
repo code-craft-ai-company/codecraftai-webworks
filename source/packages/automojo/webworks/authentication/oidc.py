@@ -19,6 +19,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -46,6 +47,12 @@ from automojo.webworks.authentication.oauth2 import (
     generate_state,
     validate_state
 )
+
+
+# Module-level logger for the OIDC helpers. Signature-verification
+# failures and id_token decode errors are logged at warning so the
+# operator can spot a misconfigured IdP or an attempted forgery.
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -771,8 +778,17 @@ def verify_id_token_signature_hmac(
         
         # Compare signatures using constant-time comparison
         return hmac.compare_digest(signature, expected_sig)
-        
-    except Exception:
+
+    except Exception as exc:
+        # An ID-token signature verification failing is the canonical
+        # sign of a tampered token or a misconfigured signing secret.
+        # Operator should always see this in the journal (without the
+        # token in plaintext).
+        logger.warning(
+            "OIDC: HMAC signature verification raised %s: %s",
+            type(exc).__name__,
+            exc,
+        )
         return False
 
 

@@ -11,6 +11,8 @@ __author__ = "Automation Mojo LLC"
 __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
+import logging
+
 from typing import Any, Callable, Dict, Optional, Tuple, Type, TYPE_CHECKING
 
 from automojo.webworks.endpoints.rest.serialization import SerializerRegistry
@@ -29,6 +31,13 @@ from automojo.webworks.endpoints.rest.exceptions import (
     UnsupportedMediaType,
     ValidationError,
 )
+
+
+# Module-level logger. The REST middleware translates every
+# uncaught exception into a structured JSON error via
+# ``_handle_error``; without a log line the operator only sees
+# the wire response and loses the underlying traceback.
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from automojo.webworks.endpoints.descriptor import EndpointDescriptor
@@ -129,7 +138,13 @@ class RESTMiddleware:
             )
             
         except Exception as exc:
-            # Step 5: Handle errors
+            # Step 5: Handle errors. Log unconditionally so the
+            # journal carries the traceback even when ``_handle_error``
+            # returns a clean JSON error body to the client.
+            logger.exception(
+                "REST middleware: handler raised %s during request processing",
+                type(exc).__name__,
+            )
             return self._handle_error(request, exc)
     
     def _get_header(self, request: Any, header_name: str) -> Optional[str]:

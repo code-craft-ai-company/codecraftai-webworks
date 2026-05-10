@@ -6,7 +6,9 @@
     by handling environ parsing, response building, and error handling.
 """
 
+import logging
 import sys
+
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 
 from automojo.webworks.wsgi.environparser import EnvironParser
@@ -14,6 +16,12 @@ from automojo.webworks.wsgi.response import Response, ResponseBuilder
 from automojo.webworks.wsgi.responseiterator import ResponseIterator
 from automojo.webworks.wsgi.errorhandler import ErrorHandler
 from automojo.webworks.wsgi.constants import ENVIRON_REQUEST, ENVIRON_DEBUG
+
+
+# Module-level logger. The WSGI generator translates handler
+# exceptions into error responses but the operator wants the
+# traceback in the journal so a 500 isn't opaque.
+logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
@@ -142,6 +150,17 @@ class WSGIApplication:
                 yield chunk
             
         except Exception as exc:
+            # Log unconditionally — the WSGI generator turns this
+            # into a structured error response, but the journal
+            # needs to carry the underlying traceback so the
+            # operator can debug a 500 without re-running the
+            # request.
+            logger.exception(
+                "WSGIApplication: handler raised %s for %s %s",
+                type(exc).__name__,
+                environ.get("REQUEST_METHOD", "?"),
+                environ.get("PATH_INFO", "?"),
+            )
             # Handle exception based on whether start_response was called
             if response_started:
                 # Exception after start_response - use exc_info for error recovery

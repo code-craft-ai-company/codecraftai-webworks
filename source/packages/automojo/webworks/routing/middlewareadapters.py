@@ -13,10 +13,18 @@
 """
 
 import io
+import logging
+
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 from automojo.webworks.routing.request import Request
 from automojo.webworks.routing.response import Response
+
+
+# Module-level logger. The WSGI bridge falls back to a 500 status
+# code when the start_response status string is malformed; without
+# the breadcrumb the operator sees a 500 with no upstream context.
+logger = logging.getLogger(__name__)
 
 
 # =============================================================================
@@ -439,7 +447,12 @@ class WSGIMiddlewareAdapter:
         if captured_status[0] is not None:
             try:
                 status_code = int(captured_status[0].split(" ", 1)[0])
-            except (ValueError, IndexError):
+            except (ValueError, IndexError) as exc:
+                logger.warning(
+                    "WSGI adapter: malformed status line %r; defaulting to 500: %s",
+                    captured_status[0],
+                    exc,
+                )
                 status_code = 500
 
         # Build headers dict
@@ -563,7 +576,12 @@ class MiddlewareToWSGI:
                 if captured_status[0] is not None:
                     try:
                         status_code = int(captured_status[0].split(" ", 1)[0])
-                    except (ValueError, IndexError):
+                    except (ValueError, IndexError) as exc:
+                        logger.warning(
+                            "WSGI adapter: malformed status line %r; defaulting to 500: %s",
+                            captured_status[0],
+                            exc,
+                        )
                         status_code = 500
 
                 headers_dict: Dict[str, str] = {}

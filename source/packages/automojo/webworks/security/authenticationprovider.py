@@ -24,12 +24,22 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, Protocol, Tuple, runtime_checkable
 
 from automojo.webworks.security.securitycontext import SecurityContext
+
+
+# Module-level logger. The JWT verification helper deliberately
+# returns ``None`` rather than raising so an authentication chain
+# can fall through to the next provider, but the operator still
+# wants the breadcrumb in the journal — a sudden surge of
+# verification failures usually indicates a key rotation or a
+# tampered-token attack.
+logger = logging.getLogger(__name__)
 
 
 def _coerce_string_collection(
@@ -179,7 +189,8 @@ def _verify_jwt(token: str, secret_key: str, algorithm: str = "HS256") -> Option
     try:
         header_bytes = _base64url_decode(header_segment)
         header = json.loads(header_bytes)
-    except (ValueError, json.JSONDecodeError):
+    except (ValueError, json.JSONDecodeError) as exc:
+        logger.warning("JWT verify: malformed header segment: %s", exc)
         return None
 
     header_alg = header.get("alg")
@@ -194,7 +205,8 @@ def _verify_jwt(token: str, secret_key: str, algorithm: str = "HS256") -> Option
 
     try:
         actual_signature = _base64url_decode(signature_segment)
-    except (ValueError,):
+    except (ValueError,) as exc:
+        logger.warning("JWT verify: malformed signature segment: %s", exc)
         return None
 
     if hmac.compare_digest(expected_signature, actual_signature) is not True:
@@ -203,7 +215,8 @@ def _verify_jwt(token: str, secret_key: str, algorithm: str = "HS256") -> Option
     try:
         payload_bytes = _base64url_decode(payload_segment)
         payload = json.loads(payload_bytes)
-    except (ValueError, json.JSONDecodeError):
+    except (ValueError, json.JSONDecodeError) as exc:
+        logger.warning("JWT verify: malformed payload segment: %s", exc)
         return None
 
     exp_claim = payload.get("exp")

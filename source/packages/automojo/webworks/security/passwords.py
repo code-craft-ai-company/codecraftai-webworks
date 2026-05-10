@@ -39,8 +39,18 @@ __credits__ = []
 
 import hashlib
 import hmac
+import logging
 import secrets
 import string
+
+
+# Module-level logger. ``verify_password`` deliberately swallows
+# stored-hash format errors (returning ``False`` rather than raising)
+# so the credential-check call site can't leak the specific reason
+# back to the client. The operator still wants the breadcrumb in the
+# journal — a sudden surge of "treated as verification failure" log
+# lines means the password store was migrated incorrectly.
+logger = logging.getLogger(__name__)
 
 
 # Default PBKDF2 iteration count. Matches werkzeug 2.3+ and the OWASP
@@ -229,11 +239,18 @@ def verify_password(password: str, stored: str) -> bool:
             iterations=iterations,
             hash_name=hash_name,
         )
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as exc:
         # Unknown hash_name or other PBKDF2 input failure; treat as
         # verification failure rather than propagating the exception
         # — the credential-check call site doesn't want to leak the
-        # specific reason.
+        # specific reason. The operator still gets the underlying
+        # cause in the journal so a corrupt or unsupported hash
+        # format doesn't silently degrade every login.
+        logger.warning(
+            "Password verify: PBKDF2 derivation failed (hash_name=%s): %s",
+            hash_name,
+            exc,
+        )
         return False
 
     rtnval = hmac.compare_digest(derived_hash, expected_hash)

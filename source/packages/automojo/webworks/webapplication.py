@@ -14,6 +14,7 @@ __credits__ = []
 
 
 import functools
+import logging
 import os
 
 from typing import Callable, Dict, List, Optional, Set, Type
@@ -44,6 +45,13 @@ from automojo.webworks.endpoints.registry import EndpointRegistry
 
 import automojo.webworks.wellknown as webworks_wellknown
 import automojo.thisapp.wellknown as thisapp_wellknown
+
+
+# Module-level logger. Lifecycle setup steps reclassify exceptions
+# into ``SemanticError`` for the caller (startup must bubble); the
+# operator wants the underlying traceback in the journal so a failed
+# startup is debuggable from the systemd / supervisor logs alone.
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +557,10 @@ class WebApplication(ThisApplication):
             self._config = registry
         except Exception as exc:
             presence_dir = AppPersona.AM_PRESENCE_DIR or "(unknown)"
+            logger.exception(
+                "WebApplication.setup_configuration: failed for presence_dir=%s",
+                presence_dir,
+            )
             errmsg = (
                 f"Configuration setup failed for presence directory "
                 f"'{presence_dir}': {exc}"

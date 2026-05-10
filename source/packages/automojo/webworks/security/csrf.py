@@ -90,6 +90,14 @@ DEFAULT_FORM_FIELD_NAME = "csrf_token"
 DEFAULT_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
+# Module-level logger used by free functions and the
+# :class:`CSRFTokenManager`. The :class:`CSRFMiddleware` keeps its
+# own configurable ``self._logger`` so applications can route
+# CSRF audit lines to a dedicated handler — this module logger is
+# the default fallback.
+logger = logging.getLogger(__name__)
+
+
 class CSRFError(Exception):
     """
         Raised when CSRF token generation or validation fails for a reason
@@ -204,7 +212,16 @@ class CSRFTokenManager:
 
         try:
             expected = self.generate(session_id)
-        except CSRFError:
+        except CSRFError as exc:
+            # Generation should only fail when ``session_id`` is
+            # malformed in a way ``validate``'s up-front guard didn't
+            # catch, or when the secret key has been mis-configured.
+            # Either case is operator-visible.
+            logger.warning(
+                "CSRF validate: token generation failed for session_id-prefix=%s: %s",
+                session_id[:8] if isinstance(session_id, str) else "<n/a>",
+                exc,
+            )
             return False
 
         is_valid = secrets.compare_digest(expected, token)

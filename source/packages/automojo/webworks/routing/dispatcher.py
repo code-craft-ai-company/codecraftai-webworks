@@ -373,19 +373,29 @@ class Dispatcher:
     def _handle_http_exception(self, exc: HTTPException) -> Response:
         """
             Convert HTTPException to appropriate response.
-            
+
             The response format depends on the error_format setting:
             - "json": Returns JSONResponse with error details
             - "html": Returns HTMLResponse with error page
             - "text": Returns plain text Response
-            
+
             :param exc: The HTTPException to convert.
-            
+
             :returns: Response with appropriate status and body.
         """
         status_code = exc.status_code
         detail = exc.detail if exc.detail else self._get_status_phrase(status_code)
         headers = exc.headers.copy() if exc.headers else {}
+
+        # 5xx HTTPException is a server-side failure that the operator
+        # almost always wants to see in the journal. 4xx is typically
+        # client-driven and is logged at lower levels by middleware
+        # (audit/security) when needed, so we keep this branch quiet
+        # to avoid drowning the journal in 401/404 noise.
+        if status_code >= 500:
+            logger.exception(
+                "HTTPException %d in dispatcher: %s", status_code, detail
+            )
         
         if self._error_format == "json":
             content = {

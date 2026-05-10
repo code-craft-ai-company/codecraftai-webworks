@@ -10,6 +10,8 @@ __author__ = "Automation Mojo LLC"
 __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
+import logging
+
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 from automojo.webworks.endpoints.accesspolicy import AccessPolicy
@@ -21,6 +23,14 @@ from automojo.webworks.endpoints.exceptions import EndpointRegistrationError, Sc
 from automojo.webworks.endpoints.ratelimit import RateLimit
 from automojo.webworks.endpoints.registry import EndpointRegistry
 from automojo.webworks.security.decorators import HANDLER_POLICY_ATTR
+
+
+# Module-level logger. Schema inspection wraps the underlying
+# error in ``SchemaInspectionError`` so the OpenAPI generator can
+# produce a clean error message — the original traceback is added
+# to the journal here so the operator can pinpoint a malformed
+# schema without re-running the inspection.
+logger = logging.getLogger(__name__)
 
 
 # Type variable for preserving function signatures in decorators
@@ -209,30 +219,42 @@ class RestEndpoint(Endpoint):
             try:
                 return schema.model_json_schema()
             except Exception as err:
+                logger.exception(
+                    "Schema inspection: model_json_schema() failed for %s",
+                    getattr(schema, "__name__", schema),
+                )
                 raise SchemaInspectionError(
                     schema=schema,
                     reason=f"Pydantic model_json_schema() failed: {err}"
-                )
-        
+                ) from err
+
         # Try Pydantic v1 API
         if hasattr(schema, "schema"):
             try:
                 return schema.schema()
             except Exception as err:
+                logger.exception(
+                    "Schema inspection: schema() failed for %s",
+                    getattr(schema, "__name__", schema),
+                )
                 raise SchemaInspectionError(
                     schema=schema,
                     reason=f"Pydantic schema() failed: {err}"
-                )
-        
+                ) from err
+
         # Try dataclass
         if hasattr(schema, "__dataclass_fields__"):
             try:
                 return cls._dataclass_to_json_schema(schema)
             except Exception as err:
+                logger.exception(
+                    "Schema inspection: dataclass inspection failed for %s",
+                    getattr(schema, "__name__", schema),
+                )
                 raise SchemaInspectionError(
                     schema=schema,
                     reason=f"Dataclass inspection failed: {err}"
-                )
+                ) from err
         
         # Return a reference schema for unknown types
         return {"$ref": f"#/components/schemas/{schema.__name__}"}

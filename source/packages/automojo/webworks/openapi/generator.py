@@ -313,12 +313,12 @@ class OpenAPIGenerator:
         """
         try:
             import yaml
-        except ImportError:
+        except ImportError as exc:
             errmsg = (
                 "PyYAML is required for YAML export. "
                 "Install it with: pip install pyyaml"
             )
-            raise ImportError(errmsg)
+            raise ImportError(errmsg) from exc
 
         spec = self.generate()
         yaml_str = yaml.dump(spec, default_flow_style=False, sort_keys=True)

@@ -26,6 +26,14 @@ from automojo.webworks.asgi.exceptions import (
 )
 
 
+# Module-level logger for the WebSocketConnection helper. The
+# WebSocketHandler keeps its own ``self._logger`` so applications
+# can route websocket errors to a dedicated handler — this module
+# logger is the default fallback for the connection-level close
+# path (which has no handler reference).
+logger = logging.getLogger(__name__)
+
+
 # Type aliases for clarity
 ReceiveCallable = Callable[[], Awaitable[Dict[str, Any]]]
 SendCallable = Callable[[Dict[str, Any]], Awaitable[None]]
@@ -331,12 +339,17 @@ class WebSocketConnection:
         
         try:
             await self._send(close_message)
-        except Exception:
-            # Connection may already be closed
-            pass
-        
+        except Exception as exc:
+            # Connection may already be closed — log at debug so
+            # the journal carries the breadcrumb without overwhelming
+            # a busy server with normal "client gone" lines.
+            logger.debug(
+                "WebSocketConnection.close: send raised (connection likely closed): %s",
+                exc,
+            )
+
         self._closed = True
-        
+
         return
 
 

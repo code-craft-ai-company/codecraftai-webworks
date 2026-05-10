@@ -18,6 +18,7 @@ __credits__ = []
 
 import hashlib
 import hmac
+import logging
 import os
 import re
 import secrets
@@ -32,6 +33,12 @@ from automojo.webworks.authentication.core import (
     AuthenticationStatus,
     Principal
 )
+
+
+# Module-level logger for the Digest authenticator. Malformed headers
+# and replay-protection failures are logged at warning so the
+# operator can spot abuse.
+logger = logging.getLogger(__name__)
 
 
 class DigestAlgorithm(Enum):
@@ -401,6 +408,7 @@ class DigestAuthenticator:
         try:
             credentials = self._parse_digest_header(auth_header)
         except ValueError as e:
+            logger.warning("Digest auth: malformed Authorization header: %s", e)
             return self._bad_request(str(e))
         
         # Validate realm matches
@@ -482,7 +490,12 @@ class DigestAuthenticator:
                 
                 # Update server count
                 self._nonce_store.increment_count(credentials.nonce)
-            except ValueError:
+            except ValueError as exc:
+                logger.warning(
+                    "Digest auth: invalid nonce-count %r: %s",
+                    credentials.nc,
+                    exc,
+                )
                 return self._bad_request("Invalid nonce count format")
         
         # Get principal from identity provider

@@ -20,6 +20,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
@@ -30,6 +31,13 @@ from automojo.webworks.authentication.core import (
     AuthenticationStatus,
     Principal
 )
+
+
+# Module-level logger for the JWT helpers / BearerAuthenticator. We
+# log token validation failures at warning level so an operator can
+# distinguish a misconfigured server (every token failing) from
+# normal expired-token traffic without resorting to packet captures.
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -554,29 +562,40 @@ class BearerAuthenticator:
             )
             return self._create_success_result(claims)
         
-        except JWTExpiredError:
+        except JWTExpiredError as exc:
+            logger.warning("Bearer auth: JWT expired: %s", exc)
             return AuthenticationResult(
                 status=AuthenticationStatus.FAILURE,
                 error_code="invalid_token",
                 error_description="The access token has expired"
             )
-        
+
         except JWTInvalidSignatureError as exc:
+            # An invalid signature is the canonical sign of either
+            # client tampering or a misconfigured signing secret on
+            # the server. Operator should always see this in the
+            # journal so a sudden surge of signature failures is
+            # actionable.
+            logger.warning("Bearer auth: JWT invalid signature: %s", exc)
             return AuthenticationResult(
                 status=AuthenticationStatus.FAILURE,
                 error_code="invalid_token",
                 error_description=str(exc)
             )
-        
+
         except JWTInvalidClaimsError as exc:
+            logger.warning("Bearer auth: JWT invalid claims: %s", exc)
             return AuthenticationResult(
                 status=AuthenticationStatus.FAILURE,
                 error_code="invalid_token",
                 error_description=str(exc)
             )
-        
-        except JWTDecodeError:
-            # Token is not a valid JWT, skip to allow TokenStore fallback
+
+        except JWTDecodeError as exc:
+            # Token is not a valid JWT, skip to allow TokenStore fallback.
+            # We still emit a debug-level breadcrumb so a fully-failed
+            # decode chain can be reconstructed from the journal.
+            logger.debug("Bearer auth: JWT decode failed (skipping to TokenStore): %s", exc)
             return AuthenticationResult(status=AuthenticationStatus.SKIP)
     
     def _create_success_result(self, claims: Dict[str, Any]) -> AuthenticationResult:
@@ -606,8 +625,14 @@ class BearerAuthenticator:
         if "exp" in claims:
             try:
                 expires_at = datetime.fromtimestamp(claims["exp"], tz=timezone.utc)
-            except (TypeError, ValueError, OSError):
-                pass  # Invalid exp value, ignore
+            except (TypeError, ValueError, OSError) as exc:
+                # An ``exp`` claim that we cannot parse is suspicious —
+                # log so the operator can investigate the issuer.
+                logger.warning(
+                    "Bearer auth: invalid 'exp' claim %r in token: %s",
+                    claims.get("exp"),
+                    exc,
+                )
         
         return AuthenticationResult(
             status=AuthenticationStatus.SUCCESS,

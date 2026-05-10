@@ -16,6 +16,7 @@ __credits__ = []
 
 
 import base64
+import logging
 from typing import Any, Optional, Protocol, runtime_checkable
 
 from automojo.webworks.authentication.core import (
@@ -24,6 +25,13 @@ from automojo.webworks.authentication.core import (
     AuthenticationStatus,
     Principal
 )
+
+
+# Module-level logger used by the Basic authenticator. Malformed
+# Authorization headers and base64 decode failures are logged at
+# warning level so an operator can distinguish "broken client" from
+# "broken server" without a packet capture.
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -167,16 +175,18 @@ class BasicAuthenticator:
         try:
             scheme, credentials = self._parse_authorization_header(auth_header)
         except ValueError as e:
+            logger.warning("Basic auth: malformed Authorization header: %s", e)
             return self._bad_request(str(e))
-        
+
         # Check if this is a Basic auth header
         if scheme.lower() != "basic":
             return AuthenticationResult(status=AuthenticationStatus.SKIP)
-        
+
         # Decode the Base64 credentials
         try:
             username, password = self._decode_credentials(credentials)
         except ValueError as e:
+            logger.warning("Basic auth: failed to decode credentials: %s", e)
             return self._bad_request(str(e))
         
         # Validate credentials against the identity provider
@@ -268,8 +278,10 @@ class BasicAuthenticator:
         """
         try:
             decoded = base64.b64decode(credentials).decode("utf-8")
-        except Exception:
-            raise ValueError("Invalid Base64 encoding")
+        except Exception as exc:
+            # Re-raise as ValueError to preserve the existing API
+            # contract; the caller logs and returns 400 Bad Request.
+            raise ValueError("Invalid Base64 encoding") from exc
         
         if ":" not in decoded:
             raise ValueError("Malformed credentials: missing separator")

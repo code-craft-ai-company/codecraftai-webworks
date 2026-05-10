@@ -16,6 +16,7 @@ __credits__ = []
 
 
 import atexit
+import logging
 import os
 import sys
 from pathlib import Path
@@ -46,6 +47,13 @@ if TYPE_CHECKING:
 
 # Module-level registry for cleanup tracking
 _ACTIVE_REGISTRIES: List['ManagedConfigRegistry'] = []
+
+
+# Module-level logger. Cleanup paths and persona-discovery fallbacks
+# all swallow exceptions so process shutdown isn't derailed by a
+# single misbehaving callback / handle, but each silenced failure
+# leaves a breadcrumb in the journal.
+logger = logging.getLogger(__name__)
 
 
 class ManagedConfigRegistry(ConfigRegistry):
@@ -193,15 +201,22 @@ class ManagedConfigRegistry(ConfigRegistry):
         """
         try:
             from automojo.thisapp.persona import AppPersona
-            
+
             presence_dir = AppPersona.AM_PRESENCE_DIR
             if presence_dir:
                 # Expand user home and environment variables
                 expanded = os.path.expanduser(os.path.expandvars(presence_dir))
                 return Path(expanded)
-        except (ImportError, AttributeError):
-            pass
-        
+        except (ImportError, AttributeError) as exc:
+            # Persona system not available — fall back to cwd. Log as
+            # a debug breadcrumb so the operator can confirm whether
+            # the fall-through was intentional.
+            logger.debug(
+                "ManagedConfigRegistry: persona presence-dir lookup failed (%s); "
+                "falling back to cwd",
+                exc,
+            )
+
         # Fall back to current directory
         return Path.cwd()
     
@@ -213,13 +228,20 @@ class ManagedConfigRegistry(ConfigRegistry):
         """
         try:
             from automojo.thisapp.persona import AppPersona
-            
+
             name = AppPersona.AM_NAME
             if name:
                 return name.lower()
-        except (ImportError, AttributeError):
-            pass
-        
+        except (ImportError, AttributeError) as exc:
+            # Persona system not available — fall back to the
+            # generic ``"app"`` name. Logged at debug level so the
+            # fallback can be confirmed without polluting startup.
+            logger.debug(
+                "ManagedConfigRegistry: persona app-name lookup failed (%s); "
+                "falling back to 'app'",
+                exc,
+            )
+
         # Fall back to "app"
         return "app"
     
@@ -341,16 +363,26 @@ class ManagedConfigRegistry(ConfigRegistry):
             try:
                 if hasattr(handle, 'close'):
                     handle.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                # A failing close shouldn't keep cleanup from
+                # finishing. Log so a leaking handle is at least
+                # visible to the operator.
+                logger.warning(
+                    "ManagedConfigRegistry.cleanup: failed to close handle %r: %s",
+                    handle,
+                    exc,
+                )
         self._file_handles.clear()
-        
+
         # Invoke cleanup callbacks
         for callback in self._cleanup_callbacks:
             try:
                 callback()
             except Exception:
-                pass
+                logger.exception(
+                    "ManagedConfigRegistry.cleanup: callback %r raised",
+                    callback,
+                )
         self._cleanup_callbacks.clear()
         
         # Remove from active registries
@@ -388,9 +420,17 @@ def validate_config_eagerly(
         # Force load with validation
         registry.load(validate=True)
     except ConfigurationValidationError as e:
+        # Eager validation: collect every per-key error and let the
+        # caller decide whether to exit. Log at warning so the
+        # journal carries the same details as the stderr summary.
+        logger.warning(
+            "validate_config_eagerly: %d validation error(s) collected",
+            len(e.errors),
+        )
         for error in e.errors:
             errors.append(f"{error.key}: {error.message}")
     except ConfigurationError as e:
+        logger.warning("validate_config_eagerly: configuration error: %s", e)
         errors.append(str(e))
     
     if errors and exit_on_failure:
@@ -484,7 +524,13 @@ def cleanup_all_registries() -> None:
         try:
             registry.cleanup()
         except Exception:
-            pass
+            # We're at process-exit time — keep going through every
+            # registry, but log each crash so a misbehaving cleanup
+            # path is recoverable from the journal.
+            logger.exception(
+                "cleanup_all_registries: registry %r cleanup raised",
+                registry,
+            )
 
 
 # Register cleanup handler

@@ -11,11 +11,20 @@ __author__ = "Automation Mojo LLC"
 __copyright__ = "Copyright 2025, Automation Mojo LLC"
 __credits__ = []
 
+import logging
+
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from automojo.webworks.endpoints.rest.exceptions import ValidationError
+
+
+# Module-level logger. ``build_location_header`` falls back to ID
+# extraction when a user-supplied ``get_resource_url_func`` raises;
+# the breadcrumb makes the fallback visible without breaking the
+# response.
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -497,7 +506,13 @@ def build_location_header(
             url = get_resource_url_func(resource)
             return url
         except Exception:
-            pass
+            # Caller-supplied URL builders are best-effort; log so a
+            # silently-falling-back implementation is visible in the
+            # journal.
+            logger.exception(
+                "build_location_header: get_resource_url_func raised; "
+                "falling back to id-based extraction"
+            )
     
     # Fall back to extracting ID from resource
     resource_id = None

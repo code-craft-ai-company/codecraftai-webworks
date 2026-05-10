@@ -17,6 +17,7 @@ __credits__ = []
 
 import hashlib
 import hmac
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -29,6 +30,12 @@ from automojo.webworks.authentication.core import (
     AuthenticationStatus,
     Principal
 )
+
+
+# Module-level logger for the HMAC authenticator. Malformed signing
+# headers and bad timestamps are logged at warning so a clock-skew
+# wave from a misconfigured client doesn't go unnoticed.
+logger = logging.getLogger(__name__)
 
 
 class HMACAlgorithm(Enum):
@@ -232,6 +239,7 @@ class HMACAuthenticator:
         try:
             credentials = self._parse_hmac_header(auth_header)
         except ValueError as e:
+            logger.warning("HMAC auth: malformed Authorization header: %s", e)
             return self._bad_request(str(e))
         
         # Validate timestamp
@@ -468,7 +476,10 @@ class HMACAuthenticator:
         """
         try:
             timestamp = float(timestamp_str)
-        except ValueError:
+        except ValueError as exc:
+            logger.warning(
+                "HMAC auth: invalid timestamp %r: %s", timestamp_str, exc
+            )
             return (False, "Invalid timestamp format")
         
         current_time = time.time()

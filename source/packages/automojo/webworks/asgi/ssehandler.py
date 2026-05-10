@@ -238,9 +238,11 @@ class SSEHandler:
             
             try:
                 await send(final_message)
-            except Exception:
-                # Connection may already be closed
-                pass
+            except Exception as send_exc:
+                self._logger.debug(
+                    "SSE: final-body send failed (connection likely closed): %s",
+                    send_exc,
+                )
         
         return
 
@@ -325,7 +327,14 @@ class SSEHandler:
                 message = await receive()
                 if message.get("type") == MESSAGE_HTTP_DISCONNECT:
                     client_disconnected = True
-            except Exception:
+            except Exception as recv_exc:
+                # Receive errors here are usually "client gone" — log
+                # at debug so a sustained surge of disconnect-detect
+                # failures is still recoverable from the journal.
+                self._logger.debug(
+                    "SSE: receive() raised during disconnect monitoring: %s",
+                    recv_exc,
+                )
                 client_disconnected = True
             
             return
