@@ -387,8 +387,7 @@ def test_revoke_endpoint_with_token_store():
 
     # Store a token first
     import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(
+    asyncio.run(
         token_store.store_token("test-token", {"sub": "user"}, 3600)
     )
 
@@ -403,7 +402,7 @@ def test_revoke_endpoint_with_token_store():
         raise AssertionError(errmsg)
 
     # Verify the token was revoked
-    result = loop.run_until_complete(token_store.validate_token("test-token"))
+    result = asyncio.run(token_store.validate_token("test-token"))
     if result is not None:
         errmsg = "Expected token to be revoked (validate_token should return None)"
         raise AssertionError(errmsg)

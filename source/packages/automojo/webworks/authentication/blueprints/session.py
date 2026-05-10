@@ -52,20 +52,42 @@ from automojo.webworks.endpoints.doc import Doc
 
 def _run_async(coro: Any) -> Any:
     """
-        Run an asynchronous coroutine synchronously.
+        Run an asynchronous coroutine synchronously, regardless of
+        whether the calling thread already has a running event loop.
 
-        This helper obtains the current event loop and uses
-        ``run_until_complete`` to execute the coroutine. It is used
-        internally by :class:`SessionAuthBlueprint` to call async
-        :class:`SessionStore` and :class:`IdentityProvider` methods
-        from synchronous endpoint handlers.
+        Uvicorn / Hypercorn workers always have a running loop on the
+        request-handling thread, so the naive pattern
+        ``asyncio.get_event_loop().run_until_complete(coro)`` raises
+        ``RuntimeError: This event loop is already running``. When a
+        running loop is detected this helper offloads the coroutine
+        to a fresh worker thread with its own loop and blocks on the
+        thread's result; the sync caller observes a normal return
+        value with no nested-loop interleaving.
 
         :param coro: The coroutine to execute.
 
         :returns: The result of the coroutine.
     """
-    loop = asyncio.get_event_loop()
-    result = loop.run_until_complete(coro)
+    try:
+        running_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        running_loop = None
+
+    if running_loop is None:
+        # No running loop on this thread — drive the coroutine here
+        # with a fresh loop.
+        result = asyncio.run(coro)
+        return result
+
+    # A running loop is present (the typical ASGI case). Offload to
+    # a worker thread that owns its own loop so we never recurse
+    # into the live loop.
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(asyncio.run, coro)
+        result = future.result()
+
     return result
 
 
