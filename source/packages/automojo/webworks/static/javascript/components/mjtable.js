@@ -110,6 +110,53 @@ thead th {
 }
 `;
 
+/*
+ * Populate a single cell.
+ *
+ *   - When `col.render` is a function, call `render(row, col, rowIdx)`
+ *     and use the return value:
+ *       * a string -> textContent (with a matching title for hover)
+ *       * a Node / Element -> appended as a child
+ *       * an array or NodeList of nodes -> all appended
+ *       * a DocumentFragment -> appended whole
+ *       * null / undefined -> empty cell
+ *   - Otherwise fall back to text rendering of the row's raw value
+ *     (unchanged behavior for callers that don't supply `render`).
+ */
+function _fillCell(cell, value, row, col, rowIdx) {
+    let rendered = value
+    if (typeof col.render === "function") {
+        rendered = col.render(row, col, rowIdx)
+    }
+    cell.replaceChildren()
+    if (rendered === null || rendered === undefined) {
+        cell.textContent = ""
+        return
+    }
+    if (typeof rendered === "string" || typeof rendered === "number") {
+        const text = String(rendered)
+        cell.textContent = text
+        if (text.length > 0) {
+            cell.setAttribute("title", text)
+        }
+        return
+    }
+    if (rendered instanceof Node) {
+        cell.appendChild(rendered)
+        return
+    }
+    if (Array.isArray(rendered) === true || rendered instanceof NodeList) {
+        for (const node of rendered) {
+            if (node instanceof Node) {
+                cell.appendChild(node)
+            }
+        }
+        return
+    }
+    cell.textContent = String(rendered)
+    return
+}
+
 export class MjTable extends MjElement {
   static tagName = "mj-table";
   static styles = STYLES;
@@ -313,8 +360,7 @@ export class MjTable extends MjElement {
         }
 
         const value = row[col.key]
-        cell.textContent = value !== undefined && value !== null ? String(value) : ""
-        cell.setAttribute("title", cell.textContent)
+        _fillCell(cell, value, row, col, rowIdx)
 
         if (responsive === "stack") {
           cell.setAttribute("data-label", col.label || col.key)
