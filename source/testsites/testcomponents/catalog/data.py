@@ -613,4 +613,79 @@ COMPONENTS = [
             ("mj-clear-selection", "Fired when the × button is clicked or Escape is pressed."),
         ],
     ),
+    ComponentDoc(
+        tag="mj-sort-control",
+        title="Sort Control",
+        group="data",
+        summary="Sort header indicator that cycles none -> asc -> desc on activation.",
+        description=(
+            "<p><code>&lt;mj-sort-control&gt;</code> is the standalone "
+            "Sort control companion for DataTable / List / treegrid hosts "
+            "(plan 5.8). It can live in a column header or anywhere else "
+            "in the DOM; click or keyboard activation cycles the sort "
+            "direction through <code>none -&gt; asc -&gt; desc -&gt; "
+            "none</code> for the named field and emits "
+            "<code>mj-sort-change</code> on every transition.</p>"
+        ),
+        how_to_use=(
+            "<p>Set <code>field</code> to the dataset key the host will "
+            "sort on. Slot the visible column label as the control's "
+            "child text. Listen for <code>mj-sort-change</code> and "
+            "re-sort the dataset.</p>"
+        ),
+        example=(
+            '<mj-sort-control field="name">Name</mj-sort-control>\n'
+            '<mj-sort-control field="updated" direction="desc">Updated</mj-sort-control>'
+        ),
+        attributes=[
+            ("field", "Field identifier used by the host to sort the dataset."),
+            ("direction", "none | asc | desc; the active sort direction."),
+            ("label", "Override accessible label (defaults to slotted text)."),
+            ("disabled", "Boolean; blocks activation."),
+        ],
+        events=[
+            ("mj-sort-change", "Fired on every direction change with { field, direction, previousDirection }."),
+        ],
+    ),
+    ComponentDoc(
+        tag="mj-row-selector",
+        title="Row Selector",
+        group="data",
+        summary="Checkbox row-selector with select-all + indeterminate modes.",
+        description=(
+            "<p><code>&lt;mj-row-selector&gt;</code> is the DataTable / "
+            "List row-selection companion (plan 5.8). In "
+            "<code>mode=\"row\"</code> it carries a per-row value; in "
+            "<code>mode=\"all\"</code> it acts as the header select-all "
+            "checkbox with <code>indeterminate</code> support. Form-"
+            "associated via ElementInternals so the control reports its "
+            "checkbox state on form submit.</p>"
+        ),
+        how_to_use=(
+            "<p>For per-row use, set <code>value</code> to the row's "
+            "identifier and listen for <code>mj-row-select-change</code>. "
+            "For the header, set <code>mode=\"all\"</code>, drive "
+            "<code>selected</code> + <code>indeterminate</code> from the "
+            "selected-count, and optionally provide <code>count</code> for "
+            "an inline tally.</p>"
+        ),
+        example=(
+            '<mj-row-selector mode="all" indeterminate count="3 of 12">'
+            "Select all</mj-row-selector>\n"
+            '<mj-row-selector value="row-42">Row 42</mj-row-selector>'
+        ),
+        attributes=[
+            ("mode", "row (default) | all."),
+            ("selected", "Boolean; the checked state."),
+            ("indeterminate", "Boolean; only meaningful in mode=all."),
+            ("value", "Row identifier carried in the form value and the change event."),
+            ("name", "Form-field name when used inside <form>."),
+            ("count", "Optional inline count string (mode=all only, e.g. '3 of 12')."),
+            ("label", "Override accessible label."),
+            ("disabled", "Boolean; blocks activation."),
+        ],
+        events=[
+            ("mj-row-select-change", "Fired with { selected, indeterminate, mode, value }."),
+        ],
+    ),
 ]

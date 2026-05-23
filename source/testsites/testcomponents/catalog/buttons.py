@@ -256,4 +256,87 @@ COMPONENTS = [
             ("mj-rollback", "Fired when an optimistic update is reverted."),
         ],
     ),
+    ComponentDoc(
+        tag="mj-download-button",
+        title="Download Button",
+        group="buttons",
+        summary="A button-styled control that triggers an HTTP download.",
+        description=(
+            "<p><code>&lt;mj-download-button&gt;</code> renders a real "
+            "<code>&lt;a download&gt;</code> internally so the browser "
+            "handles the transfer, middle-click opens in a new tab, and "
+            "the URL appears in the browser's download UI. Consumers can "
+            "intercept the click by listening for the cancelable "
+            "<code>mj-download-start</code> event and supplying their own "
+            "(signed-URL, progress, ...) flow.</p>"
+        ),
+        how_to_use=(
+            "<p>Set <code>href</code> to the resource URL and "
+            "<code>filename</code> to the suggested local filename. "
+            "<code>variant</code> and <code>size</code> mirror "
+            "<code>mj-button</code>. Add <code>loading</code> while a "
+            "deferred download is in flight.</p>"
+        ),
+        example=(
+            '<mj-download-button href="/exports/report.csv" '
+            'filename="report.csv" variant="primary">'
+            "Download CSV</mj-download-button>"
+        ),
+        attributes=[
+            ("href", "URL of the resource to download."),
+            ("filename", "Suggested filename for the saved file."),
+            ("variant", "primary | secondary | tertiary | link."),
+            ("size", "sm | md | lg control sizing."),
+            ("loading", "Boolean; shows a spinner and blocks activation."),
+            ("disabled", "Boolean; blocks activation."),
+            ("target", "Anchor target (e.g. _blank)."),
+            ("rel", "Anchor rel value; defaulted to noopener noreferrer when target=_blank."),
+        ],
+        events=[
+            ("mj-download-start", "Cancelable; fired on click with { href, filename }."),
+        ],
+    ),
+    ComponentDoc(
+        tag="mj-upload-button",
+        title="Upload Button",
+        group="buttons",
+        summary="Button that triggers a file picker and accepts file drops.",
+        description=(
+            "<p><code>&lt;mj-upload-button&gt;</code> wraps a hidden "
+            "<code>&lt;input type=file&gt;</code> styled as a button and "
+            "also accepts drag-and-drop file drops on its host (or any "
+            "ancestor selector named by <code>drop-target</code>). Picks "
+            "and drops both fire one <code>mj-upload-select</code> event "
+            "carrying the FileList plus the accepted / rejected "
+            "partitions after <code>accept</code> and <code>max-size</code> "
+            "filtering.</p>"
+        ),
+        how_to_use=(
+            "<p>Set <code>accept</code> (MIME or extension list), "
+            "<code>multiple</code>, and <code>max-size</code> (bytes) to "
+            "shape the picker. Add <code>name</code> when the control is "
+            "inside a <code>&lt;form&gt;</code> so the picked files are "
+            "submitted alongside other fields. Listen for "
+            "<code>mj-upload-select</code>.</p>"
+        ),
+        example=(
+            '<mj-upload-button accept=".csv,text/csv" multiple>'
+            "Choose CSV files</mj-upload-button>"
+        ),
+        attributes=[
+            ("accept", "Comma-separated list of MIME types or file extensions."),
+            ("multiple", "Boolean; allow selecting more than one file."),
+            ("capture", "user | environment - mobile camera capture."),
+            ("max-size", "Maximum size per file, in bytes."),
+            ("name", "Form-field name when used inside <form>."),
+            ("variant", "primary | secondary | tertiary."),
+            ("size", "sm | md | lg control sizing."),
+            ("loading", "Boolean; shows a spinner and blocks activation."),
+            ("disabled", "Boolean; blocks activation."),
+            ("drop-target", "CSS selector for an alternate drop surface."),
+        ],
+        events=[
+            ("mj-upload-select", "Fired with { files, accepted, rejected, source } on every pick or drop."),
+        ],
+    ),
 ]

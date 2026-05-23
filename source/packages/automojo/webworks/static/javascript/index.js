@@ -62,6 +62,7 @@ import { MjDisclosure } from "./components/mjdisclosure.js";
 import { MjDisclosureButton } from "./components/mjdisclosurebutton.js";
 import { MjDivider } from "./components/mjdivider.js";
 import { MjDockLayout } from "./components/mjdocklayout.js";
+import { MjDownloadButton } from "./components/mjdownloadbutton.js";
 import { MjDrawer } from "./components/mjdrawer.js";
 import { MjDropzone } from "./components/mjdropzone.js";
 import { MjEmptyState } from "./components/mjemptystate.js";
@@ -117,6 +118,7 @@ import { MjRating } from "./components/mjrating.js";
 import { MjReleaseCalendar } from "./components/mjreleasecalendar.js";
 import { MjRichTextEditor } from "./components/mjrichtexteditor.js";
 import { MjRoadmapChart } from "./components/mjroadmapchart.js";
+import { MjRowSelector } from "./components/mjrowselector.js";
 import { MjScrollArea } from "./components/mjscrollarea.js";
 import { MjSearchInput } from "./components/mjsearchinput.js";
 import { MjSearchResults } from "./components/mjsearchresults.js";
@@ -127,6 +129,7 @@ import { MjSideNav } from "./components/mjsidenav.js";
 import { MjSkeleton } from "./components/mjskeleton.js";
 import { MjSkipLink } from "./components/mjskiplink.js";
 import { MjSlider } from "./components/mjslider.js";
+import { MjSortControl } from "./components/mjsortcontrol.js";
 import { MjSpacer } from "./components/mjspacer.js";
 import { MjSparkline } from "./components/mjsparkline.js";
 import { MjSplitButton } from "./components/mjsplitbutton.js";
@@ -152,6 +155,7 @@ import { MjTreeGrid } from "./components/mjtreegrid.js";
 import { MjTreeNav } from "./components/mjtreenav.js";
 import { MjTreeSelector } from "./components/mjtreeselector.js";
 import { MjTypedField } from "./components/mjtypedfield.js";
+import { MjUploadButton } from "./components/mjuploadbutton.js";
 import { MjValidationSummary } from "./components/mjvalidationsummary.js";
 import { MjVelocityChart } from "./components/mjvelocitychart.js";
 import { MjVirtualList } from "./components/mjvirtuallist.js";
@@ -168,7 +172,8 @@ export const components = [
   MjCodeEditor, MjColorPicker, MjColumnPicker, MjCombobox, MjCommandPalette,
   MjComments, MjContextMenu, MjCopyButton, MjCumulativeFlow, MjDataTable,
   MjDatePicker, MjDependencyGraph, MjDiagram, MjDialog, MjDisclosure,
-  MjDisclosureButton, MjDivider, MjDockLayout, MjDrawer, MjDropzone,
+  MjDisclosureButton, MjDivider, MjDockLayout, MjDownloadButton, MjDrawer,
+  MjDropzone,
   MjEmptyState, MjEnvPromotionChart, MjErrorMessage, MjFab, MjFavoriteButton,
   MjFeed, MjFieldset, MjFileBrowser, MjFilePicker, MjFilterPanel, MjFooterNav,
   MjForm, MjGanttChart, MjGauge, MjGrid, MjHelpText, MjHero, MjImage,
@@ -178,15 +183,16 @@ export const components = [
   MjMenuButton, MjMilestoneTimeline, MjNavStepper, MjNotificationCenter,
   MjNumberField, MjOtpInput, MjOverlay, MjPagination, MjPasswordField,
   MjPipelineChart, MjPopover, MjProgress, MjQueryBuilder, MjRadioGroup,
-  MjRating, MjReleaseCalendar, MjRichTextEditor, MjRoadmapChart, MjScrollArea,
-  MjSearchInput, MjSearchResults, MjSegmentedControl, MjSelect, MjShareButton,
-  MjSideNav, MjSkeleton, MjSkipLink, MjSlider, MjSpacer, MjSparkline,
+  MjRating, MjReleaseCalendar, MjRichTextEditor, MjRoadmapChart, MjRowSelector,
+  MjScrollArea, MjSearchInput, MjSearchResults, MjSegmentedControl, MjSelect,
+  MjShareButton, MjSideNav, MjSkeleton, MjSkipLink, MjSlider, MjSortControl,
+  MjSpacer, MjSparkline,
   MjSplitButton, MjSplitPane, MjStack, MjStatusBar, MjSurface, MjTable,
   MjTabs, MjTagPicker, MjTextarea, MjTextField, MjToast, MjToastRegion,
   MjToc, MjToggleButton, MjTokenInput, MjToolbar, MjTooltip, MjTour,
   MjTransferList, MjTreeGrid, MjTreeNav, MjTreeSelector, MjTypedField,
-  MjValidationSummary, MjVelocityChart, MjVirtualList, MjWizard,
-  MjWorkflowDiagram
+  MjUploadButton, MjValidationSummary, MjVelocityChart, MjVirtualList,
+  MjWizard, MjWorkflowDiagram
 ];
 
 /* Register every component. Safe to import more than once (idempotent). */
