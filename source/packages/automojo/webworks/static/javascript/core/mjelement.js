@@ -231,6 +231,16 @@ export class MjElement extends HTMLElement {
 
   /*
    * Emit a namespaced CustomEvent. All component events are prefixed `mj-`.
+   *
+   * For events that mirror a standard DOM event (`mj-change`,
+   * `mj-input`, `mj-focus`, `mj-blur`), a second event is fired with
+   * the bare native name so legacy listeners written against the
+   * native form-element API (`el.addEventListener("change", ...)`)
+   * keep working when the element is upgraded from a native
+   * `<input>` / `<select>` / `<textarea>` to its mj-* equivalent.
+   * The bridged event carries the same bubbles/composed flags but is
+   * a plain `Event` (no detail) -- consumers that want the rich
+   * payload listen for the `mj-*` form.
    */
   emit(type, detail, options) {
     const opts = options || {}
@@ -246,6 +256,22 @@ export class MjElement extends HTMLElement {
     })
 
     const notCanceled = this.dispatchEvent(event)
+
+    if (
+      type === "mj-change" ||
+      type === "mj-input" ||
+      type === "mj-focus" ||
+      type === "mj-blur"
+    ) {
+      const nativeName = type.slice(3)
+      const nativeEvent = new Event(nativeName, {
+        bubbles: bubbles,
+        cancelable: false,
+        composed: composed
+      })
+      this.dispatchEvent(nativeEvent)
+    }
+
     return notCanceled
   }
 
