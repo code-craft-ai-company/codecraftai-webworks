@@ -54,6 +54,10 @@ Remember to make the test hierarchy match the source hierarchy when adding test 
 File to test: 'source/packages/automojo/interop/protocols/dns/dnsquestion.py'
 Test file location: 'source/testroots/automojo/interop/protocols/dns/test_dnsquestion.py'
 
+# File Locations
+
+- Web components: 'source/packages/automojo/webworks/static/javascript/components'
+
 # Coding Standards
 The code in this repository is meant to be utilized by testing tools and test frameworks.  Therefore, the code must prioritize:
 

@@ -1,0 +1,129 @@
+/*
+ * base.css
+ *
+ * Shared base stylesheet adopted by every mj-* component's shadow root via the
+ * MjElement base class. Provides the reset, theming hooks, accessibility
+ * helpers, and the ANCHORING rules. Docking layout geometry is computed by
+ * mj-dock-layout (see core/anchoring.js); the docking-related declarations
+ * here only cover the docked child's own presentation.
+ *
+ * This stylesheet is also safe to link directly in light DOM.
+ */
+
+:host {
+  box-sizing: border-box;
+  display: block;
+  font-family: var(--mj-font-sans);
+  font-size: var(--mj-font-size-md);
+  line-height: var(--mj-line-height);
+  color: var(--mj-text);
+  -webkit-text-size-adjust: 100%;
+}
+
+:host *,
+:host *::before,
+:host *::after {
+  box-sizing: border-box;
+}
+
+:host([hidden]),
+[hidden] {
+  display: none !important;
+}
+
+:host([disabled]) {
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+/* ----------------------------------------------------------------------
+ * Anchoring
+ *
+ * Any component placed inside a positioned container (a container that sets
+ * `position: relative`, which all mj-* layout containers do) can pin itself to
+ * an anchor point with the `anchor` attribute. RTL is handled by logical
+ * inset properties so `start`/`end` follow text direction.
+ * -------------------------------------------------------------------- */
+:host([anchor]) {
+  position: absolute;
+  z-index: var(--mj-layer-docked);
+}
+
+:host([anchor="top-start"])     { inset-block-start: var(--mj-anchor-inset, 0); inset-inline-start: var(--mj-anchor-inset, 0); }
+:host([anchor="top"])           { inset-block-start: var(--mj-anchor-inset, 0); inset-inline-start: 50%; translate: -50% 0; }
+:host([anchor="top-end"])       { inset-block-start: var(--mj-anchor-inset, 0); inset-inline-end: var(--mj-anchor-inset, 0); }
+:host([anchor="start"])         { inset-inline-start: var(--mj-anchor-inset, 0); inset-block-start: 50%; translate: 0 -50%; }
+:host([anchor="center"])        { inset-block-start: 50%; inset-inline-start: 50%; translate: -50% -50%; }
+:host([anchor="end"])           { inset-inline-end: var(--mj-anchor-inset, 0); inset-block-start: 50%; translate: 0 -50%; }
+:host([anchor="bottom-start"])  { inset-block-end: var(--mj-anchor-inset, 0); inset-inline-start: var(--mj-anchor-inset, 0); }
+:host([anchor="bottom"])        { inset-block-end: var(--mj-anchor-inset, 0); inset-inline-start: 50%; translate: -50% 0; }
+:host([anchor="bottom-end"])    { inset-block-end: var(--mj-anchor-inset, 0); inset-inline-end: var(--mj-anchor-inset, 0); }
+:host([anchor="stretch"])       { inset: var(--mj-anchor-inset, 0); }
+
+/* ----------------------------------------------------------------------
+ * Docking
+ *
+ * A component carrying `dock` is laid out by an enclosing mj-dock-layout.
+ * The host declarations below only ensure a docked child fills the band the
+ * layout assigns to it; the edge-consumption geometry is JS-driven.
+ * -------------------------------------------------------------------- */
+:host([dock]) {
+  flex: 0 0 auto;
+}
+
+:host([dock="fill"]) {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ----------------------------------------------------------------------
+ * Accessibility helpers
+ * -------------------------------------------------------------------- */
+
+/* Visually hidden but available to assistive tech. */
+.mj-visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Standard focus ring; components apply `.mj-focus-ring` or rely on
+ * :focus-visible against their interactive parts. */
+.mj-focus-ring:focus-visible,
+:host(:focus-visible) {
+  outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring);
+  outline-offset: var(--mj-focus-ring-offset);
+}
+
+/* Remove the ring for pointer interaction only. */
+:host(:focus:not(:focus-visible)) {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :host,
+  :host * {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  :host {
+    --mj-border: CanvasText;
+    --mj-focus-ring: Highlight;
+  }
+  .mj-focus-ring:focus-visible,
+  :host(:focus-visible) {
+    outline-color: Highlight;
+  }
+}

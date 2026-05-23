@@ -15,7 +15,15 @@ keywords = [
 ]
 packages = [{include="automojo", from="source/packages"}]
 include = [
+    # Vendored Swagger UI / OpenAPI assets served by SwaggerUIBlueprint.
     { path = "source/packages/automojo/webworks/openapi/static/**/*", format = ["sdist", "wheel"] },
+    # mj-* web component library shipped with the package: design tokens
+    # and base stylesheet (static/styles/), the JavaScript foundation,
+    # all component modules, the comprehensive chart library, the
+    # registration barrel (static/javascript/), and the demo gallery
+    # (static/gallery.html). Served to consumer sites via the static
+    # handler.
+    { path = "source/packages/automojo/webworks/static/**/*", format = ["sdist", "wheel"] },
 ]
 
 [tool.poetry.dependencies]
