@@ -135,6 +135,53 @@ const STYLES = `
 :host([loading]) .body-scroll { opacity: 0.5; pointer-events: none; }
 `;
 
+/*
+ * Populate a single data-cell.
+ *
+ *   - When `col.render` is a function, call `render(row, col, rowIdx)`
+ *     and use the return value:
+ *       * a string / number -> textContent
+ *       * a Node / Element -> appended as a child
+ *       * an array or NodeList of nodes -> all appended
+ *       * a DocumentFragment -> appended whole
+ *       * null / undefined -> empty cell
+ *   - Otherwise fall back to text rendering of the row's raw value
+ *     (unchanged behavior for callers that don't supply `render`).
+ *
+ * Cells with a `render` hook stay non-editable: inline-edit only
+ * makes sense for plain-text values where the cell's own content
+ * is the canonical representation.
+ */
+function _fillDataCell(cell, value, row, col, rowIdx) {
+    let rendered = value
+    if (typeof col.render === "function") {
+        rendered = col.render(row, col, rowIdx)
+    }
+    cell.replaceChildren()
+    if (rendered === null || rendered === undefined) {
+        cell.textContent = ""
+        return
+    }
+    if (typeof rendered === "string" || typeof rendered === "number") {
+        cell.textContent = String(rendered)
+        return
+    }
+    if (rendered instanceof Node) {
+        cell.appendChild(rendered)
+        return
+    }
+    if (Array.isArray(rendered) === true || rendered instanceof NodeList) {
+        for (const node of rendered) {
+            if (node instanceof Node) {
+                cell.appendChild(node)
+            }
+        }
+        return
+    }
+    cell.textContent = String(rendered)
+    return
+}
+
 export class MjDataTable extends MjElement {
   static tagName = "mj-data-table";
   static styles = STYLES;
@@ -406,7 +453,7 @@ export class MjDataTable extends MjElement {
       cellEl.style.width = typeof width === "number" ? `${width}px` : width
 
       const value = row[col.key]
-      cellEl.textContent = value !== undefined && value !== null ? String(value) : ""
+      _fillDataCell(cellEl, value, row, col, rowIndex)
 
       if (selection !== "none") {
         this.listen(cellEl, "click", () => { this._handleCellClick(rowKey, ci) })
