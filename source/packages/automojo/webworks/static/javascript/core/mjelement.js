@@ -296,6 +296,22 @@ export class MjElement extends HTMLElement {
     return disabled
   }
 
+  /*
+   * Standard `disabled` IDL surface so consumers can read/write
+   * the attribute through the property (mirroring the native
+   * <button> / <input> contract). The setter toggles the
+   * attribute so attributeChangedCallback fires and downstream
+   * components update their internal state.
+   */
+  get disabled() {
+    return this.hasAttribute("disabled")
+  }
+
+  set disabled(value) {
+    this.toggleAttribute("disabled", Boolean(value))
+    return
+  }
+
   /* ----- context menu -----
    *
    * Every component inherits a popup context menu. Configure it by setting
