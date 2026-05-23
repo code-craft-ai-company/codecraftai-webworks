@@ -111,6 +111,100 @@ thead th {
 `;
 
 /*
+ * Apply row-level styling / data hooks to a freshly-created <tr>.
+ *
+ *   rowClass    -- a string, a string[], or a callback
+ *                  `(row, idx) => string | string[]`. Adds the
+ *                  resolved class names to the row's classList in
+ *                  addition to the part="tr" identifier the
+ *                  component owns.
+ *   rowAttrs    -- a callback `(row, idx) => { [name]: value }`.
+ *                  Each name/value pair is applied via
+ *                  setAttribute, so consumers can stamp data-
+ *                  attributes (typical: a row id for keyboard /
+ *                  tests) without webworks knowing the schema.
+ *
+ * Both inputs are optional -- callers that supply neither get
+ * the existing behavior.
+ */
+function _applyRowHooks(tr, row, rowIdx, rowClass, rowAttrs) {
+    if (rowClass !== null && rowClass !== undefined) {
+        let resolved = rowClass
+        if (typeof rowClass === "function") {
+            resolved = rowClass(row, rowIdx)
+        }
+        if (typeof resolved === "string" && resolved.length > 0) {
+            for (const token of resolved.split(/\s+/)) {
+                if (token.length > 0) {
+                    tr.classList.add(token)
+                }
+            }
+        } else if (Array.isArray(resolved) === true) {
+            for (const token of resolved) {
+                if (typeof token === "string" && token.length > 0) {
+                    tr.classList.add(token)
+                }
+            }
+        }
+    }
+    if (typeof rowAttrs === "function") {
+        const attrs = rowAttrs(row, rowIdx) || {}
+        for (const name of Object.keys(attrs)) {
+            const value = attrs[name]
+            if (value === null || value === undefined || value === false) {
+                tr.removeAttribute(name)
+            } else if (value === true) {
+                tr.setAttribute(name, "")
+            } else {
+                tr.setAttribute(name, String(value))
+            }
+        }
+    }
+    return
+}
+
+/*
+ * Apply column-level cell hooks. Mirrors row hooks but scoped to
+ * one column; consumers add per-cell classes / data-attributes
+ * via `col.cellClass` and `col.cellAttrs` on the column schema.
+ */
+function _applyCellHooks(cell, row, col, rowIdx) {
+    if (col.cellClass !== null && col.cellClass !== undefined) {
+        let resolved = col.cellClass
+        if (typeof col.cellClass === "function") {
+            resolved = col.cellClass(row, col, rowIdx)
+        }
+        if (typeof resolved === "string" && resolved.length > 0) {
+            for (const token of resolved.split(/\s+/)) {
+                if (token.length > 0) {
+                    cell.classList.add(token)
+                }
+            }
+        } else if (Array.isArray(resolved) === true) {
+            for (const token of resolved) {
+                if (typeof token === "string" && token.length > 0) {
+                    cell.classList.add(token)
+                }
+            }
+        }
+    }
+    if (typeof col.cellAttrs === "function") {
+        const attrs = col.cellAttrs(row, col, rowIdx) || {}
+        for (const name of Object.keys(attrs)) {
+            const value = attrs[name]
+            if (value === null || value === undefined || value === false) {
+                cell.removeAttribute(name)
+            } else if (value === true) {
+                cell.setAttribute(name, "")
+            } else {
+                cell.setAttribute(name, String(value))
+            }
+        }
+    }
+    return
+}
+
+/*
  * Populate a single cell.
  *
  *   - When `col.render` is a function, call `render(row, col, rowIdx)`
@@ -166,6 +260,8 @@ export class MjTable extends MjElement {
     super()
     this._columns = []
     this._rows = []
+    this._rowClass = null
+    this._rowAttrs = null
     this._resizeObserver = null
   }
 
@@ -347,6 +443,7 @@ export class MjTable extends MjElement {
       const row = this._rows[rowIdx]
       const tr = document.createElement("tr")
       tr.setAttribute("part", "tr")
+      _applyRowHooks(tr, row, rowIdx, this._rowClass, this._rowAttrs)
 
       for (let colIdx = 0; colIdx < this._columns.length; colIdx = colIdx + 1) {
         const col = this._columns[colIdx]
@@ -361,6 +458,7 @@ export class MjTable extends MjElement {
 
         const value = row[col.key]
         _fillCell(cell, value, row, col, rowIdx)
+        _applyCellHooks(cell, row, col, rowIdx)
 
         if (responsive === "stack") {
           cell.setAttribute("data-label", col.label || col.key)
@@ -394,6 +492,38 @@ export class MjTable extends MjElement {
 
   set rows(value) {
     this._rows = Array.isArray(value) === true ? value : []
+    if (this._tbody !== undefined && this._tbody !== null) {
+      this._renderTable()
+    }
+    return
+  }
+
+  /*
+   * Per-row hooks. Set `rowClass` to a string, a string[], or a
+   * `(row, idx) => string | string[]` callback to add class names
+   * to every <tr>. Set `rowAttrs` to a `(row, idx) => attrs`
+   * callback to stamp arbitrary attributes (typically a row id
+   * so consumers can target individual rows from tests or
+   * styles).
+   */
+  get rowClass() {
+    return this._rowClass
+  }
+
+  set rowClass(value) {
+    this._rowClass = value
+    if (this._tbody !== undefined && this._tbody !== null) {
+      this._renderTable()
+    }
+    return
+  }
+
+  get rowAttrs() {
+    return this._rowAttrs
+  }
+
+  set rowAttrs(value) {
+    this._rowAttrs = typeof value === "function" ? value : null
     if (this._tbody !== undefined && this._tbody !== null) {
       this._renderTable()
     }

@@ -152,6 +152,90 @@ const STYLES = `
  * makes sense for plain-text values where the cell's own content
  * is the canonical representation.
  */
+/*
+ * Apply row-level styling / data hooks to a virtualized row.
+ * Mirrors mj-table's row hooks so consumers can move data-table
+ * styling onto ::part() and per-row class hooks. Same input
+ * shape: `rowClass` is a string / string[] / callback; `rowAttrs`
+ * is a `(row, idx) => attrs` callback.
+ */
+function _applyDataRowHooks(rowEl, row, rowIdx, rowClass, rowAttrs) {
+    if (rowClass !== null && rowClass !== undefined) {
+        let resolved = rowClass
+        if (typeof rowClass === "function") {
+            resolved = rowClass(row, rowIdx)
+        }
+        if (typeof resolved === "string" && resolved.length > 0) {
+            for (const token of resolved.split(/\s+/)) {
+                if (token.length > 0) {
+                    rowEl.classList.add(token)
+                }
+            }
+        } else if (Array.isArray(resolved) === true) {
+            for (const token of resolved) {
+                if (typeof token === "string" && token.length > 0) {
+                    rowEl.classList.add(token)
+                }
+            }
+        }
+    }
+    if (typeof rowAttrs === "function") {
+        const attrs = rowAttrs(row, rowIdx) || {}
+        for (const name of Object.keys(attrs)) {
+            const value = attrs[name]
+            if (value === null || value === undefined || value === false) {
+                rowEl.removeAttribute(name)
+            } else if (value === true) {
+                rowEl.setAttribute(name, "")
+            } else {
+                rowEl.setAttribute(name, String(value))
+            }
+        }
+    }
+    return
+}
+
+/*
+ * Apply column-level cell hooks. `col.cellClass` is a string /
+ * string[] / callback; `col.cellAttrs` is a callback returning a
+ * name -> value map. Same shape as mj-table.
+ */
+function _applyDataCellHooks(cellEl, row, col, rowIdx) {
+    if (col.cellClass !== null && col.cellClass !== undefined) {
+        let resolved = col.cellClass
+        if (typeof col.cellClass === "function") {
+            resolved = col.cellClass(row, col, rowIdx)
+        }
+        if (typeof resolved === "string" && resolved.length > 0) {
+            for (const token of resolved.split(/\s+/)) {
+                if (token.length > 0) {
+                    cellEl.classList.add(token)
+                }
+            }
+        } else if (Array.isArray(resolved) === true) {
+            for (const token of resolved) {
+                if (typeof token === "string" && token.length > 0) {
+                    cellEl.classList.add(token)
+                }
+            }
+        }
+    }
+    if (typeof col.cellAttrs === "function") {
+        const attrs = col.cellAttrs(row, col, rowIdx) || {}
+        for (const name of Object.keys(attrs)) {
+            const value = attrs[name]
+            if (value === null || value === undefined || value === false) {
+                cellEl.removeAttribute(name)
+            } else if (value === true) {
+                cellEl.setAttribute(name, "")
+            } else {
+                cellEl.setAttribute(name, String(value))
+            }
+        }
+    }
+    return
+}
+
 function _fillDataCell(cell, value, row, col, rowIdx) {
     let rendered = value
     if (typeof col.render === "function") {
@@ -191,6 +275,8 @@ export class MjDataTable extends MjElement {
     super()
     this._columns = []
     this._rows = []
+    this._rowClass = null
+    this._rowAttrs = null
     this._dataSource = null
     this._sortState = null
     this._filterState = {}
@@ -436,6 +522,8 @@ export class MjDataTable extends MjElement {
       rowEl.setAttribute("aria-selected", isSelected === true ? "true" : "false")
     }
 
+    _applyDataRowHooks(rowEl, row, rowIndex, this._rowClass, this._rowAttrs)
+
     rowEl.innerHTML = ""
 
     for (let ci = 0; ci < this._columns.length; ci = ci + 1) {
@@ -454,6 +542,7 @@ export class MjDataTable extends MjElement {
 
       const value = row[col.key]
       _fillDataCell(cellEl, value, row, col, rowIndex)
+      _applyDataCellHooks(cellEl, row, col, rowIndex)
 
       if (selection !== "none") {
         this.listen(cellEl, "click", () => { this._handleCellClick(rowKey, ci) })
@@ -757,6 +846,37 @@ export class MjDataTable extends MjElement {
     this._rows = Array.isArray(value) === true ? value : []
     if (this._bodyInner !== undefined && this._bodyInner !== null) {
       this._loadData()
+    }
+    return
+  }
+
+  /*
+   * Per-row hooks. Set `rowClass` to a string, a string[], or a
+   * `(row, idx) => string | string[]` callback to add class names
+   * to every virtualized row. Set `rowAttrs` to a callback
+   * `(row, idx) => attrs` to stamp arbitrary attributes (typical:
+   * row id for tests / styling).
+   */
+  get rowClass() {
+    return this._rowClass
+  }
+
+  set rowClass(value) {
+    this._rowClass = value
+    if (this._bodyInner !== undefined && this._bodyInner !== null) {
+      this._renderRows()
+    }
+    return
+  }
+
+  get rowAttrs() {
+    return this._rowAttrs
+  }
+
+  set rowAttrs(value) {
+    this._rowAttrs = typeof value === "function" ? value : null
+    if (this._bodyInner !== undefined && this._bodyInner !== null) {
+      this._renderRows()
     }
     return
   }

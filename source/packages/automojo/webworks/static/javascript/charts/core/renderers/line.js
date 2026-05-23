@@ -170,6 +170,8 @@ export function render(ctx) {
 
     if (pathData !== "") {
       const pathEl = svgEl("path", {
+        part: "line",
+        "data-series": ser.name,
         d: pathData,
         fill: "none",
         stroke: color,
@@ -191,6 +193,8 @@ export function render(ctx) {
 
       if (showPoints === true) {
         const dot = svgEl("circle", {
+          part: "dot",
+          "data-series": ser.name,
           cx: px, cy: py, r: 3,
           fill: color,
           stroke: "var(--mj-surface, #fff)",
