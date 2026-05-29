@@ -17,15 +17,16 @@ relying-party flow needs:
     3. Parse the OIDC ``id_token`` JWT, or fetch the userinfo
        endpoint, to recover the user's claims.
 
-The wrapper deliberately avoids the framework adapters
-(``flask_client``, ``starlette_client``) so it composes cleanly with
-the webworks ASGI stack: provider config is supplied by the caller
-as a plain dict, and the wrapper performs each network round trip
-synchronously via ``authlib.integrations.requests_client``. The
-synchronous shape matches the surrounding handler pattern; webworks
-runs sync handlers on the default executor, so blocking on the
-provider's authorization / token / JWKS / userinfo endpoints does
-not stall the event loop.
+The wrapper is built entirely in-house on top of :mod:`requests`
+(for the authorization-code / refresh token round trips) and the
+webworks :mod:`automojo.webworks.security.jsonwebtoken` module (for
+OIDC ``id_token`` validation). It deliberately depends on no
+higher-level OAuth framework: provider config is supplied by the
+caller as a plain dict, and the wrapper performs each network round
+trip synchronously. The synchronous shape matches the surrounding
+handler pattern; webworks runs sync handlers on the default
+executor, so blocking on the provider's authorization / token /
+JWKS / userinfo endpoints does not stall the event loop.
 
 The class carries no per-request state: handler code constructs a
 fresh instance for the duration of one kickoff or callback request,
@@ -45,11 +46,50 @@ import logging
 import secrets
 
 from typing import Any, Dict, Optional
+from urllib.parse import urlencode
 
 import requests as http_requests
 
 
 logger = logging.getLogger(__name__)
+
+
+class OAuthError(Exception):
+    """
+        Raised when an OAuth token or refresh request is rejected by
+        the provider.
+
+        The ``error`` attribute carries the OAuth 2.0 error code from
+        the provider's error response (RFC 6749 section 5.2 —
+        ``invalid_grant``, ``invalid_client``, etc.). Application code
+        branches on this code; in particular an ``invalid_grant`` on a
+        refresh means the user has revoked consent and the stored token
+        is dead.
+
+        :param error: The OAuth 2.0 error code.
+        :param description: Optional human-readable description from the
+                            provider's ``error_description`` field.
+        :param error_uri: Optional provider documentation URI from the
+                          ``error_uri`` field.
+    """
+
+    def __init__(
+        self,
+        error: str,
+        description: Optional[str] = None,
+        error_uri: Optional[str] = None,
+    ) -> None:
+        self.error = str(error or "").strip()
+        self.description = description
+        self.error_uri = error_uri
+
+        message_parts = [self.error]
+        if description is not None and str(description).strip() != "":
+            message_parts.append(str(description).strip())
+
+        message = ": ".join(message_parts)
+        super().__init__(message)
+        return
 
 
 # Algorithms the OIDC id_token decoder will accept. Restricting the
@@ -342,52 +382,107 @@ class OAuthClient:
 
             :returns: The absolute URL to redirect the browser to.
         """
-        # Lazy import keeps the module import-light when the OAuth
-        # methods are not exercised — and lets consumers that don't
-        # enable the ``oauth`` extra import this module without
-        # crashing. Consumers that reach this code path without
-        # ``authlib`` installed get a diagnostic message pointing
-        # them at the right ``pip install`` invocation.
-        try:
-            from authlib.integrations.requests_client import OAuth2Session
-        except ImportError as exc:
-            errmsg = (
-                "OAuth client functionality requires the 'oauth' "
-                "extra. Install it with: "
-                "pip install automojo-webworks[oauth]"
-            )
-            raise ImportError(errmsg) from exc
-
         scope_value = self._resolve_scope(override=scope)
 
-        params: Dict[str, Any] = {}
-        if extra_params is not None:
-            params.update(extra_params)
+        # Assemble the authorization-request query per RFC 6749
+        # section 4.1.1. ``response_type=code`` selects the
+        # authorization-code flow; the remaining parameters are the
+        # client identity, callback, scope, and CSRF state.
+        query_params: Dict[str, str] = {
+            "response_type": "code",
+            "client_id": self._client_id,
+            "redirect_uri": redirect_uri,
+            "state": state,
+        }
+
+        if scope_value != "":
+            query_params["scope"] = scope_value
 
         if nonce is not None:
             nonce_value = str(nonce).strip()
             if nonce_value != "":
-                params["nonce"] = nonce_value
+                query_params["nonce"] = nonce_value
 
-        scope_arg = scope_value if scope_value != "" else None
-
-        session = OAuth2Session(
-            client_id=self._client_id,
-            client_secret=self._client_secret,
-            scope=scope_arg,
-            redirect_uri=redirect_uri,
-            state=state,
-        )
+        if extra_params is not None:
+            for extra_key, extra_value in extra_params.items():
+                query_params[str(extra_key)] = str(extra_value)
 
         authorize_url = self._resolve_authorize_url()
 
-        url, _state = session.create_authorization_url(
-            authorize_url,
-            state=state,
-            **params,
+        # Preserve any query string the authorize endpoint already
+        # carries (some providers template a tenant id into it) by
+        # joining with the correct delimiter.
+        if "?" in authorize_url:
+            delimiter = "&"
+        else:
+            delimiter = "?"
+
+        encoded_query = urlencode(query_params)
+
+        rtnval = "{base}{delimiter}{query}".format(
+            base=authorize_url,
+            delimiter=delimiter,
+            query=encoded_query,
+        )
+        return rtnval
+
+    def _request_token(self, *, form_fields: Dict[str, str]) -> Dict[str, Any]:
+        """
+            POST a form-encoded grant request to the provider's token
+            endpoint and return the parsed token payload.
+
+            Client credentials are sent in the request body
+            (``client_secret_post``), which both OIDC providers and
+            GitHub accept. The ``Accept: application/json`` header
+            forces a JSON response from providers (notably GitHub) that
+            otherwise default to a form-encoded body.
+
+            :param form_fields: The grant-specific form fields
+                                 (``grant_type`` plus its parameters).
+
+            :returns: The parsed token dict from the provider.
+            :raises OAuthError: When the provider returns an OAuth
+                                error response or a non-2xx status.
+        """
+        token_url = self._resolve_token_url()
+
+        body = dict(form_fields)
+        body["client_id"] = self._client_id
+        body["client_secret"] = self._client_secret
+
+        response = http_requests.post(
+            token_url,
+            data=body,
+            headers={"Accept": "application/json"},
+            timeout=_HTTP_TIMEOUT_SECONDS,
         )
 
-        rtnval = url
+        parsed: Dict[str, Any] = {}
+        try:
+            loaded = response.json()
+            if isinstance(loaded, dict):
+                parsed = loaded
+        except ValueError:
+            parsed = {}
+
+        error_code = str(parsed.get("error") or "").strip()
+        if error_code != "":
+            description = parsed.get("error_description")
+            error_uri = parsed.get("error_uri")
+            raise OAuthError(
+                error=error_code,
+                description=description,
+                error_uri=error_uri,
+            )
+
+        if response.status_code < 200 or response.status_code >= 300:
+            errmsg = (
+                "Token endpoint for provider {!r} returned HTTP "
+                "{}.".format(self._provider_name, response.status_code)
+            )
+            raise OAuthError(error="token_request_failed", description=errmsg)
+
+        rtnval = parsed
         return rtnval
 
     def exchange_code_for_token(
@@ -412,34 +507,21 @@ class OAuthClient:
             :returns: The token dict from the provider, with at
                       minimum ``access_token`` and (for OIDC
                       providers) ``id_token``.
-            :raises authlib.integrations.base_client.OAuthError:
-                       When the provider rejects the token request.
+            :raises OAuthError: When the provider rejects the token
+                                request.
         """
-        try:
-            from authlib.integrations.requests_client import OAuth2Session
-        except ImportError as exc:
-            errmsg = (
-                "OAuth client functionality requires the 'oauth' "
-                "extra. Install it with: "
-                "pip install automojo-webworks[oauth]"
-            )
-            raise ImportError(errmsg) from exc
+        form_fields: Dict[str, str] = {
+            "grant_type": "authorization_code",
+            "code": str(code),
+            "redirect_uri": redirect_uri,
+        }
 
-        session = OAuth2Session(
-            client_id=self._client_id,
-            client_secret=self._client_secret,
-            redirect_uri=redirect_uri,
-            state=state,
-        )
+        if state is not None:
+            state_value = str(state).strip()
+            if state_value != "":
+                form_fields["state"] = state_value
 
-        token_url = self._resolve_token_url()
-
-        token = session.fetch_token(
-            token_url,
-            code=code,
-            redirect_uri=redirect_uri,
-            state=state,
-        )
+        token = self._request_token(form_fields=form_fields)
 
         rtnval = dict(token)
         return rtnval
@@ -467,21 +549,10 @@ class OAuthClient:
 
             :returns: A dict of token attributes from the provider.
             :raises ValueError: When ``refresh_token`` is blank.
-            :raises authlib.integrations.base_client.OAuthError:
-                       When the provider rejects the refresh request
-                       (e.g. ``invalid_grant`` after the user has
-                       revoked consent).
+            :raises OAuthError: When the provider rejects the refresh
+                                request (e.g. ``invalid_grant`` after
+                                the user has revoked consent).
         """
-        try:
-            from authlib.integrations.requests_client import OAuth2Session
-        except ImportError as exc:
-            errmsg = (
-                "OAuth client functionality requires the 'oauth' "
-                "extra. Install it with: "
-                "pip install automojo-webworks[oauth]"
-            )
-            raise ImportError(errmsg) from exc
-
         refresh_value = str(refresh_token or "").strip()
         if refresh_value == "":
             errmsg = (
@@ -490,17 +561,12 @@ class OAuthClient:
             )
             raise ValueError(errmsg)
 
-        token_url = self._resolve_token_url()
+        form_fields: Dict[str, str] = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_value,
+        }
 
-        session = OAuth2Session(
-            client_id=self._client_id,
-            client_secret=self._client_secret,
-        )
-
-        new_token = session.refresh_token(
-            token_url,
-            refresh_token=refresh_value,
-        )
+        new_token = self._request_token(form_fields=form_fields)
 
         rtnval = dict(new_token)
         return rtnval
@@ -521,12 +587,11 @@ class OAuthClient:
             Algorithms are restricted to RS256 / ES256 / ES384 /
             ES512 to defend against algorithm-confusion attacks.
 
-            Uses :mod:`joserfc` for JWT decoding and claims
-            validation. ``joserfc`` is the actively-maintained
-            successor to ``authlib.jose`` (which authlib now
-            deprecates and will drop in 2.0); using it directly
-            keeps this module's JOSE surface stable across the
-            authlib upgrade.
+            Uses the in-house
+            :mod:`automojo.webworks.security.jsonwebtoken` module for
+            JWT decoding, signature verification, and claims
+            validation — webworks owns the JOSE surface rather than
+            depending on a third-party JWT framework.
 
             :param token: Token payload returned by
                           :meth:`exchange_code_for_token`. Must
@@ -543,16 +608,7 @@ class OAuthClient:
                                 the ``jwks_uri`` / ``issuer`` fields
                                 needed for validation.
         """
-        try:
-            from joserfc import jwt as joserfc_jwt
-            from joserfc.jwk import KeySet
-        except ImportError as exc:
-            errmsg = (
-                "OIDC id_token validation requires the 'oauth' "
-                "extra. Install it with: "
-                "pip install automojo-webworks[oauth]"
-            )
-            raise ImportError(errmsg) from exc
+        from automojo.webworks.security import jsonwebtoken
 
         id_token_value = token.get("id_token")
         if id_token_value is None:
@@ -582,8 +638,8 @@ class OAuthClient:
         # acceptable signing algorithms up front to defeat
         # algorithm-confusion attacks (a JWKS that advertises
         # ``alg: HS256`` for an asymmetric key, etc.).
-        key_set = KeySet.import_key_set(jwks)
-        decoded = joserfc_jwt.decode(
+        key_set = jsonwebtoken.JsonWebKeySet.import_key_set(jwks)
+        decoded = jsonwebtoken.decode(
             id_token_str,
             key=key_set,
             algorithms=_ACCEPTED_ID_TOKEN_ALGORITHMS,
@@ -611,7 +667,7 @@ class OAuthClient:
                     "value": nonce_value,
                 }
 
-        registry = joserfc_jwt.JWTClaimsRegistry(**claims_options)
+        registry = jsonwebtoken.ClaimsRegistry(claims_options)
         registry.validate(decoded.claims)
 
         rtnval = dict(decoded.claims)
@@ -714,6 +770,7 @@ def generate_oauth_nonce() -> str:
 
 __all__ = [
     "OAuthClient",
+    "OAuthError",
     "generate_oauth_nonce",
     "generate_oauth_state",
 ]

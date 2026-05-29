@@ -23,7 +23,10 @@
           URL-safe random tokens of the documented length.
 """
 
-from typing import Any, Dict, Optional
+import base64
+import json
+
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -38,6 +41,79 @@ from automojo.webworks.authentication.oauth import (
 # =============================================================================
 # Helpers
 # =============================================================================
+
+
+def _b64url(data: bytes) -> str:
+    """
+        base64url-encode bytes with padding stripped (compact JWS
+        rule).
+    """
+    rtnval = base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+    return rtnval
+
+
+def _int_to_b64url(value: int) -> str:
+    """
+        Encode a big-endian unsigned integer as base64url, the JWK
+        encoding for RSA modulus / exponent.
+    """
+    byte_length = (value.bit_length() + 7) // 8
+    raw = value.to_bytes(byte_length, byteorder="big")
+    rtnval = _b64url(raw)
+    return rtnval
+
+
+def _make_rs256_id_token(
+    claims: Dict[str, Any],
+    kid: str,
+) -> Tuple[str, Dict[str, List[Dict[str, Any]]]]:
+    """
+        Sign an RS256 JWT with a freshly generated RSA key using
+        :mod:`cryptography`, and return the compact token alongside the
+        public-half JWKS a provider would advertise.
+
+        This replaces the previous ``joserfc``-based token minting now
+        that webworks owns its JOSE surface in-house; the test signs
+        the token with the standard primitive library so the in-house
+        verifier is exercised against an independently produced token.
+
+        :param claims: The JWT claim set.
+        :param kid: The key id to stamp on the JWK and the JOSE header.
+
+        :returns: A tuple of (compact id_token, jwks document).
+    """
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    header = {"alg": "RS256", "typ": "JWT", "kid": kid}
+
+    header_segment = _b64url(json.dumps(header).encode("utf-8"))
+    payload_segment = _b64url(json.dumps(claims).encode("utf-8"))
+    signing_input = "{}.{}".format(header_segment, payload_segment).encode("ascii")
+
+    signature = private_key.sign(
+        signing_input,
+        padding.PKCS1v15(),
+        hashes.SHA256(),
+    )
+    signature_segment = _b64url(signature)
+
+    id_token = "{}.{}.{}".format(header_segment, payload_segment, signature_segment)
+
+    public_numbers = private_key.public_key().public_numbers()
+    jwk = {
+        "kty": "RSA",
+        "kid": kid,
+        "alg": "RS256",
+        "use": "sig",
+        "n": _int_to_b64url(public_numbers.n),
+        "e": _int_to_b64url(public_numbers.e),
+    }
+    jwks = {"keys": [jwk]}
+
+    return id_token, jwks
 
 
 def _make_client(
@@ -425,19 +501,9 @@ def test_parse_id_token_round_trip_validates_signed_jwt(monkeypatch):
         End-to-end: sign a JWT with a generated RSA key, construct
         the JWKS that publishes its public half, mock the JWKS HTTP
         fetch, and confirm :meth:`parse_id_token` decodes + validates
-        the token cleanly under the joserfc-backed implementation.
+        the token cleanly under the in-house JOSE implementation.
     """
     import time
-
-    from joserfc import jwt as joserfc_jwt
-    from joserfc.jwk import RSAKey
-
-    # Generate a fresh RSA key. Issue an id_token with the iss / aud /
-    # nonce values the OAuthClient will assert against.
-    signing_key = RSAKey.generate_key(
-        2048,
-        parameters={"kid": "round-trip-key"},
-    )
 
     issuer = "https://provider.example.com"
     client_id = "id-12345"
@@ -452,14 +518,7 @@ def test_parse_id_token_round_trip_validates_signed_jwt(monkeypatch):
         "exp": int(time.time()) + 3600,
         "iat": int(time.time()),
     }
-    id_token_str = joserfc_jwt.encode(
-        {"alg": "RS256"},
-        claims,
-        signing_key,
-    )
-
-    # Public-half JWKS the provider would advertise.
-    jwks = {"keys": [signing_key.as_dict(private=False)]}
+    id_token_str, jwks = _make_rs256_id_token(claims, kid="round-trip-key")
 
     client = _make_client()
 
@@ -509,18 +568,11 @@ def test_parse_id_token_round_trip_validates_signed_jwt(monkeypatch):
 
 def test_parse_id_token_rejects_wrong_nonce(monkeypatch):
     """
-        joserfc must reject a JWT whose ``nonce`` claim doesn't match
-        the value the kickoff handler stored on the state cookie.
+        The in-house validator must reject a JWT whose ``nonce`` claim
+        doesn't match the value the kickoff handler stored on the state
+        cookie.
     """
     import time
-
-    from joserfc import jwt as joserfc_jwt
-    from joserfc.jwk import RSAKey
-
-    signing_key = RSAKey.generate_key(
-        2048,
-        parameters={"kid": "wrong-nonce-key"},
-    )
 
     issuer = "https://provider.example.com"
     client_id = "id-12345"
@@ -533,13 +585,7 @@ def test_parse_id_token_rejects_wrong_nonce(monkeypatch):
         "exp": int(time.time()) + 3600,
         "iat": int(time.time()),
     }
-    id_token_str = joserfc_jwt.encode(
-        {"alg": "RS256"},
-        claims,
-        signing_key,
-    )
-
-    jwks = {"keys": [signing_key.as_dict(private=False)]}
+    id_token_str, jwks = _make_rs256_id_token(claims, kid="wrong-nonce-key")
 
     client = _make_client()
 

@@ -1,30 +1,34 @@
 """
-    Packaging regression tests for the ``oauth`` extra.
+    Dependency-removal regression tests for the OAuth stack.
 
-    The OAuth client / blueprint / state-cookie machinery depends on
-    three third-party libraries (``authlib``, ``itsdangerous``,
-    ``joserfc``). After these were moved from main webworks deps to
-    the ``oauth`` extra, importing the blueprint and OAuth client
-    *modules* must continue to succeed even when the libraries are
-    not installed — only *using* the OAuth functionality (calling
-    ``build_authorization_url``, signing a state cookie, validating
-    an id_token) should require them. These tests lock in that
-    boundary so a future change can't accidentally hoist a library
-    import back to module scope and break the no-extras install.
+    The OAuth client / blueprint / state-cookie machinery once
+    depended on three third-party libraries (``authlib``,
+    ``itsdangerous``, ``joserfc``). Those have been replaced by
+    in-house implementations
+    (``automojo.webworks.authentication.oauth``,
+    ``automojo.webworks.security.signedserializer``, and
+    ``automojo.webworks.security.jsonwebtoken``), so none of the three
+    libraries may be imported on any OAuth code path any longer.
 
-    The library-blocking is implemented as a temporary ``builtins.__import__``
-    swap that raises ``ModuleNotFoundError`` for the three optional
-    libraries' top-level modules (and submodules). This simulates a
-    fresh ``pip install automojo-webworks`` (without ``[oauth]``)
-    runtime exactly as cleanly as deleting the libraries from the
-    venv.
+    These tests lock in that boundary: with ``authlib`` / ``joserfc``
+    / ``itsdangerous`` imports forced to fail, importing the modules,
+    constructing the client, building an authorization URL, and
+    signing + reading a state cookie must all still succeed. A future
+    change that reintroduces a dependency on one of those libraries
+    will trip these tests.
+
+    The library-blocking is implemented as a temporary
+    ``builtins.__import__`` swap that raises ``ModuleNotFoundError``
+    for the three libraries' top-level modules (and submodules). This
+    simulates an environment where the libraries simply are not
+    installed.
 """
 
 import builtins
 import importlib
 import sys
 
-from typing import Any, Iterable
+from typing import Iterable
 
 
 # =============================================================================
@@ -86,14 +90,14 @@ def _drop_cached_modules(prefixes: Iterable[str]) -> None:
 
 
 # =============================================================================
-# Module-level import succeeds without the OAuth libraries
+# Module-level import succeeds without the formerly-required libraries
 # =============================================================================
 
 
 def test_oauth_module_imports_without_oauth_libraries(monkeypatch):
     """
-        ``automojo.webworks.authentication.oauth`` must import
-        cleanly when the ``oauth`` extra is not installed.
+        ``automojo.webworks.authentication.oauth`` must import cleanly
+        when authlib / joserfc / itsdangerous are absent.
     """
     _drop_cached_modules(_BLOCKED_PREFIXES + ("automojo.webworks.authentication.oauth",))
 
@@ -116,7 +120,7 @@ def test_oauth_module_imports_without_oauth_libraries(monkeypatch):
 def test_oauthclient_blueprint_module_imports_without_oauth_libraries(monkeypatch):
     """
         ``automojo.webworks.authentication.blueprints.oauthclient``
-        must import cleanly without the ``oauth`` extra.
+        must import cleanly without the formerly-required libraries.
     """
     _drop_cached_modules(
         _BLOCKED_PREFIXES + (
@@ -142,14 +146,14 @@ def test_oauthclient_blueprint_module_imports_without_oauth_libraries(monkeypatc
 
 
 # =============================================================================
-# OAuthClient construction succeeds; using it raises diagnostically
+# OAuthClient construction and use succeed without the libraries
 # =============================================================================
 
 
-def test_oauth_client_constructor_succeeds_without_authlib(monkeypatch):
+def test_oauth_client_constructor_succeeds_without_oauth_libraries(monkeypatch):
     """
-        Constructing an :class:`OAuthClient` doesn't import authlib;
-        only the flow methods do.
+        Constructing an :class:`OAuthClient` must not require any of
+        the removed libraries.
     """
     _drop_cached_modules(
         _BLOCKED_PREFIXES + (
@@ -178,17 +182,18 @@ def test_oauth_client_constructor_succeeds_without_authlib(monkeypatch):
     )
 
     if client.provider_name != "google":
-        errmsg = "Constructor failed silently without authlib"
+        errmsg = "Constructor failed silently without the OAuth libraries"
         raise AssertionError(errmsg)
 
     return
 
 
-def test_build_authorization_url_raises_diagnostic_without_authlib(monkeypatch):
+def test_build_authorization_url_succeeds_without_oauth_libraries(monkeypatch):
     """
-        Calling ``build_authorization_url`` without authlib installed
-        must raise ``ImportError`` with a message pointing the
-        consumer at ``pip install automojo-webworks[oauth]``.
+        ``build_authorization_url`` is pure standard-library URL
+        assembly now, so it must succeed with authlib / joserfc /
+        itsdangerous all blocked, producing an authorization-code
+        request URL.
     """
     _drop_cached_modules(
         _BLOCKED_PREFIXES + (
@@ -216,41 +221,34 @@ def test_build_authorization_url_raises_diagnostic_without_authlib(monkeypatch):
         },
     )
 
-    raised = False
-    raised_message = ""
-    try:
-        client.build_authorization_url(
-            redirect_uri="https://app.example.com/callback",
-            state="state-1",
-        )
-    except ImportError as exc:
-        raised = True
-        raised_message = str(exc)
+    url = client.build_authorization_url(
+        redirect_uri="https://app.example.com/callback",
+        state="state-1",
+    )
 
-    if not raised:
-        errmsg = "Expected ImportError diagnostic without authlib"
+    if not url.startswith("https://provider.example.com/auth?"):
+        errmsg = "Authorization URL did not target the authorize endpoint: {!r}".format(url)
         raise AssertionError(errmsg)
 
-    if "automojo-webworks[oauth]" not in raised_message:
-        errmsg = (
-            "Diagnostic should mention 'automojo-webworks[oauth]', got "
-            "{!r}".format(raised_message)
-        )
-        raise AssertionError(errmsg)
+    for required_fragment in ("response_type=code", "client_id=id", "state=state-1"):
+        if required_fragment not in url:
+            errmsg = "Authorization URL missing {!r}: {!r}".format(required_fragment, url)
+            raise AssertionError(errmsg)
 
     return
 
 
-def test_state_cookie_serializer_raises_diagnostic_without_itsdangerous(monkeypatch):
+def test_state_cookie_serializer_succeeds_without_oauth_libraries(monkeypatch):
     """
-        ``OAuthClientBlueprint._build_state_serializer`` raises
-        ``ImportError`` with the ``oauth`` extra hint when
-        ``itsdangerous`` isn't installed.
+        ``OAuthClientBlueprint._build_state_serializer`` uses the
+        in-house signed serializer, so building it and round-tripping
+        a payload must succeed with the removed libraries blocked.
     """
     _drop_cached_modules(
         _BLOCKED_PREFIXES + (
             "automojo.webworks.authentication.oauth",
             "automojo.webworks.authentication.blueprints.oauthclient",
+            "automojo.webworks.security.signedserializer",
         ),
     )
 
@@ -269,23 +267,17 @@ def test_state_cookie_serializer_raises_diagnostic_without_itsdangerous(monkeypa
 
     _Fresh.state_cookie_secret_resolver = staticmethod(lambda: "sec")
 
-    raised = False
-    raised_message = ""
-    try:
-        _Fresh._build_state_serializer()
-    except ImportError as exc:
-        raised = True
-        raised_message = str(exc)
-
-    if not raised:
-        errmsg = "Expected ImportError diagnostic without itsdangerous"
+    serializer = _Fresh._build_state_serializer()
+    if serializer is None:
+        errmsg = "Serializer should be built when a secret resolver is wired"
         raise AssertionError(errmsg)
 
-    if "automojo-webworks[oauth]" not in raised_message:
-        errmsg = (
-            "Diagnostic should mention 'automojo-webworks[oauth]', got "
-            "{!r}".format(raised_message)
-        )
+    payload = {"provider": "google", "state": "abc"}
+    token = serializer.dumps(payload)
+    recovered = serializer.loads(token, max_age=600)
+
+    if recovered != payload:
+        errmsg = "State cookie round-trip mismatch: {!r}".format(recovered)
         raise AssertionError(errmsg)
 
     return

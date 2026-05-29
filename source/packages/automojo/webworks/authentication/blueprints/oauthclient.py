@@ -36,8 +36,8 @@ kickoff and callback: the user has no session yet when they click
 "Sign in with Google", so the blueprint can't lean on
 ``SessionStore``. Instead it signs
 ``{provider, state, nonce, register}`` into a cookie via
-:class:`itsdangerous.URLSafeTimedSerializer` keyed off a
-site-supplied secret. The cookie is short-lived (10 minutes by
+:class:`automojo.webworks.security.signedserializer.TimedSerializer`
+keyed off a site-supplied secret. The cookie is short-lived (10 minutes by
 default) so a replayable artifact does not loiter; it is HttpOnly +
 Secure + SameSite=Lax so it is not exposed to JavaScript and is not
 sent on cross-site requests other than the top-level callback
@@ -267,8 +267,8 @@ class OAuthClientBlueprint(SecurityBlueprint):
                                    ``"google"``.
             state_cookie_name: Name of the signed state cookie.
             state_cookie_max_age_seconds: TTL for the state cookie.
-            state_cookie_signature_salt: ``itsdangerous`` salt
-                                         applied to the signing key.
+            state_cookie_signature_salt: Namespace salt applied to the
+                                         derived signing key.
             post_login_redirect_url: Location for the success
                                      redirect. Defaults to
                                      ``"/dashboard/"``.
@@ -391,37 +391,26 @@ class OAuthClientBlueprint(SecurityBlueprint):
     @classmethod
     def _build_state_serializer(cls):
         """
-            Construct an :class:`URLSafeTimedSerializer` keyed off
-            the site's signing secret with the configured salt.
+            Construct a :class:`TimedSerializer` keyed off the site's
+            signing secret with the configured salt.
 
             :returns: A configured serializer instance, or ``None``
                       when no secret resolver is wired (the kickoff
                       handler treats this as
                       ``oauth_not_configured``).
         """
-        # Lazy import keeps the module's top-level import cheap when
-        # the blueprint is mounted but never exercised, *and* lets
-        # consumers that don't enable the ``oauth`` extra import the
-        # blueprint module without crashing. Reaching this code path
-        # without ``itsdangerous`` installed surfaces a diagnostic
-        # ``ImportError`` pointing at the right ``pip install``
-        # invocation.
-        try:
-            from itsdangerous import URLSafeTimedSerializer
-        except ImportError as exc:
-            errmsg = (
-                "OAuth state-cookie signing requires the 'oauth' "
-                "extra. Install it with: "
-                "pip install automojo-webworks[oauth]"
-            )
-            raise ImportError(errmsg) from exc
+        # The signed state cookie is produced and consumed entirely by
+        # webworks, so it uses the in-house
+        # ``automojo.webworks.security.signedserializer`` rather than a
+        # third-party signing library.
+        from automojo.webworks.security.signedserializer import TimedSerializer
 
         if cls.state_cookie_secret_resolver is None:
             return None
 
         secret = cls.state_cookie_secret_resolver()
 
-        serializer = URLSafeTimedSerializer(
+        serializer = TimedSerializer(
             secret_key=secret,
             salt=cls.state_cookie_signature_salt,
         )

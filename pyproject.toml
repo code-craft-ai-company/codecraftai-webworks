@@ -29,48 +29,29 @@ include = [
 [tool.poetry.dependencies]
 python = ">=3.10,<4.0"
 requests = "^2.32.5"
-# OAuth client / magic-link state-cookie / OIDC JWT validation are
-# packaged under the ``oauth`` extra (see ``[tool.poetry.extras]``
-# below) so consumers that don't enable OAuth don't pay the install
-# cost. Each library is imported lazily at the call sites that use
-# it — ``automojo.webworks.authentication.blueprints.oauthclient``
-# and ``automojo.webworks.authentication.oauth`` both import
-# cleanly without these libraries installed; consumers that
-# subclass ``OAuthClientBlueprint`` and reach a handler that needs
-# the library will see a diagnostic ``ImportError`` pointing at
-# ``pip install automojo-webworks[oauth]`` rather than the bare
-# ``ModuleNotFoundError``.
+# The OAuth client, OIDC id_token validation, and the signed
+# pre-auth state cookie are implemented in-house — see
+# ``automojo.webworks.authentication.oauth``,
+# ``automojo.webworks.security.jsonwebtoken``, and
+# ``automojo.webworks.security.signedserializer``. They previously
+# relied on ``authlib`` / ``joserfc`` / ``itsdangerous`` (behind an
+# ``oauth`` extra); those framework libraries have been dropped.
 #
-#   * ``authlib`` — OAuth 2.0 client (authorization URL build,
-#     token exchange, refresh).
-#   * ``itsdangerous`` — pre-auth state cookie signing.
-#   * ``joserfc`` — OIDC ``id_token`` JWT decode + validate. We use
-#     it directly rather than via ``authlib.jose`` because the
-#     latter is deprecated and dropped in authlib 2.0.
-authlib = { version = "^1.6.0", optional = true }
-itsdangerous = { version = ">=2.2.0,<3.0.0", optional = true }
-joserfc = { version = "^1.6.0", optional = true }
+# ``cryptography`` is the one primitive that remains: RSA / ECDSA
+# signature verification cannot be hand-rolled safely in pure
+# Python, so the JOSE module delegates the asymmetric verify step to
+# PyCA ``cryptography`` (the same foundational library already used
+# by ``automojo.webworks.configuration.sources``). The base64url,
+# compact-serialization, claims-registry, and HMAC paths are pure
+# standard library.
+cryptography = ">=42.0.0,<46.0.0"
 automojo-this-app = { git = "https://github.com/automationmojo/automojo-this-app.git", branch = "main" }
 automojo-testbase = { git = "https://github.com/automationmojo/automojo-testbase.git", branch = "main" }
 automojo-configuration = { git = "https://github.com/automationmojo/automojo-configuration.git", branch = "main" }
 automojo-credentials = { git = "https://github.com/automationmojo/automojo-credentials.git", branch = "main" }
 automojo-dataprofiles = { git = "https://github.com/automationmojo/automojo-dataprofiles.git", branch = "main" }
 
-[tool.poetry.extras]
-# ``pip install automojo-webworks[oauth]`` pulls in the libraries
-# that ``OAuthClientBlueprint`` and ``OAuthClient`` need at
-# request time. Consumers that only use the magic-link, session,
-# API-key, bearer, or basic blueprints don't need this extra.
-oauth = ["authlib", "itsdangerous", "joserfc"]
-
 [tool.poetry.group.dev.dependencies]
-# Dev / CI installs the OAuth libraries unconditionally so the
-# full test suite (including OAuth round-trip cases) can run
-# without ``--extras oauth`` ceremony. Production installs that
-# don't enable OAuth omit the dev group entirely.
-authlib = "^1.6.0"
-itsdangerous = ">=2.2.0,<3.0.0"
-joserfc = "^1.6.0"
 
 [tool.poetry.group.dbio.dependencies]
 

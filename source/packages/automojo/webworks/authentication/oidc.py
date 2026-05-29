@@ -792,6 +792,60 @@ def verify_id_token_signature_hmac(
         return False
 
 
+def _verify_id_token_signature_asymmetric(
+    id_token: str,
+    public_key: Dict[str, Any],
+    algorithm: str
+) -> bool:
+    """
+        Verify an ID token signature using an asymmetric public key.
+
+        Handles the RSASSA-PKCS1-v1_5 (``RS*``), RSASSA-PSS (``PS*``),
+        and ECDSA (``ES*``) algorithm families by delegating to the
+        in-house :mod:`automojo.webworks.security.jsonwebtoken` module.
+        The signature is verified over the ``header.payload`` segments
+        of the compact token.
+
+        :param id_token: The compact ID token string.
+        :param public_key: The provider's public key as a raw JWK
+                           mapping (as returned by an
+                           :class:`OIDCKeyProvider`).
+        :param algorithm: The token's signing algorithm.
+
+        :returns: True if the signature is valid, False otherwise.
+    """
+    from automojo.webworks.security import jsonwebtoken
+
+    try:
+        parts = id_token.split('.')
+        if len(parts) != 3:
+            return False
+
+        signing_input = "{}.{}".format(parts[0], parts[1]).encode("ascii")
+        signature = jsonwebtoken.base64url_decode(parts[2])
+
+        verification_key = jsonwebtoken.JsonWebKey(public_key)
+
+        rtnval = jsonwebtoken.verify_signature(
+            signing_input=signing_input,
+            signature=signature,
+            key=verification_key,
+            algorithm=algorithm,
+        )
+        return rtnval
+
+    except jsonwebtoken.JoseError as jose_exc:
+        # A malformed key or unsupported algorithm is an operator
+        # configuration problem; surface it in the journal (without the
+        # token in plaintext) and treat the signature as invalid.
+        logger.warning(
+            "OIDC: asymmetric signature verification raised %s: %s",
+            type(jose_exc).__name__,
+            jose_exc,
+        )
+        return False
+
+
 def extract_standard_claims(claims: Dict[str, Any]) -> Dict[str, Any]:
     """
         Extract standard OIDC claims from a claims dictionary.
@@ -996,16 +1050,25 @@ class OIDCAuthenticator(OAuth2Authenticator):
             public_key = await self._key_provider.get_public_key(
                 self._issuer, kid
             )
-            
+
             if public_key is None:
                 raise IDTokenValidationError(
                     "invalid_token",
                     "Unable to retrieve public key for signature verification"
                 )
-            
-            # Note: Actual RSA/EC verification would require a crypto library
-            # For now, we trust the key provider to handle verification
-            # In production, use a library like PyJWT or python-jose
+
+            # Verify the RSA/EC/PS signature against the provider's
+            # published public key using the in-house JOSE module.
+            # ``get_public_key`` returns the raw JWK mapping; build a
+            # verification key from it and confirm the signature over
+            # the ``header.payload`` segments.
+            if not _verify_id_token_signature_asymmetric(
+                id_token, public_key, alg
+            ):
+                raise IDTokenValidationError(
+                    "invalid_token",
+                    "Invalid signature"
+                )
         
         elif alg == "none":
             # Unsigned token - only accept if explicitly allowed
