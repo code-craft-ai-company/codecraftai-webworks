@@ -7,7 +7,7 @@ This implementation plan creates the endpoint abstractions system for declarativ
 ## Tasks
 
 - [x] 1. Set up project structure and core data models
-  - [x] 1.1 Create `source/packages/automojo/webworks/endpoints/` package directory
+  - [x] 1.1 Create `source/packages/ccai/webworks/endpoints/` package directory
     - Create `__init__.py` with public exports
     - _Requirements: 1.1, 5.1_
   - [x] 1.2 Implement `Doc` dataclass for documentation metadata
@@ -173,4 +173,4 @@ This implementation plan creates the endpoint abstractions system for declarativ
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
 - Testing framework: testbase (per AGENTS.md)
-- Test location: `source/testroots/automojo/tests/singlehost/webworks/endpoints/`
+- Test location: `source/testroots/ccai/tests/singlehost/webworks/endpoints/`

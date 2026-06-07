@@ -7,7 +7,7 @@ This implementation plan creates the access policy and security system for web a
 ## Tasks
 
 - [x] 1. Set up project structure and core data models
-  - [x] 1.1 Create `source/packages/automojo/webworks/security/` package directory
+  - [x] 1.1 Create `source/packages/ccai/webworks/security/` package directory
     - Create `__init__.py` with public exports
     - _Requirements: 1.1_
   - [x] 1.2 Implement `Security_Context` frozen dataclass
@@ -192,4 +192,4 @@ This implementation plan creates the access policy and security system for web a
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
 - Testing framework: testbase (per AGENTS.md)
-- Test location: `source/testroots/automojo/tests/singlehost/webworks/security/`
+- Test location: `source/testroots/ccai/tests/singlehost/webworks/security/`

@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This document specifies the requirements for the Extensibility feature. This feature provides an Extension/Plugin API that allows third-party developers and internal teams to extend the automojo web framework with custom functionality without modifying the core codebase.
+This document specifies the requirements for the Extensibility feature. This feature provides an Extension/Plugin API that allows third-party developers and internal teams to extend the ccai web framework with custom functionality without modifying the core codebase.
 
 The extensibility system enables registration of custom components (middleware, authentication providers, serializers, template engines, etc.) through well-defined hooks, supports lifecycle management for extensions, and provides discovery mechanisms for automatically loading extensions from configured locations.
 
@@ -62,7 +62,7 @@ The extensibility system enables registration of custom components (middleware, 
 #### Acceptance Criteria
 
 1. THE Extension_Loader SHALL discover extensions from configured directory paths.
-2. THE Extension_Loader SHALL discover extensions from Python entry points (e.g., `automojo.extensions`).
+2. THE Extension_Loader SHALL discover extensions from Python entry points (e.g., `ccai.extensions`).
 3. THE Extension_Loader SHALL discover extensions from the application's `extensions/` directory.
 4. THE Extension_Loader SHALL read Extension_Manifest files to determine extension metadata.
 5. WHEN an extension is discovered, THE Extension_Loader SHALL validate its manifest before registration.

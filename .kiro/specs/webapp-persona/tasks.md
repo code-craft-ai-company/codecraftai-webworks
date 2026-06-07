@@ -2,18 +2,18 @@
 
 ## Overview
 
-This implementation plan creates the foundational infrastructure for web applications in the automojo framework. The implementation leverages the existing `automojo-this-app` package which provides `ThisApplication`, `establish_app_persona`, `AppPersona`, `PersonaVariablesDesc`, and singleton infrastructure. The implementation follows a bottom-up approach, starting with the WebApplication class and building up to the high-level establishment function.
+This implementation plan creates the foundational infrastructure for web applications in the ccai framework. The implementation leverages the existing `codecraftai-this-app` package which provides `ThisApplication`, `establish_app_persona`, `AppPersona`, `PersonaVariablesDesc`, and singleton infrastructure. The implementation follows a bottom-up approach, starting with the WebApplication class and building up to the high-level establishment function.
 
 ## Dependencies
 
-The implementation uses the following from `automojo-this-app`:
-- `automojo.thisapp.wellknown.ThisApplication` - Base class to extend
-- `automojo.thisapp.wellknown.SINGLETON_LOCK` - Thread lock for singleton initialization
-- `automojo.thisapp.wellknown.THISAPPLICATION_SINGLETON` - Global singleton variable
-- `automojo.thisapp.wellknown.PersonaVariablesDesc` - Variable descriptors
-- `automojo.thisapp.wellknown.SemanticError` - Exception class
-- `automojo.thisapp.persona.AppPersona` - Persona attribute storage
-- `automojo.thisapp.persona.APP_PERSONA_ESTABLISHED` - Establishment flag
+The implementation uses the following from `codecraftai-this-app`:
+- `ccai.thisapp.wellknown.ThisApplication` - Base class to extend
+- `ccai.thisapp.wellknown.SINGLETON_LOCK` - Thread lock for singleton initialization
+- `ccai.thisapp.wellknown.THISAPPLICATION_SINGLETON` - Global singleton variable
+- `ccai.thisapp.wellknown.PersonaVariablesDesc` - Variable descriptors
+- `ccai.thisapp.wellknown.SemanticError` - Exception class
+- `ccai.thisapp.persona.AppPersona` - Persona attribute storage
+- `ccai.thisapp.persona.APP_PERSONA_ESTABLISHED` - Establishment flag
 
 ## Tasks
 
@@ -34,8 +34,8 @@ The implementation uses the following from `automojo-this-app`:
 
 - [x] 2. Implement WebApplication class
   - [x] 2.1 Create WebApplication extending ThisApplication
-    - Import `ThisApplication` from `automojo.thisapp.wellknown`
-    - Import `SemanticError` from `automojo.thisapp.wellknown`
+    - Import `ThisApplication` from `ccai.thisapp.wellknown`
+    - Import `SemanticError` from `ccai.thisapp.wellknown`
     - Constructor should accept same parameters as ThisApplication plus `from_establish_webapp_persona` flag
     - Raise SemanticError if `from_establish_webapp_persona` is not passed (prevent direct instantiation)
     - Call `super().__init__` with `from_establish_app_persona=True` to satisfy parent check
@@ -50,9 +50,9 @@ The implementation uses the following from `automojo-this-app`:
     - **Validates: Requirements 1.1, 1.6**
 
 - [x] 3. Implement singleton infrastructure
-  - [x] 3.1 Create wellknown module at automojo.webworks.wellknown
-    - Import `SINGLETON_LOCK` from `automojo.thisapp.wellknown` (reuse the same lock)
-    - Import `SemanticError` from `automojo.thisapp.wellknown`
+  - [x] 3.1 Create wellknown module at ccai.webworks.wellknown
+    - Import `SINGLETON_LOCK` from `ccai.thisapp.wellknown` (reuse the same lock)
+    - Import `SemanticError` from `ccai.thisapp.wellknown`
     - Define `THISWEBAPPLICATION_SINGLETON` module variable (initially None)
     - Implement `ThisWebApplicationSingleton()` function that:
       - Acquires `SINGLETON_LOCK`
@@ -73,9 +73,9 @@ The implementation uses the following from `automojo-this-app`:
 
 - [x] 5. Implement establish_webapp_persona function
   - [x] 5.1 Create establish_webapp_persona with all persona fields (mirroring establish_app_persona pattern)
-    - Import `AppPersona` from `automojo.thisapp.persona`
-    - Import `PersonaVariablesDesc` from `automojo.thisapp.wellknown`
-    - Import `SINGLETON_LOCK`, `THISAPPLICATION_SINGLETON` from `automojo.thisapp.wellknown`
+    - Import `AppPersona` from `ccai.thisapp.persona`
+    - Import `PersonaVariablesDesc` from `ccai.thisapp.wellknown`
+    - Import `SINGLETON_LOCK`, `THISAPPLICATION_SINGLETON` from `ccai.thisapp.wellknown`
     - Accept name, logger_name, log_basename, presence_dir, log_directory, settings_file, extensions, service_name
     - Accept optional `application_cls` parameter (defaults to WebApplication)
     - Define `WEBAPP_PERSONA_ESTABLISHED` module variable to prevent double establishment
@@ -93,8 +93,8 @@ The implementation uses the following from `automojo-this-app`:
     - Set `AppPersona.AM_NAME`, `AM_LOGGER_NAME`, `AM_LOG_BASENAME`, `AM_PRESENCE_DIR`, `AM_LOG_DIRECTORY`, `AM_SETTINGS_FILENAME`, `AM_EXTENSIONS`, `AM_SERVICE_NAME`
     - Instantiate WebApplication (or application_cls) with `from_establish_webapp_persona=True`
     - Acquire `SINGLETON_LOCK` before setting singletons
-    - Set `automojo.webworks.wellknown.THISWEBAPPLICATION_SINGLETON` to the new instance
-    - Set `automojo.thisapp.wellknown.THISAPPLICATION_SINGLETON` to the same instance
+    - Set `ccai.webworks.wellknown.THISWEBAPPLICATION_SINGLETON` to the new instance
+    - Set `ccai.thisapp.wellknown.THISAPPLICATION_SINGLETON` to the same instance
     - Call `override_variable_value` for all PersonaVariablesDesc variables
     - Return the created singleton instance
     - _Requirements: 2.1, 2.2, 2.10, 2.11, 2.12_
@@ -117,7 +117,7 @@ The implementation uses the following from `automojo-this-app`:
     - Check if `WEBAPP_PERSONA_ESTABLISHED` is True at start of establish_webapp_persona
     - If already established, raise `PersonaAlreadyEstablishedError` with existing persona name
     - Set `WEBAPP_PERSONA_ESTABLISHED = True` before creating singleton
-    - Also check that `automojo.thisapp.wellknown.THISAPPLICATION_SINGLETON` is None before setting
+    - Also check that `ccai.thisapp.wellknown.THISAPPLICATION_SINGLETON` is None before setting
     - _Requirements: 5.7_
 
   - [x] 6.2 Write property test for establishment guard
@@ -144,8 +144,8 @@ The implementation uses the following from `automojo-this-app`:
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
 - All tests should use the testbase framework as specified in AGENTS.md
-- Test files should be placed in `source/testroots/automojo/tests/singlehost/webworks/persona/`
-- The implementation leverages existing functionality from `automojo-this-app`:
+- Test files should be placed in `source/testroots/ccai/tests/singlehost/webworks/persona/`
+- The implementation leverages existing functionality from `codecraftai-this-app`:
   - `ThisApplication` provides base persona management, context, config parser, and variable resolution
   - `AppPersona` provides class-level storage for persona attributes
   - `PersonaVariablesDesc` provides variable descriptors for all persona variables

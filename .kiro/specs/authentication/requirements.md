@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This document specifies the requirements for the Authentication System in the automojo-webworks framework. The Authentication System provides a comprehensive, extensible infrastructure for authenticating users and services using various authentication mechanisms. It integrates with the existing endpoint and access policy systems to provide secure request handling.
+This document specifies the requirements for the Authentication System in the codecraftai-webworks framework. The Authentication System provides a comprehensive, extensible infrastructure for authenticating users and services using various authentication mechanisms. It integrates with the existing endpoint and access policy systems to provide secure request handling.
 
 ## Glossary
 

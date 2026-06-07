@@ -7,7 +7,7 @@ Implement a development ASGI server by creating three new modules (`asyncserverc
 ## Tasks
 
 - [x] 1. Implement HTTP/1.1 protocol handler
-  - [x] 1.1 Create `source/packages/automojo/webworks/devexp/server/httpprotocolhandler.py` with the `HTTPProtocolHandler` class
+  - [x] 1.1 Create `source/packages/ccai/webworks/devexp/server/httpprotocolhandler.py` with the `HTTPProtocolHandler` class
     - Implement `asyncio.Protocol` subclass with `connection_made`, `data_received`, `connection_lost` callbacks
     - Implement `_ParseState` enum for incremental parsing states
     - Implement `_parse_request_line(line)` to extract method, target, version from request line bytes
@@ -95,7 +95,7 @@ Implement a development ASGI server by creating three new modules (`asyncserverc
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 3. Implement lifespan manager
-  - [x] 3.1 Create `source/packages/automojo/webworks/devexp/server/lifespanmanager.py` with the `LifespanManager` class
+  - [x] 3.1 Create `source/packages/ccai/webworks/devexp/server/lifespanmanager.py` with the `LifespanManager` class
     - Implement `__init__(app)` storing app reference
     - Implement `async startup()` that creates lifespan scope `{"type": "lifespan", "asgi": {"version": "3.0"}}`, calls `app(scope, receive, send)` using `asyncio.Queue` for receive/send channels, sends `lifespan.startup` event, waits for `lifespan.startup.complete` or `lifespan.startup.failed`
     - Implement `async shutdown()` that sends `lifespan.shutdown` event and waits for `lifespan.shutdown.complete` or `lifespan.shutdown.failed`
@@ -112,7 +112,7 @@ Implement a development ASGI server by creating three new modules (`asyncserverc
     - _Requirements: 5.1, 5.2, 5.3, 5.4_
 
 - [x] 4. Implement async server core
-  - [x] 4.1 Create `source/packages/automojo/webworks/devexp/server/asyncservercore.py` with the `AsyncServerCore` class
+  - [x] 4.1 Create `source/packages/ccai/webworks/devexp/server/asyncservercore.py` with the `AsyncServerCore` class
     - Implement `__init__(app, host, port, shutdown_timeout=5, keepalive_timeout=30)` storing config and initializing state
     - Implement `async start()` using `loop.create_server()` with protocol factory to bind TCP socket
     - Implement `async stop()` that calls `server.close()`, waits up to `shutdown_timeout` for active connections to drain, then forcibly closes remaining transports
@@ -138,7 +138,7 @@ Implement a development ASGI server by creating three new modules (`asyncserverc
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 6. Enhance DevelopmentServer and integrate components
-  - [x] 6.1 Update `source/packages/automojo/webworks/devexp/server/devserver.py` to integrate async server core
+  - [x] 6.1 Update `source/packages/ccai/webworks/devexp/server/devserver.py` to integrate async server core
     - Add `_server_core`, `_lifespan_manager`, `_shutdown_event` instance variables
     - Update `start()` to create `AsyncServerCore` and `LifespanManager`, then run `asyncio.run(self._run_async())` to block the calling thread
     - Implement `async _run_async()` that runs lifespan startup, starts server core, installs signal handlers, awaits shutdown event, runs lifespan shutdown, stops server core
@@ -176,7 +176,7 @@ Implement a development ASGI server by creating three new modules (`asyncserverc
     - **Validates: Requirements 9.1, 9.2**
 
 - [x] 8. Update ServeCommand CLI integration
-  - [x] 8.1 Update `source/packages/automojo/webworks/devexp/server/servecommand.py` if needed
+  - [x] 8.1 Update `source/packages/ccai/webworks/devexp/server/servecommand.py` if needed
     - Verify `ServeCommand.execute()` correctly passes host, port, debug, reload, and watch_patterns to `DevelopmentServer`
     - Verify `start()` blocks until server is stopped and returns `EXIT_SUCCESS`
     - Verify `PortInUseError` is caught and returns `EXIT_ERROR`
@@ -189,7 +189,7 @@ Implement a development ASGI server by creating three new modules (`asyncserverc
     - _Requirements: 7.1, 7.2, 7.3, 7.4_
 
 - [x] 9. Update package `__init__.py` exports
-  - [x] 9.1 Update `source/packages/automojo/webworks/devexp/server/__init__.py` to export new classes
+  - [x] 9.1 Update `source/packages/ccai/webworks/devexp/server/__init__.py` to export new classes
     - Export `AsyncServerCore`, `HTTPProtocolHandler`, `LifespanManager`
     - Ensure no new third-party dependencies are added
     - _Requirements: 12.1, 12.2, 12.3_
@@ -204,5 +204,5 @@ Implement a development ASGI server by creating three new modules (`asyncserverc
 - Checkpoints ensure incremental validation
 - Property tests validate universal correctness properties using loop-based iteration (min 100 iterations), not hypothesis
 - All tests use the `testbase` framework (not pytest/unittest/hypothesis)
-- Test files go under `source/testroots/automojo/tests/singlehost/webworks/devexp/server/`
-- Source files go under `source/packages/automojo/webworks/devexp/server/`
+- Test files go under `source/testroots/ccai/tests/singlehost/webworks/devexp/server/`
+- Source files go under `source/packages/ccai/webworks/devexp/server/`

@@ -5,10 +5,10 @@
     and the interactive per-component test pages.
 """
 
-from automojo.webworks.endpoints.doc import Doc
-from automojo.webworks.endpoints.restblueprint import RestBlueprint
-from automojo.webworks.routing.request import Request
-from automojo.webworks.routing.response import HTMLResponse
+from ccai.webworks.endpoints.doc import Doc
+from ccai.webworks.endpoints.restblueprint import RestBlueprint
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.response import HTMLResponse
 
 from testcomponents.endpoints.blueprints.groupserving import serve_component_page
 from testcomponents.endpoints.blueprints.groupserving import serve_group_index

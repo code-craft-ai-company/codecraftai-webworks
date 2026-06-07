@@ -7,7 +7,7 @@ This design extends the `WebApplication` singleton to become the central orchest
 After this change, a minimal application entry point looks like:
 
 ```python
-from automojo.webworks.persona.establish import establish_webapp_persona
+from ccai.webworks.persona.establish import establish_webapp_persona
 
 # Import handlers to trigger attach_at registration
 import myapp.endpoints.handlers  # noqa: F401
@@ -354,8 +354,8 @@ self._current_phase: LifecyclePhase = LifecyclePhase.CREATED
 
 # Subsystem references (None until their setup phase completes)
 self._config: Optional[ManagedConfigRegistry] = None
-self._credential_manager: Optional[Any] = None  # automojo.credentials manager
-self._data_profile_manager: Optional[Any] = None  # automojo.dataprofiles manager
+self._credential_manager: Optional[Any] = None  # ccai.credentials manager
+self._data_profile_manager: Optional[Any] = None  # ccai.dataprofiles manager
 self._auth_system: Optional[AuthenticationSystem] = None
 self._auth_middleware: Optional[AuthenticationMiddleware] = None
 self._router: Optional[Router] = None
@@ -417,10 +417,10 @@ class BlueprintAlreadyRegisteredError(SemanticError):
 
 | Component | File |
 |-----------|------|
-| `LifecyclePhase` | `source/packages/automojo/webworks/persona/lifecycle.py` |
-| `LifecycleError` | `source/packages/automojo/webworks/persona/lifecycle.py` |
-| `BlueprintAlreadyRegisteredError` | `source/packages/automojo/webworks/persona/lifecycle.py` |
-| `WebApplication` (extended) | `source/packages/automojo/webworks/persona/webapplication.py` |
+| `LifecyclePhase` | `source/packages/ccai/webworks/persona/lifecycle.py` |
+| `LifecycleError` | `source/packages/ccai/webworks/persona/lifecycle.py` |
+| `BlueprintAlreadyRegisteredError` | `source/packages/ccai/webworks/persona/lifecycle.py` |
+| `WebApplication` (extended) | `source/packages/ccai/webworks/persona/webapplication.py` |
 
 
 ## Correctness Properties
@@ -514,14 +514,14 @@ class BlueprintAlreadyRegisteredError(SemanticError):
 
 Design decisions on error handling:
 - Errors from subsystem initialization (configuration, credentials, data profiles) propagate directly — the `WebApplication` does not wrap them in a generic lifecycle error. This preserves the specific error types and messages from each subsystem.
-- `LifecycleError` extends `SemanticError` (from `automojo.errors.exceptions`) to stay consistent with the existing error hierarchy.
+- `LifecycleError` extends `SemanticError` (from `ccai.errors.exceptions`) to stay consistent with the existing error hierarchy.
 - Property accessors (e.g., `router`, `config`) raise `LifecycleError` if the corresponding phase has not completed, rather than returning `None`. This fails fast with a clear message instead of producing confusing `AttributeError` downstream.
 
 ## Testing Strategy
 
 ### Framework
 
-All tests use the `testbase` framework with `test_` prefix functions. Mock objects use `automojo.testbase.mocking.Mock`. No pytest, unittest, or hypothesis.
+All tests use the `testbase` framework with `test_` prefix functions. Mock objects use `ccai.testbase.mocking.Mock`. No pytest, unittest, or hypothesis.
 
 ### Dual Testing Approach
 
@@ -539,7 +539,7 @@ All tests use the `testbase` framework with `test_` prefix functions. Mock objec
 Tests mirror the source hierarchy per project conventions:
 
 ```
-source/testroots/automojo/tests/singlehost/webworks/persona/
+source/testroots/ccai/tests/singlehost/webworks/persona/
 ├── __init__.py
 ├── test_webapplication_lifecycle.py          # Unit: startup/shutdown, phase ordering, error cases
 ├── test_webapplication_routing.py            # Unit: attach_route, attach_blueprint_to_route

@@ -89,7 +89,7 @@ Key design principles:
 #### Directory Layout
 
 ```
-source/packages/automojo/webworks/openapi/
+source/packages/ccai/webworks/openapi/
 ├── static/
 │   ├── manifest.json              # Asset versions and checksums
 │   ├── swagger-ui/

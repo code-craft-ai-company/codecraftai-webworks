@@ -2,7 +2,7 @@
 
 ## Overview
 
-This implementation plan creates the extensibility system for the automojo web framework. The implementation follows a bottom-up approach, starting with core data structures and enums, building up through the extension base class, manifest handling, context, hooks, and finally the registry and loader. Each task builds on previous work to ensure incremental, testable progress.
+This implementation plan creates the extensibility system for the ccai web framework. The implementation follows a bottom-up approach, starting with core data structures and enums, building up through the extension base class, manifest handling, context, hooks, and finally the registry and loader. Each task builds on previous work to ensure incremental, testable progress.
 
 ## Tasks
 
@@ -560,4 +560,4 @@ This implementation plan creates the extensibility system for the automojo web f
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
 - All tests should use the testbase framework as specified in AGENTS.md
-- Test files should be placed in `source/testroots/automojo/tests/singlehost/webworks/extensibility/`
+- Test files should be placed in `source/testroots/ccai/tests/singlehost/webworks/extensibility/`

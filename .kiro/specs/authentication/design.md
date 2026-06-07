@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Authentication System provides a modular, extensible framework for authenticating requests in the automojo-webworks framework. It follows a pluggable architecture where different authentication mechanisms (Basic, Bearer, OAuth2, etc.) are implemented as discrete Authenticator components that can be registered and configured independently.
+The Authentication System provides a modular, extensible framework for authenticating requests in the codecraftai-webworks framework. It follows a pluggable architecture where different authentication mechanisms (Basic, Bearer, OAuth2, etc.) are implemented as discrete Authenticator components that can be registered and configured independently.
 
 The design prioritizes:
 - **Debuggability**: Clear error messages and comprehensive logging

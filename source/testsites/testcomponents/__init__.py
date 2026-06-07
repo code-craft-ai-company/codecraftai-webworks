@@ -1,6 +1,6 @@
 """
     testcomponents -- a webworks test website whose sole purpose is to
-    exercise and document the automojo-webworks mj-* web component library.
+    exercise and document the codecraftai-webworks mj-* web component library.
 
     The site provides a browse-by-group landing page and an individual,
     interactive test/documentation page for every component. Component

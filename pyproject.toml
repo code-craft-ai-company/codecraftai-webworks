@@ -1,6 +1,6 @@
 [tool.poetry]
-name = "automojo-webworks"
-description = "Automation Mojo - WebWorks"
+name = "codecraftai-webworks"
+description = "Code Craft AI - WebWorks"
 version = "0.0.1"
 authors = []
 readme = "README.rst"
@@ -13,17 +13,17 @@ classifiers = [
 keywords = [
     "python"
 ]
-packages = [{include="automojo", from="source/packages"}]
+packages = [{include="ccai", from="source/packages"}]
 include = [
     # Vendored Swagger UI / OpenAPI assets served by SwaggerUIBlueprint.
-    { path = "source/packages/automojo/webworks/openapi/static/**/*", format = ["sdist", "wheel"] },
+    { path = "source/packages/ccai/webworks/openapi/static/**/*", format = ["sdist", "wheel"] },
     # mj-* web component library shipped with the package: design tokens
     # and base stylesheet (static/styles/), the JavaScript foundation,
     # all component modules, the comprehensive chart library, the
     # registration barrel (static/javascript/), and the demo gallery
     # (static/gallery.html). Served to consumer sites via the static
     # handler.
-    { path = "source/packages/automojo/webworks/static/**/*", format = ["sdist", "wheel"] },
+    { path = "source/packages/ccai/webworks/static/**/*", format = ["sdist", "wheel"] },
 ]
 
 [tool.poetry.dependencies]
@@ -31,9 +31,9 @@ python = ">=3.10,<4.0"
 requests = "^2.32.5"
 # The OAuth client, OIDC id_token validation, and the signed
 # pre-auth state cookie are implemented in-house — see
-# ``automojo.webworks.authentication.oauth``,
-# ``automojo.webworks.security.jsonwebtoken``, and
-# ``automojo.webworks.security.signedserializer``. They previously
+# ``ccai.webworks.authentication.oauth``,
+# ``ccai.webworks.security.jsonwebtoken``, and
+# ``ccai.webworks.security.signedserializer``. They previously
 # relied on ``authlib`` / ``joserfc`` / ``itsdangerous`` (behind an
 # ``oauth`` extra); those framework libraries have been dropped.
 #
@@ -41,15 +41,15 @@ requests = "^2.32.5"
 # signature verification cannot be hand-rolled safely in pure
 # Python, so the JOSE module delegates the asymmetric verify step to
 # PyCA ``cryptography`` (the same foundational library already used
-# by ``automojo.webworks.configuration.sources``). The base64url,
+# by ``ccai.webworks.configuration.sources``). The base64url,
 # compact-serialization, claims-registry, and HMAC paths are pure
 # standard library.
 cryptography = ">=42.0.0,<46.0.0"
-automojo-this-app = { git = "https://github.com/automationmojo/automojo-this-app.git", branch = "main" }
-automojo-testbase = { git = "https://github.com/automationmojo/automojo-testbase.git", branch = "main" }
-automojo-configuration = { git = "https://github.com/automationmojo/automojo-configuration.git", branch = "main" }
-automojo-credentials = { git = "https://github.com/automationmojo/automojo-credentials.git", branch = "main" }
-automojo-dataprofiles = { git = "https://github.com/automationmojo/automojo-dataprofiles.git", branch = "main" }
+codecraftai-this-app = { git = "https://github.com/automationmojo/codecraftai-this-app.git", branch = "main" }
+codecraftai-testbase = { git = "https://github.com/automationmojo/codecraftai-testbase.git", branch = "main" }
+codecraftai-configuration = { git = "https://github.com/automationmojo/codecraftai-configuration.git", branch = "main" }
+codecraftai-credentials = { git = "https://github.com/automationmojo/codecraftai-credentials.git", branch = "main" }
+codecraftai-dataprofiles = { git = "https://github.com/automationmojo/codecraftai-dataprofiles.git", branch = "main" }
 
 [tool.poetry.group.dev.dependencies]
 

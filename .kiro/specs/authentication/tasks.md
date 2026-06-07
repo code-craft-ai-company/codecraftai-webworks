@@ -7,7 +7,7 @@ This implementation plan breaks down the authentication system into incremental 
 ## Tasks
 
 - [x] 1. Create authentication module structure and core interfaces
-  - Create `source/packages/automojo/webworks/authentication/` directory
+  - Create `source/packages/ccai/webworks/authentication/` directory
   - Create `__init__.py` with module exports
   - Implement `AuthenticationStatus` enum
   - Implement `AuthenticationResult` dataclass

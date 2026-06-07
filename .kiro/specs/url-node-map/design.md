@@ -2,7 +2,7 @@
 
 ## Overview
 
-This design document describes the architecture and implementation approach for the URL Node Map feature. The URL Node Map provides the foundational hierarchical tree structure for organizing HTTP endpoints in the automojo web framework. It serves as the underlying data structure that endpoints attach to, supporting path-based addressing, metadata inheritance, and tree export capabilities.
+This design document describes the architecture and implementation approach for the URL Node Map feature. The URL Node Map provides the foundational hierarchical tree structure for organizing HTTP endpoints in the ccai web framework. It serves as the underlying data structure that endpoints attach to, supporting path-based addressing, metadata inheritance, and tree export capabilities.
 
 The design follows a tree-based approach where each URL path segment corresponds to a node in the tree. Nodes can carry metadata (access policies, rate limits, tags) that cascades to child nodes according to well-defined inheritance rules. The tree supports both static path segments and dynamic parameter segments for flexible routing.
 
@@ -741,7 +741,7 @@ Property-based tests should use the `testbase` framework with minimum 100 iterat
 Following the repository conventions from AGENTS.md:
 
 ```
-source/testroots/automojo/tests/singlehost/webworks/urlnodemap/
+source/testroots/ccai/tests/singlehost/webworks/urlnodemap/
 ├── test_urlnodemap.py          # URLNodeMap class tests
 ├── test_urlnode.py             # URLNode class tests
 ├── test_path_utils.py          # Path utility function tests

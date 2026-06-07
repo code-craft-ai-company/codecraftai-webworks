@@ -1,13 +1,13 @@
 # Web Component Specifications
 
-Detailed specifications for the `automojo-webworks` web component library. Each
+Detailed specifications for the `codecraftai-webworks` web component library. Each
 file specifies one **Primary** component (synonyms from the catalog are covered
 by variants/modes within the relevant primary).
 
 - Strategy, universal requirements, foundations, phasing: `../../web-component-development-plan.md`
 - Per-component spec template: `_template.md`
-- Component scripts will live at `source/packages/automojo/webworks/static/javascript/components`
-- Component styles will live at `source/packages/automojo/webworks/static/styles`
+- Component scripts will live at `source/packages/ccai/webworks/static/javascript/components`
+- Component styles will live at `source/packages/ccai/webworks/static/styles`
 
 Every spec follows `_template.md`: a header block plus 20 numbered sections
 (purpose, anatomy, variants, attributes, properties, slots, events, CSS parts,

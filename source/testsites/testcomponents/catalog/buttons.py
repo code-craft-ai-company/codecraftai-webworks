@@ -173,7 +173,7 @@ COMPONENTS = [
             "<code>success-label</code>/<code>error-label</code>.</p>"
         ),
         example=(
-            '<mj-copy-button value="npm install automojo-webworks">'
+            '<mj-copy-button value="npm install codecraftai-webworks">'
             "Copy install command</mj-copy-button>"
         ),
         attributes=[
@@ -205,7 +205,7 @@ COMPONENTS = [
         ),
         example=(
             '<mj-share-button share-url="https://example.com"\n'
-            '  share-title="Automojo WebWorks"\n'
+            '  share-title="CodeCraftAI WebWorks"\n'
             '  share-text="Check out this component library">'
             "Share</mj-share-button>"
         ),

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This design formalizes the middleware pipeline for automojo-webworks, unifying the existing `MiddlewarePipeline` in `routing.middleware`, the `WSGIMiddlewareWrapper` in `wsgi.middleware`, and the `register_middleware` hook in the extensibility system into a cohesive middleware layer.
+This design formalizes the middleware pipeline for codecraftai-webworks, unifying the existing `MiddlewarePipeline` in `routing.middleware`, the `WSGIMiddlewareWrapper` in `wsgi.middleware`, and the `register_middleware` hook in the extensibility system into a cohesive middleware layer.
 
 The current codebase already has the core building blocks:
 - `routing.middleware.MiddlewarePipeline` with `Middleware`/`AsyncMiddleware` protocols, positional insertion, sync/async execution
@@ -60,10 +60,10 @@ graph TD
 
 ### Module Layout
 
-All new middleware pipeline code lives under `source/packages/automojo/webworks/routing/` since the pipeline is fundamentally a routing concern. Built-in middleware lives in a new `middleware/` subpackage under `routing/`.
+All new middleware pipeline code lives under `source/packages/ccai/webworks/routing/` since the pipeline is fundamentally a routing concern. Built-in middleware lives in a new `middleware/` subpackage under `routing/`.
 
 ```
-source/packages/automojo/webworks/routing/
+source/packages/ccai/webworks/routing/
 ├── middleware.py              # Enhanced: MiddlewarePipeline, MiddlewareEntry, protocols
 ├── middlewarecontext.py       # NEW: MiddlewareContext
 ├── middlewareregistry.py      # NEW: MiddlewareRegistry
@@ -77,7 +77,7 @@ source/packages/automojo/webworks/routing/
 └── ...existing files...
 ```
 
-Tests mirror this structure under `source/testroots/automojo/tests/singlehost/webworks/routing/`.
+Tests mirror this structure under `source/testroots/ccai/tests/singlehost/webworks/routing/`.
 
 ## Components and Interfaces
 
@@ -789,7 +789,7 @@ The adapters (`ASGIMiddlewareAdapter`, `WSGIMiddlewareAdapter`) do not catch exc
 
 ### Testing Framework
 
-All tests use the `testbase` framework as specified in the project conventions. Property-based tests use `automojo.testbase.properties` with the `@given` decorator and `strategies` module. No external testing libraries (pytest, hypothesis) are used.
+All tests use the `testbase` framework as specified in the project conventions. Property-based tests use `ccai.testbase.properties` with the `@given` decorator and `strategies` module. No external testing libraries (pytest, hypothesis) are used.
 
 ### Property-Based Testing Configuration
 
@@ -802,7 +802,7 @@ All tests use the `testbase` framework as specified in the project conventions. 
 ### Test File Layout
 
 ```
-source/testroots/automojo/tests/singlehost/webworks/routing/
+source/testroots/ccai/tests/singlehost/webworks/routing/
 ├── test_middleware.py                          # Unit tests for MiddlewarePipeline, MiddlewareEntry
 ├── test_middleware_properties.py               # Property tests for pipeline execution, ordering, serialization
 ├── test_middlewareregistry.py                  # Unit tests for MiddlewareRegistry

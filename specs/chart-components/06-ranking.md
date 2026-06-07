@@ -1,6 +1,6 @@
 # Ranking Charts
 
-> Catalog of ranking chart types for the automojo-webworks SVG chart
+> Catalog of ranking chart types for the codecraftai-webworks SVG chart
 > library. Architecture, the coordinated-element model, the part components,
 > the JSON contract, and phasing are defined in `../../chart-components-plan.md`
 > and are not repeated here.

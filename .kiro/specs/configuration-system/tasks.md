@@ -2,7 +2,7 @@
 
 ## Overview
 
-This implementation plan creates the unified configuration system for the automojo framework. The implementation follows a bottom-up approach, starting with core data structures and enums, building up through sources and schema, to the registry and model layers. Each task builds on previous work to ensure incremental, testable progress.
+This implementation plan creates the unified configuration system for the ccai framework. The implementation follows a bottom-up approach, starting with core data structures and enums, building up through sources and schema, to the registry and model layers. Each task builds on previous work to ensure incremental, testable progress.
 
 ## Tasks
 
@@ -446,5 +446,5 @@ This implementation plan creates the unified configuration system for the automo
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
 - All tests should use the testbase framework as specified in AGENTS.md
-- Test files should be placed in `source/testroots/automojo/tests/singlehost/webworks/configuration/`
+- Test files should be placed in `source/testroots/ccai/tests/singlehost/webworks/configuration/`
 

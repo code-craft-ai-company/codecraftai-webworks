@@ -9,16 +9,16 @@
 
 ## Dependencies
 - requests
-- automojo-this-app (application persona/identity)
-- automojo-testbase (testing framework)
-- automojo-configuration (config management)
-- automojo-credentials (credential handling)
-- automojo-dataprofiles (data profiles)
+- codecraftai-this-app (application persona/identity)
+- codecraftai-testbase (testing framework)
+- codecraftai-configuration (config management)
+- codecraftai-credentials (credential handling)
+- codecraftai-dataprofiles (data profiles)
 
 ## Testing Framework
 - testbase (custom framework, NOT pytest/unittest/hypothesis)
 - Tests use `test_` prefix functions, not classes
-- Mocking via `automojo.testbase.mocking` module
+- Mocking via `ccai.testbase.mocking` module
 
 ## Common Commands
 
@@ -35,7 +35,7 @@
 ```bash
 source .venv/bin/activate
 
-testbase testing run --root source/testroots/automojo --includes=automojo.tests.singlehost --output=./.output
+testbase testing run --root source/testroots/ccai --includes=ccai.tests.singlehost --output=./.output
 ```
 
 ### Running Python in Virtual Environment

@@ -11,16 +11,16 @@
 
 import os
 
-from automojo.webworks.endpoints.registry import EndpointRegistry
-from automojo.webworks.openapi.configuration import OpenAPIInfo
-from automojo.webworks.openapi.generator import OpenAPIGenerator
-from automojo.webworks.openapi.swaggerui import SwaggerUIBlueprint
-from automojo.webworks.routing.request import Request
-from automojo.webworks.routing.response import HTMLResponse
-from automojo.webworks.routing.response import JSONResponse
-from automojo.webworks.routing.response import Response
-from automojo.webworks.webapplication import establish_webapp_persona
-from automojo.webworks.wellknown import ThisWebApplicationSingleton
+from ccai.webworks.endpoints.registry import EndpointRegistry
+from ccai.webworks.openapi.configuration import OpenAPIInfo
+from ccai.webworks.openapi.generator import OpenAPIGenerator
+from ccai.webworks.openapi.swaggerui import SwaggerUIBlueprint
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.response import HTMLResponse
+from ccai.webworks.routing.response import JSONResponse
+from ccai.webworks.routing.response import Response
+from ccai.webworks.webapplication import establish_webapp_persona
+from ccai.webworks.wellknown import ThisWebApplicationSingleton
 
 # Import endpoint handlers to trigger RestBlueprint.attach_at registration
 from blueprintdemo.endpoints import handlers  # noqa: F401
@@ -120,7 +120,7 @@ def run_development_server(
         :param reload: Whether to enable auto-reload on file changes.
     """
 
-    from automojo.webworks.devexp.server.devserver import DevelopmentServer
+    from ccai.webworks.devexp.server.devserver import DevelopmentServer
 
     server = DevelopmentServer(
         app=app,

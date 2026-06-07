@@ -2,19 +2,19 @@
 
 ## Introduction
 
-The helloworld test site is the first in a series of test sites designed to exercise the automojo-webworks framework. It provides a minimal, working web application that validates the core request-response pipeline end-to-end. The site lives under `source/testsites/helloworld` and uses the ASGI application layer, the Endpoint registration system, the Router, and the Dispatcher to serve a simple "Hello, World!" response. This site serves as a baseline for verifying that the framework's fundamental wiring — from ASGI scope through routing to response delivery — functions correctly before more complex test sites are built.
+The helloworld test site is the first in a series of test sites designed to exercise the codecraftai-webworks framework. It provides a minimal, working web application that validates the core request-response pipeline end-to-end. The site lives under `source/testsites/helloworld` and uses the ASGI application layer, the Endpoint registration system, the Router, and the Dispatcher to serve a simple "Hello, World!" response. This site serves as a baseline for verifying that the framework's fundamental wiring — from ASGI scope through routing to response delivery — functions correctly before more complex test sites are built.
 
 ## Glossary
 
 - **HelloWorld_Site**: The minimal test web application located at `source/testsites/helloworld` that demonstrates basic webworks capabilities.
-- **ASGI_Application**: The `ASGIApplication` class from `automojo.webworks.asgi.application` that receives ASGI scope, receive, and send callables and dispatches to handlers.
-- **Endpoint**: The `Endpoint` class from `automojo.webworks.endpoints.endpoint` used to register handler functions with URL paths and HTTP methods via the `attach_at` decorator.
-- **Router**: The `Router` class from `automojo.webworks.routing.router` that matches incoming request paths and methods to registered endpoint descriptors.
-- **Dispatcher**: The `Dispatcher` class from `automojo.webworks.routing.dispatcher` that executes the matched handler and returns a Response.
-- **Response**: The `Response` class from `automojo.webworks.routing.response` used to construct HTTP responses with status code, headers, and body.
+- **ASGI_Application**: The `ASGIApplication` class from `ccai.webworks.asgi.application` that receives ASGI scope, receive, and send callables and dispatches to handlers.
+- **Endpoint**: The `Endpoint` class from `ccai.webworks.endpoints.endpoint` used to register handler functions with URL paths and HTTP methods via the `attach_at` decorator.
+- **Router**: The `Router` class from `ccai.webworks.routing.router` that matches incoming request paths and methods to registered endpoint descriptors.
+- **Dispatcher**: The `Dispatcher` class from `ccai.webworks.routing.dispatcher` that executes the matched handler and returns a Response.
+- **Response**: The `Response` class from `ccai.webworks.routing.response` used to construct HTTP responses with status code, headers, and body.
 - **HTMLResponse**: The `HTMLResponse` subclass of Response that sets `Content-Type: text/html` and accepts a string body.
 - **JSONResponse**: The `JSONResponse` subclass of Response that sets `Content-Type: application/json` and serializes a dictionary body.
-- **EndpointRegistry**: The global registry from `automojo.webworks.endpoints.registry` where endpoint descriptors are stored after `attach_at` decoration.
+- **EndpointRegistry**: The global registry from `ccai.webworks.endpoints.registry` where endpoint descriptors are stored after `attach_at` decoration.
 - **App_Module**: The `source/testsites/helloworld/app.py` module that serves as the entry point for the helloworld test site, wiring together the ASGI_Application, Router, Dispatcher, and registered Endpoints.
 
 ## Requirements

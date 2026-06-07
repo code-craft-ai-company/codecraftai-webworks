@@ -3,11 +3,11 @@
 ## 1. Purpose & Scope
 
 This plan defines the requirements for a library of reusable web components served
-from `automojo-webworks`. Components are authored as native **Custom Elements**
+from `codecraftai-webworks`. Components are authored as native **Custom Elements**
 (Web Components) and live in:
 
-- Scripts: `source/packages/automojo/webworks/static/javascript/components`
-- Styles:  `source/packages/automojo/webworks/static/styles`
+- Scripts: `source/packages/ccai/webworks/static/javascript/components`
+- Styles:  `source/packages/ccai/webworks/static/styles`
 
 The catalog is intentionally large and contains many synonymous entries. A core
 goal of this plan is to **consolidate synonyms onto a single implementation** so
@@ -17,7 +17,7 @@ is mapped either to a primary component or declared a distinct component.
 "Implement to the best extent possible" is interpreted as: every component must
 meet the **universal requirements** in Section 3, and the **category** and
 **per-component** requirements that follow. Where a browser-native element or an
-existing `automojo-*` package already provides the capability, the component must
+existing `codecraftai-*` package already provides the capability, the component must
 wrap/reuse it rather than reimplement it.
 
 ## 2. Goals & Non-Goals
@@ -667,7 +667,7 @@ A component is complete only when all of the following hold:
 
 1. Meets every applicable universal requirement in Section 3.
 2. Meets its category and per-component requirements in Section 5.
-3. Reuses Section 6 foundations and existing `automojo-*` code rather than
+3. Reuses Section 6 foundations and existing `codecraftai-*` code rather than
    duplicating functionality.
 4. Behavior, attribute/property reflection, event, and keyboard tests pass under
    the `testbase` singlehost flow.

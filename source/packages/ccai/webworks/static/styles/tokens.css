@@ -1,0 +1,189 @@
+/*
+ * tokens.css
+ *
+ * Design tokens for the codecraftai-webworks (mj-*) web component library.
+ * Every component consumes ONLY these custom properties for color, spacing,
+ * typography, elevation, radius, motion, and z-index layering. No component
+ * hard-codes a visual value.
+ *
+ * Theming: set `data-theme="light|dark"` on a host element (usually <html> or
+ * an <mj-app-shell>) to switch palettes. Tokens cascade through Shadow DOM via
+ * inheritance, so component styles pick them up automatically. forced-colors
+ * is honored at the bottom of this file.
+ */
+
+:root,
+:host,
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* ---- Brand / accent ramp ---- */
+  --mj-color-accent-50: #eef4ff;
+  --mj-color-accent-100: #d9e6ff;
+  --mj-color-accent-200: #b3ccff;
+  --mj-color-accent-300: #80a8ff;
+  --mj-color-accent-400: #4d83f7;
+  --mj-color-accent-500: #2563eb;
+  --mj-color-accent-600: #1d4fc4;
+  --mj-color-accent-700: #173e9c;
+  --mj-color-accent-800: #122f78;
+  --mj-color-accent-900: #0d2256;
+
+  /* ---- Neutral / surface ramp ---- */
+  --mj-color-neutral-0: #ffffff;
+  --mj-color-neutral-50: #f7f8fa;
+  --mj-color-neutral-100: #eef0f3;
+  --mj-color-neutral-200: #e0e3e9;
+  --mj-color-neutral-300: #c7ccd6;
+  --mj-color-neutral-400: #9aa1b1;
+  --mj-color-neutral-500: #6b7280;
+  --mj-color-neutral-600: #4b5563;
+  --mj-color-neutral-700: #353c49;
+  --mj-color-neutral-800: #232934;
+  --mj-color-neutral-900: #14181f;
+
+  /* ---- Semantic status ---- */
+  --mj-color-info: #2563eb;
+  --mj-color-info-surface: #eef4ff;
+  --mj-color-success: #15803d;
+  --mj-color-success-surface: #e8f6ee;
+  --mj-color-warning: #b45309;
+  --mj-color-warning-surface: #fdf2e3;
+  --mj-color-danger: #b91c1c;
+  --mj-color-danger-surface: #fdecec;
+
+  /* ---- Semantic roles ---- */
+  --mj-bg: var(--mj-color-neutral-0);
+  --mj-bg-subtle: var(--mj-color-neutral-50);
+  --mj-bg-muted: var(--mj-color-neutral-100);
+  --mj-surface: var(--mj-color-neutral-0);
+  --mj-surface-raised: var(--mj-color-neutral-0);
+  --mj-border: var(--mj-color-neutral-200);
+  --mj-border-strong: var(--mj-color-neutral-300);
+  --mj-text: var(--mj-color-neutral-900);
+  --mj-text-muted: var(--mj-color-neutral-500);
+  --mj-text-on-accent: #ffffff;
+  --mj-accent: var(--mj-color-accent-500);
+  --mj-accent-hover: var(--mj-color-accent-600);
+  --mj-accent-active: var(--mj-color-accent-700);
+  --mj-focus-ring: var(--mj-color-accent-400);
+  --mj-overlay-scrim: rgba(20, 24, 31, 0.55);
+
+  /* ---- Spacing scale (4px base) ---- */
+  --mj-space-0: 0;
+  --mj-space-1: 0.25rem;
+  --mj-space-2: 0.5rem;
+  --mj-space-3: 0.75rem;
+  --mj-space-4: 1rem;
+  --mj-space-5: 1.5rem;
+  --mj-space-6: 2rem;
+  --mj-space-7: 3rem;
+  --mj-space-8: 4rem;
+
+  /* ---- Radius ---- */
+  --mj-radius-sm: 0.25rem;
+  --mj-radius-md: 0.5rem;
+  --mj-radius-lg: 0.75rem;
+  --mj-radius-pill: 999px;
+  --mj-radius-circle: 50%;
+
+  /* ---- Typography ---- */
+  --mj-font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mj-font-mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  --mj-font-size-xs: 0.75rem;
+  --mj-font-size-sm: 0.875rem;
+  --mj-font-size-md: 1rem;
+  --mj-font-size-lg: 1.125rem;
+  --mj-font-size-xl: 1.5rem;
+  --mj-font-size-2xl: 2rem;
+  --mj-font-weight-regular: 400;
+  --mj-font-weight-medium: 500;
+  --mj-font-weight-bold: 700;
+  --mj-line-height: 1.5;
+
+  /* ---- Elevation ---- */
+  --mj-elevation-0: none;
+  --mj-elevation-1: 0 1px 2px rgba(20, 24, 31, 0.08);
+  --mj-elevation-2: 0 2px 8px rgba(20, 24, 31, 0.12);
+  --mj-elevation-3: 0 8px 24px rgba(20, 24, 31, 0.18);
+
+  /* ---- Motion ---- */
+  --mj-motion-fast: 120ms;
+  --mj-motion-medium: 220ms;
+  --mj-motion-slow: 360ms;
+  --mj-motion-ease: cubic-bezier(0.2, 0, 0.13, 1);
+
+  /* ---- Sizing ---- */
+  --mj-control-height-sm: 1.75rem;
+  --mj-control-height-md: 2.25rem;
+  --mj-control-height-lg: 2.75rem;
+  --mj-target-min: 2.75rem;        /* WCAG 2.5.8 minimum target */
+  --mj-focus-ring-width: 2px;
+  --mj-focus-ring-offset: 2px;
+
+  /* ---- Z-index layers ---- */
+  --mj-layer-base: 0;
+  --mj-layer-docked: 10;
+  --mj-layer-sticky: 100;
+  --mj-layer-overlay: 1000;
+  --mj-layer-modal: 1100;
+  --mj-layer-popover: 1200;
+  --mj-layer-toast: 1300;
+  --mj-layer-tooltip: 1400;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --mj-bg: var(--mj-color-neutral-900);
+  --mj-bg-subtle: var(--mj-color-neutral-800);
+  --mj-bg-muted: var(--mj-color-neutral-700);
+  --mj-surface: var(--mj-color-neutral-800);
+  --mj-surface-raised: var(--mj-color-neutral-700);
+  --mj-border: var(--mj-color-neutral-700);
+  --mj-border-strong: var(--mj-color-neutral-600);
+  --mj-text: var(--mj-color-neutral-50);
+  --mj-text-muted: var(--mj-color-neutral-400);
+  --mj-text-on-accent: #ffffff;
+  --mj-accent: var(--mj-color-accent-400);
+  --mj-accent-hover: var(--mj-color-accent-300);
+  --mj-accent-active: var(--mj-color-accent-200);
+  --mj-focus-ring: var(--mj-color-accent-300);
+  --mj-overlay-scrim: rgba(0, 0, 0, 0.68);
+
+  --mj-color-info-surface: #16243f;
+  --mj-color-success-surface: #15301f;
+  --mj-color-warning-surface: #3a2a12;
+  --mj-color-danger-surface: #3a1b1b;
+
+  --mj-elevation-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --mj-elevation-2: 0 2px 8px rgba(0, 0, 0, 0.55);
+  --mj-elevation-3: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+/* Respect the OS preference when no explicit data-theme is set. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --mj-bg: var(--mj-color-neutral-900);
+    --mj-bg-subtle: var(--mj-color-neutral-800);
+    --mj-bg-muted: var(--mj-color-neutral-700);
+    --mj-surface: var(--mj-color-neutral-800);
+    --mj-surface-raised: var(--mj-color-neutral-700);
+    --mj-border: var(--mj-color-neutral-700);
+    --mj-border-strong: var(--mj-color-neutral-600);
+    --mj-text: var(--mj-color-neutral-50);
+    --mj-text-muted: var(--mj-color-neutral-400);
+    --mj-accent: var(--mj-color-accent-400);
+    --mj-focus-ring: var(--mj-color-accent-300);
+    --mj-overlay-scrim: rgba(0, 0, 0, 0.68);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --mj-motion-fast: 1ms;
+    --mj-motion-medium: 1ms;
+    --mj-motion-slow: 1ms;
+  }
+}

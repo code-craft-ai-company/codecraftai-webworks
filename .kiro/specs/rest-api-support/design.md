@@ -1029,4 +1029,4 @@ Property-based tests verify universal properties across all inputs:
 
 - Property tests: Minimum 100 iterations per property
 - Test framework: testbase (per repository conventions)
-- Test location: `source/testroots/automojo/tests/singlehost/webworks/rest/`
+- Test location: `source/testroots/ccai/tests/singlehost/webworks/rest/`

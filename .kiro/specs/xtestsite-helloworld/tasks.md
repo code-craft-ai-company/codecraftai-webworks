@@ -2,7 +2,7 @@
 
 ## Overview
 
-This implementation plan creates the helloworld test site — a minimal ASGI web application that validates the core request-response pipeline of the automojo-webworks framework. The implementation follows a bottom-up approach: first creating the directory structure, then the endpoint handlers, then the application wiring, and finally the tests.
+This implementation plan creates the helloworld test site — a minimal ASGI web application that validates the core request-response pipeline of the codecraftai-webworks framework. The implementation follows a bottom-up approach: first creating the directory structure, then the endpoint handlers, then the application wiring, and finally the tests.
 
 ## Tasks
 
@@ -44,13 +44,13 @@ This implementation plan creates the helloworld test site — a minimal ASGI web
     - _Requirements: 6.1, 6.2_
 
 - [x] 5. Write unit tests for endpoint handlers
-  - [x] 5.1 Create `source/testroots/automojo/tests/singlehost/webworks/testsites/helloworld/test_handlers.py`
+  - [x] 5.1 Create `source/testroots/ccai/tests/singlehost/webworks/testsites/helloworld/test_handlers.py`
     - Test `hello_world` returns HTMLResponse with status 200 and body "Hello, World!"
     - Test `health_check` returns JSONResponse with status 200 and body `{"status": "ok"}`
     - _Requirements: 1.3, 3.2_
 
 - [x] 6. Write unit tests for application wiring
-  - [x] 6.1 Create `source/testroots/automojo/tests/singlehost/webworks/testsites/helloworld/test_app_wiring.py`
+  - [x] 6.1 Create `source/testroots/ccai/tests/singlehost/webworks/testsites/helloworld/test_app_wiring.py`
     - Test `app` is an ASGIApplication instance
     - Test Router has registered endpoints for `/` and `/health`
     - Test Dispatcher dispatches GET `/` to hello_world handler
@@ -60,7 +60,7 @@ This implementation plan creates the helloworld test site — a minimal ASGI web
     - _Requirements: 2.5, 4.1, 4.2, 6.1, 6.2_
 
 - [x] 7. Write property tests for response correctness
-  - [x] 7.1 Create `source/testroots/automojo/tests/singlehost/webworks/testsites/helloworld/test_property_responses.py`
+  - [x] 7.1 Create `source/testroots/ccai/tests/singlehost/webworks/testsites/helloworld/test_property_responses.py`
     - **Property 1: Endpoint Response Correctness**
     - **Property 2: Not Found Consistency**
     - **Property 3: Method Not Allowed Consistency**
@@ -73,6 +73,6 @@ This implementation plan creates the helloworld test site — a minimal ASGI web
 ## Notes
 
 - All tests use the `testbase` framework per repository conventions
-- Tests mirror the source hierarchy under `source/testroots/automojo/tests/singlehost/webworks/testsites/helloworld/`
+- Tests mirror the source hierarchy under `source/testroots/ccai/tests/singlehost/webworks/testsites/helloworld/`
 - The 405 enhancement (Task 4) modifies framework code in `Router` and `Dispatcher` — these changes benefit all sites, not just helloworld
 - Endpoint handlers are synchronous; the Dispatcher handles async wrapping transparently

@@ -8,7 +8,7 @@
 
 import html
 
-from automojo.webworks.routing.response import HTMLResponse
+from ccai.webworks.routing.response import HTMLResponse
 
 from testcomponents.rendering import page_shell
 from testcomponents.rendering import render_component_page

@@ -2,19 +2,19 @@
 
 ## Introduction
 
-This document specifies the requirements for a blueprint test site that demonstrates the usage of the Blueprint system in automojo-webworks. The test site serves as a reference implementation showing two key patterns: (1) creating a Blueprint subclass with multiple pre-configured endpoints registered via `attach_at`, and (2) subclassing a Blueprint to override or extend an existing endpoint. The test site follows the same structural conventions as the existing helloworld test site at `source/testsites/helloworld/`.
+This document specifies the requirements for a blueprint test site that demonstrates the usage of the Blueprint system in codecraftai-webworks. The test site serves as a reference implementation showing two key patterns: (1) creating a Blueprint subclass with multiple pre-configured endpoints registered via `attach_at`, and (2) subclassing a Blueprint to override or extend an existing endpoint. The test site follows the same structural conventions as the existing helloworld test site at `source/testsites/helloworld/`.
 
 ## Glossary
 
 - **Blueprint_Test_Site**: A standalone ASGI web application located at `source/testsites/blueprintdemo/` that demonstrates Blueprint usage patterns.
-- **Blueprint**: An Endpoint composite class from `automojo.webworks.endpoints.blueprint` that groups related handlers under a shared parent path with inherited constraints.
+- **Blueprint**: An Endpoint composite class from `ccai.webworks.endpoints.blueprint` that groups related handlers under a shared parent path with inherited constraints.
 - **Base_Blueprint**: A Blueprint subclass within the test site that defines multiple pre-configured endpoints under a shared base path using `attach_at`.
 - **Extended_Blueprint**: A Blueprint subclass that inherits from Base_Blueprint and overrides or extends one or more endpoint handlers.
-- **Endpoint**: The base class from `automojo.webworks.endpoints.endpoint` providing handler registration via the `attach_at` decorator.
-- **EndpointRegistry**: The module-level registry from `automojo.webworks.endpoints.registry` that collects EndpointDescriptor records.
-- **Router**: The routing component from `automojo.webworks.routing.router` that matches incoming requests to registered endpoint handlers.
-- **Dispatcher**: The dispatch component from `automojo.webworks.routing.dispatcher` that invokes matched handlers and returns responses.
-- **ASGIApplication**: The ASGI application wrapper from `automojo.webworks.asgi.application` that serves HTTP requests.
+- **Endpoint**: The base class from `ccai.webworks.endpoints.endpoint` providing handler registration via the `attach_at` decorator.
+- **EndpointRegistry**: The module-level registry from `ccai.webworks.endpoints.registry` that collects EndpointDescriptor records.
+- **Router**: The routing component from `ccai.webworks.routing.router` that matches incoming requests to registered endpoint handlers.
+- **Dispatcher**: The dispatch component from `ccai.webworks.routing.dispatcher` that invokes matched handlers and returns responses.
+- **ASGIApplication**: The ASGI application wrapper from `ccai.webworks.asgi.application` that serves HTTP requests.
 
 ## Requirements
 
@@ -77,5 +77,5 @@ This document specifies the requirements for a blueprint test site that demonstr
 3. THE test suite SHALL include routing tests that verify the Router has registered endpoints for all Base_Blueprint and Extended_Blueprint paths.
 4. THE test suite SHALL include dispatch tests that verify the Dispatcher routes requests to the correct handler for each Blueprint path.
 5. THE test suite SHALL verify that the Extended_Blueprint overridden endpoint returns the augmented response while non-overridden endpoints return the Base_Blueprint response.
-6. THE test suite SHALL reside at `source/testroots/automojo/tests/singlehost/webworks/testsites/blueprintdemo/` mirroring the source hierarchy.
-7. THE test suite SHALL use the testbase framework with `test_` prefix functions and `automojo.testbase.mocking` for mock objects.
+6. THE test suite SHALL reside at `source/testroots/ccai/tests/singlehost/webworks/testsites/blueprintdemo/` mirroring the source hierarchy.
+7. THE test suite SHALL use the testbase framework with `test_` prefix functions and `ccai.testbase.mocking` for mock objects.

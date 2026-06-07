@@ -275,12 +275,12 @@ COMPONENTS = [
         ),
         example=(
             "<mj-accordion bordered>\n"
-            '  <mj-disclosure heading="What is Automojo WebWorks?">\n'
+            '  <mj-disclosure heading="What is CodeCraftAI WebWorks?">\n'
             "    <p>A library of accessible, themeable web components built on native "
             "custom elements.</p>\n"
             "  </mj-disclosure>\n"
             '  <mj-disclosure heading="How do I install it?">\n'
-            "    <p>Run <code>npm install automojo-webworks</code> and import the "
+            "    <p>Run <code>npm install codecraftai-webworks</code> and import the "
             "components you need.</p>\n"
             "  </mj-disclosure>\n"
             '  <mj-disclosure heading="Is it accessible?" open>\n'

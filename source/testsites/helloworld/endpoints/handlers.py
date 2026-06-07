@@ -7,10 +7,10 @@
     at application startup.
 """
 
-from automojo.webworks.endpoints.endpoint import Endpoint
-from automojo.webworks.routing.request import Request
-from automojo.webworks.routing.response import HTMLResponse
-from automojo.webworks.routing.response import JSONResponse
+from ccai.webworks.endpoints.endpoint import Endpoint
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.response import HTMLResponse
+from ccai.webworks.routing.response import JSONResponse
 
 
 @Endpoint.attach_at(path="/", methods=["GET"])

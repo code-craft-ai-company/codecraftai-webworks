@@ -2,25 +2,25 @@
 
 ## Overview
 
-This design document describes the architecture and implementation approach for the Web Application Persona & Presence feature. The feature provides the foundational infrastructure for web applications in the automojo framework, extending the base `ThisApplication` (from `automojo-this-app` package) with web-specific database lifecycle hooks, persona establishment, presence directory management, and singleton access patterns.
+This design document describes the architecture and implementation approach for the Web Application Persona & Presence feature. The feature provides the foundational infrastructure for web applications in the ccai framework, extending the base `ThisApplication` (from `codecraftai-this-app` package) with web-specific database lifecycle hooks, persona establishment, presence directory management, and singleton access patterns.
 
-The design follows a layered approach where `WebApplication` extends `automojo.thisapp.wellknown.ThisApplication`, inheriting all persona and variable stack functionality while adding web-specific hooks. The `establish_webapp_persona` function serves as the primary entry point for initializing the application singleton with consistent configuration.
+The design follows a layered approach where `WebApplication` extends `ccai.thisapp.wellknown.ThisApplication`, inheriting all persona and variable stack functionality while adding web-specific hooks. The `establish_webapp_persona` function serves as the primary entry point for initializing the application singleton with consistent configuration.
 
 ## Dependencies
 
-This feature depends on the `automojo-this-app` package which provides:
+This feature depends on the `codecraftai-this-app` package which provides:
 
 | Component | Import Path | Description |
 |-----------|-------------|-------------|
-| `ThisApplication` | `automojo.thisapp.wellknown` | Base application class with persona management, context, config parser |
-| `establish_app_persona` | `automojo.thisapp.persona` | Reference implementation for persona establishment pattern |
-| `AppPersona` | `automojo.thisapp.persona` | Class-level storage for persona attributes (AM_NAME, AM_PRESENCE_DIR, etc.) |
-| `PersonaVariablesDesc` | `automojo.thisapp.wellknown` | Variable descriptors for persona configuration |
-| `SINGLETON_LOCK` | `automojo.thisapp.wellknown` | Thread lock for singleton initialization |
-| `THISAPPLICATION_SINGLETON` | `automojo.thisapp.wellknown` | Global singleton variable |
-| `ThisApplicationSingleton()` | `automojo.thisapp.wellknown` | Accessor function for the singleton |
-| `SemanticError` | `automojo.thisapp.wellknown` | Exception for semantic errors |
-| `APP_PERSONA_ESTABLISHED` | `automojo.thisapp.persona` | Flag to track if persona is established |
+| `ThisApplication` | `ccai.thisapp.wellknown` | Base application class with persona management, context, config parser |
+| `establish_app_persona` | `ccai.thisapp.persona` | Reference implementation for persona establishment pattern |
+| `AppPersona` | `ccai.thisapp.persona` | Class-level storage for persona attributes (AM_NAME, AM_PRESENCE_DIR, etc.) |
+| `PersonaVariablesDesc` | `ccai.thisapp.wellknown` | Variable descriptors for persona configuration |
+| `SINGLETON_LOCK` | `ccai.thisapp.wellknown` | Thread lock for singleton initialization |
+| `THISAPPLICATION_SINGLETON` | `ccai.thisapp.wellknown` | Global singleton variable |
+| `ThisApplicationSingleton()` | `ccai.thisapp.wellknown` | Accessor function for the singleton |
+| `SemanticError` | `ccai.thisapp.wellknown` | Exception for semantic errors |
+| `APP_PERSONA_ESTABLISHED` | `ccai.thisapp.persona` | Flag to track if persona is established |
 
 ## Architecture
 
@@ -84,7 +84,7 @@ This feature depends on the `automojo-this-app` package which provides:
 ### WebApplication Class
 
 ```python
-from automojo.thisapp.wellknown import ThisApplication, SemanticError
+from ccai.thisapp.wellknown import ThisApplication, SemanticError
 
 class WebApplication(ThisApplication):
     """
@@ -159,13 +159,13 @@ class WebApplication(ThisApplication):
 import os
 from typing import Optional, Type
 
-from automojo.thisapp.persona import AppPersona
-from automojo.thisapp.wellknown import (
+from ccai.thisapp.persona import AppPersona
+from ccai.thisapp.wellknown import (
     SINGLETON_LOCK, THISAPPLICATION_SINGLETON, 
     PersonaVariablesDesc, SemanticError
 )
-from automojo.webworks import wellknown as webworks_wellknown
-from automojo.thisapp import wellknown as thisapp_wellknown
+from ccai.webworks import wellknown as webworks_wellknown
+from ccai.thisapp import wellknown as thisapp_wellknown
 
 WEBAPP_PERSONA_ESTABLISHED = False
 
@@ -184,7 +184,7 @@ def establish_webapp_persona(
     """
     Establish the web application persona and initialize the singleton.
     
-    Mirrors the pattern used by automojo.thisapp.persona.establish_app_persona
+    Mirrors the pattern used by ccai.thisapp.persona.establish_app_persona
     but instantiates WebApplication and wires it into both wellknown modules.
     
     Args:
@@ -367,10 +367,10 @@ class VariableSource(Flag):
 ### Wellknown Singleton Functions
 
 ```python
-# In automojo.webworks.wellknown
+# In ccai.webworks.wellknown
 
 from typing import Optional
-from automojo.thisapp.wellknown import SINGLETON_LOCK, SemanticError
+from ccai.thisapp.wellknown import SINGLETON_LOCK, SemanticError
 
 THISWEBAPPLICATION_SINGLETON: Optional['WebApplication'] = None
 
@@ -399,16 +399,16 @@ def ThisWebApplicationSingleton() -> 'WebApplication':
     return THISWEBAPPLICATION_SINGLETON
 ```
 
-Note: `ThisApplicationSingleton()` is already provided by `automojo.thisapp.wellknown` and will return the same instance after `establish_webapp_persona` is called.
+Note: `ThisApplicationSingleton()` is already provided by `ccai.thisapp.wellknown` and will return the same instance after `establish_webapp_persona` is called.
 
 ## Data Models
 
-### AppPersona (from automojo-this-app)
+### AppPersona (from codecraftai-this-app)
 
-The `AppPersona` class from `automojo.thisapp.persona` stores persona attributes as class variables:
+The `AppPersona` class from `ccai.thisapp.persona` stores persona attributes as class variables:
 
 ```python
-# Provided by automojo-this-app package
+# Provided by codecraftai-this-app package
 class AppPersona:
     """
     Class-level storage for persona attributes.
@@ -424,12 +424,12 @@ class AppPersona:
     AM_SERVICE_NAME: str = None
 ```
 
-### PersonaVariablesDesc (from automojo-this-app)
+### PersonaVariablesDesc (from codecraftai-this-app)
 
-The `PersonaVariablesDesc` class from `automojo.thisapp.wellknown` provides variable descriptors:
+The `PersonaVariablesDesc` class from `ccai.thisapp.wellknown` provides variable descriptors:
 
 ```python
-# Provided by automojo-this-app package
+# Provided by codecraftai-this-app package
 class PersonaVariablesDesc:
     """
     Variable descriptors for persona-related configuration.
@@ -622,7 +622,7 @@ Property-based tests should use the `testbase` framework with minimum 100 iterat
 Following the repository conventions from AGENTS.md:
 
 ```
-source/testroots/automojo/tests/singlehost/webworks/persona/
+source/testroots/ccai/tests/singlehost/webworks/persona/
 ├── test_webapplication.py       # WebApplication class tests
 ├── test_establish_persona.py    # establish_webapp_persona tests
 └── test_wellknown_singletons.py # Singleton access tests
@@ -630,7 +630,7 @@ source/testroots/automojo/tests/singlehost/webworks/persona/
 
 ### Integration Points
 
-- Integration with `automojo.thisapp` module for base functionality (ThisApplication, AppPersona, PersonaVariablesDesc)
+- Integration with `ccai.thisapp` module for base functionality (ThisApplication, AppPersona, PersonaVariablesDesc)
 - Integration with ConfigParser for settings file reading (inherited from ThisApplication)
 - Integration with Context for value storage (inherited from ThisApplication)
 - Integration with logging subsystem for log directory discovery

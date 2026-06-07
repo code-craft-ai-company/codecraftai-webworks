@@ -1094,7 +1094,7 @@ Property-based tests should use the `testbase` framework with minimum 100 iterat
 Following the repository conventions from AGENTS.md:
 
 ```
-source/testroots/automojo/tests/singlehost/webworks/
+source/testroots/ccai/tests/singlehost/webworks/
 ├── security/
 │   ├── test_access_policy.py          # AccessPolicy tests
 │   ├── test_security_context.py       # Security_Context tests

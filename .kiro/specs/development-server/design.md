@@ -76,7 +76,7 @@ sequenceDiagram
 
 ## Components and Interfaces
 
-### AsyncServerCore (`source/packages/automojo/webworks/devexp/server/asyncservercore.py`)
+### AsyncServerCore (`source/packages/ccai/webworks/devexp/server/asyncservercore.py`)
 
 The asyncio-based TCP server that binds a socket and manages connections.
 
@@ -94,7 +94,7 @@ The asyncio-based TCP server that binds a socket and manages connections.
 
 The `start()` method calls `loop.create_server()` with the protocol factory. The `stop()` method calls `server.close()`, then waits up to `shutdown_timeout` (default 5s) for active connections to drain, then forcibly closes remaining transports.
 
-### HTTPProtocolHandler (`source/packages/automojo/webworks/devexp/server/httpprotocolhandler.py`)
+### HTTPProtocolHandler (`source/packages/ccai/webworks/devexp/server/httpprotocolhandler.py`)
 
 An `asyncio.Protocol` subclass that handles a single TCP connection. Parses HTTP/1.1, constructs ASGI scopes, and bridges the ASGI receive/send interface to raw TCP.
 
@@ -143,7 +143,7 @@ An `asyncio.Protocol` subclass that handles a single TCP connection. Parses HTTP
 2. After start: expects `http.response.body`
 3. When `more_body` is `False` or absent: response is finalized
 
-### LifespanManager (`source/packages/automojo/webworks/devexp/server/lifespanmanager.py`)
+### LifespanManager (`source/packages/ccai/webworks/devexp/server/lifespanmanager.py`)
 
 Manages ASGI lifespan protocol events.
 
@@ -158,7 +158,7 @@ Manages ASGI lifespan protocol events.
 
 The manager creates a lifespan scope `{"type": "lifespan", "asgi": {"version": "3.0"}}` and calls `app(scope, receive, send)`. It uses `asyncio.Queue` objects for the receive/send channels. If the app raises an exception during lifespan handling (indicating it doesn't support lifespan), the manager catches it and proceeds as if startup succeeded.
 
-### Enhanced DevelopmentServer (`source/packages/automojo/webworks/devexp/server/devserver.py`)
+### Enhanced DevelopmentServer (`source/packages/ccai/webworks/devexp/server/devserver.py`)
 
 Changes to the existing class:
 
@@ -185,8 +185,8 @@ No new persistent data models are introduced. All data flows through existing fr
 | ASGI Message `dict` | `http.request`, `http.response.start`, `http.response.body` | Messages exchanged via receive/send callables |
 | Lifespan Scope `dict` | constructed by `LifespanManager` | Lifespan event scope |
 | `PortInUseError` | `devserver.py` (existing) | Raised when port is unavailable |
-| `Request` | `automojo.webworks.routing.request` | Parsed request object (used by HTTPHandler) |
-| `Response` | `automojo.webworks.routing.response` | Response object (used by HTTPHandler) |
+| `Request` | `ccai.webworks.routing.request` | Parsed request object (used by HTTPHandler) |
+| `Response` | `ccai.webworks.routing.response` | Response object (used by HTTPHandler) |
 
 ### HTTP Parser Internal State
 
@@ -401,7 +401,7 @@ Each property test runs a minimum of 100 iterations with randomly generated inpu
 ### Test Organization
 
 ```
-source/testroots/automojo/tests/singlehost/webworks/
+source/testroots/ccai/tests/singlehost/webworks/
 └── devexp/
     └── server/
         ├── test_httpprotocolhandler.py    # HTTP parsing unit + property tests

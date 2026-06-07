@@ -2,7 +2,7 @@
 
 ## Overview
 
-This design document describes the architecture and implementation approach for the Configuration System feature. The feature provides a unified configuration model for web applications in the automojo framework, supporting multi-source configuration loading, secrets handling, schema validation, and runtime configuration management.
+This design document describes the architecture and implementation approach for the Configuration System feature. The feature provides a unified configuration model for web applications in the ccai framework, supporting multi-source configuration loading, secrets handling, schema validation, and runtime configuration management.
 
 The design follows a layered approach with clear separation between configuration sources, the registry that manages loading and merging, and the model that provides access to resolved values. The system integrates with the existing persona and application lifecycle infrastructure.
 
@@ -952,7 +952,7 @@ Property-based tests should use the `testbase` framework with minimum 100 iterat
 Following the repository conventions from AGENTS.md:
 
 ```
-source/testroots/automojo/tests/singlehost/webworks/configuration/
+source/testroots/ccai/tests/singlehost/webworks/configuration/
 ├── test_configuration_model.py    # ConfigurationModel tests
 ├── test_config_registry.py        # ConfigRegistry tests
 ├── test_environment_source.py     # EnvironmentSource tests
@@ -965,8 +965,8 @@ source/testroots/automojo/tests/singlehost/webworks/configuration/
 
 ### Integration Points
 
-- Integration with `automojo.webworks.persona` for presence directory discovery
-- Integration with `automojo.thisapp` for application lifecycle
+- Integration with `ccai.webworks.persona` for presence directory discovery
+- Integration with `ccai.thisapp` for application lifecycle
 - Integration with logging subsystem for audit logging
 - Integration with file system for configuration file discovery and watching
 

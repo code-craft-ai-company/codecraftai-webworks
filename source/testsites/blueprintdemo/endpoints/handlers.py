@@ -13,13 +13,13 @@
     endpoints are inherited from the parent blueprint.
 """
 
-from automojo.webworks.endpoints.doc import Doc
-from automojo.webworks.endpoints.endpoint import Endpoint
-from automojo.webworks.endpoints.restblueprint import RestBlueprint
-from automojo.webworks.routing.request import Request
-from automojo.webworks.routing.response import HTMLResponse
-from automojo.webworks.routing.response import JSONResponse
-from automojo.webworks.routing.response import RedirectResponse
+from ccai.webworks.endpoints.doc import Doc
+from ccai.webworks.endpoints.endpoint import Endpoint
+from ccai.webworks.endpoints.restblueprint import RestBlueprint
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.response import HTMLResponse
+from ccai.webworks.routing.response import JSONResponse
+from ccai.webworks.routing.response import RedirectResponse
 
 
 _MAIN_PAGE_HTML = """\

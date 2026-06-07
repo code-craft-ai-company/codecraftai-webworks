@@ -7,7 +7,7 @@ This implementation plan creates authentication blueprint classes that provide p
 ## Tasks
 
 - [x] 1. Create authentication blueprints module structure
-  - Create `source/packages/automojo/webworks/authentication/blueprints/` directory
+  - Create `source/packages/ccai/webworks/authentication/blueprints/` directory
   - Create `__init__.py` with module exports
   - Create `responses.py` with AuthResponse and AuthError dataclasses
   - Create `schemas.py` with common request/response schemas

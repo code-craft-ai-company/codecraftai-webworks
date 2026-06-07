@@ -263,4 +263,4 @@ This implementation plan creates the REST API Support feature providing resource
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
 - Implementation uses Python with testbase framework per repository conventions
-- Test files should be located at `source/testroots/automojo/tests/singlehost/webworks/rest/`
+- Test files should be located at `source/testroots/ccai/tests/singlehost/webworks/rest/`

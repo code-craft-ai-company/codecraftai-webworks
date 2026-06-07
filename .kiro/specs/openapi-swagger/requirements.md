@@ -110,8 +110,8 @@ The feature enables developers to automatically generate OpenAPI 3.0+ specificat
 
 #### Acceptance Criteria
 
-1. THE package SHALL include a vendored copy of the Swagger UI distribution files (swagger-ui-bundle.js, swagger-ui.css, and supporting assets) under `source/packages/automojo/webworks/openapi/static/swagger-ui/`.
-2. THE package SHALL include a vendored copy of the ReDoc standalone JavaScript file under `source/packages/automojo/webworks/openapi/static/redoc/`.
+1. THE package SHALL include a vendored copy of the Swagger UI distribution files (swagger-ui-bundle.js, swagger-ui.css, and supporting assets) under `source/packages/ccai/webworks/openapi/static/swagger-ui/`.
+2. THE package SHALL include a vendored copy of the ReDoc standalone JavaScript file under `source/packages/ccai/webworks/openapi/static/redoc/`.
 3. THE static assets SHALL be included in the package distribution via `pyproject.toml` package-data configuration.
 4. THE package SHALL provide a management script or CLI command (`webworks openapi update-assets`) that downloads the latest Swagger UI and ReDoc releases from their official GitHub repositories and updates the vendored copies.
 5. THE asset update command SHALL record the downloaded version numbers in a manifest file (`static/manifest.json`) containing asset name, version, download URL, and SHA-256 checksum.

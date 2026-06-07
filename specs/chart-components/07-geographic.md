@@ -1,6 +1,6 @@
 # Geographic & Map Charts
 
-> Catalog of chart types in this category for the automojo-webworks SVG chart
+> Catalog of chart types in this category for the codecraftai-webworks SVG chart
 > library. Architecture, the coordinated-element model, the part components,
 > the JSON contract, and phasing are defined in `../../chart-components-plan.md`
 > and are not repeated here.

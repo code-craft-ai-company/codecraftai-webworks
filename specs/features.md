@@ -3,7 +3,7 @@
 ## Web Application Persona & Presence
 
 ### `WebApplication` Root Class
-- `automojo.webworks.webapplication.WebApplication` extends `ThisApplication` and adds overridable hooks (`prepare_database`, `connect_database`, `startup_database`, `ensure_database_ready`) so services can define their database bootstrap flow once and reuse it during CLI or worker startup.
+- `ccai.webworks.webapplication.WebApplication` extends `ThisApplication` and adds overridable hooks (`prepare_database`, `connect_database`, `startup_database`, `ensure_database_ready`) so services can define their database bootstrap flow once and reuse it during CLI or worker startup.
 - Project-level apps subclass `WebApplication` to add helpers (ORM models, DI containers, etc.) while still inheriting the presence/variable stack from `ThisApplication`.
 - Example:
 
@@ -17,7 +17,7 @@ class PortalWebApp(WebApplication):
 ```
 
 ### `establish_webapp_persona`
-- Mirrors `automojo.thisapp.persona.establish_app_persona` but instantiates the `WebApplication` singleton and wires it into both `automojo.thisapp.wellknown.THISAPPLICATION_SINGLETON` and `automojo.webworks.wellknown.WEBAPPLICATION_SINGLETON`.
+- Mirrors `ccai.thisapp.persona.establish_app_persona` but instantiates the `WebApplication` singleton and wires it into both `ccai.thisapp.wellknown.THISAPPLICATION_SINGLETON` and `ccai.webworks.wellknown.WEBAPPLICATION_SINGLETON`.
 - Accepts the familiar persona fields (`name`, `logger_name`, `log_basename`, `presence_dir`, `log_directory`, `settings_file`, `extensions`, `service_name`) plus an optional `application_cls` so callers can swap in custom subclasses.
 - Computes defaults identical to `AppPersona`: if no presence is supplied the folder defaults to `~/<appname>`, log directory defaults to `<presence>/logs`, and `settings.config` lives under the presence directory unless an absolute/expanded path is passed.
 - After instantiation the helper overrides the `PersonaVariablesDesc` values so every `AppVarAccessor` returns the resolved persona metadata immediately.
@@ -33,7 +33,7 @@ class PortalWebApp(WebApplication):
 - Combined with the persona overrides, this gives a single source of truth for configuration—documentation generators can list every `AppVarDesc`, and runtime code simply references `PersonaVariables.AM_PRESENCE_DIR()` to stay in sync with the persona.
 
 ### Wellknown Singletons
-- `automojo.webworks.wellknown.WebApplicationSingleton()` mirrors `automojo.thisapp.wellknown.ThisApplicationSingleton()` but surfaces the richer `WebApplication` root. Both point to the same object once `establish_webapp_persona` runs, so legacy code calling either accessor stays consistent.
+- `ccai.webworks.wellknown.WebApplicationSingleton()` mirrors `ccai.thisapp.wellknown.ThisApplicationSingleton()` but surfaces the richer `WebApplication` root. Both point to the same object once `establish_webapp_persona` runs, so legacy code calling either accessor stays consistent.
 - The singleton lock from `thisapp.wellknown` is reused to guard initialization, preventing multiple personas from being established accidentally.
 
 ## Endpoint Abstractions
@@ -206,17 +206,17 @@ portal_bp.attach_child(PortalEndpoint, leaf="magic/portals")
 
 ## Access Policy (Canonical)
 
-### `automojo.webworks.security.accesspolicy.AccessPolicy`
+### `ccai.webworks.security.accesspolicy.AccessPolicy`
 - The canonical immutable security constraint for an endpoint. Frozen dataclass; ``roles`` and ``scopes`` are stored as tuples regardless of the iterable type the caller supplies (lists, sets, generators are coerced in ``__post_init__``).
-- ``automojo.webworks.endpoints.accesspolicy.AccessPolicy`` is now a re-export of the security-package class. The two parallel definitions that used to ship with webworks have been unified — the endpoints module retains the import path purely so existing consumers keep resolving without code changes.
+- ``ccai.webworks.endpoints.accesspolicy.AccessPolicy`` is now a re-export of the security-package class. The two parallel definitions that used to ship with webworks have been unified — the endpoints module retains the import path purely so existing consumers keep resolving without code changes.
 - ``check(subject)`` is polymorphic and accepts any of three subject shapes:
-  - :class:`automojo.webworks.security.securitycontext.SecurityContext` — flat immutable context with ``user_id`` / ``roles`` / ``scopes``.
-  - :class:`automojo.webworks.authentication.core.AuthenticationContext` — wraps a :class:`Principal`. Scopes are evaluated against ``principal.permissions`` since :class:`Principal` carries scope-equivalent grants under that name.
+  - :class:`ccai.webworks.security.securitycontext.SecurityContext` — flat immutable context with ``user_id`` / ``roles`` / ``scopes``.
+  - :class:`ccai.webworks.authentication.core.AuthenticationContext` — wraps a :class:`Principal`. Scopes are evaluated against ``principal.permissions`` since :class:`Principal` carries scope-equivalent grants under that name.
   - Any duck-typed *User* with ``is_authenticated`` / ``roles`` / ``scopes`` attributes — used by tooling and tests that don't construct full security contexts.
 - Discrimination is performed by attribute presence at call time (``hasattr(subject, 'principal')`` → AuthenticationContext, ``hasattr(subject, 'user_id')`` → SecurityContext, otherwise User). Adding a new subject shape is a matter of routing inside ``check`` — no consumer changes required.
 - Named convenience methods preserved from the legacy endpoints implementation: ``check_authentication_context(ctx)``, ``check_roles(ctx)``, ``check_permissions(ctx)``. ``get_denial_reason(subject)`` is similarly polymorphic.
 - ``merge_with(other, replace_roles=False, replace_scopes=False)`` returns a new ``AccessPolicy`` combining constraints. Roles and scopes default to deduplicated union; ``require_auth`` is the logical OR; the custom ``constraints`` dict is shallow-merged with ``other`` precedence.
-- :class:`automojo.webworks.endpoints.constraints.EndpointConstraints` retains its list-typed ``roles`` and ``scopes`` fields. Its ``__post_init__`` coerces incoming iterables (commonly tuples handed off from an ``AccessPolicy``) to lists so consumer code continues to receive the list shape it has always seen.
+- :class:`ccai.webworks.endpoints.constraints.EndpointConstraints` retains its list-typed ``roles`` and ``scopes`` fields. Its ``__post_init__`` coerces incoming iterables (commonly tuples handed off from an ``AccessPolicy``) to lists so consumer code continues to receive the list shape it has always seen.
 
 ### Decorator wire-through (`Endpoint.attach_at` / `RestEndpoint.attach_at`)
 - Security decorators (``@require_auth``, ``@require_roles``, ``@require_scopes``, ``@public_endpoint``) attach an :class:`AccessPolicy` to the handler function under the ``_access_policy`` attribute. When the function is then registered via :meth:`Endpoint.attach_at` (or any subclass that inherits this behavior — :class:`RestEndpoint`, :class:`Blueprint`, :class:`RestBlueprint`), the registration logic reads ``_access_policy`` and merges it into the descriptor's effective policy alongside any explicit ``access_policy=`` kwarg and the class-level default.
@@ -235,7 +235,7 @@ def internal_dashboard(request):
 The handler's effective policy is ``AccessPolicy(roles=("authenticated-user", "system-admin"), require_auth=True)`` and the :class:`SecurityMiddleware` / :class:`AuthenticationMiddleware` reads it from the descriptor.
 ## Flash Messaging
 
-### `automojo.webworks.flash`
+### `ccai.webworks.flash`
 - Provides one-shot user-feedback messaging modeled after the classic Flask `flash()` / `get_flashed_messages()` API: a handler emits a message before redirecting, and the next render consumes it.
 - Three composable pieces: `FlashStore` (abstract backend), `InMemoryFlashStore` (process-local default), `FlashManager` (input-validating facade), and `make_flash_context_processor` (templating integration via `ContextProcessorRegistry`).
 - Each message is a `(category, message)` tuple. Category is a free-form string the rendering layer can key on for styling — `info`, `success`, `warning`, `error` are the conventional values, but any string is accepted.
@@ -243,7 +243,7 @@ The handler's effective policy is ``AccessPolicy(roles=("authenticated-user", "s
 - The store is intentionally session-coupled but storage-independent: implementations of `FlashStore` may share state across workers via Redis or any other backend without changing handler call sites.
 
 ```python
-from automojo.webworks.flash import FlashManager, make_flash_context_processor
+from ccai.webworks.flash import FlashManager, make_flash_context_processor
 
 flash_manager = FlashManager()  # uses InMemoryFlashStore by default
 
@@ -276,14 +276,14 @@ response = SiteSessionAuth.establish_session(
 
 ## CSRF Protection
 
-### `automojo.webworks.security.csrf`
+### `ccai.webworks.security.csrf`
 - Provides synchronizer-token style CSRF protection backed by an HMAC-SHA256 over the session identifier with a server-side secret key. Tokens are deterministically reproducible from the session id alone, so neither the manager nor the application persists per-request token state.
 - The module ships three pieces that compose: `CSRFTokenManager` for the cryptographic primitives, `CSRFMiddleware` for ASGI enforcement on unsafe HTTP methods, and `make_csrf_context_processor` for templating integration via the existing `ContextProcessorRegistry`.
 - Token transport defaults to the `X-CSRF-Token` header. Subclasses of `CSRFMiddleware` may override `_extract_form_token(scope, receive)` to read the token from `application/x-www-form-urlencoded` request bodies. Body parsing is intentionally not done in the base middleware so applications can choose their own body buffering / replay strategy.
 - Threat-model notes: this layer assumes cookie-bound sessions, an in-confidence secret key, and HTTPS in production. It complements `SameSite` cookie attributes and `Origin` checks rather than replacing them.
 
 ```python
-from automojo.webworks.security.csrf import (
+from ccai.webworks.security.csrf import (
     CSRFMiddleware,
     CSRFTokenManager,
     cookie_session_id_resolver,

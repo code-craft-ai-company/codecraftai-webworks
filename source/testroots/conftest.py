@@ -1,8 +1,8 @@
 """
     pytest adapter for tests decorated with
-    :func:`automojo.testbase.properties.given`.
+    :func:`ccai.testbase.properties.given`.
 
-    The ``automojo.testbase.properties`` framework ships a ``given``
+    The ``ccai.testbase.properties`` framework ships a ``given``
     decorator that stamps a ``_property_`` attribute on a test
     function carrying the strategy bindings and execution
     constraints. It is intended to be invoked by the TestBase test
@@ -26,7 +26,7 @@
          strategies, using a deterministic seed derived from the
          fully-qualified test name (matches the reproducibility
          contract documented on
-         :class:`automojo.testbase.properties.PropertyRunner`).
+         :class:`ccai.testbase.properties.PropertyRunner`).
       3. Parametrise the test once per generated example.
 
     Each example becomes a separate pytest invocation, so failures
@@ -35,7 +35,7 @@
     pass / fail per property.
 
     Tests can short-circuit invalid example inputs via
-    :func:`automojo.testbase.properties.assume`, which raises
+    :func:`ccai.testbase.properties.assume`, which raises
     :class:`UnsatisfiedAssumption`. The :func:`pytest_runtest_call`
     hook below converts that exception into a ``pytest.skip`` so an
     assumption-rejected example is reported as skipped rather than
@@ -48,8 +48,8 @@
     the seed.
 """
 
-__author__ = "Automation Mojo LLC"
-__copyright__ = "Copyright 2026, Automation Mojo LLC"
+__author__ = "Code Craft AI LLC"
+__copyright__ = "Copyright 2026, Code Craft AI LLC"
 __credits__ = []
 
 
@@ -60,7 +60,7 @@ from typing import Any
 
 import pytest
 
-from automojo.testbase.properties.assumptions import UnsatisfiedAssumption
+from ccai.testbase.properties.assumptions import UnsatisfiedAssumption
 
 
 def _derive_test_seed(test_name: str) -> int:
@@ -69,7 +69,7 @@ def _derive_test_seed(test_name: str) -> int:
         test name.
 
         Matches the seed-derivation contract documented on
-        :func:`automojo.testbase.properties.propertyrunner.derive_test_seed`
+        :func:`ccai.testbase.properties.propertyrunner.derive_test_seed`
         so the same test produces the same example values whether
         run via the TestBase sequencer or through this adapter.
         TestBase's version mixes the job seed in too; the pytest
@@ -132,7 +132,7 @@ def pytest_generate_tests(metafunc: Any) -> None:
 def pytest_runtest_call(item: Any) -> None:
     """
         Translate :class:`UnsatisfiedAssumption` (raised by
-        :func:`automojo.testbase.properties.assume`) into
+        :func:`ccai.testbase.properties.assume`) into
         :class:`pytest.skip` so an assumption-rejected example is
         reported as a skip rather than an error.
 

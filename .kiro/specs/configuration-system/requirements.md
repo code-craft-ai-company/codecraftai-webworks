@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This document specifies the requirements for the Configuration System feature. This feature provides a unified configuration model for web applications in the automojo framework, supporting multi-source configuration loading, secrets handling, and a consistent API for accessing configuration values across the application.
+This document specifies the requirements for the Configuration System feature. This feature provides a unified configuration model for web applications in the ccai framework, supporting multi-source configuration loading, secrets handling, and a consistent API for accessing configuration values across the application.
 
 The configuration system enables applications to load settings from multiple sources (environment variables, configuration files, secrets stores) with a well-defined precedence order, while providing secure handling of sensitive values and runtime configuration validation.
 
