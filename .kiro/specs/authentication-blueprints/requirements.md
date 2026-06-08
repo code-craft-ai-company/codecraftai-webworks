@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This document specifies the requirements for Authentication Blueprints in the automojo-webworks framework. Authentication Blueprints are specialized blueprint classes derived from the security blueprint base that provide default endpoint implementations for each authentication method. These blueprints enable rapid integration of authentication flows by providing pre-built, customizable endpoints for login, logout, token management, and OAuth flows.
+This document specifies the requirements for Authentication Blueprints in the codecraftai-webworks framework. Authentication Blueprints are specialized blueprint classes derived from the security blueprint base that provide default endpoint implementations for each authentication method. These blueprints enable rapid integration of authentication flows by providing pre-built, customizable endpoints for login, logout, token management, and OAuth flows.
 
 ## Glossary
 

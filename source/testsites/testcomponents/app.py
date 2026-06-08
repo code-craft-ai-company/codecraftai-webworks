@@ -1,7 +1,7 @@
 """
     Application entry point for the testcomponents test site.
 
-    This site exists solely to exercise and document the automojo-webworks
+    This site exists solely to exercise and document the codecraftai-webworks
     mj-* web component library. It serves a browse-by-group landing page
     and an interactive test/documentation page for every component. The
     component groups are served by dedicated RestBlueprint classes and the
@@ -13,8 +13,8 @@
 
 import os
 
-from automojo.webworks.webapplication import establish_webapp_persona
-from automojo.webworks.wellknown import ThisWebApplicationSingleton
+from ccai.webworks.webapplication import establish_webapp_persona
+from ccai.webworks.wellknown import ThisWebApplicationSingleton
 
 # Importing the handlers module triggers Endpoint.attach_at registration
 # for the landing page and the static asset route.
@@ -56,7 +56,7 @@ def run_development_server(
         :param reload: Whether to enable auto-reload on file changes.
     """
 
-    from automojo.webworks.devexp.server.devserver import DevelopmentServer
+    from ccai.webworks.devexp.server.devserver import DevelopmentServer
 
     server = DevelopmentServer(
         app=app,

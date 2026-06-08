@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This document specifies the requirements for the Middleware Pipeline feature of the automojo-webworks package. The middleware pipeline provides a formal abstraction for composing request/response processing in an ordered chain, enabling cross-cutting concerns such as CORS, request logging, compression, rate limiting, and error normalization to be applied declaratively across routes, blueprints, or the entire application.
+This document specifies the requirements for the Middleware Pipeline feature of the codecraftai-webworks package. The middleware pipeline provides a formal abstraction for composing request/response processing in an ordered chain, enabling cross-cutting concerns such as CORS, request logging, compression, rate limiting, and error normalization to be applied declaratively across routes, blueprints, or the entire application.
 
 The existing codebase already contains a `MiddlewarePipeline` in `routing.middleware` with basic sync/async execution, a `WSGIMiddlewareWrapper` in `wsgi.middleware` for WSGI-style wrapping, and a `register_middleware` hook in the extensibility system's `ComponentRegistrationHooks`. This feature formalizes and unifies these pieces into a cohesive middleware layer that integrates with both ASGI and WSGI protocols, supports scoped middleware attachment (global, per-blueprint, per-route), and provides built-in middleware for common cross-cutting concerns.
 

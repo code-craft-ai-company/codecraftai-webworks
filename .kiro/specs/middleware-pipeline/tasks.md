@@ -12,28 +12,28 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
     - Add `priority` and `scope` read-only properties
     - Add `as_dict()` method returning `{"name": ..., "priority": ..., "scope": ...}`
     - Update `__repr__` to include priority and scope
-    - File: `source/packages/automojo/webworks/routing/middleware.py`
+    - File: `source/packages/ccai/webworks/routing/middleware.py`
     - _Requirements: 3.8, 14.1_
 
   - [x] 1.2 Enhance `MiddlewarePipeline.add()` with priority and scope parameters
     - Accept `priority: int = 50` and `scope: str = "global"` parameters
     - Pass priority and scope through to `MiddlewareEntry` constructor
     - Implement priority-based ordering within the same positional group (lower priority executes first)
-    - File: `source/packages/automojo/webworks/routing/middleware.py`
+    - File: `source/packages/ccai/webworks/routing/middleware.py`
     - _Requirements: 3.8_
 
   - [x] 1.3 Add protocol validation to `MiddlewarePipeline.add()`
     - Validate that middleware conforms to `Middleware` or `AsyncMiddleware` protocol via duck-typing
     - Also accept plain callables with `(request, call_next) -> response` signature
     - Raise `TypeError` with descriptive message if middleware does not conform
-    - File: `source/packages/automojo/webworks/routing/middleware.py`
+    - File: `source/packages/ccai/webworks/routing/middleware.py`
     - _Requirements: 1.5, 1.6, 1.7, 1.8_
 
   - [x] 1.4 Add serialization methods to `MiddlewarePipeline`
     - Implement `as_dict()` returning list of entry dictionaries via `MiddlewareEntry.as_dict()`
     - Implement `to_json()` serializing `as_dict()` to JSON string
     - Implement `from_config(config, factory_registry=None)` classmethod to reconstruct pipeline from config dicts
-    - File: `source/packages/automojo/webworks/routing/middleware.py`
+    - File: `source/packages/ccai/webworks/routing/middleware.py`
     - _Requirements: 14.1, 14.2, 14.3, 14.4_
 
   - [x] 1.5 Write property tests for pipeline execution order
@@ -93,13 +93,13 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
     - Implement read-only properties for each field
     - Default `logger` to a module-level logger when `None` is provided
     - Default `endpoint_descriptor` to `None` (middleware executing before routing)
-    - File: `source/packages/automojo/webworks/routing/middlewarecontext.py`
+    - File: `source/packages/ccai/webworks/routing/middlewarecontext.py`
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.6_
 
   - [x] 3.2 Add `middleware_context` attribute to the `Request` class
     - Add `middleware_context: Optional[MiddlewareContext] = None` to the Request constructor
     - Ensure backward compatibility with existing Request usage
-    - File: `source/packages/automojo/webworks/routing/request.py`
+    - File: `source/packages/ccai/webworks/routing/request.py`
     - _Requirements: 8.5_
 
   - [x] 3.3 Write property test for middleware context attached to request
@@ -111,20 +111,20 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
     - Implement `__init__` with internal storage for global, blueprint, and route scopes
     - Implement `register()` accepting middleware, name, scope, scope_key, priority, and position
     - Validate middleware conforms to protocol on registration (raise `TypeError` if not)
-    - File: `source/packages/automojo/webworks/routing/middlewareregistry.py`
+    - File: `source/packages/ccai/webworks/routing/middlewareregistry.py`
     - _Requirements: 4.1, 4.2, 4.3, 1.7, 1.8_
 
   - [x] 4.2 Implement `get_middleware_by_scope()` and `compose_pipeline()` methods
     - `get_middleware_by_scope(scope, scope_key)` returns entries for a specific scope
     - `compose_pipeline(blueprint_name, route_path)` composes effective pipeline: global → blueprint → route
-    - File: `source/packages/automojo/webworks/routing/middlewareregistry.py`
+    - File: `source/packages/ccai/webworks/routing/middlewareregistry.py`
     - _Requirements: 4.4, 4.5, 4.6, 4.7_
 
   - [x] 4.3 Implement introspection methods on `MiddlewareRegistry`
     - `list_by_scope()` returns all middleware grouped by scope
     - `export_effective_pipeline(route_path, blueprint_name)` returns ordered list of middleware names
     - `get_registered_components(hook_name)` returns middleware registered via extensibility system
-    - File: `source/packages/automojo/webworks/routing/middlewareregistry.py`
+    - File: `source/packages/ccai/webworks/routing/middlewareregistry.py`
     - _Requirements: 12.4, 12.5, 7.6_
 
   - [x] 4.4 Write property test for scoped pipeline composition order
@@ -150,13 +150,13 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
   - [x] 6.1 Create ASGI adapters in `routing/middlewareadapters.py`
     - Implement `ASGIMiddlewareAdapter` wrapping ASGI middleware (scope, receive, send) to `AsyncMiddleware` protocol
     - Implement `AsyncMiddlewareToASGI` wrapping `AsyncMiddleware` to ASGI middleware protocol
-    - File: `source/packages/automojo/webworks/routing/middlewareadapters.py`
+    - File: `source/packages/ccai/webworks/routing/middlewareadapters.py`
     - _Requirements: 5.1, 5.2, 5.3, 5.5_
 
   - [x] 6.2 Create WSGI adapters in `routing/middlewareadapters.py`
     - Implement `WSGIMiddlewareAdapter` wrapping WSGI middleware factory to `Middleware` protocol
     - Implement `MiddlewareToWSGI` wrapping `Middleware` to WSGI middleware factory pattern
-    - File: `source/packages/automojo/webworks/routing/middlewareadapters.py`
+    - File: `source/packages/ccai/webworks/routing/middlewareadapters.py`
     - _Requirements: 6.1, 6.2, 6.3, 6.5_
 
   - [x] 6.3 Write unit tests for ASGI and WSGI adapters
@@ -164,7 +164,7 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
     - Test `AsyncMiddlewareToASGI` with mock AsyncMiddleware
     - Test `WSGIMiddlewareAdapter` with mock WSGI factory
     - Test `MiddlewareToWSGI` with mock Middleware
-    - File: `source/testroots/automojo/tests/singlehost/webworks/routing/test_middlewareadapters.py`
+    - File: `source/testroots/ccai/tests/singlehost/webworks/routing/test_middlewareadapters.py`
     - _Requirements: 5.1, 5.2, 5.3, 6.1, 6.2, 6.3_
 
 - [x] 7. Create middleware factory helpers
@@ -173,12 +173,12 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
     - Invoke factory to produce middleware instance
     - Validate returned instance conforms to `Middleware` or `AsyncMiddleware` protocol
     - Raise `TypeError` if factory returns non-conforming object
-    - File: `source/packages/automojo/webworks/routing/middlewarefactory.py`
+    - File: `source/packages/ccai/webworks/routing/middlewarefactory.py`
     - _Requirements: 13.1, 13.2, 13.3, 13.5_
 
   - [x] 7.2 Integrate factory pattern with `MiddlewareRegistry`
     - When a factory is registered with the registry, invoke it to produce the middleware instance before adding to pipeline
-    - File: `source/packages/automojo/webworks/routing/middlewareregistry.py`
+    - File: `source/packages/ccai/webworks/routing/middlewareregistry.py`
     - _Requirements: 13.4_
 
   - [x] 7.3 Write property test for factory conformance
@@ -196,7 +196,7 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
     - Implement `__call__` adding CORS headers to regular responses for allowed origins
     - Omit CORS headers when origin is not allowed
     - Support wildcard `"*"` origin matching
-    - File: `source/packages/automojo/webworks/routing/middleware/cors.py`
+    - File: `source/packages/ccai/webworks/routing/middleware/cors.py`
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.8, 9.9, 9.10_
 
   - [x] 9.2 Write property test for CORS preflight
@@ -214,7 +214,7 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
     - Log response status code and processing duration after handler
     - Skip logging when request path matches an excluded pattern
     - Include only configured headers in log output
-    - File: `source/packages/automojo/webworks/routing/middleware/logging.py`
+    - File: `source/packages/ccai/webworks/routing/middleware/logging.py`
     - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7_
 
   - [x] 10.2 Write property test for logging completeness
@@ -238,7 +238,7 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
     - Include `traceback` field only when `debug=True`
     - Log all caught exceptions via configured logger
     - Support custom exception-to-status mappings via `exception_map`
-    - File: `source/packages/automojo/webworks/routing/middleware/errornormalization.py`
+    - File: `source/packages/ccai/webworks/routing/middleware/errornormalization.py`
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7, 11.8_
 
   - [x] 11.2 Write property test for error normalization JSON structure
@@ -266,7 +266,7 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
     - Before pipeline execution, compose effective pipeline from registry using matched route's blueprint and path
     - Create `MiddlewareContext` and attach to `request.middleware_context` before pipeline execution
     - Set `endpoint_descriptor` to `None` when no route matched yet
-    - File: `source/packages/automojo/webworks/routing/dispatcher.py`
+    - File: `source/packages/ccai/webworks/routing/dispatcher.py`
     - _Requirements: 4.4, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6_
 
   - [ ] 13.2 Bridge extensibility system `register_middleware` hook to `MiddlewareRegistry`
@@ -274,26 +274,26 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
     - Continue validating `process_request` and `process_response` methods per `COMPONENT_REQUIRED_METHODS`
     - Support extensions specifying priority and position via attributes on registered component
     - Implement `get_registered_components(hook_name)` to retrieve extension-registered middleware
-    - File: `source/packages/automojo/webworks/routing/middlewareregistry.py`
+    - File: `source/packages/ccai/webworks/routing/middlewareregistry.py`
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6_
 
   - [ ] 13.3 Integrate middleware pipeline with ASGI application layer
     - Ensure `ASGIApplication` executes composed middleware pipeline before dispatching to endpoint handler
     - Delegate ASGI middleware exceptions to `ASGIApplication` error handler
-    - File: `source/packages/automojo/webworks/asgi/httphandler.py`
+    - File: `source/packages/ccai/webworks/asgi/httphandler.py`
     - _Requirements: 5.4, 5.6_
 
   - [ ] 13.4 Integrate middleware pipeline with WSGI application layer
     - Ensure `WSGIApplication` executes composed middleware pipeline before dispatching to endpoint handler
     - Delegate WSGI middleware exceptions to `WSGIApplication` error handler
-    - File: `source/packages/automojo/webworks/wsgi/` (relevant files)
+    - File: `source/packages/ccai/webworks/wsgi/` (relevant files)
     - _Requirements: 6.4, 6.6_
 
   - [ ] 13.5 Write integration tests for dispatcher and extensibility wiring
     - Test that dispatcher composes pipeline from registry for matched routes
     - Test that middleware context is attached to request during execution
     - Test that extension-registered middleware appears in global pipeline
-    - File: `source/testroots/automojo/tests/singlehost/webworks/routing/test_middlewareregistry.py`
+    - File: `source/testroots/ccai/tests/singlehost/webworks/routing/test_middlewareregistry.py`
     - _Requirements: 4.4, 7.1, 7.2, 8.5_
 
 - [ ] 14. Final checkpoint - Ensure all tests pass
@@ -308,5 +308,5 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
 - Unit tests validate specific examples and edge cases
 - Implementation uses Python 3.10+ with testbase framework per repository conventions
 - The existing `MiddlewarePipeline` in `routing/middleware.py` is enhanced, not replaced
-- Test files go under `source/testroots/automojo/tests/singlehost/webworks/routing/`
+- Test files go under `source/testroots/ccai/tests/singlehost/webworks/routing/`
 - Property test files use the `_properties` suffix convention

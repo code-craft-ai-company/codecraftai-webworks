@@ -314,5 +314,5 @@ This implementation plan creates the Web Templating feature providing template e
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
 - Implementation uses Python with testbase framework per repository conventions
-- Test files should be located at `source/testroots/automojo/tests/singlehost/webworks/templating/`
+- Test files should be located at `source/testroots/ccai/tests/singlehost/webworks/templating/`
 - Jinja2 and Mako are external dependencies that must be installed

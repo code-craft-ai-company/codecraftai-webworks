@@ -2,7 +2,7 @@
 
 ## Overview
 
-This design document describes the architecture and implementation approach for the Extensibility feature. The feature provides an Extension/Plugin API that allows third-party developers and internal teams to extend the automojo web framework with custom functionality without modifying the core codebase.
+This design document describes the architecture and implementation approach for the Extensibility feature. The feature provides an Extension/Plugin API that allows third-party developers and internal teams to extend the ccai web framework with custom functionality without modifying the core codebase.
 
 The design follows a registry-based approach with clear separation between extension discovery, lifecycle management, and hook execution. Extensions are self-contained modules that register with the framework through well-defined extension points and hooks.
 
@@ -299,7 +299,7 @@ class ExtensionLoader:
         """
         pass
     
-    def discover_from_entry_points(self, group: str = "automojo.extensions") -> List[ExtensionManifest]:
+    def discover_from_entry_points(self, group: str = "ccai.extensions") -> List[ExtensionManifest]:
         """
         Discover extensions from Python entry points.
         
@@ -1111,5 +1111,5 @@ Integration tests should cover:
 ## Notes
 
 - All tests should use the testbase framework as specified in AGENTS.md
-- Test files should be placed in `source/testroots/automojo/tests/singlehost/webworks/extensibility/`
+- Test files should be placed in `source/testroots/ccai/tests/singlehost/webworks/extensibility/`
 - Property-based tests should run minimum 100 iterations

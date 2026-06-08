@@ -1195,5 +1195,5 @@ Integration tests should verify:
 
 - Use testbase framework per repository conventions
 - Minimum 100 iterations for property-based tests
-- Test files at `source/testroots/automojo/tests/singlehost/webworks/asgi/`
+- Test files at `source/testroots/ccai/tests/singlehost/webworks/asgi/`
 

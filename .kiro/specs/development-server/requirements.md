@@ -2,7 +2,7 @@
 
 ## Introduction
 
-The automojo-webworks framework currently has a `DevelopmentServer` class that manages lifecycle and configuration (debug middleware, request logging, file watching) but does not actually bind a socket, accept connections, or serve HTTP requests. The existing `WSGIServer` provides real socket-based serving but only for WSGI applications. The framework needs a development-focused ASGI server that can accept HTTP connections, translate raw HTTP into ASGI scope dictionaries, invoke the `ASGIApplication` callable, and send responses back to clients. This server must integrate with the existing `DevelopmentServer` lifecycle, the `ServeCommand` CLI, and use only Python standard library (`asyncio`) with no external dependencies.
+The codecraftai-webworks framework currently has a `DevelopmentServer` class that manages lifecycle and configuration (debug middleware, request logging, file watching) but does not actually bind a socket, accept connections, or serve HTTP requests. The existing `WSGIServer` provides real socket-based serving but only for WSGI applications. The framework needs a development-focused ASGI server that can accept HTTP connections, translate raw HTTP into ASGI scope dictionaries, invoke the `ASGIApplication` callable, and send responses back to clients. This server must integrate with the existing `DevelopmentServer` lifecycle, the `ServeCommand` CLI, and use only Python standard library (`asyncio`) with no external dependencies.
 
 ## Glossary
 

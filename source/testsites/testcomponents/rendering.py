@@ -499,7 +499,7 @@ def render_browse_page() -> str:
         f"""
     <div class="hero">
       <h1 data-testid="browse-heading">Browse Components by Group</h1>
-      <p>An interactive test site for the automojo-webworks
+      <p>An interactive test site for the codecraftai-webworks
         <code>mj-*</code> web component library. Pick a group, then a
         component, to read its documentation and experiment with it live
         in an editable playground.</p>
@@ -608,7 +608,7 @@ def render_charts_page() -> str:
     <div class="hero">
       <h1 data-testid="charts-heading">Charts &amp; Visualizations</h1>
       <p>The interactive, data-driven chart components of the
-        automojo-webworks <code>mj-*</code> library. Every chart accepts
+        codecraftai-webworks <code>mj-*</code> library. Every chart accepts
         JSON data, redraws dynamically when its data changes, and emits
         interaction events.</p>
       <div class="stats">

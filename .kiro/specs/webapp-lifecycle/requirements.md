@@ -6,20 +6,20 @@ The `WebApplication` singleton currently manages only persona/identity concerns 
 
 ## Glossary
 
-- **WebApplication**: The singleton class (`automojo.webworks.persona.webapplication.WebApplication`) that extends `ThisApplication` and serves as the central object managing web application lifecycle and state.
-- **Router**: The URL routing tree (`automojo.webworks.routing.router.Router`) that maps request paths and methods to endpoint handlers.
-- **Dispatcher**: The request dispatcher (`automojo.webworks.routing.dispatcher.Dispatcher`) that receives an HTTP request, resolves a route via the Router, runs the middleware pipeline, and invokes the matched handler.
-- **ASGIApplication**: The ASGI protocol handler (`automojo.webworks.asgi.application.ASGIApplication`) that receives raw ASGI scope/receive/send calls and delegates to HTTP, WebSocket, and lifespan handlers.
-- **EndpointRegistry**: The class-level registry (`automojo.webworks.endpoints.registry.EndpointRegistry`) that collects `EndpointDescriptor` instances registered via `Endpoint.attach_at` and `RestBlueprint.attach_at`.
+- **WebApplication**: The singleton class (`ccai.webworks.persona.webapplication.WebApplication`) that extends `ThisApplication` and serves as the central object managing web application lifecycle and state.
+- **Router**: The URL routing tree (`ccai.webworks.routing.router.Router`) that maps request paths and methods to endpoint handlers.
+- **Dispatcher**: The request dispatcher (`ccai.webworks.routing.dispatcher.Dispatcher`) that receives an HTTP request, resolves a route via the Router, runs the middleware pipeline, and invokes the matched handler.
+- **ASGIApplication**: The ASGI protocol handler (`ccai.webworks.asgi.application.ASGIApplication`) that receives raw ASGI scope/receive/send calls and delegates to HTTP, WebSocket, and lifespan handlers.
+- **EndpointRegistry**: The class-level registry (`ccai.webworks.endpoints.registry.EndpointRegistry`) that collects `EndpointDescriptor` instances registered via `Endpoint.attach_at` and `RestBlueprint.attach_at`.
 - **EndpointDescriptor**: A data object describing a single registered endpoint (handler, path, methods, tags, constraints, etc.).
 - **Endpoint**: A base class providing the `attach_at` class-method decorator for registering standalone handler functions with the EndpointRegistry.
 - **RestBlueprint**: A base class providing the `attach_at` class-method decorator for registering grouped REST handlers under a common base path with the EndpointRegistry.
-- **AuthenticationSystem**: The central authentication coordinator (`automojo.webworks.authentication.system.AuthenticationSystem`) that manages a registry of `Authenticator` implementations.
-- **AuthenticationMiddleware**: ASGI middleware (`automojo.webworks.authentication.middleware.AuthenticationMiddleware`) that intercepts requests and performs authentication via the AuthenticationSystem.
-- **ManagedConfigRegistry**: The configuration lifecycle manager (`automojo.webworks.configuration.lifecycle.ManagedConfigRegistry`) that loads, validates, and optionally watches configuration sources.
+- **AuthenticationSystem**: The central authentication coordinator (`ccai.webworks.authentication.system.AuthenticationSystem`) that manages a registry of `Authenticator` implementations.
+- **AuthenticationMiddleware**: ASGI middleware (`ccai.webworks.authentication.middleware.AuthenticationMiddleware`) that intercepts requests and performs authentication via the AuthenticationSystem.
+- **ManagedConfigRegistry**: The configuration lifecycle manager (`ccai.webworks.configuration.lifecycle.ManagedConfigRegistry`) that loads, validates, and optionally watches configuration sources.
 - **MiddlewarePipeline**: The ordered chain of middleware functions that the Dispatcher executes before invoking the matched handler.
-- **Credential_Manager**: The integration point with `automojo-credentials` for loading and managing application credentials.
-- **DataProfile_Manager**: The integration point with `automojo-dataprofiles` for loading and managing data profiles.
+- **Credential_Manager**: The integration point with `codecraftai-credentials` for loading and managing application credentials.
+- **DataProfile_Manager**: The integration point with `codecraftai-dataprofiles` for loading and managing data profiles.
 - **Lifecycle_Phase**: A discrete stage in the WebApplication startup sequence (e.g., configure, authenticate, wire, ready).
 
 ## Requirements
@@ -69,7 +69,7 @@ The `WebApplication` singleton currently manages only persona/identity concerns 
 
 ### Requirement 5: Credential Management
 
-**User Story:** As a web application developer, I want the WebApplication to integrate with automojo-credentials, so that credentials are loaded and accessible through the application lifecycle.
+**User Story:** As a web application developer, I want the WebApplication to integrate with codecraftai-credentials, so that credentials are loaded and accessible through the application lifecycle.
 
 #### Acceptance Criteria
 
@@ -79,7 +79,7 @@ The `WebApplication` singleton currently manages only persona/identity concerns 
 
 ### Requirement 6: Data Profile Management
 
-**User Story:** As a web application developer, I want the WebApplication to integrate with automojo-dataprofiles, so that data profiles are loaded and accessible through the application lifecycle.
+**User Story:** As a web application developer, I want the WebApplication to integrate with codecraftai-dataprofiles, so that data profiles are loaded and accessible through the application lifecycle.
 
 #### Acceptance Criteria
 

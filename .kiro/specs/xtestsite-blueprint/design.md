@@ -9,7 +9,7 @@ This design describes a test site at `source/testsites/blueprintdemo/` that demo
 
 The test site follows the same structural conventions as the existing `helloworld` test site. It wires both Blueprints into a single ASGI application via `Router`, `Dispatcher`, and `create_asgi_application`, exposing module-level `app`, `router`, and `dispatcher` variables for test access.
 
-The test suite lives at `source/testroots/automojo/tests/singlehost/webworks/testsites/blueprintdemo/` and uses the `testbase` framework exclusively.
+The test suite lives at `source/testroots/ccai/tests/singlehost/webworks/testsites/blueprintdemo/` and uses the `testbase` framework exclusively.
 
 ## Architecture
 
@@ -50,9 +50,9 @@ Empty init file for subpackage recognition.
 Defines two Blueprint subclasses and their handler functions.
 
 ```python
-from automojo.webworks.endpoints.blueprint import Blueprint
-from automojo.webworks.routing.request import Request
-from automojo.webworks.routing.response import JSONResponse
+from ccai.webworks.endpoints.blueprint import Blueprint
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.response import JSONResponse
 
 
 class ItemsBlueprint(Blueprint):
@@ -86,10 +86,10 @@ Key design decisions:
 Wires the application following the same pattern as `helloworld/app.py`:
 
 ```python
-from automojo.webworks.asgi.application import create_asgi_application
-from automojo.webworks.endpoints.registry import EndpointRegistry
-from automojo.webworks.routing.dispatcher import Dispatcher
-from automojo.webworks.routing.router import Router
+from ccai.webworks.asgi.application import create_asgi_application
+from ccai.webworks.endpoints.registry import EndpointRegistry
+from ccai.webworks.routing.dispatcher import Dispatcher
+from ccai.webworks.routing.router import Router
 
 from blueprintdemo.endpoints import handlers  # noqa: F401
 
@@ -117,7 +117,7 @@ Exposes module-level `app`, `router`, `dispatcher` for test access.
 
 ### Test Suite Files
 
-All tests reside at `source/testroots/automojo/tests/singlehost/webworks/testsites/blueprintdemo/`:
+All tests reside at `source/testroots/ccai/tests/singlehost/webworks/testsites/blueprintdemo/`:
 
 | File | Purpose |
 |------|---------|
@@ -198,7 +198,7 @@ Error handling is delegated entirely to the existing `Dispatcher` implementation
 
 ### Framework
 
-All tests use the `testbase` framework with `test_` prefix functions. Mock objects use `automojo.testbase.mocking.Mock`. No pytest, unittest, or hypothesis.
+All tests use the `testbase` framework with `test_` prefix functions. Mock objects use `ccai.testbase.mocking.Mock`. No pytest, unittest, or hypothesis.
 
 ### Dual Testing Approach
 
@@ -208,7 +208,7 @@ All tests use the `testbase` framework with `test_` prefix functions. Mock objec
 ### Test File Layout
 
 ```
-source/testroots/automojo/tests/singlehost/webworks/testsites/blueprintdemo/
+source/testroots/ccai/tests/singlehost/webworks/testsites/blueprintdemo/
 ├── __init__.py
 ├── test_handlers.py                        # Unit: direct handler invocation
 ├── test_app_wiring.py                      # Unit: module-level object types and route registration

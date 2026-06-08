@@ -1,6 +1,6 @@
 # Part-to-Whole Charts
 
-> Catalog of part-to-whole chart types for the automojo-webworks SVG chart
+> Catalog of part-to-whole chart types for the codecraftai-webworks SVG chart
 > library. Architecture, the coordinated-element model, the part components,
 > the JSON contract, and phasing are defined in `../../chart-components-plan.md`
 > and are not repeated here.

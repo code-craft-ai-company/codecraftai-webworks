@@ -2,7 +2,7 @@
 
 ## Overview
 
-The helloworld test site is a minimal ASGI web application that validates the core request-response pipeline of the automojo-webworks framework. It exercises the `Endpoint` registration system, `Router`, `Dispatcher`, and `ASGIApplication` wiring to serve simple HTTP responses. The site lives at `source/testsites/helloworld/` and establishes the directory layout pattern for all future test sites.
+The helloworld test site is a minimal ASGI web application that validates the core request-response pipeline of the codecraftai-webworks framework. It exercises the `Endpoint` registration system, `Router`, `Dispatcher`, and `ASGIApplication` wiring to serve simple HTTP responses. The site lives at `source/testsites/helloworld/` and establishes the directory layout pattern for all future test sites.
 
 The site registers two endpoints:
 - `GET /` — returns an `HTMLResponse` with `"Hello, World!"`
@@ -45,7 +45,7 @@ The endpoint handlers themselves are synchronous functions (they return a `Respo
 
 ### Design Decision: 405 Method Not Allowed
 
-The current `Router.match()` returns `None` for both "path not found" and "path found but method not allowed" cases. The `Dispatcher` treats `None` as a 404. The framework already provides a `MethodNotAllowed` exception (in `automojo.webworks.routing.exceptions`) that accepts an `allowed` parameter and sets the `Allow` header automatically.
+The current `Router.match()` returns `None` for both "path not found" and "path found but method not allowed" cases. The `Dispatcher` treats `None` as a 404. The framework already provides a `MethodNotAllowed` exception (in `ccai.webworks.routing.exceptions`) that accepts an `allowed` parameter and sets the `Allow` header automatically.
 
 To support Requirement 6 (405 responses), the `Router` needs a `get_allowed_methods(path)` method that checks whether a path has any registered handlers regardless of method. The `Dispatcher` can then call this before returning a 404: if the path exists with other methods, it raises `MethodNotAllowed(allowed=allowed_methods)` instead of `NotFound()`. The `Dispatcher._handle_http_exception` already converts `HTTPException` subclasses to proper responses with headers, so the `Allow` header propagates automatically.
 
@@ -86,12 +86,12 @@ This site uses no custom data models. All data flows through existing framework 
 
 | Type | Module | Usage |
 |---|---|---|
-| `Request` | `automojo.webworks.routing.request` | Incoming HTTP request |
-| `Response` | `automojo.webworks.routing.response` | Base response class |
-| `HTMLResponse` | `automojo.webworks.routing.response` | HTML content response (root endpoint) |
-| `JSONResponse` | `automojo.webworks.routing.response` | JSON content response (health endpoint) |
-| `EndpointDescriptor` | `automojo.webworks.endpoints.descriptor` | Registered endpoint metadata |
-| `RouteMatch` | `automojo.webworks.routing.router` | Successful route match result |
+| `Request` | `ccai.webworks.routing.request` | Incoming HTTP request |
+| `Response` | `ccai.webworks.routing.response` | Base response class |
+| `HTMLResponse` | `ccai.webworks.routing.response` | HTML content response (root endpoint) |
+| `JSONResponse` | `ccai.webworks.routing.response` | JSON content response (health endpoint) |
+| `EndpointDescriptor` | `ccai.webworks.endpoints.descriptor` | Registered endpoint metadata |
+| `RouteMatch` | `ccai.webworks.routing.router` | Successful route match result |
 
 
 
@@ -162,7 +162,7 @@ Property-based tests should use the `testbase` framework. Each test validates a 
 Following the repository conventions:
 
 ```
-source/testroots/automojo/tests/singlehost/webworks/
+source/testroots/ccai/tests/singlehost/webworks/
 └── testsites/
     └── helloworld/
         ├── test_handlers.py              # Endpoint handler unit tests

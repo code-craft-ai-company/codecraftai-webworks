@@ -1,7 +1,7 @@
 # testcomponents
 
 A webworks test website whose sole purpose is to exercise and document the
-`automojo-webworks` `mj-*` web component library. It requires **no
+`codecraftai-webworks` `mj-*` web component library. It requires **no
 authentication**.
 
 ## What it provides
@@ -38,7 +38,7 @@ testcomponents/
 ```
 
 The `mj-*` library and design tokens are served from the
-`automojo.webworks` static directory under the `/static` mount.
+`ccai.webworks` static directory under the `/static` mount.
 
 ## Running the site
 

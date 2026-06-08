@@ -7,7 +7,7 @@ This implementation plan updates the OpenAPI specification generation and Swagge
 ## Tasks
 
 - [x] 1. Set up module structure and base classes
-  - [x] 1.1 Create `automojo.webworks.openapi` package with `__init__.py`
+  - [x] 1.1 Create `ccai.webworks.openapi` package with `__init__.py`
   - [x] 1.2 Create configuration dataclasses (OpenAPIInfo, ServerObject, etc.)
   - [x] 1.3 Create security scheme dataclasses
 
@@ -64,9 +64,9 @@ This implementation plan updates the OpenAPI specification generation and Swagge
 
 - [x] 11. Vendor static assets and create asset resolver
   - [x] 11.1 Create static asset directory structure
-    - Create `source/packages/automojo/webworks/openapi/static/swagger-ui/`
-    - Create `source/packages/automojo/webworks/openapi/static/redoc/`
-    - Create `source/packages/automojo/webworks/openapi/static/manifest.json` with empty structure
+    - Create `source/packages/ccai/webworks/openapi/static/swagger-ui/`
+    - Create `source/packages/ccai/webworks/openapi/static/redoc/`
+    - Create `source/packages/ccai/webworks/openapi/static/manifest.json` with empty structure
     - _Requirements: 7.1, 7.2_
 
   - [x] 11.2 Download and vendor Swagger UI distribution files
@@ -81,7 +81,7 @@ This implementation plan updates the OpenAPI specification generation and Swagge
     - Record version, download URL, and SHA-256 checksum in `manifest.json`
     - _Requirements: 7.2, 7.5, 7.6_
 
-  - [x] 11.4 Create `AssetResolver` class in `source/packages/automojo/webworks/openapi/assets.py`
+  - [x] 11.4 Create `AssetResolver` class in `source/packages/ccai/webworks/openapi/assets.py`
     - Implement `resolve(asset_group, filename)` to read bundled files using `__file__`-relative paths
     - Implement `content_type(filename)` with MIME type mapping for .js, .css, .png, .svg, .ico, .json, .woff, .woff2, .ttf
     - Implement `verify_integrity()` to check SHA-256 checksums against manifest
@@ -89,7 +89,7 @@ This implementation plan updates the OpenAPI specification generation and Swagge
     - _Requirements: 7.1, 7.2, 7.5, 7.6, 8.8_
 
   - [x] 11.5 Write unit tests for AssetResolver
-    - Create `source/testroots/automojo/tests/singlehost/webworks/openapi/test_assets.py`
+    - Create `source/testroots/ccai/tests/singlehost/webworks/openapi/test_assets.py`
     - Test `resolve` returns bytes for each vendored file
     - Test `resolve` returns None for non-existent files
     - Test `content_type` returns correct MIME type for each supported extension
@@ -180,7 +180,7 @@ This implementation plan updates the OpenAPI specification generation and Swagge
 - [x] 15. Checkpoint - Verify updated UI blueprints serve from bundled assets
 
 - [x] 16. Implement asset update CLI command
-  - [x] 16.1 Create `AssetUpdater` class in `source/packages/automojo/webworks/openapi/assets.py`
+  - [x] 16.1 Create `AssetUpdater` class in `source/packages/ccai/webworks/openapi/assets.py`
     - Implement `update_swagger_ui(version=None)` to download from GitHub releases
     - Implement `update_redoc(version=None)` to download from GitHub releases
     - Implement `_download_file(url, dest)` returning SHA-256 checksum

@@ -183,7 +183,7 @@ COMPONENTS = [
         summary="The chart controller — 139 chart types selected by the type attribute, drawn as SVG from JSON.",
         description=(
             "<p><code>&lt;mj-chart&gt;</code> is the controller of the "
-            "automojo-webworks chart library. A single component covers "
+            "codecraftai-webworks chart library. A single component covers "
             "every chart type &mdash; bar, line, area, pie, donut, scatter, "
             "Sankey, treemap, gauge, OHLC, network, and ~130 more &mdash; "
             "selected by the <code>type</code> attribute. Data is supplied "

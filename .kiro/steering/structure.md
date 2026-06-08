@@ -11,13 +11,13 @@
 │   └── repository-config.ini # Repository configuration
 ├── source/
 │   ├── packages/             # Python package source
-│   │   └── automojo/
+│   │   └── ccai/
 │   │       └── webworks/
 │   │           ├── asgi/     # ASGI application layer
 │   │           ├── wsgi/     # WSGI application layer
 │   │           └── persona/  # Web application persona
 │   └── testroots/            # Test packages
-│       └── automojo/
+│       └── ccai/
 │           └── tests/
 │               └── singlehost/
 │                   └── webworks/  # Tests mirror source structure
@@ -30,8 +30,8 @@
 
 ### Test File Placement
 Tests must mirror the source hierarchy:
-- Source: `source/packages/automojo/webworks/asgi/application.py`
-- Test: `source/testroots/automojo/tests/singlehost/webworks/asgi/test_application.py`
+- Source: `source/packages/ccai/webworks/asgi/application.py`
+- Test: `source/testroots/ccai/tests/singlehost/webworks/asgi/test_application.py`
 
 ### Namespace Package
-`source/packages/automojo` is a namespace package (no `__init__.py`). The first `__init__.py` appears at the package level (e.g., `webworks/__init__.py`).
+`source/packages/ccai` is a namespace package (no `__init__.py`). The first `__init__.py` appears at the package level (e.g., `webworks/__init__.py`).

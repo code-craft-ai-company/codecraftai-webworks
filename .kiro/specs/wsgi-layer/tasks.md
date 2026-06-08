@@ -524,7 +524,7 @@ This implementation plan creates the WSGI Layer feature providing both the WSGI 
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
 - Implementation uses Python with testbase framework per repository conventions
-- Test files should be located at `source/testroots/automojo/tests/singlehost/webworks/wsgi/`
+- Test files should be located at `source/testroots/ccai/tests/singlehost/webworks/wsgi/`
 - WSGI specification reference: PEP 3333
 - The built-in server reduces dependencies on external packages like Gunicorn
 - Server components (tasks 14-27) implement the complete WSGI server stack

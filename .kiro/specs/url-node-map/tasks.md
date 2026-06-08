@@ -2,12 +2,12 @@
 
 ## Overview
 
-This implementation plan creates the URL Node Map feature, which provides the foundational hierarchical tree structure for organizing HTTP endpoints in the automojo web framework. The implementation follows a bottom-up approach, starting with path utilities, then building the core node and map classes, followed by metadata inheritance, and finally export capabilities.
+This implementation plan creates the URL Node Map feature, which provides the foundational hierarchical tree structure for organizing HTTP endpoints in the ccai web framework. The implementation follows a bottom-up approach, starting with path utilities, then building the core node and map classes, followed by metadata inheritance, and finally export capabilities.
 
 ## Tasks
 
 - [x] 1. Create path utility functions
-  - [x] 1.1 Create `source/packages/automojo/webworks/urlnodemap/pathutils.py`
+  - [x] 1.1 Create `source/packages/ccai/webworks/urlnodemap/pathutils.py`
     - Implement `normalize_path(path: str) -> str` function
     - Implement `split_path(path: str) -> List[str]` function
     - Implement `is_parameter_segment(segment: str) -> bool` function
@@ -21,7 +21,7 @@ This implementation plan creates the URL Node Map feature, which provides the fo
     - **Validates: Requirements 7.1, 7.2**
 
 - [x] 2. Create exception classes
-  - [x] 2.1 Create `source/packages/automojo/webworks/urlnodemap/exceptions.py`
+  - [x] 2.1 Create `source/packages/ccai/webworks/urlnodemap/exceptions.py`
     - Implement `NodeNotFoundError` exception
     - Implement `NodeConflictError` exception
     - Implement `PathConflictError` exception
@@ -31,7 +31,7 @@ This implementation plan creates the URL Node Map feature, which provides the fo
     - _Requirements: 1.8, 2.5, 7.7, 8.4_
 
 - [x] 3. Create URLNode class
-  - [x] 3.1 Create `source/packages/automojo/webworks/urlnodemap/urlnode.py`
+  - [x] 3.1 Create `source/packages/ccai/webworks/urlnodemap/urlnode.py`
     - Implement `URLNode` class with segment, path, parent, children properties
     - Implement parameter segment detection (`is_parameter`, `parameter_name`)
     - Implement `get_child(segment: str) -> URLNode` method
@@ -54,7 +54,7 @@ This implementation plan creates the URL Node Map feature, which provides the fo
     - _Requirements: 3.6, 3.7_
 
 - [x] 5. Create URLNodeMap class
-  - [x] 5.1 Create `source/packages/automojo/webworks/urlnodemap/urlnodemap.py`
+  - [x] 5.1 Create `source/packages/ccai/webworks/urlnodemap/urlnodemap.py`
     - Implement `URLNodeMap` class with root node initialization
     - Implement `get_node(path: str) -> URLNode` method
     - Implement `get_or_create_node(path: str) -> URLNode` method
@@ -125,7 +125,7 @@ This implementation plan creates the URL Node Map feature, which provides the fo
     - **Validates: Requirements 8.3, 8.4**
 
 - [x] 11. Create package structure and exports
-  - [x] 11.1 Create `source/packages/automojo/webworks/urlnodemap/__init__.py`
+  - [x] 11.1 Create `source/packages/ccai/webworks/urlnodemap/__init__.py`
     - Export `URLNodeMap`, `URLNode` classes
     - Export exception classes
     - Export path utility functions
@@ -142,4 +142,4 @@ This implementation plan creates the URL Node Map feature, which provides the fo
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
 - Use the `testbase` framework for all tests as specified in AGENTS.md
-- Test files should be placed in `source/testroots/automojo/tests/singlehost/webworks/urlnodemap/`
+- Test files should be placed in `source/testroots/ccai/tests/singlehost/webworks/urlnodemap/`

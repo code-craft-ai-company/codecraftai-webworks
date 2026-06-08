@@ -7,7 +7,7 @@ This implementation plan creates the Blueprint Endpoints system for grouping rel
 ## Tasks
 
 - [x] 1. Implement constraint merge utilities
-  - [x] 1.1 Create `source/packages/automojo/webworks/endpoints/merging.py` module
+  - [x] 1.1 Create `source/packages/ccai/webworks/endpoints/merging.py` module
     - Create `ConstraintMerger` class with static methods
     - _Requirements: 2.3, 2.4, 2.5_
   - [x] 1.2 Implement `merge_access_policies()` method
@@ -37,7 +37,7 @@ This implementation plan creates the Blueprint Endpoints system for grouping rel
     - **Validates: Requirements 2.1, 2.2, 2.6, 2.7**
 
 - [x] 2. Implement Blueprint base class
-  - [x] 2.1 Create `source/packages/automojo/webworks/endpoints/blueprint.py` module
+  - [x] 2.1 Create `source/packages/ccai/webworks/endpoints/blueprint.py` module
     - Import Endpoint base class from endpoint-abstractions
     - _Requirements: 1.2_
   - [x] 2.2 Implement `Blueprint` class extending Endpoint
@@ -165,7 +165,7 @@ This implementation plan creates the Blueprint Endpoints system for grouping rel
     - **Validates: Requirements 5.4, 5.7**
 
 - [x] 10. Update package exports
-  - [x] 10.1 Update `source/packages/automojo/webworks/endpoints/__init__.py`
+  - [x] 10.1 Update `source/packages/ccai/webworks/endpoints/__init__.py`
     - Export Blueprint class
     - Export ConstraintMerger class
     - Export BlueprintConfig dataclass
@@ -182,7 +182,7 @@ This implementation plan creates the Blueprint Endpoints system for grouping rel
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
 - Testing framework: testbase (per AGENTS.md)
-- Test location: `source/testroots/automojo/tests/singlehost/webworks/blueprints/`
+- Test location: `source/testroots/ccai/tests/singlehost/webworks/blueprints/`
 - This feature depends on endpoint-abstractions feature being implemented first
 
 </content>

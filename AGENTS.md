@@ -1,14 +1,14 @@
 # Personality
 AI Agents working in this repository should conduct themselves as a Principal Software
-Engineer and Archtect working at the "Automation Mojo LLC" company. This software engineer
-is known as 'AutomationX'.  The primary goal of 'AutomationX' is to help the company build
+Engineer and Archtect working at the "Code Craft AI LLC" company. This software engineer
+is known as 'CodeCraftX'.  The primary goal of 'CodeCraftX' is to help the company build
 a suite of Python foundation software packages that are well planned out, highely reusable,
 modular and that enable companies to rapidly build advanced automation software system and
-automation pipelines.  When building and creating packages, 'AutomationX' always focuses
-on reusing modular code from other 'automojo-*' packages and always works to look at the big
-picture and make sure code and functionality is placed in the correct 'automojo-*' package.
-AutomationX is a very creative, but very disciplined software engineer that values code stability,
-reusability and scalability over quick fixes and fast delivery.  AutomationX always keeps
+automation pipelines.  When building and creating packages, 'CodeCraftX' always focuses
+on reusing modular code from other 'codecraftai-*' packages and always works to look at the big
+picture and make sure code and functionality is placed in the correct 'codecraftai-*' package.
+CodeCraftX is a very creative, but very disciplined software engineer that values code stability,
+reusability and scalability over quick fixes and fast delivery.  CodeCraftX always keeps
 in mind the companies goal of building a comprehensive suite of foundation Python packages
 that are well design, cohesive, and easy to use and that provide rapid but stable results. 
 
@@ -22,22 +22,22 @@ that are well design, cohesive, and easy to use and that provide rapid but stabl
 - Avoid using relative imports
 - When creating specs to build/update other specs, preceed the spec folder with 'x-'
 - Only write tests to test product code, never write tests to verify specs
-- Always prioritize the reuse of code from 'automojo-*' packages over rewriting functionality
+- Always prioritize the reuse of code from 'codecraftai-*' packages over rewriting functionality
 
 
 # Project Overview
 
 # Testing Conventions
-The 'automojo-webworks' package repository utilizes the 'testbase' framework in order to run tests.  The 'testbase' test framework is used for single host testing or tests where only the machine running the tests is required.
+The 'codecraftai-webworks' package repository utilizes the 'testbase' framework in order to run tests.  The 'testbase' test framework is used for single host testing or tests where only the machine running the tests is required.
 
-Test are organized at the lowest level by resource configuration.  For example, all the single host tests for this package are in the folder 'source/testroots/automojo/tests/singlehost/webworks'.
+Test are organized at the lowest level by resource configuration.  For example, all the single host tests for this package are in the folder 'source/testroots/ccai/tests/singlehost/webworks'.
 
 AI based testing should run only the 'singlehost' tests tests with:
 
 ```
     source .venv/bin/activate
     
-    testbase testing run --root source/testroots/automojo --includes=automojo.tests.singlehost --output=./.output/
+    testbase testing run --root source/testroots/ccai --includes=ccai.tests.singlehost --output=./.output/
 ```
 
 When running tests you should create an output folder in order to be able to capture all the test run artifacts in an isolated folder.
@@ -51,12 +51,12 @@ The code structure of this repository follows the [Code Organization](userguide/
 
 Remember to make the test hierarchy match the source hierarchy when adding test files.  For example:
 
-File to test: 'source/packages/automojo/interop/protocols/dns/dnsquestion.py'
-Test file location: 'source/testroots/automojo/interop/protocols/dns/test_dnsquestion.py'
+File to test: 'source/packages/ccai/interop/protocols/dns/dnsquestion.py'
+Test file location: 'source/testroots/ccai/interop/protocols/dns/test_dnsquestion.py'
 
 # File Locations
 
-- Web components: 'source/packages/automojo/webworks/static/javascript/components'
+- Web components: 'source/packages/ccai/webworks/static/javascript/components'
 
 # Coding Standards
 The code in this repository is meant to be utilized by testing tools and test frameworks.  Therefore, the code must prioritize:
@@ -125,25 +125,25 @@ def test_use_landscape(lscape: Landscape):
 
 ```
 
-The test tree should only contain resource origination declarations and tests.  It should not contain factories unless the usage of the factory is very isolated.  It is preferable to place factories in a folder such as a factory that creates the AutomationPodSimple object might be located at 'source/testroots/automojo/testshared/factories/automationpods/automationpodsimple.py'
+The test tree should only contain resource origination declarations and tests.  It should not contain factories unless the usage of the factory is very isolated.  It is preferable to place factories in a folder such as a factory that creates the AutomationPodSimple object might be located at 'source/testroots/ccai/testshared/factories/automationpods/automationpodsimple.py'
 
 # Limiting Test Run Duration
 The `testbase testing run` command supports a `--timeout` parameter that sets a maximum wall-clock duration (in seconds) for the entire test run.  If the timeout is reached, the run is terminated and any in-progress tests are marked as errors.  This is useful for preventing runaway tests from blocking CI pipelines or agent workflows.
 
 ```
-    testbase testing run --root source/testroots/automojo --includes=automojo.tests.singlehost --output=./.output/ --timeout=600
+    testbase testing run --root source/testroots/ccai --includes=ccai.tests.singlehost --output=./.output/ --timeout=600
 ```
 
 The example above limits the test run to 600 seconds (10 minutes).  Choose a timeout value that gives your test suite enough headroom to complete under normal conditions while still catching hangs or infinite loops.
 
 # Using TestBase Mocking
 
-The testbase framework provides its own mocking module that should be used instead of `unittest.mock`. Import the mocking utilities from `automojo.testbase.mocking`.
+The testbase framework provides its own mocking module that should be used instead of `unittest.mock`. Import the mocking utilities from `ccai.testbase.mocking`.
 
 ## Basic Mock Usage
 
 ```python
-from automojo.testbase.mocking import Mock
+from ccai.testbase.mocking import Mock
 
 # Create a mock object
 mock = Mock()
@@ -173,7 +173,7 @@ ctx.mock_property('some_property', return_value='prop_value')
 For chained method calls like `session.query(Model).filter(...).first()`:
 
 ```python
-from automojo.testbase.mocking import Mock
+from ccai.testbase.mocking import Mock
 
 def create_mock_session_returning_user(existing_user):
     """Create a mock database session that returns an existing user on query."""
@@ -232,7 +232,7 @@ The `MockContext` provides assertion methods for verifying mock usage:
 For patching existing code:
 
 ```python
-from automojo.testbase.mocking import create_module_patch, create_class_patch, create_instance_patch
+from ccai.testbase.mocking import create_module_patch, create_class_patch, create_instance_patch
 
 # Patch a module attribute
 patch = create_module_patch(some_module, 'function_name', recursive=True)
@@ -269,15 +269,15 @@ patch.deactivate()
 
 # Property Testing with TestBase
 
-The testbase framework includes a built-in property-based testing engine under `automojo.testbase.properties`. Property tests verify that invariants hold across many randomly generated inputs, rather than testing a single example. The engine handles random value generation, counterexample shrinking, and deterministic reproducibility via seeded RNGs — all using only the Python standard library (no Hypothesis dependency).
+The testbase framework includes a built-in property-based testing engine under `ccai.testbase.properties`. Property tests verify that invariants hold across many randomly generated inputs, rather than testing a single example. The engine handles random value generation, counterexample shrinking, and deterministic reproducibility via seeded RNGs — all using only the Python standard library (no Hypothesis dependency).
 
 ## Quick Start
 
 ```python
-import automojo.testbase as testbase
+import ccai.testbase as testbase
 
-from automojo.testbase.properties import given
-from automojo.testbase.properties import strategies as st
+from ccai.testbase.properties import given
+from ccai.testbase.properties import strategies as st
 
 
 @given(x=st.integers(-1000, 1000), y=st.integers(-1000, 1000))
@@ -292,8 +292,8 @@ The `@given` decorator marks a test function as a property test. Each keyword ar
 ## Imports
 
 ```python
-from automojo.testbase.properties import given, expect_exception, assume
-from automojo.testbase.properties import strategies as st
+from ccai.testbase.properties import given, expect_exception, assume
+from ccai.testbase.properties import strategies as st
 ```
 
 ## Configuring Test Execution with `constraints`
@@ -367,7 +367,7 @@ variable_length_text = st.integers(1, 10).flatmap(lambda n: st.text(min_size=n, 
 For complex data generation, use the `@composite` decorator:
 
 ```python
-from automojo.testbase.properties.strategies import composite
+from ccai.testbase.properties.strategies import composite
 
 @composite
 def sorted_lists(draw, min_size=0, max_size=10):
@@ -387,7 +387,7 @@ The `draw` callable pulls a random value from any strategy during generation.
 Use `assume()` to skip examples that don't meet preconditions:
 
 ```python
-from automojo.testbase.properties import assume
+from ccai.testbase.properties import assume
 
 @given(x=st.integers(), y=st.integers())
 def test_division(x, y):
@@ -404,7 +404,7 @@ When `assume()` receives a falsy value, the current example is silently skipped 
 Use `@expect_exception` to mark tests that are expected to raise a specific exception (e.g., documenting known edge cases):
 
 ```python
-from automojo.testbase.properties import expect_exception
+from ccai.testbase.properties import expect_exception
 
 @expect_exception(AssertionError, reason="urlencode/parse_qsl loses empty-value entries")
 @given(
@@ -443,7 +443,7 @@ Property test files should include the standard testbase entrypoint at the botto
 
 ```python
 if __name__ == "__main__":
-    from automojo.testbase.entrypoints import generic_test_entrypoint
+    from ccai.testbase.entrypoints import generic_test_entrypoint
     generic_test_entrypoint()
 ```
 
@@ -451,17 +451,17 @@ if __name__ == "__main__":
 
 ```python
 """
-    .. module:: automojo.tests.singlehost.agentkit.test_agentidentity_properties
+    .. module:: ccai.tests.singlehost.agentkit.test_agentidentity_properties
     :platform: Darwin, Linux, Unix, Windows
     :synopsis: Property tests for AgentIdentity serialization invariants.
 """
 
-import automojo.testbase as testbase
+import ccai.testbase as testbase
 
-from automojo.testbase.properties import given
-from automojo.testbase.properties import strategies as st
+from ccai.testbase.properties import given
+from ccai.testbase.properties import strategies as st
 
-from automojo.agentkit.agentidentity import AgentIdentity
+from ccai.agentkit.agentidentity import AgentIdentity
 
 
 @given(
@@ -484,7 +484,7 @@ def test_agentidentity_json_roundtrip(name, version):
 
 
 if __name__ == "__main__":
-    from automojo.testbase.entrypoints import generic_test_entrypoint
+    from ccai.testbase.entrypoints import generic_test_entrypoint
     generic_test_entrypoint()
 ```
 
@@ -577,7 +577,7 @@ test starts it writes a preview to the stream.  The test preview has a 'result' 
 
 ```
 {
-    "name": "automojo.tests.singlehost.interop.protocols.dns.test_dnsaddress#test_write_passes_address",
+    "name": "ccai.tests.singlehost.interop.protocols.dns.test_dnsaddress#test_write_passes_address",
     "monikers": [],
     "pivots": {},
     "instance": "abb868e4-ce97-4bae-b0af-715da0d61d92",
@@ -593,7 +593,7 @@ When a test finishes it writes a result to the stream.  A test result will alway
 
 ```
 {
-    "name": "automojo.tests.singlehost.interop.protocols.dns.test_dnsaddress#test_write_passes_address",
+    "name": "ccai.tests.singlehost.interop.protocols.dns.test_dnsaddress#test_write_passes_address",
     "monikers": [],
     "pivots": {},
     "instance": "abb868e4-ce97-4bae-b0af-715da0d61d92",

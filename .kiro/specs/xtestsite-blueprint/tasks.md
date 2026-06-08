@@ -37,13 +37,13 @@ Implement a blueprint demo test site at `source/testsites/blueprintdemo/` that d
 
 - [x] 3. Create handler unit tests
   - [x] 3.1 Create test package init files
-    - Create `source/testroots/automojo/tests/singlehost/webworks/testsites/blueprintdemo/__init__.py` (empty init)
+    - Create `source/testroots/ccai/tests/singlehost/webworks/testsites/blueprintdemo/__init__.py` (empty init)
     - _Requirements: 5.6_
 
   - [x] 3.2 Create test_handlers.py with direct handler invocation tests
-    - Create `source/testroots/automojo/tests/singlehost/webworks/testsites/blueprintdemo/test_handlers.py`
+    - Create `source/testroots/ccai/tests/singlehost/webworks/testsites/blueprintdemo/test_handlers.py`
     - Add sys.path setup to include `source/testsites` (same pattern as helloworld tests)
-    - Create `_create_mock_request` helper using `automojo.testbase.mocking.Mock`
+    - Create `_create_mock_request` helper using `ccai.testbase.mocking.Mock`
     - Write tests for `list_items` (base): response type is JSONResponse, status 200, body contains items list
     - Write tests for `get_item`: response type is JSONResponse, status 200, body contains single item
     - Write tests for `create_item`: response type is JSONResponse, status 201, body contains created item with `"created": true`
@@ -52,7 +52,7 @@ Implement a blueprint demo test site at `source/testsites/blueprintdemo/` that d
 
 - [x] 4. Create app wiring and dispatch tests
   - [x] 4.1 Create test_app_wiring.py with wiring and route registration tests
-    - Create `source/testroots/automojo/tests/singlehost/webworks/testsites/blueprintdemo/test_app_wiring.py`
+    - Create `source/testroots/ccai/tests/singlehost/webworks/testsites/blueprintdemo/test_app_wiring.py`
     - Add sys.path setup to include `source/testsites`
     - Test `app` is `ASGIApplication` instance
     - Test `router` is `Router` instance (implicitly, via `get_allowed_methods`)
@@ -62,7 +62,7 @@ Implement a blueprint demo test site at `source/testsites/blueprintdemo/` that d
     - _Requirements: 5.2, 5.3_
 
   - [x] 4.2 Create test_dispatch.py with dispatcher routing tests
-    - Create `source/testroots/automojo/tests/singlehost/webworks/testsites/blueprintdemo/test_dispatch.py`
+    - Create `source/testroots/ccai/tests/singlehost/webworks/testsites/blueprintdemo/test_dispatch.py`
     - Add sys.path setup to include `source/testsites`
     - Test dispatcher routes `GET /api/items/list` → base list response (status 200, items without version)
     - Test dispatcher routes `GET /api/items/detail` → detail response (status 200, single item)
@@ -74,7 +74,7 @@ Implement a blueprint demo test site at `source/testsites/blueprintdemo/` that d
 
 - [x] 5. Create property-based tests
   - [x] 5.1 Write property test for endpoint response correctness
-    - Create `source/testroots/automojo/tests/singlehost/webworks/testsites/blueprintdemo/test_property_blueprint_responses.py`
+    - Create `source/testroots/ccai/tests/singlehost/webworks/testsites/blueprintdemo/test_property_blueprint_responses.py`
     - Define `REGISTERED_ENDPOINTS` dict with all endpoint specs (path, method, expected status, expected body JSON)
     - **Property 1: Endpoint Response Correctness**
     - Iterate over all registered endpoints for both blueprints, dispatch request, verify status and body match
@@ -101,6 +101,6 @@ Implement a blueprint demo test site at `source/testsites/blueprintdemo/` that d
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - The implementation language is Python, matching the existing codebase
-- All tests use the testbase framework with `test_` prefix functions and `automojo.testbase.mocking` for mocks
-- Test files mirror the source hierarchy under `source/testroots/automojo/tests/singlehost/webworks/testsites/blueprintdemo/`
+- All tests use the testbase framework with `test_` prefix functions and `ccai.testbase.mocking` for mocks
+- Test files mirror the source hierarchy under `source/testroots/ccai/tests/singlehost/webworks/testsites/blueprintdemo/`
 - Property tests follow the same exhaustive enumeration pattern as `helloworld/test_property_responses.py`

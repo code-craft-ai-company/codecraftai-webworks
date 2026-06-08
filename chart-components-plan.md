@@ -3,7 +3,7 @@
 ## 1. Purpose & Scope
 
 This plan defines the architecture and delivery approach for a comprehensive
-SVG charting library for `automojo-webworks`. It covers ~150 chart types
+SVG charting library for `codecraftai-webworks`. It covers ~150 chart types
 across 17 categories (see `specs/chart-components/` for the full catalog).
 
 Every chart is built from **coordinated web components** — a chart is not one

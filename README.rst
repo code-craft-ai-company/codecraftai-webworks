@@ -1,12 +1,12 @@
 =================
-automojo-webworks
+codecraftai-webworks
 =================
 
-Automation Mojo - WebWorks
+Code Craft AI - WebWorks
 
 Overview
 ========
-automojo-webworks is a core component of the Automation Mojo technology stack. It provides robust, reusable foundation code designed to enable and orchestrate complex software automation tasks.
+codecraftai-webworks is a core component of the Code Craft AI technology stack. It provides robust, reusable foundation code designed to enable and orchestrate complex software automation tasks.
 
 Installation
 ============
@@ -14,7 +14,7 @@ Using Poetry:
 
 .. code-block:: bash
 
-    poetry add automojo-webworks
+    poetry add codecraftai-webworks
 
 Development
 ===========

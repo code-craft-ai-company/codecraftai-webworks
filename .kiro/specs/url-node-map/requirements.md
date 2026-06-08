@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This document specifies the requirements for the URL Node Map feature. The URL Node Map provides the foundational hierarchical tree structure for organizing and routing HTTP endpoints in the automojo web framework. It serves as the underlying data structure that endpoints attach to, supporting path-based addressing, inheritance of properties between parent and child nodes, and tree export capabilities for documentation and routing.
+This document specifies the requirements for the URL Node Map feature. The URL Node Map provides the foundational hierarchical tree structure for organizing and routing HTTP endpoints in the ccai web framework. It serves as the underlying data structure that endpoints attach to, supporting path-based addressing, inheritance of properties between parent and child nodes, and tree export capabilities for documentation and routing.
 
 The URL Node Map enables declarative endpoint organization where each node in the tree can carry metadata (access policies, rate limits, tags, versions) that cascades to child nodes according to well-defined inheritance rules.
 

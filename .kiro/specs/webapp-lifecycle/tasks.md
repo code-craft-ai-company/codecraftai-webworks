@@ -2,21 +2,21 @@
 
 ## Overview
 
-Extend the `WebApplication` singleton to orchestrate the full lifecycle of a web application — including configuration, credentials, data profiles, authentication, and web infrastructure wiring — so that applications can be stood up with minimal boilerplate. Implementation adds a `LifecyclePhase` enum, error classes, lifecycle methods, registration APIs (`attach_route`, `attach_blueprint_to_route`), and authentication management to the existing `WebApplication` class. All new source goes in `source/packages/automojo/webworks/persona/`, all tests in `source/testroots/automojo/tests/singlehost/webworks/persona/`.
+Extend the `WebApplication` singleton to orchestrate the full lifecycle of a web application — including configuration, credentials, data profiles, authentication, and web infrastructure wiring — so that applications can be stood up with minimal boilerplate. Implementation adds a `LifecyclePhase` enum, error classes, lifecycle methods, registration APIs (`attach_route`, `attach_blueprint_to_route`), and authentication management to the existing `WebApplication` class. All new source goes in `source/packages/ccai/webworks/persona/`, all tests in `source/testroots/ccai/tests/singlehost/webworks/persona/`.
 
 ## Tasks
 
 - [x] 1. Create lifecycle support module with LifecyclePhase enum and error classes
-  - [x] 1.1 Create `source/packages/automojo/webworks/persona/lifecycle.py`
+  - [x] 1.1 Create `source/packages/ccai/webworks/persona/lifecycle.py`
     - Define `LifecyclePhase(str, Enum)` with members: `CREATED`, `CONFIGURED`, `CREDENTIALS_LOADED`, `DATA_PROFILES_LOADED`, `DATABASE_READY`, `AUTHENTICATION_READY`, `INFRASTRUCTURE_READY`, `READY`, `SHUTDOWN`
     - Define `LifecycleError(SemanticError)` with `operation`, `required_phase`, `current_phase` attributes and descriptive message
     - Define `BlueprintAlreadyRegisteredError(SemanticError)` with `blueprint_cls` attribute and descriptive message
     - Define `EndpointConflictError(SemanticError)` as a lifecycle-scoped conflict error (wraps routing conflicts from `attach_route`)
-    - Import `SemanticError` from `automojo.errors.exceptions`
+    - Import `SemanticError` from `ccai.errors.exceptions`
     - _Requirements: 8.1, 8.2, 2.2, 3.2_
 
   - [x] 1.2 Write unit tests for LifecyclePhase and error classes
-    - Create `source/testroots/automojo/tests/singlehost/webworks/persona/test_lifecycle.py`
+    - Create `source/testroots/ccai/tests/singlehost/webworks/persona/test_lifecycle.py`
     - Test `LifecyclePhase` enum has all expected members in correct order
     - Test `LifecycleError` message includes operation, required phase, and current phase
     - Test `BlueprintAlreadyRegisteredError` message includes blueprint class name
@@ -25,7 +25,7 @@ Extend the `WebApplication` singleton to orchestrate the full lifecycle of a web
 
 - [x] 2. Extend WebApplication with lifecycle state and phase enforcement
   - [x] 2.1 Add lifecycle private attributes and phase tracking to `WebApplication.__init__`
-    - In `source/packages/automojo/webworks/persona/webapplication.py`:
+    - In `source/packages/ccai/webworks/persona/webapplication.py`:
     - Add `_current_phase` initialized to `LifecyclePhase.CREATED`
     - Add `_config`, `_credential_manager`, `_data_profile_manager`, `_auth_system`, `_auth_middleware`, `_router`, `_dispatcher`, `_asgi_app` (all `None`)
     - Add `_pending_routes` list, `_pending_blueprints` list, `_registered_blueprints` set
@@ -45,7 +45,7 @@ Extend the `WebApplication` singleton to orchestrate the full lifecycle of a web
     - _Requirements: 1.1, 1.2, 1.3, 4.1, 5.1, 6.1, 7.1, 8.2_
 
   - [x] 2.3 Write property test for lifecycle phase ordering enforcement
-    - Create `source/testroots/automojo/tests/singlehost/webworks/persona/test_property_lifecycle.py`
+    - Create `source/testroots/ccai/tests/singlehost/webworks/persona/test_property_lifecycle.py`
     - **Property 10: Lifecycle phase ordering enforcement**
     - For each pair of (lifecycle method, prerequisite phase), call the method before the prerequisite and verify `LifecycleError` is raised with the correct phase names
     - **Validates: Requirements 8.1, 8.2, 7.4**
@@ -99,7 +99,7 @@ Extend the `WebApplication` singleton to orchestrate the full lifecycle of a web
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6_
 
   - [x] 4.7 Write unit tests for lifecycle setup methods
-    - Add tests to `source/testroots/automojo/tests/singlehost/webworks/persona/test_webapplication_lifecycle.py`
+    - Add tests to `source/testroots/ccai/tests/singlehost/webworks/persona/test_webapplication_lifecycle.py`
     - Test `setup_configuration` creates `ManagedConfigRegistry` and calls `setup_from_persona` (mock the registry)
     - Test `setup_credentials` uses presence directory (mock credential manager)
     - Test `setup_data_profiles` uses presence directory (mock data profile manager)
@@ -130,19 +130,19 @@ Extend the `WebApplication` singleton to orchestrate the full lifecycle of a web
     - _Requirements: 8.1_
 
   - [x] 5.4 Write property test for startup initializes all subsystems
-    - In `source/testroots/automojo/tests/singlehost/webworks/persona/test_property_lifecycle.py`
+    - In `source/testroots/ccai/tests/singlehost/webworks/persona/test_property_lifecycle.py`
     - **Property 1: Startup initializes all subsystems**
     - For valid persona configurations, after calling `startup()`, verify `router`, `dispatcher`, `asgi_app`, `config`, `credentials`, `data_profiles`, `auth_system` are all non-None and of correct types, and `current_phase` is `READY`
     - **Validates: Requirements 1.1, 1.2, 1.3, 4.1, 5.1, 6.1, 7.1, 8.3**
 
   - [x] 5.5 Write property test for infrastructure wiring consistency
-    - In `source/testroots/automojo/tests/singlehost/webworks/persona/test_property_lifecycle.py`
+    - In `source/testroots/ccai/tests/singlehost/webworks/persona/test_property_lifecycle.py`
     - **Property 2: Infrastructure wiring consistency**
     - After `startup()`, verify the Dispatcher's `router` property returns the same Router object as `WebApplication.router` (identity check), and EndpointDescriptors from the EndpointRegistry are matchable via the Router
     - **Validates: Requirements 1.4, 1.5, 1.6**
 
   - [x] 5.6 Write property test for shutdown releases all resources
-    - In `source/testroots/automojo/tests/singlehost/webworks/persona/test_property_lifecycle.py`
+    - In `source/testroots/ccai/tests/singlehost/webworks/persona/test_property_lifecycle.py`
     - **Property 11: Shutdown releases all resources**
     - After `startup()` then `shutdown()`, verify `current_phase` is `SHUTDOWN` and config `cleanup()` was called
     - **Validates: Requirements 8.4**
@@ -166,7 +166,7 @@ Extend the `WebApplication` singleton to orchestrate the full lifecycle of a web
     - _Requirements: 3.1, 3.2, 3.3_
 
   - [x] 7.3 Write unit tests for attach_route and attach_blueprint_to_route
-    - Create `source/testroots/automojo/tests/singlehost/webworks/persona/test_webapplication_routing.py`
+    - Create `source/testroots/ccai/tests/singlehost/webworks/persona/test_webapplication_routing.py`
     - Test `attach_route` with a specific path and method makes the handler routable after startup
     - Test `attach_route` conflict raises `EndpointConflictError` with descriptive message
     - Test `attach_route` preserves function `__name__` and `__doc__`
@@ -177,7 +177,7 @@ Extend the `WebApplication` singleton to orchestrate the full lifecycle of a web
     - _Requirements: 2.1, 2.2, 2.3, 3.1, 3.2, 3.3_
 
   - [x] 7.4 Write property tests for routing
-    - Create `source/testroots/automojo/tests/singlehost/webworks/persona/test_property_routing.py`
+    - Create `source/testroots/ccai/tests/singlehost/webworks/persona/test_property_routing.py`
     - **Property 3: attach_route registers routable endpoints**
     - Generate valid URL paths and HTTP methods, apply `attach_route`, call `startup()`, verify Router matches each path+method to the correct handler
     - **Validates: Requirements 2.1**
@@ -212,14 +212,14 @@ Extend the `WebApplication` singleton to orchestrate the full lifecycle of a web
     - _Requirements: 7.3, 7.4_
 
   - [x] 9.3 Write unit tests for authentication management
-    - Create `source/testroots/automojo/tests/singlehost/webworks/persona/test_webapplication_auth.py`
+    - Create `source/testroots/ccai/tests/singlehost/webworks/persona/test_webapplication_auth.py`
     - Test `register_authenticator` adds authenticator to auth system
     - Test `configure_auth_middleware` creates middleware with correct `app` and `auth_system` properties
     - Test `configure_auth_middleware` before infrastructure raises `LifecycleError`
     - _Requirements: 7.1, 7.2, 7.3, 7.4_
 
   - [x] 9.4 Write property tests for authentication
-    - Create `source/testroots/automojo/tests/singlehost/webworks/persona/test_property_auth.py`
+    - Create `source/testroots/ccai/tests/singlehost/webworks/persona/test_property_auth.py`
     - **Property 8: register_authenticator delegates to AuthenticationSystem**
     - Generate mock Authenticator instances with random scheme names and priorities, call `register_authenticator`, verify the AuthenticationSystem contains each authenticator by scheme
     - **Validates: Requirements 7.2**
@@ -234,7 +234,7 @@ Extend the `WebApplication` singleton to orchestrate the full lifecycle of a web
     - _Requirements: 9.3_
 
   - [x] 10.2 Write property test for subclass overrides
-    - In `source/testroots/automojo/tests/singlehost/webworks/persona/test_property_lifecycle.py`
+    - In `source/testroots/ccai/tests/singlehost/webworks/persona/test_property_lifecycle.py`
     - **Property 12: Subclass overrides are invoked during startup**
     - Create subclasses that override each lifecycle method with a tracking wrapper, call `startup()`, verify each override was called in the correct order
     - **Validates: Requirements 9.2**
@@ -246,8 +246,8 @@ Extend the `WebApplication` singleton to orchestrate the full lifecycle of a web
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
 - Each task references specific requirements for traceability
-- All tests use the `testbase` framework with `test_` prefix functions and `automojo.testbase.mocking` for mocks
-- Test files go in `source/testroots/automojo/tests/singlehost/webworks/persona/`
+- All tests use the `testbase` framework with `test_` prefix functions and `ccai.testbase.mocking` for mocks
+- Test files go in `source/testroots/ccai/tests/singlehost/webworks/persona/`
 - Property tests use data-driven iteration over generated inputs (minimum 100 iterations per property) since hypothesis is not used
 - Checkpoints ensure incremental validation
 - The `reset_webapp_persona` helper in `establish.py` should be used in tests to reset singleton state between test runs

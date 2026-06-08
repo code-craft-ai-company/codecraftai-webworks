@@ -7,7 +7,7 @@ This implementation plan creates the router and request handling system for matc
 ## Tasks
 
 - [x] 1. Set up project structure and helper classes
-  - [x] 1.1 Create `source/packages/automojo/webworks/routing/` package directory
+  - [x] 1.1 Create `source/packages/ccai/webworks/routing/` package directory
     - Create `__init__.py` with public exports
     - _Requirements: 1.1_
   - [x] 1.2 Implement `QueryParams` class for query string parsing
@@ -231,5 +231,5 @@ This implementation plan creates the router and request handling system for matc
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
 - Testing framework: testbase (per AGENTS.md)
-- Test location: `source/testroots/automojo/tests/singlehost/webworks/routing/`
+- Test location: `source/testroots/ccai/tests/singlehost/webworks/routing/`
 - This feature integrates with endpoint-abstractions for EndpointDescriptor and EndpointRegistry

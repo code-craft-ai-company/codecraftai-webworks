@@ -1093,6 +1093,6 @@ Integration tests should cover:
 ### Test Configuration
 
 - Use testbase framework per repository conventions
-- Test files located at `source/testroots/automojo/tests/singlehost/webworks/prodserver/`
+- Test files located at `source/testroots/ccai/tests/singlehost/webworks/prodserver/`
 - Property tests should run minimum 100 iterations
 - Each property test must reference its design document property

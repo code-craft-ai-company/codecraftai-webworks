@@ -54,11 +54,11 @@ The design follows the existing blueprint pattern in webworks, where blueprints 
 from typing import Any, Callable, Dict, List, Optional, Type
 from dataclasses import dataclass
 
-from automojo.webworks.endpoints.restblueprint import RestBlueprint
-from automojo.webworks.endpoints.accesspolicy import AccessPolicy
-from automojo.webworks.endpoints.doc import Doc
-from automojo.webworks.authentication.system import AuthenticationSystem
-from automojo.webworks.authentication.context import AuthenticationContext
+from ccai.webworks.endpoints.restblueprint import RestBlueprint
+from ccai.webworks.endpoints.accesspolicy import AccessPolicy
+from ccai.webworks.endpoints.doc import Doc
+from ccai.webworks.authentication.system import AuthenticationSystem
+from ccai.webworks.authentication.context import AuthenticationContext
 
 
 @dataclass

@@ -5,7 +5,7 @@
 
     This module exposes a module-level ``COMPONENTS`` list of ComponentDoc
     instances describing and demonstrating the chart and diagram components
-    of the Automojo WebWorks library.
+    of the CodeCraftAI WebWorks library.
 """
 
 from testcomponents.catalog.componentdoc import ComponentDoc

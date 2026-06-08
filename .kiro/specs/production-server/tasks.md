@@ -314,4 +314,4 @@ This implementation plan creates the Production Server feature providing worker 
 - Property tests validate universal correctness properties
 - Unit tests validate specific examples and edge cases
 - Implementation uses Python with testbase framework per repository conventions
-- Test files should be located at `source/testroots/automojo/tests/singlehost/webworks/prodserver/`
+- Test files should be located at `source/testroots/ccai/tests/singlehost/webworks/prodserver/`

@@ -10,8 +10,8 @@
 
 import os
 
-from automojo.webworks.webapplication import establish_webapp_persona
-from automojo.webworks.wellknown import ThisWebApplicationSingleton
+from ccai.webworks.webapplication import establish_webapp_persona
+from ccai.webworks.wellknown import ThisWebApplicationSingleton
 
 # Import endpoint handlers to trigger Endpoint.attach_at registration
 from helloworld.endpoints import handlers  # noqa: F401
@@ -53,7 +53,7 @@ def run_development_server(
         :param reload: Whether to enable auto-reload on file changes.
     """
 
-    from automojo.webworks.devexp.server.devserver import DevelopmentServer
+    from ccai.webworks.devexp.server.devserver import DevelopmentServer
 
     server = DevelopmentServer(
         app=app,

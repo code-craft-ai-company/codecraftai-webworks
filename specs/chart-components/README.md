@@ -1,6 +1,6 @@
 # Chart Components Catalog
 
-The per-category catalog for the automojo-webworks SVG chart library. The
+The per-category catalog for the codecraftai-webworks SVG chart library. The
 architecture — the coordinated-element model, the `<mj-chart>` controller, the
 part components, the JSON data contract, the SVG drawing model, orientation,
 docking/anchoring, the `charts/` directory layout, phasing, and the definition

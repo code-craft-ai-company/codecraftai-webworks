@@ -5,7 +5,7 @@
 
       - ``/``                       the browse-by-group landing page
       - ``/static/{assetpath:path}`` serves the mj-* component library and
-        design tokens out of the automojo.webworks static directory
+        design tokens out of the ccai.webworks static directory
 
     The per-group index pages and per-component test pages are served by
     the group blueprints (see endpoints/blueprints).
@@ -14,12 +14,12 @@
 import mimetypes
 import os
 
-import automojo.webworks as _webworks
+import ccai.webworks as _webworks
 
-from automojo.webworks.endpoints.endpoint import Endpoint
-from automojo.webworks.routing.request import Request
-from automojo.webworks.routing.response import HTMLResponse
-from automojo.webworks.routing.response import Response
+from ccai.webworks.endpoints.endpoint import Endpoint
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.response import HTMLResponse
+from ccai.webworks.routing.response import Response
 
 from testcomponents.rendering import render_browse_page
 from testcomponents.rendering import render_charts_page
