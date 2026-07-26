@@ -26,7 +26,7 @@ from ccai.webworks.asgi.constants import (
     MESSAGE_LIFESPAN_SHUTDOWN,
     MESSAGE_LIFESPAN_SHUTDOWN_COMPLETE,
 )
-from ccai.webworks.wsgi.request import Request
+from ccai.webworks.routing.request import Request
 from ccai.webworks.wsgi.response import Response
 
 

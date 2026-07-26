@@ -12,7 +12,7 @@ from ccai.webworks.asgi.constants import (
     SCOPE_ROUTE,
     SCOPE_PATH_PARAMS,
 )
-from ccai.webworks.wsgi.request import Request
+from ccai.webworks.routing.request import Request
 
 
 # =============================================================================

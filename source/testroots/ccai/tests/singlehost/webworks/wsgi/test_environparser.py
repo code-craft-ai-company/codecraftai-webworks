@@ -14,7 +14,7 @@ from io import BytesIO
 from typing import Any, Dict
 
 from ccai.webworks.wsgi.environparser import EnvironParser
-from ccai.webworks.wsgi.request import Request
+from ccai.webworks.routing.request import Request
 from ccai.webworks.wsgi.constants import ENVIRON_REQUEST, ENVIRON_ROUTE, ENVIRON_PATH_PARAMS
 from ccai.webworks.wsgi.exceptions import RequestEntityTooLarge
 

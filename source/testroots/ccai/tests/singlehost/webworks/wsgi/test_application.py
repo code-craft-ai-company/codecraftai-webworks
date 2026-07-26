@@ -24,7 +24,7 @@ from ccai.webworks.wsgi.application import (
     reset_wsgi_application,
 )
 from ccai.webworks.wsgi.response import Response
-from ccai.webworks.wsgi.request import Request
+from ccai.webworks.routing.request import Request
 from ccai.webworks.wsgi.exceptions import HTTPException
 
 

@@ -18,7 +18,7 @@ from ccai.webworks.asgi.constants import (
     MESSAGE_HTTP_RESPONSE_BODY,
     MESSAGE_HTTP_DISCONNECT,
 )
-from ccai.webworks.wsgi.request import Request
+from ccai.webworks.routing.request import Request
 from ccai.webworks.wsgi.response import Response
 
 

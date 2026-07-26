@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from ccai.webworks.wsgi.middleware import WSGIMiddlewareWrapper
 from ccai.webworks.wsgi.application import WSGIApplication
 from ccai.webworks.wsgi.response import Response
-from ccai.webworks.wsgi.request import Request
+from ccai.webworks.routing.request import Request
 
 
 # =============================================================================
