@@ -69,15 +69,52 @@ def _without_no_color_env(func):
     return result
 
 
-def _cleanup_root_logger():
+def _detach_root_logger_handlers():
     """
-        Remove all handlers from the root logger to ensure test isolation.
+        Detach the root logger's handlers and return them, for isolation.
+
+        The handlers are detached but NOT closed. The test runner owns the root
+        logger for the duration of a run, so closing its handlers breaks the
+        framework's own logging for everything that follows — the next log call
+        writes to a closed stream and the run stops making progress rather than
+        failing. Detaching gives a test the same isolation without taking the
+        framework's logging down with it.
+
+        :returns: The detached handlers and the level to restore.
     """
+    root_logger = logging.getLogger()
+
+    detached = root_logger.handlers[:]
+    for handler in detached:
+        root_logger.removeHandler(handler)
+
+    return (detached, root_logger.level)
+
+
+def _restore_root_logger_handlers(saved):
+    """
+        Restore handlers detached by :func:`_detach_root_logger_handlers`.
+
+        Anything the test attached is removed first, and closed — those are the
+        test's own handlers, so the test is responsible for them.
+
+        :param saved: The tuple returned by _detach_root_logger_handlers.
+
+        :returns: ``None``
+    """
+    detached, level = saved
+
     root_logger = logging.getLogger()
 
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
-        handler.close()
+        if handler not in detached:
+            handler.close()
+
+    for handler in detached:
+        root_logger.addHandler(handler)
+
+    root_logger.setLevel(level)
 
     return
 
@@ -129,7 +166,7 @@ def test_devlogger_setup_configures_root_logger_level():
     """
         Test that setup() sets the root logger to the configured level.
     """
-    _cleanup_root_logger()
+    _saved_logging = _detach_root_logger_handlers()
 
     dev_logger = DevLogger(debug=True)
 
@@ -146,7 +183,7 @@ def test_devlogger_setup_configures_root_logger_level():
             raise AssertionError(errmsg)
     finally:
         dev_logger.teardown()
-        _cleanup_root_logger()
+        _restore_root_logger_handlers(_saved_logging)
 
     return
 
@@ -561,7 +598,7 @@ def test_devlogger_log_level_applied_on_setup():
     """
         Test that the configured log level is applied to the root logger.
     """
-    _cleanup_root_logger()
+    _saved_logging = _detach_root_logger_handlers()
 
     dev_logger = DevLogger(debug=False, log_level="ERROR")
 
@@ -577,7 +614,7 @@ def test_devlogger_log_level_applied_on_setup():
             raise AssertionError(errmsg)
     finally:
         dev_logger.teardown()
-        _cleanup_root_logger()
+        _restore_root_logger_handlers(_saved_logging)
 
     return
 
@@ -618,7 +655,7 @@ def test_devlogger_setup_creates_file_handler():
     """
         Test that setup() creates a file handler when log_file is set.
     """
-    _cleanup_root_logger()
+    _saved_logging = _detach_root_logger_handlers()
 
     tmp_file = tempfile.NamedTemporaryFile(
         mode="w", suffix=".log", delete=False
@@ -643,7 +680,7 @@ def test_devlogger_setup_creates_file_handler():
             raise AssertionError(errmsg)
     finally:
         dev_logger.teardown()
-        _cleanup_root_logger()
+        _restore_root_logger_handlers(_saved_logging)
         os.unlink(tmp_path)
 
     return
@@ -653,7 +690,7 @@ def test_devlogger_add_file_handler_writes_to_file():
     """
         Test that the file handler actually writes log messages to the file.
     """
-    _cleanup_root_logger()
+    _saved_logging = _detach_root_logger_handlers()
 
     tmp_file = tempfile.NamedTemporaryFile(
         mode="w", suffix=".log", delete=False
@@ -682,7 +719,7 @@ def test_devlogger_add_file_handler_writes_to_file():
             raise AssertionError(errmsg)
     finally:
         dev_logger.teardown()
-        _cleanup_root_logger()
+        _restore_root_logger_handlers(_saved_logging)
         os.unlink(tmp_path)
 
     return
@@ -896,7 +933,7 @@ def test_devlogger_teardown_removes_handlers():
     """
         Test that teardown removes all handlers added by DevLogger.
     """
-    _cleanup_root_logger()
+    _saved_logging = _detach_root_logger_handlers()
 
     dev_logger = DevLogger(debug=True, use_colors=False)
 
@@ -919,6 +956,6 @@ def test_devlogger_teardown_removes_handlers():
         )
         raise AssertionError(errmsg)
 
-    _cleanup_root_logger()
+    _restore_root_logger_handlers(_saved_logging)
 
     return

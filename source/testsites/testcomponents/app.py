@@ -14,6 +14,7 @@
 import os
 
 from ccai.webworks.webapplication import establish_webapp_persona
+from ccai.webworks.webapplication import reset_webapp_persona
 from ccai.webworks.wellknown import ThisWebApplicationSingleton
 
 # Importing the handlers module triggers Endpoint.attach_at registration
@@ -28,6 +29,14 @@ from testcomponents.endpoints import blueprints  # noqa: F401
 # Establish the persona with a presence directory under .output/testsites.
 _PRESENCE_DIR = os.path.join(".output", "testsites", "testcomponents")
 
+# These sites are fixtures, and a test run imports all three into one
+# process. Establishing a persona and registering endpoints are
+# process-global, so each site claims them from whichever site ran
+# before it. The reset has to sit here rather than in a test package's
+# __init__: discovery imports every package before any module, so a
+# reset there runs long before this line.
+reset_webapp_persona()
+
 webapp = establish_webapp_persona(
     name="testcomponents",
     logger_name="testcomponents",
@@ -39,6 +48,11 @@ webapp.startup()
 
 # The ASGI application instance for serving.
 app = ThisWebApplicationSingleton().asgi_app
+
+# The router and dispatcher the application built during startup.
+# Exported because the wiring tests assert against them directly.
+router = webapp.router
+dispatcher = webapp.dispatcher
 
 
 def run_development_server(

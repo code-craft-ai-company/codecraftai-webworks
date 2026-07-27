@@ -923,6 +923,12 @@ def establish_webapp_persona(
     else:
         resolved_settings_file = os.path.join(resolved_presence_dir, "settings.config")
 
+    # Check that THISAPPLICATION_SINGLETON is not already set
+    if thisapp_wellknown.THISAPPLICATION_SINGLETON is not None:
+        errmsg = "The singleton 'wellknown.THISAPPLICATION_SINGLETON' must not be set " \
+                 "when calling 'establish_webapp_persona'"
+        raise SemanticError(errmsg)
+
     # Populate AppPersona class attributes (same pattern as establish_app_persona)
     AppPersona.AM_NAME = name
     AppPersona.AM_LOGGER_NAME = logger_name
@@ -932,12 +938,6 @@ def establish_webapp_persona(
     AppPersona.AM_SETTINGS_FILENAME = resolved_settings_file
     AppPersona.AM_EXTENSIONS = extensions
     AppPersona.AM_SERVICE_NAME = service_name
-
-    # Check that THISAPPLICATION_SINGLETON is not already set
-    if thisapp_wellknown.THISAPPLICATION_SINGLETON is not None:
-        errmsg = "The singleton 'wellknown.THISAPPLICATION_SINGLETON' must not be set " \
-                 "when calling 'establish_webapp_persona'"
-        raise SemanticError(errmsg)
 
     # Determine which class to instantiate
     if application_cls is None:
