@@ -20,9 +20,9 @@ import time
 
 from typing import Any, Dict, Tuple
 
-import pytest
 
 from ccai.webworks.security import jsonwebtoken as jwt
+from ccai import testbase
 
 
 # =============================================================================
@@ -164,7 +164,7 @@ def test_tampered_payload_is_rejected():
     forged_payload = _b64url(json.dumps({"sub": "attacker"}).encode("utf-8"))
     forged = "{}.{}.{}".format(header_segment, forged_payload, signature_segment)
 
-    with pytest.raises(jwt.InvalidSignatureError):
+    with testbase.raises(jwt.InvalidSignatureError):
         jwt.decode(forged, key=key_set, algorithms=["RS256"])
 
     return
@@ -175,7 +175,7 @@ def test_wrong_key_is_rejected():
     _other_token, other_jwks = _make_rs256(_baseline_claims(), kid="rsa-1")
     other_key_set = jwt.JsonWebKeySet.import_key_set(other_jwks)
 
-    with pytest.raises(jwt.InvalidSignatureError):
+    with testbase.raises(jwt.InvalidSignatureError):
         jwt.decode(token, key=other_key_set, algorithms=["RS256"])
 
     return
@@ -185,7 +185,7 @@ def test_algorithm_not_in_allow_list_is_rejected():
     token, jwks = _make_rs256(_baseline_claims(), kid="rsa-1")
     key_set = jwt.JsonWebKeySet.import_key_set(jwks)
 
-    with pytest.raises(jwt.UnsupportedAlgorithmError):
+    with testbase.raises(jwt.UnsupportedAlgorithmError):
         jwt.decode(token, key=key_set, algorithms=["ES256"])
 
     return
@@ -195,14 +195,14 @@ def test_empty_allow_list_is_rejected():
     token, jwks = _make_rs256(_baseline_claims(), kid="rsa-1")
     key_set = jwt.JsonWebKeySet.import_key_set(jwks)
 
-    with pytest.raises(jwt.UnsupportedAlgorithmError):
+    with testbase.raises(jwt.UnsupportedAlgorithmError):
         jwt.decode(token, key=key_set, algorithms=[])
 
     return
 
 
 def test_malformed_token_is_rejected():
-    with pytest.raises(jwt.DecodeError):
+    with testbase.raises(jwt.DecodeError):
         jwt.decode("not-a-valid-token", key="secret", algorithms=["HS256"])
 
     return
@@ -233,14 +233,14 @@ def test_jwks_unmatched_kid_raises():
     jwks["keys"][0]["kid"] = "different-kid"
     key_set = jwt.JsonWebKeySet.import_key_set(jwks)
 
-    with pytest.raises(jwt.JoseError):
+    with testbase.raises(jwt.JoseError):
         jwt.decode(token, key=key_set, algorithms=["RS256"])
 
     return
 
 
 def test_empty_jwks_raises():
-    with pytest.raises(jwt.JoseError):
+    with testbase.raises(jwt.JoseError):
         jwt.JsonWebKeySet.import_key_set({"keys": []})
 
     return
@@ -270,7 +270,7 @@ def test_claims_registry_rejects_missing_essential_claim():
     del claims["iss"]
     registry = jwt.ClaimsRegistry({"iss": {"essential": True}})
 
-    with pytest.raises(jwt.InvalidClaimError):
+    with testbase.raises(jwt.InvalidClaimError):
         registry.validate(claims)
 
     return
@@ -282,7 +282,7 @@ def test_claims_registry_rejects_wrong_value():
         {"aud": {"essential": True, "value": "a-different-client"}}
     )
 
-    with pytest.raises(jwt.InvalidClaimError):
+    with testbase.raises(jwt.InvalidClaimError):
         registry.validate(claims)
 
     return
@@ -303,7 +303,7 @@ def test_claims_registry_rejects_expired_token():
     claims["exp"] = int(time.time()) - 10
     registry = jwt.ClaimsRegistry({})
 
-    with pytest.raises(jwt.InvalidClaimError):
+    with testbase.raises(jwt.InvalidClaimError):
         registry.validate(claims)
 
     return
@@ -314,7 +314,7 @@ def test_claims_registry_rejects_not_yet_valid_token():
     claims["nbf"] = int(time.time()) + 3600
     registry = jwt.ClaimsRegistry({})
 
-    with pytest.raises(jwt.InvalidClaimError):
+    with testbase.raises(jwt.InvalidClaimError):
         registry.validate(claims)
 
     return

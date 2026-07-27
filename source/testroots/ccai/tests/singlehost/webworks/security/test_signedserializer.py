@@ -12,7 +12,6 @@
         - An empty secret is rejected at construction.
 """
 
-import pytest
 
 from ccai.webworks.security.signedserializer import (
     BadPayloadError,
@@ -20,6 +19,8 @@ from ccai.webworks.security.signedserializer import (
     BadTimeSignatureError,
     TimedSerializer,
 )
+
+from ccai import testbase
 
 
 def test_round_trip_recovers_payload():
@@ -45,7 +46,7 @@ def test_tampered_token_is_rejected():
     tampered_payload = ("A" if payload_segment[0] != "A" else "B") + payload_segment[1:]
     tampered = "{}.{}.{}".format(tampered_payload, timestamp_segment, signature_segment)
 
-    with pytest.raises(BadSignatureError):
+    with testbase.raises(BadSignatureError):
         serializer.loads(tampered, max_age=600)
 
     return
@@ -57,7 +58,7 @@ def test_wrong_secret_is_rejected():
 
     token = producer.dumps({"state": "abc"})
 
-    with pytest.raises(BadSignatureError):
+    with testbase.raises(BadSignatureError):
         consumer.loads(token, max_age=600)
 
     return
@@ -69,7 +70,7 @@ def test_wrong_salt_is_rejected():
 
     token = producer.dumps({"state": "abc"})
 
-    with pytest.raises(BadSignatureError):
+    with testbase.raises(BadSignatureError):
         consumer.loads(token, max_age=600)
 
     return
@@ -81,7 +82,7 @@ def test_token_older_than_max_age_is_rejected():
     token = serializer.dumps({"state": "abc"})
 
     # A negative max_age means "already too old" without having to sleep.
-    with pytest.raises(BadTimeSignatureError):
+    with testbase.raises(BadTimeSignatureError):
         serializer.loads(token, max_age=-1)
 
     return
@@ -114,14 +115,14 @@ def test_no_max_age_skips_expiry_check():
 def test_malformed_token_is_rejected():
     serializer = TimedSerializer("super-secret", salt="oauth-state")
 
-    with pytest.raises(BadPayloadError):
+    with testbase.raises(BadPayloadError):
         serializer.loads("only-two.segments", max_age=600)
 
     return
 
 
 def test_empty_secret_is_rejected():
-    with pytest.raises(ValueError):
+    with testbase.raises(ValueError):
         TimedSerializer("", salt="oauth-state")
 
     return

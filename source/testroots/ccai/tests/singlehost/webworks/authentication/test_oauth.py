@@ -29,13 +29,14 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urlparse
 
-import pytest
 
 from ccai.webworks.authentication.oauth import (
     OAuthClient,
     generate_oauth_nonce,
     generate_oauth_state,
 )
+
+from ccai import testbase
 
 
 # =============================================================================
@@ -150,7 +151,7 @@ def _make_client(
 
 
 def test_constructor_rejects_empty_provider_name():
-    with pytest.raises(ValueError, match="provider name is required"):
+    with testbase.raises(ValueError, match="provider name is required"):
         OAuthClient(
             provider_name="",
             provider_config={
@@ -163,7 +164,7 @@ def test_constructor_rejects_empty_provider_name():
 
 
 def test_constructor_rejects_whitespace_provider_name():
-    with pytest.raises(ValueError, match="provider name is required"):
+    with testbase.raises(ValueError, match="provider name is required"):
         OAuthClient(
             provider_name="   ",
             provider_config={
@@ -176,7 +177,7 @@ def test_constructor_rejects_whitespace_provider_name():
 
 
 def test_constructor_rejects_missing_client_id():
-    with pytest.raises(ValueError, match="client_id"):
+    with testbase.raises(ValueError, match="client_id"):
         OAuthClient(
             provider_name="google",
             provider_config={"client_secret": "secret"},
@@ -186,7 +187,7 @@ def test_constructor_rejects_missing_client_id():
 
 
 def test_constructor_rejects_empty_client_secret():
-    with pytest.raises(ValueError, match="client_secret"):
+    with testbase.raises(ValueError, match="client_secret"):
         OAuthClient(
             provider_name="google",
             provider_config={
@@ -267,7 +268,7 @@ def test_resolve_authorize_url_raises_when_no_source(monkeypatch):
 
     monkeypatch.setattr(client, "_resolve_server_metadata", lambda: {})
 
-    with pytest.raises(ValueError, match="authorization endpoint"):
+    with testbase.raises(ValueError, match="authorization endpoint"):
         client._resolve_authorize_url()
 
     return
@@ -343,7 +344,7 @@ def test_resolve_userinfo_url_raises_when_no_source(monkeypatch):
     monkeypatch.setattr(client, "_resolve_server_metadata", lambda: {})
     client._provider_config["api_base_url"] = ""
 
-    with pytest.raises(ValueError, match="userinfo endpoint"):
+    with testbase.raises(ValueError, match="userinfo endpoint"):
         client._resolve_userinfo_url()
 
     return
@@ -481,7 +482,7 @@ def test_build_authorization_url_uses_scope_override():
 def test_parse_id_token_rejects_payload_without_id_token():
     client = _make_client()
 
-    with pytest.raises(ValueError, match="no id_token"):
+    with testbase.raises(ValueError, match="no id_token"):
         client.parse_id_token({"access_token": "abc"})
 
     return
@@ -490,7 +491,7 @@ def test_parse_id_token_rejects_payload_without_id_token():
 def test_parse_id_token_rejects_empty_id_token():
     client = _make_client()
 
-    with pytest.raises(ValueError, match="no id_token"):
+    with testbase.raises(ValueError, match="no id_token"):
         client.parse_id_token({"id_token": "   "})
 
     return
@@ -645,7 +646,7 @@ def test_parse_id_token_rejects_when_metadata_lacks_jwks_uri(monkeypatch):
         lambda: {"issuer": "https://provider.example.com"},
     )
 
-    with pytest.raises(ValueError, match="jwks_uri"):
+    with testbase.raises(ValueError, match="jwks_uri"):
         client.parse_id_token({"id_token": "header.payload.signature"})
 
     return
@@ -659,7 +660,7 @@ def test_parse_id_token_rejects_when_metadata_lacks_jwks_uri(monkeypatch):
 def test_fetch_userinfo_rejects_payload_without_access_token():
     client = _make_client()
 
-    with pytest.raises(ValueError, match="no access_token"):
+    with testbase.raises(ValueError, match="no access_token"):
         client.fetch_userinfo({"id_token": "abc"})
 
     return
@@ -668,7 +669,7 @@ def test_fetch_userinfo_rejects_payload_without_access_token():
 def test_fetch_userinfo_rejects_empty_access_token():
     client = _make_client()
 
-    with pytest.raises(ValueError, match="no access_token"):
+    with testbase.raises(ValueError, match="no access_token"):
         client.fetch_userinfo({"access_token": "   "})
 
     return
@@ -682,7 +683,7 @@ def test_fetch_userinfo_rejects_empty_access_token():
 def test_refresh_token_rejects_empty_input():
     client = _make_client()
 
-    with pytest.raises(ValueError, match="non-empty refresh token"):
+    with testbase.raises(ValueError, match="non-empty refresh token"):
         client.refresh_token("   ")
 
     return

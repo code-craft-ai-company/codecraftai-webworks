@@ -53,6 +53,9 @@ __copyright__ = "Copyright 2026, Code Craft AI LLC"
 __credits__ = []
 
 
+from ccai.errors.exceptions import SkipError
+
+
 import hashlib
 import random
 
@@ -148,5 +151,5 @@ def pytest_runtest_call(item: Any) -> None:
     try:
         item.runtest()
     except UnsatisfiedAssumption as ex:
-        pytest.skip("UnsatisfiedAssumption: {}".format(ex))
+        raise SkipError("UnsatisfiedAssumption: {}".format(ex))
     return
