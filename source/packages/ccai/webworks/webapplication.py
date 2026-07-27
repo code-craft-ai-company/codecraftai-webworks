@@ -19,7 +19,7 @@ import os
 
 from typing import Callable, Dict, List, Optional, Set, Type
 
-from ccai.thisapp.persona import AppPersona
+from ccai.thisapp.persona import AppPersona, reset_app_persona
 from ccai.thisapp.wellknown import (
     SINGLETON_LOCK,
     PersonaVariablesDesc,
@@ -993,7 +993,14 @@ def reset_webapp_persona() -> None:
     try:
         WEBAPP_PERSONA_ESTABLISHED = False
         webworks_wellknown.THISWEBAPPLICATION_SINGLETON = None
-        thisapp_wellknown.THISAPPLICATION_SINGLETON = None
+
+        # Call down rather than clearing THISAPPLICATION_SINGLETON here.
+        # establish_webapp_persona populates AppPersona's class attributes and
+        # the base tier's singleton, so undoing only the singleton left the
+        # persona attributes and APP_PERSONA_ESTABLISHED behind — enough state
+        # for the next establish to trip a guard or inherit the last
+        # persona's extensions.
+        reset_app_persona()
     finally:
         SINGLETON_LOCK.release()
 
