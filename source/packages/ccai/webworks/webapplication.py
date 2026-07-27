@@ -994,6 +994,14 @@ def reset_webapp_persona() -> None:
         WEBAPP_PERSONA_ESTABLISHED = False
         webworks_wellknown.THISWEBAPPLICATION_SINGLETON = None
 
+        # The endpoint registry is module-level and survives both the
+        # application and the persona: @Endpoint.attach_at registers into it at
+        # decoration time, and establishing a persona is what consumes it. A
+        # reset that leaves it populated hands the next application the
+        # previous one's endpoints, which surfaces as an EndpointConflictError
+        # naming a handler from a module the new application never owned.
+        EndpointRegistry.clear()
+
         # Call down rather than clearing THISAPPLICATION_SINGLETON here.
         # establish_webapp_persona populates AppPersona's class attributes and
         # the base tier's singleton, so undoing only the singleton left the
