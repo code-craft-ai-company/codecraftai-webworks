@@ -184,20 +184,24 @@ def generate_directories():
 
 def generate_python_path():
 
-    folder_testbase_root = os.path.join(REPOSITORY_SOURCE_FOLDER, "testroots", "testbase")
+    # The list below names the folders THIS repository actually has. It is
+    # deliberately per-repository -- the layouts differ across the fleet and
+    # divergence here is expected, so keep it in step with `source/` rather
+    # than in step with another repo's copy of this script.
     folder_packages = os.path.join(REPOSITORY_SOURCE_FOLDER, "packages")
-    folder_service = os.path.join(REPOSITORY_SOURCE_FOLDER, "service")
     folder_testroots = os.path.join(REPOSITORY_SOURCE_FOLDER, "testroots")
-    folder_tests = os.path.join(REPOSITORY_SOURCE_FOLDER, "tests")
-    folder_tools = os.path.join(REPOSITORY_SOURCE_FOLDER, "tools")
+    # The three sample applications under `source/testsites` are imported as
+    # top-level packages (`helloworld`, `blueprintdemo`, `testcomponents`), so
+    # that directory belongs on the path in its own right. It was missing, and
+    # every test module that imports a testsite compensated with its own
+    # `sys.path.insert` preamble -- a workaround for a path entry, repeated
+    # once per file.
+    folder_testsites = os.path.join(REPOSITORY_SOURCE_FOLDER, "testsites")
 
     python_path_parts = [
-        folder_testbase_root,
         folder_packages,
-        folder_service,
         folder_testroots,
-        folder_tests,
-        folder_tools,
+        folder_testsites,
         VENV_SITEPACKAGES_FOLDER,
     ]
 
