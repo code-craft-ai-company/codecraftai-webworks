@@ -428,6 +428,7 @@ def test_property_infrastructure_wiring_consistency(persona_name):
         **Feature: webapp-lifecycle, Property 2: Infrastructure wiring consistency**
         **Validates: Requirements 1.4, 1.5, 1.6**
     """
+    registry = EndpointRegistry()
     patch = None
 
     try:
@@ -439,7 +440,7 @@ def test_property_infrastructure_wiring_consistency(persona_name):
             log_basename=persona_name,
         )
 
-        descriptors_before = EndpointRegistry.collect()
+        descriptors_before = registry.collect()
 
         patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
         mock_cls = patch.activate()

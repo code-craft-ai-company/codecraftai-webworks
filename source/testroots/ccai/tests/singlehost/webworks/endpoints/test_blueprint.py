@@ -27,7 +27,7 @@ from ccai.webworks.endpoints import (
 
 def _clear_registry():
     """Helper to clear the registry before tests."""
-    EndpointRegistry.clear()
+    registry = EndpointRegistry()
     # Also clear the blueprint's internal descriptor cache
     Blueprint._blueprint_descriptors.clear()
 
@@ -178,6 +178,7 @@ def test_blueprint_subclass_can_set_constraints():
 
 def test_blueprint_attach_at_computes_path_from_base_path():
     """Test that Blueprint.attach_at computes path relative to base_path."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class ApiBlueprint(Blueprint):
@@ -187,7 +188,8 @@ def test_blueprint_attach_at_computes_path_from_base_path():
     def list_users():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(list_users)
+    descriptors = registry.collect()
     
     if len(descriptors) != 1:
         raise AssertionError(f"Expected 1 descriptor, got {len(descriptors)}")
@@ -202,6 +204,7 @@ def test_blueprint_attach_at_computes_path_from_base_path():
 
 def test_blueprint_attach_at_computes_path_from_base_leaf():
     """Test that Blueprint.attach_at computes path relative to base_leaf."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class ApiBlueprint(Blueprint):
@@ -211,7 +214,8 @@ def test_blueprint_attach_at_computes_path_from_base_leaf():
     def get_status():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(get_status)
+    descriptors = registry.collect()
     desc = descriptors[0]
     
     if desc.path != "/api/status":
@@ -222,6 +226,7 @@ def test_blueprint_attach_at_computes_path_from_base_leaf():
 
 def test_blueprint_attach_at_with_nested_path():
     """Test that Blueprint.attach_at handles nested paths correctly."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class ApiBlueprint(Blueprint):
@@ -231,7 +236,8 @@ def test_blueprint_attach_at_with_nested_path():
     def get_profile():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(get_profile)
+    descriptors = registry.collect()
     desc = descriptors[0]
     
     if desc.path != "/api/v1/users/profile":
@@ -242,6 +248,7 @@ def test_blueprint_attach_at_with_nested_path():
 
 def test_blueprint_attach_at_inherits_constraints():
     """Test that Blueprint.attach_at inherits blueprint constraints."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class SecureBlueprint(Blueprint):
@@ -253,7 +260,8 @@ def test_blueprint_attach_at_inherits_constraints():
     def get_data():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(get_data)
+    descriptors = registry.collect()
     desc = descriptors[0]
     
     if desc.constraints.access_policy.roles != ("admin",):
@@ -267,6 +275,7 @@ def test_blueprint_attach_at_inherits_constraints():
 
 def test_blueprint_attach_at_merge_tags_false():
     """Test that Blueprint.attach_at with merge_tags=False uses child tags."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class ApiBlueprint(Blueprint):
@@ -278,7 +287,8 @@ def test_blueprint_attach_at_merge_tags_false():
     def list_users():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(list_users)
+    descriptors = registry.collect()
     desc = descriptors[0]
     
     # Child tags should win
@@ -290,6 +300,7 @@ def test_blueprint_attach_at_merge_tags_false():
 
 def test_blueprint_attach_at_merge_tags_true():
     """Test that Blueprint.attach_at with merge_tags=True merges tags."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class ApiBlueprint(Blueprint):
@@ -301,7 +312,8 @@ def test_blueprint_attach_at_merge_tags_true():
     def list_users():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(list_users)
+    descriptors = registry.collect()
     desc = descriptors[0]
     
     # Tags should be merged
@@ -319,6 +331,7 @@ def test_blueprint_attach_at_merge_tags_true():
 
 def test_blueprint_attach_at_no_child_tags_uses_parent():
     """Test that Blueprint.attach_at uses parent tags when child has none."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class ApiBlueprint(Blueprint):
@@ -329,7 +342,8 @@ def test_blueprint_attach_at_no_child_tags_uses_parent():
     def get_status():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(get_status)
+    descriptors = registry.collect()
     desc = descriptors[0]
     
     if desc.tags != ["api", "v1"]:
@@ -523,6 +537,7 @@ def test_blueprint_multiple_methods_single_endpoint():
 
 def test_blueprint_inherits_version():
     """Test that Blueprint endpoints inherit version from blueprint."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class VersionedBlueprint(Blueprint):
@@ -533,7 +548,8 @@ def test_blueprint_inherits_version():
     def get_status():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(get_status)
+    descriptors = registry.collect()
     desc = descriptors[0]
     
     if desc.version != "v2":
@@ -544,6 +560,7 @@ def test_blueprint_inherits_version():
 
 def test_blueprint_endpoint_can_override_version():
     """Test that endpoint can override blueprint version."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class VersionedBlueprint(Blueprint):
@@ -554,7 +571,8 @@ def test_blueprint_endpoint_can_override_version():
     def get_status():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(get_status)
+    descriptors = registry.collect()
     desc = descriptors[0]
     
     if desc.version != "v3":

@@ -129,6 +129,11 @@ class WebApplication(ThisApplication):
         # Lifecycle tracking
         self._current_phase: LifecyclePhase = LifecyclePhase.CREATED
 
+        # The endpoints belonging to THIS application. A registry is per
+        # application rather than process-global, so two applications in one
+        # process no longer contend for one endpoint map.
+        self._registry: EndpointRegistry = EndpointRegistry()
+
         # Subsystem references (None until their setup phase completes)
         self._config = None
         self._credential_manager = None
@@ -145,6 +150,27 @@ class WebApplication(ThisApplication):
         self._registered_blueprints: Set = set()
 
         return
+
+    @property
+    def registry(self) -> EndpointRegistry:
+        """
+            The :class:`EndpointRegistry` holding this application's endpoints.
+
+            Handlers decorated with ``@Endpoint.attach_at`` are only marked;
+            an application declares which of them are its own by collecting
+            the modules that define them, before ``startup()``::
+
+                webapp.registry.collect_from(myapp.endpoints)
+                webapp.startup()
+
+            Available from construction -- it is not gated on a lifecycle
+            phase, because collection has to happen before the router is
+            built.
+
+            :returns: This application's endpoint registry.
+        """
+        rtnval = self._registry
+        return rtnval
 
     @property
     def current_phase(self) -> LifecyclePhase:
@@ -711,8 +737,8 @@ class WebApplication(ThisApplication):
         router = Router()
         self._router = router
 
-        # 2. Load descriptors from the global EndpointRegistry
-        router.load_from_registry(registry=EndpointRegistry)
+        # 2. Load this application's own endpoints into the router.
+        router.load_from_registry(registry=self._registry)
 
         # 3. Flush pending routes
         for descriptor in self._pending_routes:
@@ -994,13 +1020,17 @@ def reset_webapp_persona() -> None:
         WEBAPP_PERSONA_ESTABLISHED = False
         webworks_wellknown.THISWEBAPPLICATION_SINGLETON = None
 
-        # The endpoint registry is module-level and survives both the
-        # application and the persona: @Endpoint.attach_at registers into it at
-        # decoration time, and establishing a persona is what consumes it. A
-        # reset that leaves it populated hands the next application the
-        # previous one's endpoints, which surfaces as an EndpointConflictError
-        # naming a handler from a module the new application never owned.
-        EndpointRegistry.clear()
+        # There is no endpoint registry to reset. A registry belongs to the
+        # application that built it, so it goes away with the application
+        # rather than needing to be scrubbed here.
+        #
+        # This used to call EndpointRegistry.clear(), and its placement was an
+        # unwinnable choice: @Endpoint.attach_at registered into a global at
+        # decoration time, so resetting after a site's endpoint imports
+        # discarded the registrations it had just made and left the router
+        # empty, while resetting before them let the endpoints outlive the
+        # reset and collide with the next application. Registration is now
+        # explicit and per-application, so neither happens.
 
         # Call down rather than clearing THISAPPLICATION_SINGLETON here.
         # establish_webapp_persona populates AppPersona's class attributes and

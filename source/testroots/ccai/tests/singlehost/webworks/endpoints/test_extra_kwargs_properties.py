@@ -41,9 +41,7 @@ def generate_random_leaf() -> str:
 
 def _clear_registry():
     """Helper to clear the registry before tests."""
-    EndpointRegistry.clear()
-
-
+    registry = EndpointRegistry()
 def _make_handler(iteration: int, suffix: str = ""):
     """Create a unique handler function for a given iteration."""
     def handler():
@@ -95,6 +93,7 @@ def test_property_extra_kwargs_appear_verbatim_in_extras():
         **Feature: endpoint-abstractions, Property 4: Extra Kwargs Preservation**
         **Validates: Requirements 2.7, 5.4**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -104,7 +103,7 @@ def test_property_extra_kwargs_appear_verbatim_in_extras():
 
         Endpoint.attach_at(leaf=leaf, **extras)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
 
         if len(descriptors) != 1:
             raise AssertionError(
@@ -140,6 +139,7 @@ def test_property_unknown_keys_preserved_for_downstream():
         **Feature: endpoint-abstractions, Property 4: Extra Kwargs Preservation**
         **Validates: Requirements 2.7, 5.4**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -159,7 +159,7 @@ def test_property_unknown_keys_preserved_for_downstream():
 
         Endpoint.attach_at(leaf=leaf, **extras)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         for key, value in extras.items():
@@ -189,6 +189,7 @@ def test_property_extras_do_not_interfere_with_standard_params():
         **Feature: endpoint-abstractions, Property 4: Extra Kwargs Preservation**
         **Validates: Requirements 2.7, 5.4**
     """
+    registry = EndpointRegistry()
     all_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
     for iteration in range(100):
@@ -209,7 +210,7 @@ def test_property_extras_do_not_interfere_with_standard_params():
             **extras
         )(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         # Verify standard fields are unaffected by extras
@@ -266,6 +267,7 @@ def test_property_empty_extras_yields_no_spurious_keys():
         **Validates: Requirements 2.7, 5.4**
     """
     # Known framework-managed keys that may appear in extras
+    registry = EndpointRegistry()
     FRAMEWORK_KEYS = {"serializers", "rest"}
 
     for iteration in range(100):
@@ -276,7 +278,7 @@ def test_property_empty_extras_yields_no_spurious_keys():
 
         Endpoint.attach_at(leaf=leaf)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         unexpected_keys = set(desc.extras.keys()) - FRAMEWORK_KEYS
@@ -301,6 +303,7 @@ def test_property_extras_identity_preserved_for_mutable_values():
         **Feature: endpoint-abstractions, Property 4: Extra Kwargs Preservation**
         **Validates: Requirements 2.7, 5.4**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -325,7 +328,7 @@ def test_property_extras_identity_preserved_for_mutable_values():
 
         Endpoint.attach_at(leaf=leaf, **extras)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         for key, original in original_values.items():

@@ -14,7 +14,9 @@ from ccai.webworks.webapplication import establish_webapp_persona
 from ccai.webworks.webapplication import reset_webapp_persona
 from ccai.webworks.wellknown import ThisWebApplicationSingleton
 
-# Import endpoint handlers to trigger Endpoint.attach_at registration
+# Import the endpoint handlers. The import only defines them --
+# Endpoint.attach_at marks a handler and nothing more. This
+# application claims them below via registry.collect_from.
 from helloworld.endpoints import handlers  # noqa: F401
 
 
@@ -35,6 +37,11 @@ webapp = establish_webapp_persona(
     log_basename="helloworld",
     presence_dir=_PRESENCE_DIR,
 )
+
+# Declare which endpoints belong to this application. Registration is
+# explicit and per-application, so the three testsites in this process
+# no longer contend for one endpoint map -- each collects its own.
+webapp.registry.collect_from(handlers)
 
 webapp.startup()
 

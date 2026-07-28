@@ -11,11 +11,15 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 import csv
+import inspect
 import io
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
-from ccai.webworks.endpoints.descriptor import EndpointDescriptor
+from ccai.webworks.endpoints.descriptor import (
+    ENDPOINT_DESCRIPTORS_ATTR,
+    EndpointDescriptor
+)
 
 
 class EndpointConflictError(Exception):
@@ -71,24 +75,36 @@ class EndpointConflictError(Exception):
 
 class EndpointRegistry:
     """
-        Module-level registry that collects all endpoint descriptors
-        from attach_at/attach_child calls.
-        
-        This class implements a singleton pattern at the module level,
-        storing all registered endpoint descriptors and providing methods
-        for collecting, querying, and exporting the endpoint map.
-        
-        The registry detects conflicts when two handlers attempt to
-        register at the same path+method combination and can optionally
-        allow replacement of existing registrations.
+        The set of endpoints belonging to one application.
+
+        A registry is an ordinary object and owns its own state. Build one,
+        collect the modules whose endpoints belong to it, and hand it to the
+        application::
+
+            registry = EndpointRegistry()
+            registry.collect_from(helloworld.endpoints)
+            app = WebApplication(registry=registry)
+
+        This used to be class-level state with every method a classmethod,
+        which made the endpoint map process-global. Two applications in one
+        process shared it, so importing a second one raised
+        EndpointConflictError for routes that were never actually in conflict
+        -- they simply belonged to different applications. Python's module
+        cache made that unfixable from the outside: a module of handlers
+        registers on first import and never again, so whichever registry was
+        active at that moment kept them forever.
+
+        Conflict detection is kept, and now means what it says: two handlers
+        claiming the same path and method *within one application*.
     """
-    
-    _descriptors: List[EndpointDescriptor] = []
-    _path_method_index: Dict[Tuple[str, str], EndpointDescriptor] = {}
-    
-    @classmethod
+
+    def __init__(self) -> None:
+        self._descriptors: List[EndpointDescriptor] = []
+        self._path_method_index: Dict[Tuple[str, str], EndpointDescriptor] = {}
+        return
+
     def register(
-        cls,
+        self,
         descriptor: EndpointDescriptor,
         on_conflict: str = "error"
     ) -> None:
@@ -108,18 +124,18 @@ class EndpointRegistry:
                                           and on_conflict="error".
         """
         # Determine the path for indexing
-        path = cls._get_index_path(descriptor)
+        path = self._get_index_path(descriptor)
         
         # Check for conflicts for each method
         for method in descriptor.methods:
             key = (path, method.upper())
             
-            if key in cls._path_method_index:
-                existing = cls._path_method_index[key]
+            if key in self._path_method_index:
+                existing = self._path_method_index[key]
                 
                 if on_conflict == "replace":
                     # Remove the existing descriptor from the list
-                    cls._remove_descriptor_for_key(key)
+                    self._remove_descriptor_for_key(key)
                 else:
                     # Raise conflict error
                     raise EndpointConflictError(
@@ -130,13 +146,12 @@ class EndpointRegistry:
                     )
             
             # Register the new descriptor for this method
-            cls._path_method_index[key] = descriptor
+            self._path_method_index[key] = descriptor
         
         # Add to the descriptors list
-        cls._descriptors.append(descriptor)
+        self._descriptors.append(descriptor)
     
-    @classmethod
-    def _get_index_path(cls, descriptor: EndpointDescriptor) -> str:
+    def _get_index_path(self, descriptor: EndpointDescriptor) -> str:
         """
             Get the path to use for indexing a descriptor.
             
@@ -151,8 +166,7 @@ class EndpointRegistry:
         else:
             return "/"
     
-    @classmethod
-    def _remove_descriptor_for_key(cls, key: Tuple[str, str]) -> None:
+    def _remove_descriptor_for_key(self, key: Tuple[str, str]) -> None:
         """
             Remove a descriptor from the list that matches the given key.
             
@@ -161,14 +175,13 @@ class EndpointRegistry:
         path, method = key
         
         # Find and remove the descriptor
-        for i, desc in enumerate(cls._descriptors):
-            desc_path = cls._get_index_path(desc)
+        for i, desc in enumerate(self._descriptors):
+            desc_path = self._get_index_path(desc)
             if desc_path == path and method.upper() in [m.upper() for m in desc.methods]:
-                cls._descriptors.pop(i)
+                self._descriptors.pop(i)
                 break
     
-    @classmethod
-    def collect(cls) -> List[EndpointDescriptor]:
+    def collect(self) -> List[EndpointDescriptor]:
         """
             Return all registered descriptors.
 
@@ -177,11 +190,10 @@ class EndpointRegistry:
 
             :returns: List of all EndpointDescriptor objects.
         """
-        return cls._descriptors.copy()
+        return self._descriptors.copy()
 
-    @classmethod
     def update_descriptor_path(
-        cls,
+        self,
         descriptor: EndpointDescriptor,
         new_path: str,
     ) -> None:
@@ -214,7 +226,7 @@ class EndpointRegistry:
                                            descriptor for any of the
                                            descriptor's methods.
         """
-        if descriptor not in cls._descriptors:
+        if descriptor not in self._descriptors:
             errmsg = (
                 "Cannot update path for a descriptor that is not "
                 "registered: handler={!r}, current_path={!r}".format(
@@ -224,7 +236,7 @@ class EndpointRegistry:
             )
             raise ValueError(errmsg)
 
-        old_index_path = cls._get_index_path(descriptor)
+        old_index_path = self._get_index_path(descriptor)
         new_index_path = new_path
 
         # Short-circuit when the path is unchanged. Avoids touching the
@@ -238,7 +250,7 @@ class EndpointRegistry:
         # different descriptor, abort before mutating any state.
         for method in descriptor.methods:
             new_key = (new_index_path, method.upper())
-            existing = cls._path_method_index.get(new_key)
+            existing = self._path_method_index.get(new_key)
             if existing is not None and existing is not descriptor:
                 raise EndpointConflictError(
                     path=new_index_path,
@@ -251,32 +263,87 @@ class EndpointRegistry:
         # install new index keys.
         for method in descriptor.methods:
             old_key = (old_index_path, method.upper())
-            if cls._path_method_index.get(old_key) is descriptor:
-                del cls._path_method_index[old_key]
+            if self._path_method_index.get(old_key) is descriptor:
+                del self._path_method_index[old_key]
 
         descriptor.path = new_path
         descriptor.leaf = None
 
         for method in descriptor.methods:
             new_key = (new_index_path, method.upper())
-            cls._path_method_index[new_key] = descriptor
+            self._path_method_index[new_key] = descriptor
 
         return
     
-    @classmethod
-    def clear(cls) -> None:
+    def collect_from(self, *sources: Any, on_conflict: Optional[str] = None) -> int:
         """
-            Clear all registered descriptors.
-            
-            This method is primarily intended for testing purposes,
-            allowing tests to reset the registry state between test runs.
+            Register every marked handler found in the given sources.
+
+            :meth:`Endpoint.attach_at` only marks a handler; this is the step
+            that puts it in an application's endpoint map. A source may be a
+            module or package, a class, or a single callable, so an
+            application can collect a whole site while a test collects one
+            handler it just defined::
+
+                registry.collect_from(helloworld.endpoints)
+                registry.collect_from(StatusEndpoint, some_handler)
+
+            Modules are walked one level: their classes are descended into,
+            so handlers defined in a class body are found, but imported
+            submodules are not followed. Collecting the same source twice
+            registers each descriptor once -- re-collection is not a second
+            registration and does not self-conflict.
+
+            :param sources: Modules, classes or callables to scan.
+            :param on_conflict: Overrides the policy each descriptor declared
+                                at its decorator. Left as None normally.
+
+            :returns: The number of descriptors newly registered.
         """
-        cls._descriptors.clear()
-        cls._path_method_index.clear()
-    
-    @classmethod
+        seen: List[int] = [id(d) for d in self._descriptors]
+        found: List[EndpointDescriptor] = []
+
+        for source in sources:
+            self._gather(source, found)
+
+        count = 0
+        for descriptor in found:
+            if id(descriptor) in seen:
+                continue
+            policy = on_conflict if on_conflict is not None else descriptor.on_conflict
+            self.register(descriptor, on_conflict=policy)
+            seen.append(id(descriptor))
+            count += 1
+
+        return count
+
+    def _gather(self, source: Any, found: List[EndpointDescriptor]) -> None:
+        """
+            Append every descriptor marked on ``source`` to ``found``.
+
+            :param source: A module, class or callable to inspect.
+            :param found: Accumulator, appended to in place.
+        """
+        marks = getattr(source, ENDPOINT_DESCRIPTORS_ATTR, None)
+        if marks is not None:
+            found.extend(marks)
+            return
+
+        if inspect.ismodule(source) or inspect.isclass(source):
+            for _, member in inspect.getmembers(source):
+                member_marks = getattr(member, ENDPOINT_DESCRIPTORS_ATTR, None)
+                if member_marks is not None:
+                    found.extend(member_marks)
+                elif inspect.isclass(member) and inspect.ismodule(source):
+                    for _, attr in inspect.getmembers(member):
+                        attr_marks = getattr(attr, ENDPOINT_DESCRIPTORS_ATTR, None)
+                        if attr_marks is not None:
+                            found.extend(attr_marks)
+
+        return
+
     def export_security_map(
-        cls,
+        self,
         filter_tag: Optional[str] = None,
         format: str = "markdown"
     ) -> str:
@@ -293,24 +360,23 @@ class EndpointRegistry:
             :returns: Formatted security map string.
         """
         # Collect and filter descriptors
-        descriptors = cls._filter_descriptors(filter_tag)
+        descriptors = self._filter_descriptors(filter_tag)
         
         # Convert to security rows
         rows = [desc.to_security_row() for desc in descriptors]
         
         # Format based on requested format
         if format == "markdown":
-            return cls._format_markdown(rows)
+            return self._format_markdown(rows)
         elif format == "csv":
-            return cls._format_csv(rows)
+            return self._format_csv(rows)
         elif format == "json":
-            return cls._format_json(rows)
+            return self._format_json(rows)
         else:
             raise ValueError(f"Unsupported format: {format}")
     
-    @classmethod
     def _filter_descriptors(
-        cls,
+        self,
         filter_tag: Optional[str]
     ) -> List[EndpointDescriptor]:
         """
@@ -321,15 +387,14 @@ class EndpointRegistry:
             :returns: Filtered list of descriptors.
         """
         if filter_tag is None:
-            return cls._descriptors.copy()
+            return self._descriptors.copy()
         
         return [
-            desc for desc in cls._descriptors
+            desc for desc in self._descriptors
             if filter_tag in desc.tags
         ]
     
-    @classmethod
-    def _format_markdown(cls, rows: List[Dict[str, Any]]) -> str:
+    def _format_markdown(self, rows: List[Dict[str, Any]]) -> str:
         """
             Format security rows as a Markdown table.
             
@@ -364,8 +429,7 @@ class EndpointRegistry:
         
         return "\n".join([header, separator] + table_rows) + "\n"
     
-    @classmethod
-    def _format_csv(cls, rows: List[Dict[str, Any]]) -> str:
+    def _format_csv(self, rows: List[Dict[str, Any]]) -> str:
         """
             Format security rows as CSV.
             
@@ -390,8 +454,7 @@ class EndpointRegistry:
         
         return output.getvalue()
     
-    @classmethod
-    def _format_json(cls, rows: List[Dict[str, Any]]) -> str:
+    def _format_json(self, rows: List[Dict[str, Any]]) -> str:
         """
             Format security rows as JSON.
             

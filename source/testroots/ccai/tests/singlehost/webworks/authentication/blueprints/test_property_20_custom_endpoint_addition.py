@@ -68,8 +68,7 @@ def test_property_20_custom_endpoint_addition():
 
     for iteration in range(num_iterations):
         # Clear the registry before each iteration to avoid conflicts
-        EndpointRegistry.clear()
-
+        registry = EndpointRegistry()
         # Generate random base path and custom leaf names
         base_segment = _random_path_segment()
         base_path = f"/test/{base_segment}"
@@ -124,7 +123,8 @@ def test_property_20_custom_endpoint_addition():
         TestBlueprint.register_with_registry(on_conflict="replace")
 
         # Collect all registered descriptors
-        all_descriptors = EndpointRegistry.collect()
+        registry.collect_from(custom_handler)
+        all_descriptors = registry.collect()
 
         # --- Verify default endpoint is registered ---
 
@@ -228,6 +228,5 @@ def test_property_20_custom_endpoint_addition():
             raise AssertionError(errmsg)
 
     # Final cleanup
-    EndpointRegistry.clear()
-
+    registry = EndpointRegistry()
     return

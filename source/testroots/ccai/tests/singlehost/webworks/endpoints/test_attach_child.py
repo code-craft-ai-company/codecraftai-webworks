@@ -26,9 +26,7 @@ from ccai.webworks.endpoints import (
 
 def _clear_registry():
     """Helper to clear the registry before tests."""
-    EndpointRegistry.clear()
-
-
+    registry = EndpointRegistry()
 # =============================================================================
 # Task 5.1: attach_child() classmethod in Blueprint
 # =============================================================================
@@ -157,6 +155,7 @@ def test_attach_child_returns_endpoint_descriptor():
 
 def test_attach_child_registers_descriptor():
     """Test that attach_child registers the descriptor with EndpointRegistry."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class ParentBlueprint(Blueprint):
@@ -167,7 +166,7 @@ def test_attach_child_registers_descriptor():
     
     ParentBlueprint.attach_child(ChildEndpoint)
     
-    descriptors = EndpointRegistry.collect()
+    descriptors = registry.collect()
     
     if len(descriptors) != 1:
         raise AssertionError(f"Expected 1 descriptor in registry, got {len(descriptors)}")
@@ -610,6 +609,7 @@ def test_attach_child_with_doc_kwarg():
 
 def test_attach_child_multiple_children():
     """Test that attach_child can attach multiple children."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class ParentBlueprint(Blueprint):
@@ -630,7 +630,7 @@ def test_attach_child_multiple_children():
     if desc2.path != "/api/items":
         raise AssertionError(f"Expected path='/api/items', got {desc2.path}")
     
-    descriptors = EndpointRegistry.collect()
+    descriptors = registry.collect()
     if len(descriptors) != 2:
         raise AssertionError(f"Expected 2 descriptors in registry, got {len(descriptors)}")
     

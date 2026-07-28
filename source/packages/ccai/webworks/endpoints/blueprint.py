@@ -15,7 +15,10 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Type, TypeVar
 
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.constraints import EndpointConstraints
-from ccai.webworks.endpoints.descriptor import EndpointDescriptor
+from ccai.webworks.endpoints.descriptor import (
+    EndpointDescriptor,
+    mark_handler
+)
 from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.endpoint import Endpoint
 from ccai.webworks.endpoints.exceptions import EndpointRegistrationError
@@ -178,7 +181,7 @@ class Blueprint(Endpoint):
             return cached_descriptors.copy()
         
         # Collect descriptors from the registry that belong to this blueprint
-        all_descriptors = EndpointRegistry.collect()
+        all_descriptors = cls.marked_descriptors()
         
         # Filter to descriptors that were registered by this blueprint class
         blueprint_descriptors = cls._collect_blueprint_descriptors(all_descriptors)
@@ -708,7 +711,7 @@ class Blueprint(Endpoint):
             extras=extras_dict
         )
         
-        # Step 12: Register with EndpointRegistry
-        EndpointRegistry.register(descriptor)
+        # Step 12: mark the handler. A registry collects it later.
+        mark_handler(descriptor.handler, descriptor)
         
         return descriptor

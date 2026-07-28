@@ -85,9 +85,7 @@ def generate_random_doc() -> Optional[Doc]:
 
 def _clear_registry():
     """Helper to clear the registry before tests."""
-    EndpointRegistry.clear()
-
-
+    registry = EndpointRegistry()
 def _make_handler(iteration: int, suffix: str = ""):
     """Create a unique handler function for a given iteration."""
     def handler():
@@ -120,6 +118,7 @@ def test_property_attach_at_emits_descriptor_to_registry():
         **Feature: endpoint-abstractions, Property 3: Descriptor Emission**
         **Validates: Requirements 4.1, 6.1**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -142,7 +141,7 @@ def test_property_attach_at_emits_descriptor_to_registry():
             doc=doc,
         )(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
 
         if len(descriptors) != 1:
             raise AssertionError(
@@ -207,6 +206,7 @@ def test_property_attach_at_emits_descriptor_with_merged_class_attrs():
         **Feature: endpoint-abstractions, Property 3: Descriptor Emission**
         **Validates: Requirements 4.1, 6.1**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -248,7 +248,7 @@ def test_property_attach_at_emits_descriptor_with_merged_class_attrs():
 
         SubEndpoint.attach_at(**kwargs)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
 
         if len(descriptors) != 1:
             raise AssertionError(
@@ -301,6 +301,7 @@ def test_property_attach_at_with_path_emits_descriptor():
         **Feature: endpoint-abstractions, Property 3: Descriptor Emission**
         **Validates: Requirements 4.1, 6.1**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -311,7 +312,7 @@ def test_property_attach_at_with_path_emits_descriptor():
 
         Endpoint.attach_at(path=path, methods=methods)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
 
         if len(descriptors) != 1:
             raise AssertionError(
@@ -351,6 +352,7 @@ def test_property_each_attach_at_call_adds_one_descriptor():
         **Feature: endpoint-abstractions, Property 3: Descriptor Emission**
         **Validates: Requirements 4.1, 6.1**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -363,7 +365,7 @@ def test_property_each_attach_at_call_adds_one_descriptor():
             Endpoint.attach_at(leaf=leaf)(handler)
             handlers.append(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
 
         if len(descriptors) != num_handlers:
             raise AssertionError(
@@ -394,6 +396,7 @@ def test_property_descriptor_has_constraints_object():
         **Feature: endpoint-abstractions, Property 3: Descriptor Emission**
         **Validates: Requirements 4.1, 6.1**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -408,7 +411,7 @@ def test_property_descriptor_has_constraints_object():
             rate_limit=rate_limit,
         )(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         if not isinstance(desc.constraints, EndpointConstraints):
@@ -532,6 +535,7 @@ def test_property_descriptor_module_matches_handler():
         **Feature: endpoint-abstractions, Property 3: Descriptor Emission**
         **Validates: Requirements 4.1, 6.1**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -540,7 +544,7 @@ def test_property_descriptor_module_matches_handler():
 
         Endpoint.attach_at(leaf=leaf)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         if desc.module != handler.__module__:

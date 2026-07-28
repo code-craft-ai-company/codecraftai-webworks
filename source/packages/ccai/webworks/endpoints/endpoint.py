@@ -15,7 +15,11 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.constraints import EndpointConstraints
-from ccai.webworks.endpoints.descriptor import EndpointDescriptor
+from ccai.webworks.endpoints.descriptor import (
+    ENDPOINT_DESCRIPTORS_ATTR,
+    EndpointDescriptor,
+    mark_handler
+)
 from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.exceptions import EndpointRegistrationError
 from ccai.webworks.endpoints.ratelimit import RateLimit
@@ -25,6 +29,7 @@ from ccai.webworks.security.decorators import HANDLER_POLICY_ATTR
 
 # Type variable for preserving function signatures in decorators
 F = TypeVar("F", bound=Callable[..., Any])
+
 
 
 class Endpoint:
@@ -156,10 +161,12 @@ class Endpoint:
                 continue
 
             for descriptor in descriptors:
-                EndpointRegistry.update_descriptor_path(
-                    descriptor=descriptor,
-                    new_path=corrected_path,
-                )
+                # The descriptor is still only a mark on the handler at this
+                # point -- no registry has collected it yet -- so correcting
+                # the path is a plain assignment. Previously this had to
+                # reach into the global registry and move index entries,
+                # because registration had already happened at decoration.
+                descriptor.path = corrected_path
 
             # Anchor the marker to the resolved subclass so deeper
             # subclasses that don't override this method won't try
@@ -281,10 +288,44 @@ class Endpoint:
             :returns: List of matching descriptors. Empty when the
                       handler is not registered.
         """
+        marks = getattr(handler, ENDPOINT_DESCRIPTORS_ATTR, None)
+        if marks is None:
+            return []
+
+        rtnval: List[EndpointDescriptor] = list(marks)
+
+        return rtnval
+
+    @classmethod
+    def marked_descriptors(cls) -> List[EndpointDescriptor]:
+        """
+            Every descriptor declared by a handler on this class or an
+            ancestor of it.
+
+            Callers used to reach for ``EndpointRegistry.collect()`` and then
+            filter the whole process's endpoints down to the ones belonging
+            to a class. The descriptors now live on the handlers themselves,
+            so a class can be asked directly and the answer does not depend
+            on what else has been imported.
+
+            :returns: Descriptors in method-resolution order, nearest class
+                      first, with duplicates from inherited handlers removed.
+        """
         rtnval: List[EndpointDescriptor] = []
-        for descriptor in EndpointRegistry.collect():
-            if descriptor.handler is handler:
-                rtnval.append(descriptor)
+        seen: List[int] = []
+
+        for klass in cls.__mro__:
+            for value in list(vars(klass).values()):
+                handler = value
+                if isinstance(handler, (classmethod, staticmethod)):
+                    handler = handler.__func__
+                if not callable(handler):
+                    continue
+                for descriptor in getattr(handler, ENDPOINT_DESCRIPTORS_ATTR, ()):
+                    if id(descriptor) in seen:
+                        continue
+                    seen.append(id(descriptor))
+                    rtnval.append(descriptor)
 
         return rtnval
 
@@ -406,9 +447,17 @@ class Endpoint:
                 extras=extras_dict
             )
             
-            # Register with the registry
-            EndpointRegistry.register(descriptor, on_conflict=on_conflict)
-            
+            # Mark the function with its descriptor. Registration is a
+            # separate, explicit step -- an application builds an
+            # EndpointRegistry and calls collect_from(...) on the modules it
+            # wants. Importing a module of handlers has no global effect.
+            #
+            # The mark is read out of func.__dict__ rather than with getattr
+            # so that a method defined on a subclass does not append to a
+            # list that belongs to its base class.
+            descriptor.on_conflict = on_conflict
+            mark_handler(func, descriptor)
+
             # Return the original function unchanged
             return func
         

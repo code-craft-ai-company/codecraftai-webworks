@@ -16,7 +16,10 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.constraints import EndpointConstraints
-from ccai.webworks.endpoints.descriptor import EndpointDescriptor
+from ccai.webworks.endpoints.descriptor import (
+    EndpointDescriptor,
+    mark_handler
+)
 from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.endpoint import Endpoint
 from ccai.webworks.endpoints.exceptions import EndpointRegistrationError, SchemaInspectionError
@@ -191,8 +194,9 @@ class RestEndpoint(Endpoint):
                 extras=extras_dict
             )
             
-            # Register with the registry
-            EndpointRegistry.register(descriptor, on_conflict=on_conflict)
+            # Mark the handler; a registry collects it later.
+            descriptor.on_conflict = on_conflict
+            mark_handler(func, descriptor)
             
             # Return the original function unchanged
             return func

@@ -161,8 +161,7 @@ def test_property_conflict_raises_error_for_same_path_method():
         **Validates: Requirements 2.5, 6.5**
     """
     for iteration in range(100):
-        EndpointRegistry.clear()
-
+        registry = EndpointRegistry()
         # Generate a random path and method combination
         use_path = random.choice([True, False])
         if use_path:
@@ -191,12 +190,12 @@ def test_property_conflict_raises_error_for_same_path_method():
         )
 
         # First registration should succeed
-        EndpointRegistry.register(desc_a, on_conflict="error")
+        registry.register(desc_a, on_conflict="error")
 
         # Second registration at same path+method should raise conflict
         caught = False
         try:
-            EndpointRegistry.register(desc_b, on_conflict="error")
+            registry.register(desc_b, on_conflict="error")
         except EndpointConflictError as exc:
             caught = True
 
@@ -231,7 +230,7 @@ def test_property_conflict_raises_error_for_same_path_method():
             )
             raise AssertionError(errmsg)
 
-    EndpointRegistry.clear()
+    registry = EndpointRegistry()
     return
 
 
@@ -248,8 +247,7 @@ def test_property_on_conflict_replace_allows_override():
         **Validates: Requirements 6.6**
     """
     for iteration in range(100):
-        EndpointRegistry.clear()
-
+        registry = EndpointRegistry()
         # Generate a random path and method combination
         use_path = random.choice([True, False])
         if use_path:
@@ -278,11 +276,11 @@ def test_property_on_conflict_replace_allows_override():
         )
 
         # First registration
-        EndpointRegistry.register(desc_a, on_conflict="error")
+        registry.register(desc_a, on_conflict="error")
 
         # Second registration with replace should not raise
         try:
-            EndpointRegistry.register(desc_b, on_conflict="replace")
+            registry.register(desc_b, on_conflict="replace")
         except EndpointConflictError as exc:
             errmsg = (
                 f"Iteration {iteration}: on_conflict='replace' should not raise "
@@ -291,7 +289,7 @@ def test_property_on_conflict_replace_allows_override():
             raise AssertionError(errmsg)
 
         # The registry should now contain the replacement handler
-        collected = EndpointRegistry.collect()
+        collected = registry.collect()
         matching = [
             d for d in collected
             if d.handler is handler_b
@@ -319,7 +317,7 @@ def test_property_on_conflict_replace_allows_override():
             )
             raise AssertionError(errmsg)
 
-    EndpointRegistry.clear()
+    registry = EndpointRegistry()
     return
 
 
@@ -335,8 +333,7 @@ def test_property_no_conflict_for_different_methods_same_path():
         **Validates: Requirements 2.5, 6.5**
     """
     for iteration in range(100):
-        EndpointRegistry.clear()
-
+        registry = EndpointRegistry()
         # Generate a random path
         use_path = random.choice([True, False])
         if use_path:
@@ -367,8 +364,8 @@ def test_property_no_conflict_for_different_methods_same_path():
 
         # Both registrations should succeed without error
         try:
-            EndpointRegistry.register(desc_a, on_conflict="error")
-            EndpointRegistry.register(desc_b, on_conflict="error")
+            registry.register(desc_a, on_conflict="error")
+            registry.register(desc_b, on_conflict="error")
         except EndpointConflictError as exc:
             errmsg = (
                 f"Iteration {iteration}: Different methods on same path should not "
@@ -377,7 +374,7 @@ def test_property_no_conflict_for_different_methods_same_path():
             )
             raise AssertionError(errmsg)
 
-        collected = EndpointRegistry.collect()
+        collected = registry.collect()
         if len(collected) != 2:
             errmsg = (
                 f"Iteration {iteration}: Registry should contain 2 descriptors "
@@ -385,7 +382,7 @@ def test_property_no_conflict_for_different_methods_same_path():
             )
             raise AssertionError(errmsg)
 
-    EndpointRegistry.clear()
+    registry = EndpointRegistry()
     return
 
 
@@ -401,8 +398,7 @@ def test_property_attach_at_with_leaf_or_path_succeeds():
         **Validates: Requirements 2.4**
     """
     for iteration in range(100):
-        EndpointRegistry.clear()
-
+        registry = EndpointRegistry()
         handler = make_handler()
 
         # Randomly choose to provide leaf, path, or both
@@ -435,5 +431,5 @@ def test_property_attach_at_with_leaf_or_path_succeeds():
             )
             raise AssertionError(errmsg)
 
-    EndpointRegistry.clear()
+    registry = EndpointRegistry()
     return

@@ -84,9 +84,7 @@ def generate_random_doc() -> Optional[Doc]:
 
 def _clear_registry():
     """Helper to clear the registry before tests."""
-    EndpointRegistry.clear()
-
-
+    registry = EndpointRegistry()
 def _make_handler(iteration: int):
     """Create a unique handler function for a given iteration."""
     def handler():

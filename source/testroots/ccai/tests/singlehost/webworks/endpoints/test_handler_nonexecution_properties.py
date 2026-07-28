@@ -84,9 +84,7 @@ def generate_random_doc() -> Optional[Doc]:
 
 def _clear_registry():
     """Helper to clear the registry before tests."""
-    EndpointRegistry.clear()
-
-
+    registry = EndpointRegistry()
 def _create_subclass(iteration: int, attrs: Dict[str, Any]) -> type:
     """Create a unique Endpoint subclass with the given class attributes."""
     return type(f"NonExecEndpoint_{iteration}", (Endpoint,), dict(attrs))
@@ -198,13 +196,14 @@ def test_property_handler_not_called_during_registry_collect():
     """
         Property 11: Handler Non-Execution During Import - Registry Collect
 
-        *For any* set of registered endpoints, calling EndpointRegistry.collect()
+        *For any* set of registered endpoints, calling registry.collect()
         SHALL NOT execute any of the registered handlers. The collect operation
         SHALL only return descriptor records.
 
         **Feature: endpoint-abstractions, Property 11: Handler Non-Execution During Import**
         **Validates: Requirements 6.2**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -233,13 +232,13 @@ def test_property_handler_not_called_during_registry_collect():
             cc[0] = 0
 
         # Call collect - this should not execute any handlers
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
 
         for idx, cc in enumerate(call_counts):
             if cc[0] != 0:
                 raise AssertionError(
                     f"Iteration {iteration}: Handler {idx} was called {cc[0]} time(s) "
-                    f"during EndpointRegistry.collect(). Expected 0 calls."
+                    f"during registry.collect(). Expected 0 calls."
                 )
 
         if len(descriptors) != num_handlers:

@@ -64,15 +64,13 @@ def _populated_registry():
         is idempotent. Teardown clears the registry again to keep this
         module's side effects contained.
     """
-    EndpointRegistry.clear()
+    registry = EndpointRegistry()
     for blueprint_cls in _SECURITY_BLUEPRINT_CLASSES:
         blueprint_cls.register_with_registry(on_conflict="replace")
 
     yield
 
-    EndpointRegistry.clear()
-
-
+    registry = EndpointRegistry()
 # =============================================================================
 # Test Helpers
 # =============================================================================
@@ -118,7 +116,8 @@ def test_property_21_registry_descriptors_have_handlers():
 
         **Validates: Requirements 9.1**
     """
-    descriptors = EndpointRegistry.collect()
+    registry = EndpointRegistry()
+    descriptors = registry.collect()
 
     if len(descriptors) == 0:
         errmsg = "EndpointRegistry has no descriptors registered."
@@ -172,9 +171,10 @@ def test_property_21_router_matches_registered_endpoints():
 
         **Validates: Requirements 9.1, 9.2, 9.6**
     """
+    registry = EndpointRegistry()
     router = _build_router_from_registry()
 
-    descriptors = EndpointRegistry.collect()
+    descriptors = registry.collect()
 
     for descriptor in descriptors:
         desc_path = _get_descriptor_path(descriptor)
@@ -297,9 +297,10 @@ def test_property_21_router_preserves_handler_reference():
 
         **Validates: Requirements 9.2, 9.6**
     """
+    registry = EndpointRegistry()
     router = _build_router_from_registry()
 
-    descriptors = EndpointRegistry.collect()
+    descriptors = registry.collect()
 
     for descriptor in descriptors:
         desc_path = _get_descriptor_path(descriptor)

@@ -63,8 +63,7 @@ def test_restblueprint_has_add_crud_method():
 
 def test_restblueprint_attach_at_computes_path_from_base():
     """Test that attach_at computes path relative to base_path."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api/v1"
     
@@ -72,15 +71,15 @@ def test_restblueprint_attach_at_computes_path_from_base():
     def list_users():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(list_users)
+    descriptors = registry.collect()
     assert len(descriptors) == 1
     assert descriptors[0].path == "/api/v1/users"
 
 
 def test_restblueprint_attach_at_computes_path_from_base_leaf():
     """Test that attach_at computes path relative to base_leaf."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_leaf = "api"
     
@@ -88,15 +87,15 @@ def test_restblueprint_attach_at_computes_path_from_base_leaf():
     def get_status():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(get_status)
+    descriptors = registry.collect()
     assert len(descriptors) == 1
     assert descriptors[0].path == "/api/status"
 
 
 def test_restblueprint_attach_at_with_absolute_path():
     """Test that attach_at with absolute=True overrides base path."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api/v1"
     
@@ -104,15 +103,15 @@ def test_restblueprint_attach_at_with_absolute_path():
     def health_check():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(health_check)
+    descriptors = registry.collect()
     assert len(descriptors) == 1
     assert descriptors[0].path == "/health"
 
 
 def test_restblueprint_tag_merging_default():
     """Test that tags are merged by default (not replaced)."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
         tags = ["api", "v1"]
@@ -121,7 +120,8 @@ def test_restblueprint_tag_merging_default():
     def list_users():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(list_users)
+    descriptors = registry.collect()
     assert len(descriptors) == 1
     # Child tags + parent tags merged
     assert "users" in descriptors[0].tags
@@ -131,8 +131,7 @@ def test_restblueprint_tag_merging_default():
 
 def test_restblueprint_tag_replacement():
     """Test that replace_tags=True causes child tags to replace parent tags."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
         tags = ["api", "v1"]
@@ -142,7 +141,8 @@ def test_restblueprint_tag_replacement():
     def list_users():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(list_users)
+    descriptors = registry.collect()
     assert len(descriptors) == 1
     # Only child tags, parent tags replaced
     assert descriptors[0].tags == ["users"]
@@ -150,8 +150,7 @@ def test_restblueprint_tag_replacement():
 
 def test_restblueprint_version_inheritance():
     """Test that version is inherited from blueprint."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
         version = "v2"
@@ -160,15 +159,15 @@ def test_restblueprint_version_inheritance():
     def list_users():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(list_users)
+    descriptors = registry.collect()
     assert len(descriptors) == 1
     assert descriptors[0].version == "v2"
 
 
 def test_restblueprint_version_override():
     """Test that version can be overridden in attach_at."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
         version = "v1"
@@ -177,15 +176,15 @@ def test_restblueprint_version_override():
     def list_users():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(list_users)
+    descriptors = registry.collect()
     assert len(descriptors) == 1
     assert descriptors[0].version == "v3"
 
 
 def test_restblueprint_register_returns_descriptors():
     """Test that register() returns list of descriptors."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -203,8 +202,7 @@ def test_restblueprint_register_returns_descriptors():
 
 def test_restblueprint_register_with_router():
     """Test that register() calls router.add_endpoint for each descriptor."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class MockRouter:
         def __init__(self):
             self.endpoints = []
@@ -228,8 +226,7 @@ def test_restblueprint_register_with_router():
 
 def test_restblueprint_add_crud_registers_list_endpoint():
     """Test that add_crud registers list endpoint."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -250,8 +247,7 @@ def test_restblueprint_add_crud_registers_list_endpoint():
 
 def test_restblueprint_add_crud_registers_create_endpoint():
     """Test that add_crud registers create endpoint."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -272,8 +268,7 @@ def test_restblueprint_add_crud_registers_create_endpoint():
 
 def test_restblueprint_add_crud_registers_read_endpoint():
     """Test that add_crud registers read endpoint."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -294,8 +289,7 @@ def test_restblueprint_add_crud_registers_read_endpoint():
 
 def test_restblueprint_add_crud_registers_update_endpoint():
     """Test that add_crud registers update endpoint."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -317,8 +311,7 @@ def test_restblueprint_add_crud_registers_update_endpoint():
 
 def test_restblueprint_add_crud_registers_delete_endpoint():
     """Test that add_crud registers delete endpoint."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -339,8 +332,7 @@ def test_restblueprint_add_crud_registers_delete_endpoint():
 
 def test_restblueprint_add_crud_registers_all_endpoints():
     """Test that add_crud registers all CRUD endpoints when all handlers provided."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -374,8 +366,7 @@ def test_restblueprint_add_crud_registers_all_endpoints():
 
 def test_restblueprint_inherits_access_policy():
     """Test that child endpoints inherit access_policy from blueprint."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     policy = AccessPolicy(roles=["admin"], scopes=["read"])
     
     class ApiBlueprint(RestBlueprint):
@@ -386,15 +377,15 @@ def test_restblueprint_inherits_access_policy():
     def list_users():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(list_users)
+    descriptors = registry.collect()
     assert len(descriptors) == 1
     assert descriptors[0].constraints.access_policy == policy
 
 
 def test_restblueprint_inherits_rate_limit():
     """Test that child endpoints inherit rate_limit from blueprint."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     limit = RateLimit(requests=100, window=60)
     
     class ApiBlueprint(RestBlueprint):
@@ -405,15 +396,15 @@ def test_restblueprint_inherits_rate_limit():
     def list_users():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(list_users)
+    descriptors = registry.collect()
     assert len(descriptors) == 1
     assert descriptors[0].constraints.rate_limit == limit
 
 
 def test_restblueprint_schema_inspection():
     """Test that schema inspection works for REST endpoints."""
-    EndpointRegistry.clear()
-    
+    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -421,7 +412,8 @@ def test_restblueprint_schema_inspection():
     def list_users():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(list_users)
+    descriptors = registry.collect()
     assert len(descriptors) == 1
     assert "rest" in descriptors[0].extras
     assert "response_schema" in descriptors[0].extras["rest"]

@@ -34,7 +34,7 @@ def third_handler():
 
 def setup_clean_registry():
     """Clear the registry before each test."""
-    EndpointRegistry.clear()
+    return EndpointRegistry()
 
 
 # =============================================================================
@@ -45,8 +45,7 @@ def test_registry_register_single_descriptor():
     """
         Test that a single descriptor can be registered.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -54,9 +53,9 @@ def test_registry_register_single_descriptor():
         methods=["GET"]
     )
     
-    EndpointRegistry.register(descriptor)
+    registry.register(descriptor)
     
-    collected = EndpointRegistry.collect()
+    collected = registry.collect()
     
     if len(collected) != 1:
         errmsg = f"Expected 1 descriptor, got {len(collected)}"
@@ -73,8 +72,7 @@ def test_registry_register_multiple_descriptors():
     """
         Test that multiple descriptors can be registered.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor1 = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -89,10 +87,10 @@ def test_registry_register_multiple_descriptors():
         methods=["GET"]
     )
     
-    EndpointRegistry.register(descriptor1)
-    EndpointRegistry.register(descriptor2)
+    registry.register(descriptor1)
+    registry.register(descriptor2)
     
-    collected = EndpointRegistry.collect()
+    collected = registry.collect()
     
     if len(collected) != 2:
         errmsg = f"Expected 2 descriptors, got {len(collected)}"
@@ -105,8 +103,7 @@ def test_registry_collect_returns_copy():
     """
         Test that collect() returns a copy of the descriptors list.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -114,10 +111,10 @@ def test_registry_collect_returns_copy():
         methods=["GET"]
     )
     
-    EndpointRegistry.register(descriptor)
+    registry.register(descriptor)
     
-    collected1 = EndpointRegistry.collect()
-    collected2 = EndpointRegistry.collect()
+    collected1 = registry.collect()
+    collected2 = registry.collect()
     
     if collected1 is collected2:
         errmsg = "Expected collect() to return different list objects"
@@ -126,7 +123,7 @@ def test_registry_collect_returns_copy():
     # Modifying the returned list should not affect the registry
     collected1.clear()
     
-    collected3 = EndpointRegistry.collect()
+    collected3 = registry.collect()
     if len(collected3) != 1:
         errmsg = f"Expected 1 descriptor after clearing returned list, got {len(collected3)}"
         raise AssertionError(errmsg)
@@ -138,8 +135,7 @@ def test_registry_clear():
     """
         Test that clear() removes all registered descriptors.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -147,16 +143,15 @@ def test_registry_clear():
         methods=["GET"]
     )
     
-    EndpointRegistry.register(descriptor)
+    registry.register(descriptor)
     
-    if len(EndpointRegistry.collect()) != 1:
+    if len(registry.collect()) != 1:
         errmsg = "Expected 1 descriptor before clear"
         raise AssertionError(errmsg)
     
-    EndpointRegistry.clear()
-    
-    if len(EndpointRegistry.collect()) != 0:
-        errmsg = f"Expected 0 descriptors after clear, got {len(EndpointRegistry.collect())}"
+    registry = EndpointRegistry()
+    if len(registry.collect()) != 0:
+        errmsg = f"Expected 0 descriptors after clear, got {len(registry.collect())}"
         raise AssertionError(errmsg)
     
     return
@@ -170,8 +165,7 @@ def test_registry_conflict_same_path_method():
     """
         Test that registering the same path+method raises EndpointConflictError.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor1 = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -186,10 +180,10 @@ def test_registry_conflict_same_path_method():
         methods=["GET"]
     )
     
-    EndpointRegistry.register(descriptor1)
+    registry.register(descriptor1)
     
     try:
-        EndpointRegistry.register(descriptor2)
+        registry.register(descriptor2)
         raise AssertionError("Expected EndpointConflictError to be raised")
     except EndpointConflictError as e:
         if e.path != "/status":
@@ -206,8 +200,7 @@ def test_registry_conflict_different_methods_allowed():
     """
         Test that same path with different methods is allowed.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor1 = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -222,10 +215,10 @@ def test_registry_conflict_different_methods_allowed():
         methods=["POST"]
     )
     
-    EndpointRegistry.register(descriptor1)
-    EndpointRegistry.register(descriptor2)
+    registry.register(descriptor1)
+    registry.register(descriptor2)
     
-    collected = EndpointRegistry.collect()
+    collected = registry.collect()
     
     if len(collected) != 2:
         errmsg = f"Expected 2 descriptors, got {len(collected)}"
@@ -238,8 +231,7 @@ def test_registry_conflict_multiple_methods():
     """
         Test conflict detection with multiple methods on a descriptor.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor1 = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -254,10 +246,10 @@ def test_registry_conflict_multiple_methods():
         methods=["POST"]  # Conflicts with POST from descriptor1
     )
     
-    EndpointRegistry.register(descriptor1)
+    registry.register(descriptor1)
     
     try:
-        EndpointRegistry.register(descriptor2)
+        registry.register(descriptor2)
         raise AssertionError("Expected EndpointConflictError to be raised")
     except EndpointConflictError as e:
         if e.method != "POST":
@@ -271,8 +263,7 @@ def test_registry_on_conflict_replace():
     """
         Test that on_conflict='replace' allows overriding existing registration.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor1 = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -287,10 +278,10 @@ def test_registry_on_conflict_replace():
         methods=["GET"]
     )
     
-    EndpointRegistry.register(descriptor1)
-    EndpointRegistry.register(descriptor2, on_conflict="replace")
+    registry.register(descriptor1)
+    registry.register(descriptor2, on_conflict="replace")
     
-    collected = EndpointRegistry.collect()
+    collected = registry.collect()
     
     if len(collected) != 1:
         errmsg = f"Expected 1 descriptor after replace, got {len(collected)}"
@@ -307,8 +298,7 @@ def test_registry_conflict_with_path():
     """
         Test conflict detection using path instead of leaf.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor1 = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -323,10 +313,10 @@ def test_registry_conflict_with_path():
         methods=["GET"]
     )
     
-    EndpointRegistry.register(descriptor1)
+    registry.register(descriptor1)
     
     try:
-        EndpointRegistry.register(descriptor2)
+        registry.register(descriptor2)
         raise AssertionError("Expected EndpointConflictError to be raised")
     except EndpointConflictError as e:
         if e.path != "/api/v1/status":
@@ -411,9 +401,8 @@ def test_export_security_map_markdown_empty():
     """
         Test export_security_map with no registered endpoints.
     """
-    setup_clean_registry()
-    
-    result = EndpointRegistry.export_security_map(format="markdown")
+    registry = setup_clean_registry()
+    result = registry.export_security_map(format="markdown")
     
     if "No endpoints registered" not in result:
         errmsg = f"Expected 'No endpoints registered' message, got {result}"
@@ -426,8 +415,7 @@ def test_export_security_map_markdown_basic():
     """
         Test export_security_map generates markdown table.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -436,9 +424,9 @@ def test_export_security_map_markdown_basic():
         tags=["api"]
     )
     
-    EndpointRegistry.register(descriptor)
+    registry.register(descriptor)
     
-    result = EndpointRegistry.export_security_map(format="markdown")
+    result = registry.export_security_map(format="markdown")
     
     if "| path |" not in result:
         errmsg = f"Expected markdown header, got {result}"
@@ -459,8 +447,7 @@ def test_export_security_map_csv():
     """
         Test export_security_map generates CSV format.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -468,9 +455,9 @@ def test_export_security_map_csv():
         methods=["GET"]
     )
     
-    EndpointRegistry.register(descriptor)
+    registry.register(descriptor)
     
-    result = EndpointRegistry.export_security_map(format="csv")
+    result = registry.export_security_map(format="csv")
     
     if "path,methods,handler" not in result:
         errmsg = f"Expected CSV header, got {result}"
@@ -487,8 +474,7 @@ def test_export_security_map_json():
     """
         Test export_security_map generates JSON format.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -496,9 +482,9 @@ def test_export_security_map_json():
         methods=["GET"]
     )
     
-    EndpointRegistry.register(descriptor)
+    registry.register(descriptor)
     
-    result = EndpointRegistry.export_security_map(format="json")
+    result = registry.export_security_map(format="json")
     
     import json
     parsed = json.loads(result)
@@ -522,8 +508,7 @@ def test_export_security_map_filter_tag():
     """
         Test export_security_map filters by tag.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor1 = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -540,11 +525,11 @@ def test_export_security_map_filter_tag():
         tags=["public", "api"]
     )
     
-    EndpointRegistry.register(descriptor1)
-    EndpointRegistry.register(descriptor2)
+    registry.register(descriptor1)
+    registry.register(descriptor2)
     
     # Filter by admin tag
-    result = EndpointRegistry.export_security_map(filter_tag="admin", format="json")
+    result = registry.export_security_map(filter_tag="admin", format="json")
     
     import json
     parsed = json.loads(result)
@@ -564,8 +549,7 @@ def test_export_security_map_filter_tag_no_match():
     """
         Test export_security_map with filter that matches nothing.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -574,9 +558,9 @@ def test_export_security_map_filter_tag_no_match():
         tags=["api"]
     )
     
-    EndpointRegistry.register(descriptor)
+    registry.register(descriptor)
     
-    result = EndpointRegistry.export_security_map(filter_tag="nonexistent", format="json")
+    result = registry.export_security_map(filter_tag="nonexistent", format="json")
     
     import json
     parsed = json.loads(result)
@@ -592,8 +576,7 @@ def test_export_security_map_with_constraints():
     """
         Test export_security_map includes constraint information.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     policy = AccessPolicy(roles=["admin"], scopes=["read"], require_auth=True)
     limit = RateLimit(requests=100, window=60)
     constraints = EndpointConstraints(
@@ -611,9 +594,9 @@ def test_export_security_map_with_constraints():
         constraints=constraints
     )
     
-    EndpointRegistry.register(descriptor)
+    registry.register(descriptor)
     
-    result = EndpointRegistry.export_security_map(format="json")
+    result = registry.export_security_map(format="json")
     
     import json
     parsed = json.loads(result)
@@ -637,10 +620,9 @@ def test_export_security_map_invalid_format():
     """
         Test export_security_map raises error for invalid format.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     try:
-        EndpointRegistry.export_security_map(format="invalid")
+        registry.export_security_map(format="invalid")
         raise AssertionError("Expected ValueError to be raised")
     except ValueError as e:
         if "Unsupported format" not in str(e):
@@ -654,8 +636,7 @@ def test_export_security_map_multiple_endpoints():
     """
         Test export_security_map with multiple endpoints.
     """
-    setup_clean_registry()
-    
+    registry = setup_clean_registry()
     descriptor1 = EndpointDescriptor(
         handler=sample_handler,
         module="test_module",
@@ -680,11 +661,11 @@ def test_export_security_map_multiple_endpoints():
         tags=["monitoring"]
     )
     
-    EndpointRegistry.register(descriptor1)
-    EndpointRegistry.register(descriptor2)
-    EndpointRegistry.register(descriptor3)
+    registry.register(descriptor1)
+    registry.register(descriptor2)
+    registry.register(descriptor3)
     
-    result = EndpointRegistry.export_security_map(format="json")
+    result = registry.export_security_map(format="json")
     
     import json
     parsed = json.loads(result)

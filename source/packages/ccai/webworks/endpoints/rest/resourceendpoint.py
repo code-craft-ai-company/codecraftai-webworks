@@ -13,6 +13,7 @@ __credits__ = []
 
 from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING
 
+from ccai.webworks.endpoints.descriptor import mark_handler
 from ccai.webworks.endpoints.restendpoint import RestEndpoint
 from ccai.webworks.endpoints.rest.models import ErrorMapping
 
@@ -428,7 +429,7 @@ class ResourceEndpoint(RestEndpoint):
             if router is not None:
                 router.add_route(collection_descriptor)
             else:
-                EndpointRegistry.register(collection_descriptor)
+                mark_handler(collection_descriptor.handler, collection_descriptor)
             
             descriptors.append(collection_descriptor)
         
@@ -470,7 +471,7 @@ class ResourceEndpoint(RestEndpoint):
             if router is not None:
                 router.add_route(item_descriptor)
             else:
-                EndpointRegistry.register(item_descriptor)
+                mark_handler(item_descriptor.handler, item_descriptor)
             
             descriptors.append(item_descriptor)
         

@@ -69,9 +69,7 @@ def generate_random_rate_limit() -> RateLimit:
 
 def _clear_registry():
     """Helper to clear the registry before tests."""
-    EndpointRegistry.clear()
-
-
+    registry = EndpointRegistry()
 def _make_handler(iteration: int, suffix: str = ""):
     """Create a unique handler function for a given iteration."""
     def handler():
@@ -104,6 +102,7 @@ def test_property_explicit_kwargs_override_class_attributes():
         **Feature: endpoint-abstractions, Property 2: Attribute Inheritance and Override**
         **Validates: Requirements 1.3, 2.3, 2.8**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -142,7 +141,7 @@ def test_property_explicit_kwargs_override_class_attributes():
         )(handler)
 
         # Retrieve the descriptor from the registry
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         if len(descriptors) != 1:
             raise AssertionError(
                 f"Iteration {iteration}: Expected 1 descriptor, got {len(descriptors)}"
@@ -193,6 +192,7 @@ def test_property_missing_kwargs_fallback_to_class_defaults():
         **Feature: endpoint-abstractions, Property 2: Attribute Inheritance and Override**
         **Validates: Requirements 1.4, 1.6**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -217,7 +217,7 @@ def test_property_missing_kwargs_fallback_to_class_defaults():
         # Call attach_at with only the mandatory leaf, no overrides
         SubEndpoint.attach_at(leaf=leaf)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         if len(descriptors) != 1:
             raise AssertionError(
                 f"Iteration {iteration}: Expected 1 descriptor, got {len(descriptors)}"
@@ -352,6 +352,7 @@ def test_property_partial_override_mixes_class_and_kwargs():
         **Validates: Requirements 1.3, 1.4, 2.8**
     """
     # The overridable attributes we test
+    registry = EndpointRegistry()
     ATTR_KEYS = ["methods", "tags", "version", "access_policy", "rate_limit"]
 
     for iteration in range(100):
@@ -390,7 +391,7 @@ def test_property_partial_override_mixes_class_and_kwargs():
 
         SubEndpoint.attach_at(leaf=leaf, **override_values)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         if len(descriptors) != 1:
             raise AssertionError(
                 f"Iteration {iteration}: Expected 1 descriptor, got {len(descriptors)}"
@@ -447,6 +448,7 @@ def test_property_subclass_defaults_inherited_by_handler():
         **Feature: endpoint-abstractions, Property 2: Attribute Inheritance and Override**
         **Validates: Requirements 1.6**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -472,7 +474,7 @@ def test_property_subclass_defaults_inherited_by_handler():
 
         SubEndpoint.attach_at(leaf=leaf)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         # Verify all class attributes are inherited

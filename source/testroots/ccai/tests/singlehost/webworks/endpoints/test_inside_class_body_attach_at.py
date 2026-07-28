@@ -54,7 +54,7 @@ def _setup_function(function):
         Reset the global :class:`EndpointRegistry` before each test
         so cases don't interfere via descriptor accumulation.
     """
-    EndpointRegistry.clear()
+    registry = EndpointRegistry()
     return
 
 
@@ -64,8 +64,7 @@ def _setup_function(function):
 
 
 def test_rest_blueprint_inside_class_body_decoration_resolves_subclass_base_path():
-    EndpointRegistry.clear()
-
+    registry = EndpointRegistry()
     class InsideRestBP(RestBlueprint):
         base_path = "/inside-rest"
 
@@ -73,7 +72,8 @@ def test_rest_blueprint_inside_class_body_decoration_resolves_subclass_base_path
         def thing(self, request):
             return {}
 
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(thing)
+    descriptors = registry.collect()
 
     if len(descriptors) != 1:
         errmsg = "Expected exactly 1 descriptor, got {}".format(
@@ -96,8 +96,7 @@ def test_rest_blueprint_outside_class_body_decoration_unchanged():
     # The typical pattern: decorate against the subclass after the
     # class is fully defined. No reliance on __init_subclass__; the
     # path should compose correctly at decoration time.
-    EndpointRegistry.clear()
-
+    registry = EndpointRegistry()
     class OutsideRestBP(RestBlueprint):
         base_path = "/outside-rest"
 
@@ -105,7 +104,8 @@ def test_rest_blueprint_outside_class_body_decoration_unchanged():
     def widget_handler(request):
         return {}
 
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(widget_handler)
+    descriptors = registry.collect()
 
     if len(descriptors) != 1:
         errmsg = "Expected exactly 1 descriptor, got {}".format(
@@ -125,8 +125,7 @@ def test_rest_blueprint_outside_class_body_decoration_unchanged():
 
 
 def test_rest_blueprint_inside_class_body_multi_method_stacking():
-    EndpointRegistry.clear()
-
+    registry = EndpointRegistry()
     class StackedRestBP(RestBlueprint):
         base_path = "/stacked"
 
@@ -135,7 +134,8 @@ def test_rest_blueprint_inside_class_body_multi_method_stacking():
         def thing(self, request):
             return {}
 
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(thing)
+    descriptors = registry.collect()
 
     if len(descriptors) != 2:
         errmsg = (
@@ -163,8 +163,7 @@ def test_rest_blueprint_inside_class_body_multi_method_stacking():
 
 
 def test_rest_blueprint_inside_class_body_absolute_path_not_reprefixed():
-    EndpointRegistry.clear()
-
+    registry = EndpointRegistry()
     class AbsoluteRestBP(RestBlueprint):
         base_path = "/abs"
 
@@ -176,7 +175,8 @@ def test_rest_blueprint_inside_class_body_absolute_path_not_reprefixed():
         def elsewhere(self, request):
             return {}
 
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(elsewhere)
+    descriptors = registry.collect()
 
     if len(descriptors) != 1:
         errmsg = "Expected exactly 1 descriptor, got {}".format(
@@ -197,8 +197,7 @@ def test_rest_blueprint_inside_class_body_absolute_path_not_reprefixed():
 def test_rest_blueprint_inside_class_body_path_form():
     # User passes a ``path=`` instead of a ``leaf=``. The
     # re-resolution must produce the right composition.
-    EndpointRegistry.clear()
-
+    registry = EndpointRegistry()
     class PathFormBP(RestBlueprint):
         base_path = "/pathy"
 
@@ -206,7 +205,8 @@ def test_rest_blueprint_inside_class_body_path_form():
         def list_things(self, request):
             return {}
 
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(list_things)
+    descriptors = registry.collect()
 
     if len(descriptors) != 1:
         errmsg = "Expected exactly 1 descriptor, got {}".format(
@@ -229,8 +229,7 @@ def test_rest_blueprint_inside_class_body_path_form():
 
 
 def test_blueprint_inside_class_body_decoration_resolves_subclass_base_path():
-    EndpointRegistry.clear()
-
+    registry = EndpointRegistry()
     class InsideBP(Blueprint):
         base_path = "/inside-bp"
 
@@ -238,7 +237,8 @@ def test_blueprint_inside_class_body_decoration_resolves_subclass_base_path():
         def thing(self, request):
             return {}
 
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(thing)
+    descriptors = registry.collect()
 
     if len(descriptors) != 1:
         errmsg = "Expected exactly 1 descriptor, got {}".format(
@@ -261,8 +261,7 @@ def test_blueprint_inside_class_body_decoration_resolves_subclass_base_path():
 
 
 def test_multi_level_subclass_picks_up_each_levels_base_path():
-    EndpointRegistry.clear()
-
+    registry = EndpointRegistry()
     class LevelOne(RestBlueprint):
         base_path = "/one"
 
@@ -277,7 +276,8 @@ def test_multi_level_subclass_picks_up_each_levels_base_path():
         def beta(self, request):
             return {}
 
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(alpha, beta)
+    descriptors = registry.collect()
 
     paths = sorted(d.path for d in descriptors)
     expected = sorted(["/one/alpha", "/two/beta"])
@@ -298,8 +298,7 @@ def test_marker_does_not_re_resolve_when_decoration_is_on_subclass_itself():
     # Decorating against the *subclass* (which is a no-op for the
     # bug because ``cls`` is already the right class) should not
     # trigger any path correction in __init_subclass__.
-    EndpointRegistry.clear()
-
+    registry = EndpointRegistry()
     class SelfDecoratedBP(RestBlueprint):
         base_path = "/self"
 
@@ -307,7 +306,8 @@ def test_marker_does_not_re_resolve_when_decoration_is_on_subclass_itself():
     def self_thing(request):
         return {}
 
-    descriptors_after_first = EndpointRegistry.collect()
+    registry.collect_from(self_thing)
+    descriptors_after_first = registry.collect()
 
     if descriptors_after_first[0].path != "/self/thing":
         errmsg = (
@@ -324,7 +324,7 @@ def test_marker_does_not_re_resolve_when_decoration_is_on_subclass_itself():
     class DeeperBP(SelfDecoratedBP):
         base_path = "/deeper"
 
-    descriptors_after_second = EndpointRegistry.collect()
+    descriptors_after_second = registry.collect()
 
     if descriptors_after_second[0].path != "/self/thing":
         errmsg = (
@@ -344,8 +344,7 @@ def test_marker_does_not_re_resolve_when_decoration_is_on_subclass_itself():
 
 
 def test_registry_update_descriptor_path_moves_index_entries():
-    EndpointRegistry.clear()
-
+    registry = EndpointRegistry()
     class _BP(RestBlueprint):
         base_path = "/start"
 
@@ -353,7 +352,8 @@ def test_registry_update_descriptor_path_moves_index_entries():
     def thing_handler(request):
         return {}
 
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(thing_handler)
+    descriptors = registry.collect()
     descriptor = descriptors[0]
 
     if descriptor.path != "/start/thing":
@@ -364,7 +364,7 @@ def test_registry_update_descriptor_path_moves_index_entries():
 
     # Move the descriptor to a new path and confirm both index keys
     # follow it.
-    EndpointRegistry.update_descriptor_path(
+    registry.update_descriptor_path(
         descriptor=descriptor,
         new_path="/start/thing-renamed",
     )
@@ -402,8 +402,7 @@ def test_registry_update_descriptor_path_rejects_unregistered_descriptor():
     from ccai.webworks.endpoints.descriptor import EndpointDescriptor
     from ccai.webworks.endpoints.constraints import EndpointConstraints
 
-    EndpointRegistry.clear()
-
+    registry = EndpointRegistry()
     orphan = EndpointDescriptor(
         handler=lambda request: None,
         module="test",
@@ -419,7 +418,7 @@ def test_registry_update_descriptor_path_rejects_unregistered_descriptor():
 
     raised = False
     try:
-        EndpointRegistry.update_descriptor_path(
+        registry.update_descriptor_path(
             descriptor=orphan,
             new_path="/somewhere-else",
         )
@@ -434,8 +433,7 @@ def test_registry_update_descriptor_path_rejects_unregistered_descriptor():
 
 
 def test_registry_update_descriptor_path_no_op_for_unchanged_path():
-    EndpointRegistry.clear()
-
+    registry = EndpointRegistry()
     class _BP(RestBlueprint):
         base_path = "/no-op"
 
@@ -443,9 +441,10 @@ def test_registry_update_descriptor_path_no_op_for_unchanged_path():
     def thing_handler(request):
         return {}
 
-    descriptor = EndpointRegistry.collect()[0]
+    registry.collect_from(thing_handler)
+    descriptor = registry.collect()[0]
 
-    EndpointRegistry.update_descriptor_path(
+    registry.update_descriptor_path(
         descriptor=descriptor,
         new_path="/no-op/thing",  # same as current
     )

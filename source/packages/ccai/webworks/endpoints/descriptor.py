@@ -17,6 +17,44 @@ from ccai.webworks.endpoints.constraints import EndpointConstraints
 from ccai.webworks.endpoints.doc import Doc
 
 
+#: Attribute stamped on a handler by :meth:`Endpoint.attach_at`, holding the
+#: list of :class:`EndpointDescriptor` objects declared for it. The decorator
+#: only marks; an :class:`EndpointRegistry` reads these marks when an
+#: application explicitly collects a module. A handler may carry more than
+#: one descriptor when it is decorated more than once.
+#:
+#: Defined here rather than beside the decorator so that registry.py can
+#: read it without importing endpoint.py, which imports registry.py.
+ENDPOINT_DESCRIPTORS_ATTR = "__webworks_endpoint_descriptors__"
+
+
+def mark_handler(handler: Any, descriptor: "EndpointDescriptor") -> None:
+    """
+        Record a descriptor on the handler that declared it.
+
+        Declaring an endpoint and registering one are separate steps. This is
+        the declaring half: it attaches the descriptor to the handler and has
+        no other effect, so importing a module of handlers changes nothing
+        outside that module. An :class:`EndpointRegistry` performs the
+        registering half when an application collects the module.
+
+        The existing marks are read out of ``handler.__dict__`` rather than
+        with :func:`getattr` so a method defined on a subclass never appends
+        to a list belonging to its base class.
+
+        :param handler: The callable declaring the endpoint.
+        :param descriptor: The descriptor to record on it.
+    """
+    marks = handler.__dict__.get(ENDPOINT_DESCRIPTORS_ATTR)
+    if marks is None:
+        marks = []
+        setattr(handler, ENDPOINT_DESCRIPTORS_ATTR, marks)
+
+    marks.append(descriptor)
+
+    return
+
+
 @dataclass
 class EndpointDescriptor:
     """
@@ -37,8 +75,14 @@ class EndpointDescriptor:
         :param constraints: Normalized constraint objects (AccessPolicy, RateLimit).
         :param doc: Documentation metadata (summary, description).
         :param extras: Additional metadata namespaced by endpoint type.
+        :param on_conflict: What a registry should do when this descriptor
+                            collides with one already registered at the same
+                            path and method -- "error" or "replace". Declared
+                            at the decorator and carried here because the
+                            decorator only marks; the decision has to survive
+                            until a registry actually collects the handler.
     """
-    
+
     handler: Callable
     module: str
     leaf: Optional[str] = None
@@ -49,6 +93,7 @@ class EndpointDescriptor:
     constraints: EndpointConstraints = field(default_factory=EndpointConstraints)
     doc: Optional[Doc] = None
     extras: Dict[str, Any] = field(default_factory=dict)
+    on_conflict: str = "error"
     
     def to_openapi_path(self) -> Dict[str, Any]:
         """

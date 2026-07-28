@@ -39,7 +39,7 @@ def _clear_registry():
         Reset the global :class:`EndpointRegistry` between tests so route
         registrations from earlier tests do not collide with new ones.
     """
-    EndpointRegistry.clear()
+    registry = EndpointRegistry()
     return
 
 
@@ -50,7 +50,8 @@ def _last_descriptor_for(handler):
         attach_at recorded for a specific handler without depending on
         registration order.
     """
-    descriptors = EndpointRegistry.collect()
+    registry = EndpointRegistry()
+    descriptors = registry.collect()
     for desc in descriptors:
         if desc.handler is handler:
             return desc

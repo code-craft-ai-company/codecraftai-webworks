@@ -42,9 +42,7 @@ def generate_random_leaf() -> str:
 
 def _clear_registry():
     """Helper to clear the registry before tests."""
-    EndpointRegistry.clear()
-
-
+    registry = EndpointRegistry()
 def _make_handler(iteration: int, suffix: str = ""):
     """Create a unique handler function for a given iteration."""
     def handler():
@@ -176,6 +174,7 @@ def test_property_dataclass_request_schema_captured_in_extras():
         **Feature: endpoint-abstractions, Property 12: Schema Inspection**
         **Validates: Requirements 8.7**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -187,7 +186,7 @@ def test_property_dataclass_request_schema_captured_in_extras():
 
         RestEndpoint.attach_at(leaf=leaf, request_schema=schema_cls)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
 
         if len(descriptors) != 1:
             raise AssertionError(
@@ -245,6 +244,7 @@ def test_property_dataclass_response_schema_captured_in_extras():
         **Feature: endpoint-abstractions, Property 12: Schema Inspection**
         **Validates: Requirements 8.7**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -256,7 +256,7 @@ def test_property_dataclass_response_schema_captured_in_extras():
 
         RestEndpoint.attach_at(leaf=leaf, response_schema=schema_cls)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         if "rest" not in desc.extras:
@@ -300,6 +300,7 @@ def test_property_pydantic_model_schema_captured_via_model_json_schema():
         **Feature: endpoint-abstractions, Property 12: Schema Inspection**
         **Validates: Requirements 8.7**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -312,7 +313,7 @@ def test_property_pydantic_model_schema_captured_via_model_json_schema():
         # Use as request_schema
         RestEndpoint.attach_at(leaf=leaf, request_schema=model_cls)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         rest = desc.extras.get("rest", {})
@@ -348,6 +349,7 @@ def test_property_both_request_and_response_schemas_captured():
         **Feature: endpoint-abstractions, Property 12: Schema Inspection**
         **Validates: Requirements 8.7**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -366,7 +368,7 @@ def test_property_both_request_and_response_schemas_captured():
             response_schema=resp_cls
         )(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         rest = desc.extras.get("rest", {})
@@ -413,6 +415,7 @@ def test_property_dataclass_required_fields_marked_in_schema():
         **Feature: endpoint-abstractions, Property 12: Schema Inspection**
         **Validates: Requirements 8.7**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -436,7 +439,7 @@ def test_property_dataclass_required_fields_marked_in_schema():
 
         RestEndpoint.attach_at(leaf=leaf, request_schema=schema_cls)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         captured = desc.extras.get("rest", {}).get("request_schema", {})

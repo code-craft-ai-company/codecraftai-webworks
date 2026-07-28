@@ -86,9 +86,7 @@ def generate_random_doc() -> Optional[Doc]:
 
 def _clear_registry():
     """Helper to clear the registry before tests."""
-    EndpointRegistry.clear()
-
-
+    registry = EndpointRegistry()
 def _make_handler(iteration: int, suffix: str = ""):
     """Create a unique handler function for a given iteration."""
     def handler():
@@ -108,7 +106,7 @@ def test_property_collect_descriptors_have_all_metadata_fields():
     """
         Property 13: Descriptor Metadata Completeness - Field Presence
 
-        *For any* call to EndpointRegistry.collect(), each returned
+        *For any* call to registry.collect(), each returned
         descriptor SHALL include all metadata fields: path (or leaf),
         methods, constraints (with access_policy, scopes, rate_limits,
         roles), version, tags, doc, handler, module, and extras.
@@ -116,6 +114,7 @@ def test_property_collect_descriptors_have_all_metadata_fields():
         **Feature: endpoint-abstractions, Property 13: Descriptor Metadata Completeness**
         **Validates: Requirements 11.1**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -138,7 +137,7 @@ def test_property_collect_descriptors_have_all_metadata_fields():
             doc=doc,
         )(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
 
         if len(descriptors) != 1:
             raise AssertionError(
@@ -248,6 +247,7 @@ def test_property_collect_preserves_access_policy_in_constraints():
         **Feature: endpoint-abstractions, Property 13: Descriptor Metadata Completeness**
         **Validates: Requirements 11.1**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -265,7 +265,7 @@ def test_property_collect_preserves_access_policy_in_constraints():
             access_policy=access_policy,
         )(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         # Verify access_policy is present in constraints
@@ -312,6 +312,7 @@ def test_property_collect_preserves_rate_limit_in_constraints():
         **Feature: endpoint-abstractions, Property 13: Descriptor Metadata Completeness**
         **Validates: Requirements 11.1**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -328,7 +329,7 @@ def test_property_collect_preserves_rate_limit_in_constraints():
             rate_limit=rate_limit,
         )(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         # Verify rate_limit is present in constraints
@@ -364,6 +365,7 @@ def test_property_collect_multiple_descriptors_all_complete():
         **Feature: endpoint-abstractions, Property 13: Descriptor Metadata Completeness**
         **Validates: Requirements 11.1**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -400,7 +402,7 @@ def test_property_collect_multiple_descriptors_all_complete():
                 "version": version,
             })
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
 
         if len(descriptors) != num_endpoints:
             raise AssertionError(
@@ -470,6 +472,7 @@ def test_property_collect_no_policy_yields_empty_scopes_and_roles():
         **Feature: endpoint-abstractions, Property 13: Descriptor Metadata Completeness**
         **Validates: Requirements 11.1**
     """
+    registry = EndpointRegistry()
     for iteration in range(100):
         _clear_registry()
 
@@ -478,7 +481,7 @@ def test_property_collect_no_policy_yields_empty_scopes_and_roles():
 
         Endpoint.attach_at(leaf=leaf)(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         if desc.constraints.access_policy is not None:
@@ -519,6 +522,7 @@ def test_property_collect_security_row_has_all_columns():
         **Feature: endpoint-abstractions, Property 13: Descriptor Metadata Completeness**
         **Validates: Requirements 11.1**
     """
+    registry = EndpointRegistry()
     required_columns = [
         "path", "methods", "handler", "access_policy",
         "scopes", "roles", "rate_limit", "summary"
@@ -542,7 +546,7 @@ def test_property_collect_security_row_has_all_columns():
             doc=doc,
         )(handler)
 
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
 
         row = desc.to_security_row()

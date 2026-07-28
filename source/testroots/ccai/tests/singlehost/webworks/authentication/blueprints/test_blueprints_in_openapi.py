@@ -101,7 +101,7 @@ def _build_spec_for(blueprint_cls) -> Dict[str, Any]:
         :class:`OpenAPIGenerator` against it. Returns the generated
         spec dict.
     """
-    EndpointRegistry.clear()
+    registry = EndpointRegistry()
     blueprint_cls.register_with_registry(on_conflict="replace")
 
     info = OpenAPIInfo(title="Test", version="0.0.0")

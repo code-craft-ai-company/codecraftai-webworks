@@ -95,9 +95,7 @@ def generate_random_rate_limit() -> Optional[RateLimit]:
 
 def _clear_registry():
     """Helper to clear the registry before tests."""
-    EndpointRegistry.clear()
-
-
+    registry = EndpointRegistry()
 # =============================================================================
 # Property 4: Path Composition
 # Feature: blueprint-endpoints, Property 4: Path Composition
@@ -831,6 +829,7 @@ def test_property_class_default_inheritance():
         **Feature: blueprint-endpoints, Property 2: Class Default Inheritance and Override**
         **Validates: Requirements 3.8, 3.9, 3.10**
     """
+    registry = EndpointRegistry()
     _clear_registry()
     
     # Run 100 iterations with different random configurations
@@ -865,7 +864,7 @@ def test_property_class_default_inheritance():
         TestBlueprint.attach_at(leaf=leaf)(handler)
         
         # Get the registered descriptor
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         if len(descriptors) != 1:
             errmsg = f"Iteration {iteration}: Expected 1 descriptor, got {len(descriptors)}"
             raise AssertionError(errmsg)
@@ -915,6 +914,7 @@ def test_property_class_default_override():
         **Feature: blueprint-endpoints, Property 2: Class Default Inheritance and Override**
         **Validates: Requirements 3.8, 3.9, 3.10**
     """
+    registry = EndpointRegistry()
     _clear_registry()
     
     # Run 100 iterations with different random configurations
@@ -955,7 +955,7 @@ def test_property_class_default_override():
         )(handler)
         
         # Get the registered descriptor
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
         
         # Verify methods are overridden
@@ -1083,6 +1083,7 @@ def test_property_extra_kwargs_preservation():
         **Feature: blueprint-endpoints, Property 3: Extra Kwargs Preservation**
         **Validates: Requirements 3.7**
     """
+    registry = EndpointRegistry()
     _clear_registry()
     
     # Run 100 iterations with different random configurations
@@ -1124,7 +1125,7 @@ def test_property_extra_kwargs_preservation():
         TestBlueprint.attach_at(leaf=leaf, **extra_kwargs)(handler)
         
         # Get the registered descriptor
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
         
         # Verify all extra kwargs are preserved in extras
@@ -1159,6 +1160,7 @@ def test_property_extra_kwargs_verbatim():
         **Feature: blueprint-endpoints, Property 3: Extra Kwargs Preservation**
         **Validates: Requirements 3.7**
     """
+    registry = EndpointRegistry()
     _clear_registry()
     
     # Run 100 iterations with different random configurations
@@ -1196,7 +1198,7 @@ def test_property_extra_kwargs_verbatim():
         TestBlueprint.attach_at(leaf=leaf, nested_config=nested_value)(handler)
         
         # Get the registered descriptor
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
         
         # Verify nested structure is preserved verbatim
@@ -2287,6 +2289,7 @@ def test_property_descriptor_emission():
         **Feature: blueprint-endpoints, Property 9: Descriptor Emission**
         **Validates: Requirements 5.1, 5.6**
     """
+    registry = EndpointRegistry()
     _clear_registry()
     
     # Run 100 iterations with different random configurations
@@ -2324,7 +2327,7 @@ def test_property_descriptor_emission():
         )(handler)
         
         # Verify descriptor was emitted to registry
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         
         if len(descriptors) != 1:
             errmsg = (
@@ -2391,6 +2394,7 @@ def test_property_descriptor_emission_with_attach_child():
         **Feature: blueprint-endpoints, Property 9: Descriptor Emission**
         **Validates: Requirements 5.1, 5.6**
     """
+    registry = EndpointRegistry()
     _clear_registry()
     
     # Run 100 iterations with different random configurations
@@ -2424,7 +2428,7 @@ def test_property_descriptor_emission_with_attach_child():
         descriptor = ParentBlueprint.attach_child(ChildEndpoint)
         
         # Verify descriptor was emitted to registry
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         
         if len(descriptors) != 1:
             errmsg = (
@@ -2465,6 +2469,7 @@ def test_property_descriptor_emission_merged_metadata():
         **Feature: blueprint-endpoints, Property 9: Descriptor Emission**
         **Validates: Requirements 5.1, 5.6**
     """
+    registry = EndpointRegistry()
     _clear_registry()
     
     # Run 100 iterations with different random configurations
@@ -2502,7 +2507,7 @@ def test_property_descriptor_emission_merged_metadata():
         TestBlueprint.attach_at(leaf=leaf)(handler)
         
         # Verify descriptor was emitted with merged metadata
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         desc = descriptors[0]
         
         # Verify access_policy is inherited from parent
@@ -2664,6 +2669,7 @@ def test_property_conflict_detection_replace_behavior():
         **Feature: blueprint-endpoints, Property 11: Conflict Detection and Replace**
         **Validates: Requirements 3.4, 3.5, 6.3, 6.4**
     """
+    registry = EndpointRegistry()
     _clear_registry()
     
     # Run 100 iterations with different random configurations
@@ -2690,7 +2696,7 @@ def test_property_conflict_detection_replace_behavior():
         TestBlueprint.attach_at(leaf=leaf, methods=methods)(handler1)
         
         # Verify first handler is registered
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         if len(descriptors) != 1:
             errmsg = f"Iteration {iteration}: Expected 1 descriptor after first attach"
             raise AssertionError(errmsg)
@@ -2713,7 +2719,7 @@ def test_property_conflict_detection_replace_behavior():
         )(handler2)
         
         # Verify second handler replaced first
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         
         if len(descriptors) != 1:
             errmsg = (
@@ -2742,6 +2748,7 @@ def test_property_conflict_detection_different_methods_allowed():
         **Feature: blueprint-endpoints, Property 11: Conflict Detection and Replace**
         **Validates: Requirements 3.4, 3.5, 6.3, 6.4**
     """
+    registry = EndpointRegistry()
     _clear_registry()
     
     # Run 100 iterations with different random configurations
@@ -2774,7 +2781,7 @@ def test_property_conflict_detection_different_methods_allowed():
         TestBlueprint.attach_at(leaf=leaf, methods=["PUT"])(put_handler)
         
         # Verify all handlers are registered
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         
         if len(descriptors) != 3:
             errmsg = (
@@ -2820,6 +2827,7 @@ def test_property_handler_non_execution_during_decoration():
         **Feature: blueprint-endpoints, Property 10: Handler Non-Execution During Registration**
         **Validates: Requirements 5.4, 5.7**
     """
+    registry = EndpointRegistry()
     _clear_registry()
     
     # Run 100 iterations with different random configurations
@@ -2874,7 +2882,7 @@ def test_property_handler_non_execution_during_decoration():
             raise AssertionError(errmsg)
         
         # Verify descriptor was created
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         if len(descriptors) != 1:
             errmsg = (
                 f"Iteration {iteration}: Expected 1 descriptor, got {len(descriptors)}"
@@ -2909,6 +2917,7 @@ def test_property_handler_non_execution_with_constraints():
         **Feature: blueprint-endpoints, Property 10: Handler Non-Execution During Registration**
         **Validates: Requirements 5.4, 5.7**
     """
+    registry = EndpointRegistry()
     _clear_registry()
     
     # Run 100 iterations with different random configurations
@@ -2961,7 +2970,7 @@ def test_property_handler_non_execution_with_constraints():
             raise AssertionError(errmsg)
         
         # Verify descriptor was created with merged constraints
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         if len(descriptors) != 1:
             errmsg = (
                 f"Iteration {iteration}: Expected 1 descriptor, got {len(descriptors)}"
@@ -2988,6 +2997,7 @@ def test_property_handler_non_execution_multiple_handlers():
         **Feature: blueprint-endpoints, Property 10: Handler Non-Execution During Registration**
         **Validates: Requirements 5.4, 5.7**
     """
+    registry = EndpointRegistry()
     _clear_registry()
     
     # Run 100 iterations with different random configurations
@@ -3031,7 +3041,7 @@ def test_property_handler_non_execution_multiple_handlers():
                 raise AssertionError(errmsg)
         
         # Verify all descriptors were created
-        descriptors = EndpointRegistry.collect()
+        descriptors = registry.collect()
         if len(descriptors) != num_handlers:
             errmsg = (
                 f"Iteration {iteration}: Expected {num_handlers} descriptors, "

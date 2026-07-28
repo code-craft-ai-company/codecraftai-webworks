@@ -292,7 +292,7 @@ class RestBlueprint(RestEndpoint):
             :returns: List of EndpointDescriptor objects for all registered endpoints.
         """
         # Collect descriptors from the registry that belong to this blueprint
-        all_descriptors = EndpointRegistry.collect()
+        all_descriptors = cls.marked_descriptors()
         
         # Filter to descriptors that were registered by this blueprint class
         blueprint_descriptors = cls._collect_blueprint_descriptors(all_descriptors)
@@ -388,7 +388,7 @@ class RestBlueprint(RestEndpoint):
             )
             decorator(list_handler)
             # Get the descriptor that was just registered
-            all_descs = EndpointRegistry.collect()
+            all_descs = cls.marked_descriptors()
             if all_descs:
                 descriptors.append(all_descs[-1])
         
@@ -405,7 +405,7 @@ class RestBlueprint(RestEndpoint):
                 doc=doc
             )
             decorator(create_handler)
-            all_descs = EndpointRegistry.collect()
+            all_descs = cls.marked_descriptors()
             if all_descs:
                 descriptors.append(all_descs[-1])
         
@@ -421,7 +421,7 @@ class RestBlueprint(RestEndpoint):
                 doc=doc
             )
             decorator(read_handler)
-            all_descs = EndpointRegistry.collect()
+            all_descs = cls.marked_descriptors()
             if all_descs:
                 descriptors.append(all_descs[-1])
         
@@ -438,7 +438,7 @@ class RestBlueprint(RestEndpoint):
                 doc=doc
             )
             decorator(update_handler)
-            all_descs = EndpointRegistry.collect()
+            all_descs = cls.marked_descriptors()
             if all_descs:
                 descriptors.append(all_descs[-1])
         
@@ -453,7 +453,7 @@ class RestBlueprint(RestEndpoint):
                 doc=doc
             )
             decorator(delete_handler)
-            all_descs = EndpointRegistry.collect()
+            all_descs = cls.marked_descriptors()
             if all_descs:
                 descriptors.append(all_descs[-1])
         

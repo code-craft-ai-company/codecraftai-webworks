@@ -103,6 +103,11 @@ def _serve_swagger_static(request: Request) -> Response:
     return Response(status_code=status_code, headers=headers, body=content_bytes)
 
 
+# Declare which endpoints belong to this application. Registration is
+# explicit and per-application, so the three testsites in this process
+# no longer contend for one endpoint map -- each collects its own.
+webapp.registry.collect_from(handlers)
+
 webapp.startup()
 
 # The ASGI application instance for serving

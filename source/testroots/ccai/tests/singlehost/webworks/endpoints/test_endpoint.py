@@ -29,9 +29,7 @@ from ccai.webworks.endpoints import (
 
 def _clear_registry():
     """Helper to clear the registry before tests."""
-    EndpointRegistry.clear()
-
-
+    registry = EndpointRegistry()
 # =============================================================================
 # Task 5.1: Endpoint class with class-level defaults
 # =============================================================================
@@ -153,13 +151,15 @@ def test_attach_at_returns_original_function():
 
 def test_attach_at_registers_descriptor():
     """Test that attach_at registers an EndpointDescriptor with the registry."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     @Endpoint.attach_at(leaf="test")
     def test_handler():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(test_handler)
+    descriptors = registry.collect()
     
     if len(descriptors) != 1:
         raise AssertionError(f"Expected 1 descriptor, got {len(descriptors)}")
@@ -180,13 +180,15 @@ def test_attach_at_registers_descriptor():
 
 def test_attach_at_with_path_parameter():
     """Test that attach_at accepts path parameter instead of leaf."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     @Endpoint.attach_at(path="/api/v1/status")
     def status_handler():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(status_handler)
+    descriptors = registry.collect()
     
     if len(descriptors) != 1:
         raise AssertionError(f"Expected 1 descriptor, got {len(descriptors)}")
@@ -228,6 +230,7 @@ def test_attach_at_raises_error_without_leaf_or_path():
 
 def test_attach_at_kwargs_override_class_defaults():
     """Test that explicit kwargs override class-level defaults."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class CustomEndpoint(Endpoint):
@@ -244,7 +247,8 @@ def test_attach_at_kwargs_override_class_defaults():
     def override_handler():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(override_handler)
+    descriptors = registry.collect()
     desc = descriptors[0]
     
     # Verify kwargs override class defaults
@@ -262,6 +266,7 @@ def test_attach_at_kwargs_override_class_defaults():
 
 def test_attach_at_inherits_class_defaults_when_not_specified():
     """Test that class defaults are used when kwargs not specified."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     class CustomEndpoint(Endpoint):
@@ -275,7 +280,8 @@ def test_attach_at_inherits_class_defaults_when_not_specified():
     def inherit_handler():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(inherit_handler)
+    descriptors = registry.collect()
     desc = descriptors[0]
     
     # Verify class defaults are inherited
@@ -299,6 +305,7 @@ def test_attach_at_inherits_class_defaults_when_not_specified():
 
 def test_attach_at_accepts_all_documented_parameters():
     """Test that attach_at accepts all documented parameters."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     policy = AccessPolicy(roles=["admin"], scopes=["read", "write"])
@@ -319,7 +326,8 @@ def test_attach_at_accepts_all_documented_parameters():
     def full_handler():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(full_handler)
+    descriptors = registry.collect()
     desc = descriptors[0]
     
     if desc.leaf != "full":
@@ -348,6 +356,7 @@ def test_attach_at_accepts_all_documented_parameters():
 
 def test_attach_at_stores_extra_kwargs_in_extras():
     """Test that additional kwargs are stored in descriptor.extras."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     @Endpoint.attach_at(
@@ -358,7 +367,8 @@ def test_attach_at_stores_extra_kwargs_in_extras():
     def extras_handler():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(extras_handler)
+    descriptors = registry.collect()
     desc = descriptors[0]
     
     if desc.extras.get("custom_field") != "custom_value":
@@ -395,6 +405,7 @@ def test_attach_at_raises_conflict_error_on_duplicate():
 
 def test_attach_at_allows_replace_on_conflict():
     """Test that attach_at allows replacement when on_conflict='replace'."""
+    registry = EndpointRegistry()
     _clear_registry()
     
     @Endpoint.attach_at(leaf="replace", methods=["GET"])
@@ -405,7 +416,8 @@ def test_attach_at_allows_replace_on_conflict():
     def second_handler():
         pass
     
-    descriptors = EndpointRegistry.collect()
+    registry.collect_from(first_handler, second_handler)
+    descriptors = registry.collect()
     
     # Should have only one descriptor (the replacement)
     if len(descriptors) != 1:
