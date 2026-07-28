@@ -96,16 +96,16 @@ def _make_oauth_blueprint() -> type:
 
 def _build_spec_for(blueprint_cls) -> Dict[str, Any]:
     """
-        Register the blueprint's descriptors with a freshly-cleared
+        Register the blueprint's descriptors with a registry built for
         :class:`EndpointRegistry` and invoke the
         :class:`OpenAPIGenerator` against it. Returns the generated
         spec dict.
     """
     registry = EndpointRegistry()
-    blueprint_cls.register_with_registry(on_conflict="replace")
+    blueprint_cls.register_with_registry(registry=registry, on_conflict="replace")
 
     info = OpenAPIInfo(title="Test", version="0.0.0")
-    generator = OpenAPIGenerator(registry=EndpointRegistry, info=info)
+    generator = OpenAPIGenerator(registry=registry, info=info)
 
     rtnval = generator.generate()
     return rtnval

@@ -120,7 +120,7 @@ def test_property_20_custom_endpoint_addition():
         TestBlueprint.custom_handler = custom_handler
 
         # Register the blueprint endpoints with the global registry
-        TestBlueprint.register_with_registry(on_conflict="replace")
+        TestBlueprint.register_with_registry(registry=registry, on_conflict="replace")
 
         # Collect all registered descriptors
         registry.collect_from(custom_handler)

@@ -66,7 +66,7 @@ def _populated_registry():
     """
     registry = EndpointRegistry()
     for blueprint_cls in _SECURITY_BLUEPRINT_CLASSES:
-        blueprint_cls.register_with_registry(on_conflict="replace")
+        blueprint_cls.register_with_registry(registry=registry, on_conflict="replace")
 
     yield
 
@@ -88,7 +88,7 @@ def _build_router_from_registry():
         Build a Router and load all endpoints from the global registry.
     """
     router = Router(strict_slashes=False, case_sensitive=True)
-    router.load_from_registry(EndpointRegistry)
+    router.load_from_registry(registry)
     return router
 
 

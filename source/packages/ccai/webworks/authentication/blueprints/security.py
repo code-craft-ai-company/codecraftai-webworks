@@ -899,16 +899,17 @@ class SecurityBlueprint(RestBlueprint):
 
             Builds endpoint descriptors from decorated handler methods and
             registers each one with the given :class:`EndpointRegistry`.
-            If no registry is provided, the global ``EndpointRegistry``
-            class is used.
+            A registry is required -- there is no global one to fall back
+            to, because a registry belongs to the application that built
+            it.
 
             This method enables integration with the webworks endpoint
             infrastructure so that blueprint endpoints appear alongside
             other registered endpoints in security maps, documentation
             generation, and bulk router loading.
 
-            :param registry: The :class:`EndpointRegistry` to register
-                             with. Defaults to the global EndpointRegistry.
+            :param registry: The :class:`EndpointRegistry` to register with.
+                             Required; passing None raises ValueError.
             :param on_conflict: Conflict handling strategy passed to the
                                 registry. Defaults to ``"replace"`` so that
                                 re-registration overwrites previous entries.
@@ -916,7 +917,10 @@ class SecurityBlueprint(RestBlueprint):
             :returns: List of EndpointDescriptor objects that were registered.
         """
         if registry is None:
-            registry = EndpointRegistry
+            errmsg = "register_with_registry requires a registry. Endpoints " \
+                     "belong to the application that collected them; there " \
+                     "is no process-wide registry to default to."
+            raise ValueError(errmsg)
 
         descriptors = cls.register()
 
@@ -975,10 +979,11 @@ class SecurityBlueprint(RestBlueprint):
         # Register with router (also builds descriptors)
         descriptors = cls.register(router=router)
 
-        # Register with the endpoint registry
-        target_registry = registry if registry is not None else EndpointRegistry
-        for descriptor in descriptors:
-            target_registry.register(descriptor, on_conflict="replace")
+        # Register with the endpoint registry, when one was supplied. There
+        # is no global registry to fall back to.
+        if registry is not None:
+            for descriptor in descriptors:
+                registry.register(descriptor, on_conflict="replace")
 
         # Register with middleware
         if middleware is not None:
