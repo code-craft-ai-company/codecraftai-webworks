@@ -24,6 +24,8 @@
     installed.
 """
 
+from unittest.mock import patch
+
 import builtins
 import importlib
 import sys
@@ -94,30 +96,32 @@ def _drop_cached_modules(prefixes: Iterable[str]) -> None:
 # =============================================================================
 
 
-def test_oauth_module_imports_without_oauth_libraries(monkeypatch):
+def test_oauth_module_imports_without_oauth_libraries():
     """
         ``ccai.webworks.authentication.oauth`` must import cleanly
         when authlib / joserfc / itsdangerous are absent.
     """
     _drop_cached_modules(_BLOCKED_PREFIXES + ("ccai.webworks.authentication.oauth",))
 
-    monkeypatch.setattr(
+    # builtins.__import__ is process-wide state. patch.object restores it
+    # on exit; leaving it replaced would break every later import.
+    with patch.object(
         builtins,
-        "__import__",
+        '__import__',
         _make_blocking_import(_BLOCKED_PREFIXES),
-    )
+    ):
 
-    oauth_mod = importlib.import_module(
-        "ccai.webworks.authentication.oauth",
-    )
-    if not hasattr(oauth_mod, "OAuthClient"):
-        errmsg = "OAuthClient export missing after no-libs import"
-        raise AssertionError(errmsg)
+        oauth_mod = importlib.import_module(
+            "ccai.webworks.authentication.oauth",
+        )
+        if not hasattr(oauth_mod, "OAuthClient"):
+            errmsg = "OAuthClient export missing after no-libs import"
+            raise AssertionError(errmsg)
 
-    return
+        return
 
 
-def test_oauthclient_blueprint_module_imports_without_oauth_libraries(monkeypatch):
+def test_oauthclient_blueprint_module_imports_without_oauth_libraries():
     """
         ``ccai.webworks.authentication.blueprints.oauthclient``
         must import cleanly without the formerly-required libraries.
@@ -129,20 +133,22 @@ def test_oauthclient_blueprint_module_imports_without_oauth_libraries(monkeypatc
         ),
     )
 
-    monkeypatch.setattr(
+    # builtins.__import__ is process-wide state. patch.object restores it
+    # on exit; leaving it replaced would break every later import.
+    with patch.object(
         builtins,
-        "__import__",
+        '__import__',
         _make_blocking_import(_BLOCKED_PREFIXES),
-    )
+    ):
 
-    bp_mod = importlib.import_module(
-        "ccai.webworks.authentication.blueprints.oauthclient",
-    )
-    if not hasattr(bp_mod, "OAuthClientBlueprint"):
-        errmsg = "OAuthClientBlueprint export missing after no-libs import"
-        raise AssertionError(errmsg)
+        bp_mod = importlib.import_module(
+            "ccai.webworks.authentication.blueprints.oauthclient",
+        )
+        if not hasattr(bp_mod, "OAuthClientBlueprint"):
+            errmsg = "OAuthClientBlueprint export missing after no-libs import"
+            raise AssertionError(errmsg)
 
-    return
+        return
 
 
 # =============================================================================
@@ -150,7 +156,7 @@ def test_oauthclient_blueprint_module_imports_without_oauth_libraries(monkeypatc
 # =============================================================================
 
 
-def test_oauth_client_constructor_succeeds_without_oauth_libraries(monkeypatch):
+def test_oauth_client_constructor_succeeds_without_oauth_libraries():
     """
         Constructing an :class:`OAuthClient` must not require any of
         the removed libraries.
@@ -161,34 +167,36 @@ def test_oauth_client_constructor_succeeds_without_oauth_libraries(monkeypatch):
         ),
     )
 
-    monkeypatch.setattr(
+    # builtins.__import__ is process-wide state. patch.object restores it
+    # on exit; leaving it replaced would break every later import.
+    with patch.object(
         builtins,
-        "__import__",
+        '__import__',
         _make_blocking_import(_BLOCKED_PREFIXES),
-    )
+    ):
 
-    oauth_mod = importlib.import_module(
-        "ccai.webworks.authentication.oauth",
-    )
+        oauth_mod = importlib.import_module(
+            "ccai.webworks.authentication.oauth",
+        )
 
-    client = oauth_mod.OAuthClient(
-        provider_name="google",
-        provider_config={
-            "client_id": "id",
-            "client_secret": "secret",
-            "authorize_url": "https://provider.example.com/auth",
-            "access_token_url": "https://provider.example.com/token",
-        },
-    )
+        client = oauth_mod.OAuthClient(
+            provider_name="google",
+            provider_config={
+                "client_id": "id",
+                "client_secret": "secret",
+                "authorize_url": "https://provider.example.com/auth",
+                "access_token_url": "https://provider.example.com/token",
+            },
+        )
 
-    if client.provider_name != "google":
-        errmsg = "Constructor failed silently without the OAuth libraries"
-        raise AssertionError(errmsg)
+        if client.provider_name != "google":
+            errmsg = "Constructor failed silently without the OAuth libraries"
+            raise AssertionError(errmsg)
 
-    return
+        return
 
 
-def test_build_authorization_url_succeeds_without_oauth_libraries(monkeypatch):
+def test_build_authorization_url_succeeds_without_oauth_libraries():
     """
         ``build_authorization_url`` is pure standard-library URL
         assembly now, so it must succeed with authlib / joserfc /
@@ -201,44 +209,46 @@ def test_build_authorization_url_succeeds_without_oauth_libraries(monkeypatch):
         ),
     )
 
-    monkeypatch.setattr(
+    # builtins.__import__ is process-wide state. patch.object restores it
+    # on exit; leaving it replaced would break every later import.
+    with patch.object(
         builtins,
-        "__import__",
+        '__import__',
         _make_blocking_import(_BLOCKED_PREFIXES),
-    )
+    ):
 
-    oauth_mod = importlib.import_module(
-        "ccai.webworks.authentication.oauth",
-    )
+        oauth_mod = importlib.import_module(
+            "ccai.webworks.authentication.oauth",
+        )
 
-    client = oauth_mod.OAuthClient(
-        provider_name="google",
-        provider_config={
-            "client_id": "id",
-            "client_secret": "secret",
-            "authorize_url": "https://provider.example.com/auth",
-            "access_token_url": "https://provider.example.com/token",
-        },
-    )
+        client = oauth_mod.OAuthClient(
+            provider_name="google",
+            provider_config={
+                "client_id": "id",
+                "client_secret": "secret",
+                "authorize_url": "https://provider.example.com/auth",
+                "access_token_url": "https://provider.example.com/token",
+            },
+        )
 
-    url = client.build_authorization_url(
-        redirect_uri="https://app.example.com/callback",
-        state="state-1",
-    )
+        url = client.build_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+            state="state-1",
+        )
 
-    if not url.startswith("https://provider.example.com/auth?"):
-        errmsg = "Authorization URL did not target the authorize endpoint: {!r}".format(url)
-        raise AssertionError(errmsg)
-
-    for required_fragment in ("response_type=code", "client_id=id", "state=state-1"):
-        if required_fragment not in url:
-            errmsg = "Authorization URL missing {!r}: {!r}".format(required_fragment, url)
+        if not url.startswith("https://provider.example.com/auth?"):
+            errmsg = "Authorization URL did not target the authorize endpoint: {!r}".format(url)
             raise AssertionError(errmsg)
 
-    return
+        for required_fragment in ("response_type=code", "client_id=id", "state=state-1"):
+            if required_fragment not in url:
+                errmsg = "Authorization URL missing {!r}: {!r}".format(required_fragment, url)
+                raise AssertionError(errmsg)
+
+        return
 
 
-def test_state_cookie_serializer_succeeds_without_oauth_libraries(monkeypatch):
+def test_state_cookie_serializer_succeeds_without_oauth_libraries():
     """
         ``OAuthClientBlueprint._build_state_serializer`` uses the
         in-house signed serializer, so building it and round-tripping
@@ -252,32 +262,34 @@ def test_state_cookie_serializer_succeeds_without_oauth_libraries(monkeypatch):
         ),
     )
 
-    monkeypatch.setattr(
+    # builtins.__import__ is process-wide state. patch.object restores it
+    # on exit; leaving it replaced would break every later import.
+    with patch.object(
         builtins,
-        "__import__",
+        '__import__',
         _make_blocking_import(_BLOCKED_PREFIXES),
-    )
+    ):
 
-    bp_mod = importlib.import_module(
-        "ccai.webworks.authentication.blueprints.oauthclient",
-    )
+        bp_mod = importlib.import_module(
+            "ccai.webworks.authentication.blueprints.oauthclient",
+        )
 
-    class _Fresh(bp_mod.OAuthClientBlueprint):
-        pass
+        class _Fresh(bp_mod.OAuthClientBlueprint):
+            pass
 
-    _Fresh.state_cookie_secret_resolver = staticmethod(lambda: "sec")
+        _Fresh.state_cookie_secret_resolver = staticmethod(lambda: "sec")
 
-    serializer = _Fresh._build_state_serializer()
-    if serializer is None:
-        errmsg = "Serializer should be built when a secret resolver is wired"
-        raise AssertionError(errmsg)
+        serializer = _Fresh._build_state_serializer()
+        if serializer is None:
+            errmsg = "Serializer should be built when a secret resolver is wired"
+            raise AssertionError(errmsg)
 
-    payload = {"provider": "google", "state": "abc"}
-    token = serializer.dumps(payload)
-    recovered = serializer.loads(token, max_age=600)
+        payload = {"provider": "google", "state": "abc"}
+        token = serializer.dumps(payload)
+        recovered = serializer.loads(token, max_age=600)
 
-    if recovered != payload:
-        errmsg = "State cookie round-trip mismatch: {!r}".format(recovered)
-        raise AssertionError(errmsg)
+        if recovered != payload:
+            errmsg = "State cookie round-trip mismatch: {!r}".format(recovered)
+            raise AssertionError(errmsg)
 
-    return
+        return

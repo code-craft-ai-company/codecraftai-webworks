@@ -23,6 +23,8 @@
           URL-safe random tokens of the documented length.
 """
 
+from unittest.mock import patch
+
 import base64
 import json
 
@@ -238,7 +240,7 @@ def test_resolve_authorize_url_prefers_explicit_config():
     return
 
 
-def test_resolve_authorize_url_falls_back_to_metadata(monkeypatch):
+def test_resolve_authorize_url_falls_back_to_metadata():
     client = _make_client(
         config_overrides={
             "authorize_url": "",
@@ -246,13 +248,7 @@ def test_resolve_authorize_url_falls_back_to_metadata(monkeypatch):
         },
     )
 
-    monkeypatch.setattr(
-        client,
-        "_resolve_server_metadata",
-        lambda: {
-            "authorization_endpoint": "https://provider.example.com/oidc/authorize",
-        },
-    )
+    client._resolve_server_metadata = lambda: {'authorization_endpoint': 'https://provider.example.com/oidc/authorize'}
 
     url = client._resolve_authorize_url()
 
@@ -263,10 +259,10 @@ def test_resolve_authorize_url_falls_back_to_metadata(monkeypatch):
     return
 
 
-def test_resolve_authorize_url_raises_when_no_source(monkeypatch):
+def test_resolve_authorize_url_raises_when_no_source():
     client = _make_client(config_overrides={"authorize_url": ""})
 
-    monkeypatch.setattr(client, "_resolve_server_metadata", lambda: {})
+    client._resolve_server_metadata = lambda: {}
 
     with testbase.raises(ValueError, match="authorization endpoint"):
         client._resolve_authorize_url()
@@ -274,20 +270,14 @@ def test_resolve_authorize_url_raises_when_no_source(monkeypatch):
     return
 
 
-def test_resolve_token_url_falls_back_to_metadata(monkeypatch):
+def test_resolve_token_url_falls_back_to_metadata():
     client = _make_client(
         config_overrides={
             "access_token_url": "",
         },
     )
 
-    monkeypatch.setattr(
-        client,
-        "_resolve_server_metadata",
-        lambda: {
-            "token_endpoint": "https://provider.example.com/oidc/token",
-        },
-    )
+    client._resolve_server_metadata = lambda: {'token_endpoint': 'https://provider.example.com/oidc/token'}
 
     url = client._resolve_token_url()
 
@@ -319,7 +309,7 @@ def test_resolve_userinfo_url_falls_back_to_api_base():
     return
 
 
-def test_resolve_userinfo_url_appends_slash_to_api_base(monkeypatch):
+def test_resolve_userinfo_url_appends_slash_to_api_base():
     client = _make_client(
         config_overrides={
             "userinfo_endpoint": "",
@@ -327,7 +317,7 @@ def test_resolve_userinfo_url_appends_slash_to_api_base(monkeypatch):
         },
     )
 
-    monkeypatch.setattr(client, "_resolve_server_metadata", lambda: {})
+    client._resolve_server_metadata = lambda: {}
 
     url = client._resolve_userinfo_url()
 
@@ -338,10 +328,10 @@ def test_resolve_userinfo_url_appends_slash_to_api_base(monkeypatch):
     return
 
 
-def test_resolve_userinfo_url_raises_when_no_source(monkeypatch):
+def test_resolve_userinfo_url_raises_when_no_source():
     client = _make_client(config_overrides={"userinfo_endpoint": ""})
 
-    monkeypatch.setattr(client, "_resolve_server_metadata", lambda: {})
+    client._resolve_server_metadata = lambda: {}
     client._provider_config["api_base_url"] = ""
 
     with testbase.raises(ValueError, match="userinfo endpoint"):
@@ -497,7 +487,7 @@ def test_parse_id_token_rejects_empty_id_token():
     return
 
 
-def test_parse_id_token_round_trip_validates_signed_jwt(monkeypatch):
+def test_parse_id_token_round_trip_validates_signed_jwt():
     """
         End-to-end: sign a JWT with a generated RSA key, construct
         the JWKS that publishes its public half, mock the JWKS HTTP
@@ -524,14 +514,7 @@ def test_parse_id_token_round_trip_validates_signed_jwt(monkeypatch):
     client = _make_client()
 
     # Stub server metadata + the JWKS HTTP fetch.
-    monkeypatch.setattr(
-        client,
-        "_resolve_server_metadata",
-        lambda: {
-            "issuer": issuer,
-            "jwks_uri": "https://provider.example.com/.well-known/jwks.json",
-        },
-    )
+    client._resolve_server_metadata = lambda: {'issuer': issuer, 'jwks_uri': 'https://provider.example.com/.well-known/jwks.json'}
 
     class _StubResponse:
         def __init__(self, payload):
@@ -545,16 +528,18 @@ def test_parse_id_token_round_trip_validates_signed_jwt(monkeypatch):
 
     from ccai.webworks.authentication import oauth as oauth_module
 
-    monkeypatch.setattr(
+    # patch.object restores on exit. The target is module state --
+    # oauth_module.http_requests.get -- so leaving it stubbed would hand the
+    # stub to every later test that reaches for HTTP.
+    with patch.object(
         oauth_module.http_requests,
         "get",
         lambda url, timeout=None: _StubResponse(jwks),
-    )
-
-    decoded = client.parse_id_token(
-        {"id_token": id_token_str},
-        nonce=nonce_value,
-    )
+    ):
+        decoded = client.parse_id_token(
+            {"id_token": id_token_str},
+            nonce=nonce_value,
+        )
 
     if decoded.get("sub") != "subject-1":
         errmsg = "Expected sub claim, got {!r}".format(decoded)
@@ -567,7 +552,7 @@ def test_parse_id_token_round_trip_validates_signed_jwt(monkeypatch):
     return
 
 
-def test_parse_id_token_rejects_wrong_nonce(monkeypatch):
+def test_parse_id_token_rejects_wrong_nonce():
     """
         The in-house validator must reject a JWT whose ``nonce`` claim
         doesn't match the value the kickoff handler stored on the state
@@ -590,14 +575,7 @@ def test_parse_id_token_rejects_wrong_nonce(monkeypatch):
 
     client = _make_client()
 
-    monkeypatch.setattr(
-        client,
-        "_resolve_server_metadata",
-        lambda: {
-            "issuer": issuer,
-            "jwks_uri": "https://provider.example.com/.well-known/jwks.json",
-        },
-    )
+    client._resolve_server_metadata = lambda: {'issuer': issuer, 'jwks_uri': 'https://provider.example.com/.well-known/jwks.json'}
 
     class _StubResponse:
         def __init__(self, payload):
@@ -611,20 +589,20 @@ def test_parse_id_token_rejects_wrong_nonce(monkeypatch):
 
     from ccai.webworks.authentication import oauth as oauth_module
 
-    monkeypatch.setattr(
+    # See the note above: module state, so the stub has to be undone.
+    raised = False
+    with patch.object(
         oauth_module.http_requests,
         "get",
         lambda url, timeout=None: _StubResponse(jwks),
-    )
-
-    raised = False
-    try:
-        client.parse_id_token(
-            {"id_token": id_token_str},
-            nonce="expected-different-nonce",
-        )
-    except Exception:
-        raised = True
+    ):
+        try:
+            client.parse_id_token(
+                {"id_token": id_token_str},
+                nonce="expected-different-nonce",
+            )
+        except Exception:
+            raised = True
 
     if not raised:
         errmsg = "Expected parse_id_token to reject nonce mismatch"
@@ -633,18 +611,14 @@ def test_parse_id_token_rejects_wrong_nonce(monkeypatch):
     return
 
 
-def test_parse_id_token_rejects_when_metadata_lacks_jwks_uri(monkeypatch):
+def test_parse_id_token_rejects_when_metadata_lacks_jwks_uri():
     client = _make_client(
         config_overrides={
             "server_metadata_url": "https://provider.example.com/.well-known",
         },
     )
 
-    monkeypatch.setattr(
-        client,
-        "_resolve_server_metadata",
-        lambda: {"issuer": "https://provider.example.com"},
-    )
+    client._resolve_server_metadata = lambda: {'issuer': 'https://provider.example.com'}
 
     with testbase.raises(ValueError, match="jwks_uri"):
         client.parse_id_token({"id_token": "header.payload.signature"})

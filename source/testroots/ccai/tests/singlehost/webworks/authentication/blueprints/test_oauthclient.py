@@ -351,7 +351,7 @@ def test_state_cookie_no_secret_resolver_returns_none():
     return
 
 
-def test_state_cookie_unsign_rejects_expired_payload(monkeypatch):
+def test_state_cookie_unsign_rejects_expired_payload():
     blueprint = _make_oauth_blueprint()
     blueprint.state_cookie_max_age_seconds = 1
 
@@ -375,7 +375,7 @@ def test_state_cookie_unsign_rejects_expired_payload(monkeypatch):
 # =============================================================================
 
 
-def test_kickoff_success_redirects_with_signed_cookie(monkeypatch):
+def test_kickoff_success_redirects_with_signed_cookie():
     stub_client = StubOAuthClient()
 
     blueprint = _make_oauth_blueprint(
@@ -384,11 +384,7 @@ def test_kickoff_success_redirects_with_signed_cookie(monkeypatch):
     )
 
     # Replace OAuthClient construction with the stub.
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = MockRequest(query_params={"provider": "google", "register": "1"})
 
@@ -430,7 +426,7 @@ def test_kickoff_success_redirects_with_signed_cookie(monkeypatch):
     return
 
 
-def test_kickoff_defaults_to_default_provider_when_query_omits_it(monkeypatch):
+def test_kickoff_defaults_to_default_provider_when_query_omits_it():
     stub_client = StubOAuthClient()
 
     blueprint = _make_oauth_blueprint(
@@ -439,11 +435,7 @@ def test_kickoff_defaults_to_default_provider_when_query_omits_it(monkeypatch):
     )
     blueprint.default_provider_name = "google"
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = MockRequest(query_params={})
 
@@ -511,7 +503,7 @@ def test_kickoff_unknown_provider_redirects_with_unknown_provider():
     return
 
 
-def test_kickoff_invokes_provider_extras_resolver(monkeypatch):
+def test_kickoff_invokes_provider_extras_resolver():
     stub_client = StubOAuthClient()
     captured: Dict[str, Any] = {}
 
@@ -526,11 +518,7 @@ def test_kickoff_invokes_provider_extras_resolver(monkeypatch):
         provider_extras_resolver=extras_resolver,
     )
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = MockRequest(query_params={"provider": "google", "register": "1"})
 
@@ -553,7 +541,7 @@ def test_kickoff_invokes_provider_extras_resolver(monkeypatch):
     return
 
 
-def test_kickoff_authorization_url_build_failure_redirects_with_unavailable(monkeypatch):
+def test_kickoff_authorization_url_build_failure_redirects_with_unavailable():
     stub_client = StubOAuthClient(raise_on_build=RuntimeError("network down"))
 
     blueprint = _make_oauth_blueprint(
@@ -561,11 +549,7 @@ def test_kickoff_authorization_url_build_failure_redirects_with_unavailable(monk
         provider_name_lister=_provider_name_lister,
     )
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = MockRequest(query_params={"provider": "google"})
 
@@ -865,7 +849,7 @@ def test_callback_missing_code_redirects_with_no_token():
     return
 
 
-def test_callback_unknown_provider_after_state_validation(monkeypatch):
+def test_callback_unknown_provider_after_state_validation():
     blueprint = _make_oauth_blueprint(
         provider_resolver=lambda name: None,  # everything is unknown
         user_resolver=lambda *args, **kwargs: OAuthCallbackResult(),
@@ -883,7 +867,7 @@ def test_callback_unknown_provider_after_state_validation(monkeypatch):
     return
 
 
-def test_callback_token_exchange_failure_redirects_with_authorization_failed(monkeypatch):
+def test_callback_token_exchange_failure_redirects_with_authorization_failed():
     stub_client = StubOAuthClient(raise_on_exchange=RuntimeError("token refused"))
 
     blueprint = _make_oauth_blueprint(
@@ -891,11 +875,7 @@ def test_callback_token_exchange_failure_redirects_with_authorization_failed(mon
         user_resolver=lambda *args, **kwargs: OAuthCallbackResult(),
     )
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = _build_callback_request(blueprint)
 
@@ -909,7 +889,7 @@ def test_callback_token_exchange_failure_redirects_with_authorization_failed(mon
     return
 
 
-def test_callback_id_token_parse_failure_redirects_with_token_parse_failed(monkeypatch):
+def test_callback_id_token_parse_failure_redirects_with_token_parse_failed():
     stub_client = StubOAuthClient(
         raise_on_parse_id_token=RuntimeError("invalid signature"),
     )
@@ -919,11 +899,7 @@ def test_callback_id_token_parse_failure_redirects_with_token_parse_failed(monke
         user_resolver=lambda *args, **kwargs: OAuthCallbackResult(),
     )
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = _build_callback_request(blueprint)
 
@@ -937,7 +913,7 @@ def test_callback_id_token_parse_failure_redirects_with_token_parse_failed(monke
     return
 
 
-def test_callback_non_oidc_provider_uses_fetch_userinfo(monkeypatch):
+def test_callback_non_oidc_provider_uses_fetch_userinfo():
     # No id_token in token payload → blueprint must call fetch_userinfo.
     stub_client = StubOAuthClient(
         token_payload={"access_token": "atok"},
@@ -963,11 +939,7 @@ def test_callback_non_oidc_provider_uses_fetch_userinfo(monkeypatch):
         user_resolver=user_resolver,
     )
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = _build_callback_request(blueprint, provider="github")
     request.query_params["provider"] = "github"
@@ -1001,7 +973,7 @@ def test_callback_non_oidc_provider_uses_fetch_userinfo(monkeypatch):
     return
 
 
-def test_callback_user_resolver_error_code_propagates(monkeypatch):
+def test_callback_user_resolver_error_code_propagates():
     stub_client = StubOAuthClient()
 
     blueprint = _make_oauth_blueprint(
@@ -1011,11 +983,7 @@ def test_callback_user_resolver_error_code_propagates(monkeypatch):
         ),
     )
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = _build_callback_request(blueprint)
 
@@ -1035,7 +1003,7 @@ def test_callback_user_resolver_error_code_propagates(monkeypatch):
     return
 
 
-def test_callback_user_resolver_short_circuit_redirect(monkeypatch):
+def test_callback_user_resolver_short_circuit_redirect():
     stub_client = StubOAuthClient()
 
     blueprint = _make_oauth_blueprint(
@@ -1045,11 +1013,7 @@ def test_callback_user_resolver_short_circuit_redirect(monkeypatch):
         ),
     )
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = _build_callback_request(blueprint)
 
@@ -1068,7 +1032,7 @@ def test_callback_user_resolver_short_circuit_redirect(monkeypatch):
     return
 
 
-def test_callback_user_resolver_returns_wrong_type_redirects_with_authorization_failed(monkeypatch):
+def test_callback_user_resolver_returns_wrong_type_redirects_with_authorization_failed():
     stub_client = StubOAuthClient()
 
     blueprint = _make_oauth_blueprint(
@@ -1076,11 +1040,7 @@ def test_callback_user_resolver_returns_wrong_type_redirects_with_authorization_
         user_resolver=lambda *args, **kwargs: {"principal": "wrong type"},
     )
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = _build_callback_request(blueprint)
 
@@ -1099,7 +1059,7 @@ def test_callback_user_resolver_returns_wrong_type_redirects_with_authorization_
 # =============================================================================
 
 
-def test_callback_success_invokes_token_persister_and_establishes_session(monkeypatch):
+def test_callback_success_invokes_token_persister_and_establishes_session():
     stub_client = StubOAuthClient()
     persisted: List[Dict[str, Any]] = []
 
@@ -1129,11 +1089,7 @@ def test_callback_success_invokes_token_persister_and_establishes_session(monkey
         token_persister=token_persister,
     )
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = _build_callback_request(blueprint)
 
@@ -1173,7 +1129,7 @@ def test_callback_success_invokes_token_persister_and_establishes_session(monkey
     return
 
 
-def test_callback_token_persister_failure_is_non_fatal(monkeypatch):
+def test_callback_token_persister_failure_is_non_fatal():
     stub_client = StubOAuthClient()
 
     def raising_persister(*args, **kwargs):
@@ -1191,11 +1147,7 @@ def test_callback_token_persister_failure_is_non_fatal(monkeypatch):
         token_persister=raising_persister,
     )
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = _build_callback_request(blueprint)
 
@@ -1216,7 +1168,7 @@ def test_callback_token_persister_failure_is_non_fatal(monkeypatch):
     return
 
 
-def test_callback_no_user_resolver_redirects_with_not_configured(monkeypatch):
+def test_callback_no_user_resolver_redirects_with_not_configured():
     stub_client = StubOAuthClient()
 
     blueprint = _make_oauth_blueprint(
@@ -1224,11 +1176,7 @@ def test_callback_no_user_resolver_redirects_with_not_configured(monkeypatch):
         user_resolver=None,
     )
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = _build_callback_request(blueprint)
 
@@ -1242,7 +1190,7 @@ def test_callback_no_user_resolver_redirects_with_not_configured(monkeypatch):
     return
 
 
-def test_callback_no_session_blueprint_redirects_with_not_configured(monkeypatch):
+def test_callback_no_session_blueprint_redirects_with_not_configured():
     stub_client = StubOAuthClient()
 
     blueprint = _make_oauth_blueprint(
@@ -1253,11 +1201,7 @@ def test_callback_no_session_blueprint_redirects_with_not_configured(monkeypatch
     )
     blueprint.session_blueprint = None
 
-    monkeypatch.setattr(
-        blueprint,
-        "_resolve_oauth_client",
-        classmethod(lambda cls, provider: stub_client).__get__(None, blueprint),
-    )
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
     request = _build_callback_request(blueprint)
 
