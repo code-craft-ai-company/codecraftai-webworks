@@ -137,10 +137,40 @@ class Headers:
         rtnval = len(self._headers)
         return rtnval
     
+    def __eq__(self, other: object) -> bool:
+        """
+            Compare against another Headers or any mapping, ignoring case.
+
+            Header names are case-insensitive, so ``Content-Length`` and
+            ``content-length`` are the same header and two collections
+            differing only in the case of their names are equal. Without
+            this, equality fell back to identity: a Headers object never
+            compared equal to the dict it was built from, and even an empty
+            one was unequal to ``{}``.
+
+            :param other: A Headers, or a mapping of names to values.
+
+            :returns: True when both hold the same headers.
+        """
+        if isinstance(other, Headers):
+            return self._headers == other._headers
+
+        if isinstance(other, dict):
+            if len(other) != len(self._headers):
+                return False
+            for name, value in other.items():
+                if not isinstance(name, str):
+                    return False
+                if self._headers.get(name.lower()) != value:
+                    return False
+            return True
+
+        return NotImplemented
+
     def __repr__(self) -> str:
         """
             Get string representation.
-            
+
             :returns: String representation.
         """
         rtnval = f"Headers({dict(self.items())})"

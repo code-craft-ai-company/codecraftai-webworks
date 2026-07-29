@@ -2485,8 +2485,16 @@ def test_property_14_secrets_provider_masking():
                 str_repr = str(secret)
                 actual_value = secret.get_secret_value()
                 
-                if actual_value in str_repr:
-                    errmsg = f"Iteration {iteration}: Secret value exposed in string for key '{key}'"
+                # Assert the representation *is* the mask rather than that it
+                # merely lacks the value. A containment check false-positives
+                # on short secrets: generate_random_value() can return a
+                # single character, and "M", "A", "S", "K", "E" and "D" all
+                # appear in "***MASKED***", so a correctly masked secret
+                # looked leaked roughly one run in ten.
+                if str_repr != SecretValue.MASKED_VALUE:
+                    errmsg = (f"Iteration {iteration}: Expected "
+                              f"'{SecretValue.MASKED_VALUE}' for key '{key}', "
+                              f"got: {str_repr}")
                     raise AssertionError(errmsg)
                 
                 # Verify actual value is correct
@@ -3150,11 +3158,11 @@ def test_property_18_environment_specific_files():
             
             # Create base config file
             base_file = Path(temp_dir) / "settings.yaml"
-            base_file.write_text(f"{base_key}: {base_value}\nenv: base")
+            base_file.write_text(f"'{base_key}': '{base_value}'\nenv: base")
             
             # Create environment-specific config file
             env_file = Path(temp_dir) / f"settings.{environment}.yaml"
-            env_file.write_text(f"{base_key}: {env_value}\nenv: {environment}")
+            env_file.write_text(f"'{base_key}': '{env_value}'\nenv: {environment}")
             
             # Create discovery with environment
             discovery = ConfigFileDiscovery(
@@ -3214,12 +3222,12 @@ def test_property_18_environment_specific_files_random():
                     env_config[key] = generate_random_value()
             
             # Create base config file
-            base_content = "\n".join(f"{k}: {v}" for k, v in base_config.items())
+            base_content = "\n".join(f"'{k}': '{v}'" for k, v in base_config.items())
             base_file = Path(temp_dir) / "settings.yaml"
             base_file.write_text(base_content)
             
             # Create environment-specific config file
-            env_content = "\n".join(f"{k}: {v}" for k, v in env_config.items())
+            env_content = "\n".join(f"'{k}': '{v}'" for k, v in env_config.items())
             env_file = Path(temp_dir) / f"settings.{environment}.yaml"
             env_file.write_text(env_content)
             
@@ -3273,11 +3281,11 @@ def test_property_18_environment_specific_files_precedence():
             
             # Create base config file
             base_file = Path(temp_dir) / "settings.yaml"
-            base_file.write_text(f"{shared_key}: {base_value}")
+            base_file.write_text(f"'{shared_key}': '{base_value}'")
             
             # Create environment-specific config file
             env_file = Path(temp_dir) / f"settings.{environment}.yaml"
-            env_file.write_text(f"{shared_key}: {env_value}")
+            env_file.write_text(f"'{shared_key}': '{env_value}'")
             
             # Create discovery with environment
             discovery = ConfigFileDiscovery(
@@ -3334,7 +3342,7 @@ def test_property_19_file_merge_precedence():
                 values.append(value)
                 
                 config_file = Path(temp_dir) / "settings.yaml"
-                config_file.write_text(f"{shared_key}: {value}")
+                config_file.write_text(f"'{shared_key}': '{value}'")
             
             # Create discovery with directories in order
             discovery = ConfigFileDiscovery(
@@ -3382,10 +3390,10 @@ def test_property_19_file_merge_precedence_env_over_base():
             env_value = f"env_{generate_random_value()}"
             
             base_file = Path(temp_dir) / "settings.yaml"
-            base_file.write_text(f"{shared_key}: {base_value}")
+            base_file.write_text(f"'{shared_key}': '{base_value}'")
             
             env_file = Path(temp_dir) / f"settings.{environment}.yaml"
-            env_file.write_text(f"{shared_key}: {env_value}")
+            env_file.write_text(f"'{shared_key}': '{env_value}'")
             
             discovery = ConfigFileDiscovery(
                 appname="testapp",
@@ -3429,13 +3437,13 @@ def test_property_19_file_merge_precedence_profile_over_env():
             profile_value = f"profile_{generate_random_value()}"
             
             base_file = Path(temp_dir) / "settings.yaml"
-            base_file.write_text(f"{shared_key}: {base_value}")
+            base_file.write_text(f"'{shared_key}': '{base_value}'")
             
             env_file = Path(temp_dir) / f"settings.{environment}.yaml"
-            env_file.write_text(f"{shared_key}: {env_value}")
+            env_file.write_text(f"'{shared_key}': '{env_value}'")
             
             profile_file = Path(temp_dir) / f"settings.{profile}.yaml"
-            profile_file.write_text(f"{shared_key}: {profile_value}")
+            profile_file.write_text(f"'{shared_key}': '{profile_value}'")
             
             discovery = ConfigFileDiscovery(
                 appname="testapp",
@@ -3496,11 +3504,11 @@ def test_property_31_profile_configuration():
             
             # Create base config file
             base_file = Path(temp_dir) / "settings.yaml"
-            base_file.write_text(f"{shared_key}: {base_value}")
+            base_file.write_text(f"'{shared_key}': '{base_value}'")
             
             # Create profile-specific config file
             profile_file = Path(temp_dir) / f"settings.{profile}.yaml"
-            profile_file.write_text(f"{shared_key}: {profile_value}")
+            profile_file.write_text(f"'{shared_key}': '{profile_value}'")
             
             # Create discovery with profile from environment variable
             discovery = ConfigFileDiscovery(
@@ -3562,12 +3570,12 @@ def test_property_31_profile_configuration_explicit():
                     profile_config[key] = f"profile_{generate_random_value()}"
             
             # Create base config file
-            base_content = "\n".join(f"{k}: {v}" for k, v in base_config.items())
+            base_content = "\n".join(f"'{k}': '{v}'" for k, v in base_config.items())
             base_file = Path(temp_dir) / "settings.yaml"
             base_file.write_text(base_content)
             
             # Create profile-specific config file
-            profile_content = "\n".join(f"{k}: {v}" for k, v in profile_config.items())
+            profile_content = "\n".join(f"'{k}': '{v}'" for k, v in profile_config.items())
             profile_file = Path(temp_dir) / f"settings.{profile}.yaml"
             profile_file.write_text(profile_content)
             
@@ -3620,11 +3628,11 @@ def test_property_31_profile_configuration_precedence():
             
             # Create base config file
             base_file = Path(temp_dir) / "settings.yaml"
-            base_file.write_text(f"{shared_key}: {base_value}")
+            base_file.write_text(f"'{shared_key}': '{base_value}'")
             
             # Create profile-specific config file
             profile_file = Path(temp_dir) / f"settings.{profile}.yaml"
-            profile_file.write_text(f"{shared_key}: {profile_value}")
+            profile_file.write_text(f"'{shared_key}': '{profile_value}'")
             
             # Create discovery with profile
             discovery = ConfigFileDiscovery(

@@ -6,7 +6,7 @@
     ValidationError, and ConfigChangeEvent.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ccai.webworks.configuration import (
@@ -839,14 +839,14 @@ def test_config_change_event_default_timestamp():
     """
         Test that ConfigChangeEvent has a default timestamp.
     """
-    before = datetime.utcnow()
+    before = datetime.now(timezone.utc)
     event = ConfigChangeEvent(
         key="test.key",
         old_value=None,
         new_value="new",
         source=ConfigSourceType.OVERRIDE
     )
-    after = datetime.utcnow()
+    after = datetime.now(timezone.utc)
     
     if event.timestamp < before or event.timestamp > after:
         errmsg = f"Expected timestamp between {before} and {after}, got {event.timestamp}"

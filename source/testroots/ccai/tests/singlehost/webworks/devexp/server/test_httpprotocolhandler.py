@@ -247,13 +247,15 @@ def _encode_chunked(data):
 def _run_async(coro):
     """
         Run an async coroutine synchronously.
+
+        This built a loop with new_event_loop() but never made it the current
+        one, so anything inside the coroutine that asked asyncio for the
+        running loop found none and raised. Whether that happened depended on
+        which test had run first and left a loop installed, which is why
+        these failed only in a full run. asyncio.run installs the loop it
+        creates and tears it down afterwards.
     """
-    loop = asyncio.new_event_loop()
-    try:
-        result = loop.run_until_complete(coro)
-    finally:
-        loop.close()
-    return result
+    return asyncio.run(coro)
 
 
 # =============================================================================

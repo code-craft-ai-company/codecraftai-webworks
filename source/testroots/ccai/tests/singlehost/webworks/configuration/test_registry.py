@@ -1224,7 +1224,7 @@ def test_property_change_notification_callbacks():
     """
     import random
     import string
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     
     def generate_random_key():
         """Generate a random configuration key."""
@@ -1258,13 +1258,13 @@ def test_property_change_notification_callbacks():
         new_value = generate_random_value()
         
         # Record time before override
-        before_time = datetime.utcnow()
+        before_time = datetime.now(timezone.utc)
         
         # Override the value
         registry.override(key, new_value)
         
         # Record time after override
-        after_time = datetime.utcnow()
+        after_time = datetime.now(timezone.utc)
         
         # Verify callback was invoked
         if len(events) != 1:

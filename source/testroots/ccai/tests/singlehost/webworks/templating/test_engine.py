@@ -394,7 +394,7 @@ def test_render_async_default_falls_back_to_sync():
     engine.add_template("test.html", "Hello {{ name }}!")
     
     # Run the async method
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         engine.render_async("test.html", {"name": "World"})
     )
     
@@ -411,7 +411,7 @@ def test_render_async_with_context():
     engine = MockTemplateEngine()
     engine.add_template("test.html", "{{ greeting }} {{ name }}!")
     
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         engine.render_async("test.html", {"greeting": "Hello", "name": "World"})
     )
     

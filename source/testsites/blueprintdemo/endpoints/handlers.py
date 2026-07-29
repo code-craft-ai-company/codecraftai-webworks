@@ -107,7 +107,7 @@ class ItemsBlueprint(RestBlueprint):
     tags = ["items"]
 
     @RestBlueprint.attach_at(
-        path="/api/items/list",
+        leaf="list",
         methods=["GET"],
         doc=Doc(
             summary="List Items",
@@ -129,7 +129,7 @@ class ItemsBlueprint(RestBlueprint):
         return response
 
     @RestBlueprint.attach_at(
-        path="/api/items/detail",
+        leaf="detail",
         methods=["GET"],
         doc=Doc(
             summary="Get Item Detail",
@@ -151,7 +151,7 @@ class ItemsBlueprint(RestBlueprint):
         return response
 
     @RestBlueprint.attach_at(
-        path="/api/items/create",
+        leaf="create",
         methods=["POST"],
         doc=Doc(
             summary="Create Item",
@@ -178,7 +178,7 @@ class ItemsV2Blueprint(ItemsBlueprint):
     tags = ["items-v2"]
 
     @RestBlueprint.attach_at(
-        path="/api/v2/items/list",
+        leaf="list",
         methods=["GET"],
         doc=Doc(
             summary="List Items (V2)",
