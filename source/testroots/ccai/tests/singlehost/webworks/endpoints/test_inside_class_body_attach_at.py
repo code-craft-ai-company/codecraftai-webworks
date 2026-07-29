@@ -375,13 +375,13 @@ def test_registry_update_descriptor_path_moves_index_entries():
         )
         raise AssertionError(errmsg)
 
-    new_get = EndpointRegistry._path_method_index.get(
+    new_get = registry._path_method_index.get(
         ("/start/thing-renamed", "GET"),
     )
-    new_post = EndpointRegistry._path_method_index.get(
+    new_post = registry._path_method_index.get(
         ("/start/thing-renamed", "POST"),
     )
-    old_get = EndpointRegistry._path_method_index.get(
+    old_get = registry._path_method_index.get(
         ("/start/thing", "GET"),
     )
 
@@ -450,7 +450,7 @@ def test_registry_update_descriptor_path_no_op_for_unchanged_path():
     )
 
     # The index should still resolve correctly.
-    indexed = EndpointRegistry._path_method_index.get(
+    indexed = registry._path_method_index.get(
         ("/no-op/thing", "GET"),
     )
     if indexed is not descriptor:

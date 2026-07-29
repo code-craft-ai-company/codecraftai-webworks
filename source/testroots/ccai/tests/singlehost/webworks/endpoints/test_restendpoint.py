@@ -126,7 +126,6 @@ def test_restendpoint_default_attributes():
 def test_attach_at_with_dataclass_request_schema():
     """attach_at should inspect dataclass request schemas."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     @RestEndpoint.attach_at(leaf="users", methods=["POST"], request_schema=UserCreateSchema)
     def create_user():
@@ -161,7 +160,6 @@ def test_attach_at_with_dataclass_request_schema():
 def test_attach_at_with_dataclass_response_schema():
     """attach_at should inspect dataclass response schemas."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     @RestEndpoint.attach_at(leaf="users", methods=["GET"], response_schema=UserSchema)
     def get_users():
@@ -184,7 +182,6 @@ def test_attach_at_with_dataclass_response_schema():
 
 def test_attach_at_with_error_map():
     """attach_at should inspect error map schemas."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     @RestEndpoint.attach_at(
@@ -213,7 +210,6 @@ def test_attach_at_with_error_map():
 def test_attach_at_with_optional_fields_schema():
     """attach_at should correctly handle schemas with optional fields."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     @RestEndpoint.attach_at(leaf="optional", methods=["POST"], request_schema=OptionalFieldsSchema)
     def create_optional():
@@ -233,7 +229,6 @@ def test_attach_at_with_optional_fields_schema():
 
 def test_attach_at_with_list_fields_schema():
     """attach_at should correctly handle schemas with list fields."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     @RestEndpoint.attach_at(leaf="lists", methods=["POST"], request_schema=ListFieldSchema)
@@ -259,7 +254,6 @@ def test_attach_at_with_list_fields_schema():
 
 def test_subclass_inherits_rest_attributes():
     """Subclass should inherit REST-specific attributes."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     class UserEndpoint(RestEndpoint):
@@ -293,7 +287,6 @@ def test_subclass_inherits_rest_attributes():
 
 def test_kwargs_override_class_attributes():
     """Explicit kwargs should override class attributes."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     class UserEndpoint(RestEndpoint):
@@ -332,12 +325,13 @@ def test_kwargs_override_class_attributes():
 def test_read_helper_uses_get_method():
     """read() helper should use GET method."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     @RestEndpoint.read(leaf="users", response_schema=UserSchema)
     def get_users():
         pass
     
+    registry.collect_from(get_users)
+
     descriptors = registry.collect()
     descriptor = descriptors[0]
     
@@ -348,12 +342,13 @@ def test_read_helper_uses_get_method():
 def test_create_helper_uses_post_method():
     """create() helper should use POST method."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     @RestEndpoint.create(leaf="users", request_schema=UserCreateSchema)
     def create_user():
         pass
     
+    registry.collect_from(create_user)
+
     descriptors = registry.collect()
     descriptor = descriptors[0]
     
@@ -364,12 +359,13 @@ def test_create_helper_uses_post_method():
 def test_update_helper_uses_put_patch_methods():
     """update() helper should use PUT and PATCH methods."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     @RestEndpoint.update(leaf="users", request_schema=UserCreateSchema)
     def update_user():
         pass
     
+    registry.collect_from(update_user)
+
     descriptors = registry.collect()
     descriptor = descriptors[0]
     
@@ -380,12 +376,13 @@ def test_update_helper_uses_put_patch_methods():
 def test_delete_helper_uses_delete_method():
     """delete() helper should use DELETE method."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     @RestEndpoint.delete(leaf="users")
     def delete_user():
         pass
     
+    registry.collect_from(delete_user)
+
     descriptors = registry.collect()
     descriptor = descriptors[0]
     
@@ -430,7 +427,6 @@ def test_crud_helpers_preserve_function_identity():
 def test_crud_helpers_accept_all_parameters():
     """CRUD helpers should accept all standard parameters."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     policy = AccessPolicy(roles=["admin"])
     limit = RateLimit(requests=10, window=60)
@@ -450,6 +446,8 @@ def test_crud_helpers_accept_all_parameters():
     def test_handler():
         pass
     
+    registry.collect_from(test_handler)
+
     descriptors = registry.collect()
     descriptor = descriptors[0]
     

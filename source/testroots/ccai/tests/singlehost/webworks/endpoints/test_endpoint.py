@@ -380,26 +380,59 @@ def test_attach_at_stores_extra_kwargs_in_extras():
     return
 
 
-def test_attach_at_raises_conflict_error_on_duplicate():
-    """Test that attach_at raises EndpointConflictError on duplicate path+method."""
+def test_collect_raises_conflict_error_on_duplicate():
+    """Test that collecting two handlers at one path+method conflicts."""
     registry = EndpointRegistry()
-    
+
     @Endpoint.attach_at(leaf="conflict", methods=["GET"])
     def first_handler():
         pass
-    
+
+    @Endpoint.attach_at(leaf="conflict", methods=["GET"])
+    def second_handler():
+        pass
+
+    # Decorating raises nothing: attach_at marks the handler and has no
+    # other effect, so two handlers may claim the same location as long as
+    # no single application takes both. The conflict is a property of a
+    # registry, and is detected when one is asked to hold both.
+    registry.collect_from(first_handler)
+
     error_raised = False
-    
+
     try:
-        @Endpoint.attach_at(leaf="conflict", methods=["GET"])
-        def second_handler():
-            pass
+        registry.collect_from(second_handler)
     except EndpointConflictError:
         error_raised = True
-    
+
     if not error_raised:
         raise AssertionError("Expected EndpointConflictError to be raised")
-    
+
+    return
+
+
+def test_separate_registries_do_not_conflict():
+    """Two applications may each serve the same path without conflicting."""
+    registry_one = EndpointRegistry()
+    registry_two = EndpointRegistry()
+
+    @Endpoint.attach_at(leaf="shared", methods=["GET"])
+    def handler_one():
+        pass
+
+    @Endpoint.attach_at(leaf="shared", methods=["GET"])
+    def handler_two():
+        pass
+
+    registry_one.collect_from(handler_one)
+    registry_two.collect_from(handler_two)
+
+    if len(registry_one.collect()) != 1:
+        raise AssertionError("Expected 1 descriptor in the first registry")
+
+    if len(registry_two.collect()) != 1:
+        raise AssertionError("Expected 1 descriptor in the second registry")
+
     return
 
 

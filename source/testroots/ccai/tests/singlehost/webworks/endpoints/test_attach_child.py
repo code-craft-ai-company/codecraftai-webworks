@@ -154,18 +154,21 @@ def test_attach_child_returns_endpoint_descriptor():
 
 
 def test_attach_child_registers_descriptor():
-    """Test that attach_child registers the descriptor with EndpointRegistry."""
+    """Test that a descriptor from attach_child can be registered."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
-    
+
     class ParentBlueprint(Blueprint):
         base_path = "/api"
-    
+
     class ChildEndpoint(Endpoint):
         base_leaf = "items"
-    
-    ParentBlueprint.attach_child(ChildEndpoint)
-    
+
+    # attach_child hands back the descriptor rather than filing it anywhere.
+    # Its handler is a placeholder built inside the call, so collect_from has
+    # no name to reach it by -- the descriptor itself is the handle.
+    descriptor = ParentBlueprint.attach_child(ChildEndpoint)
+    registry.register(descriptor)
+
     descriptors = registry.collect()
     
     if len(descriptors) != 1:
@@ -610,20 +613,22 @@ def test_attach_child_with_doc_kwarg():
 def test_attach_child_multiple_children():
     """Test that attach_child can attach multiple children."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
-    
+
     class ParentBlueprint(Blueprint):
         base_path = "/api"
-    
+
     class UsersEndpoint(Endpoint):
         base_leaf = "users"
-    
+
     class ItemsEndpoint(Endpoint):
         base_leaf = "items"
-    
+
     desc1 = ParentBlueprint.attach_child(UsersEndpoint)
     desc2 = ParentBlueprint.attach_child(ItemsEndpoint)
-    
+
+    registry.register(desc1)
+    registry.register(desc2)
+
     if desc1.path != "/api/users":
         raise AssertionError(f"Expected path='/api/users', got {desc1.path}")
     

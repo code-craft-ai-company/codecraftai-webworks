@@ -16,7 +16,9 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.constraints import EndpointConstraints
 from ccai.webworks.endpoints.descriptor import (
+    ENDPOINT_DECLARED_ATTR,
     ENDPOINT_DESCRIPTORS_ATTR,
+    declare_on_class,
     EndpointDescriptor,
     mark_handler
 )
@@ -308,6 +310,19 @@ class Endpoint:
             so a class can be asked directly and the answer does not depend
             on what else has been imported.
 
+            Two sources are combined. Handlers written in a class body are
+            found by walking the MRO, so a subclass inherits its bases'
+            endpoints. Handlers attached as free functions -- the ordinary
+            way to write a blueprint -- are not members of any class, so
+            those come from the list ``attach_at`` left on this class, and
+            that list is read from ``cls.__dict__`` only. See
+            :data:`~ccai.webworks.endpoints.descriptor.ENDPOINT_DECLARED_ATTR`
+            for why inheriting it would recreate the global registry.
+
+            Declared descriptors come last and stay in declaration order:
+            :meth:`RestBlueprint.add_crud` attaches a handler and then takes
+            the final entry as the one it just made.
+
             :returns: Descriptors in method-resolution order, nearest class
                       first, with duplicates from inherited handlers removed.
         """
@@ -326,6 +341,12 @@ class Endpoint:
                         continue
                     seen.append(id(descriptor))
                     rtnval.append(descriptor)
+
+        for descriptor in cls.__dict__.get(ENDPOINT_DECLARED_ATTR, ()):
+            if id(descriptor) in seen:
+                continue
+            seen.append(id(descriptor))
+            rtnval.append(descriptor)
 
         return rtnval
 
@@ -457,6 +478,11 @@ class Endpoint:
             # list that belongs to its base class.
             descriptor.on_conflict = on_conflict
             mark_handler(func, descriptor)
+
+            # Also record it against the class it was declared through, so
+            # `cls.register()` can find handlers that are free functions
+            # rather than members of the class body.
+            declare_on_class(cls, descriptor)
 
             # Return the original function unchanged
             return func

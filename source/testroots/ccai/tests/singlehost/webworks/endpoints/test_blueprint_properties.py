@@ -1564,12 +1564,10 @@ def test_property_blueprint_multi_attachment():
         **Validates: Requirements 1.1, 1.3, 1.4**
     """
     registry = EndpointRegistry()
-    Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
         registry = EndpointRegistry()
-        Blueprint._blueprint_descriptors.clear()
         
         # Generate random number of endpoints (1-5)
         num_endpoints = random.randint(1, 5)
@@ -1634,12 +1632,10 @@ def test_property_blueprint_multi_attachment_separate_descriptors():
         **Validates: Requirements 1.1, 1.3, 1.4**
     """
     registry = EndpointRegistry()
-    Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
         registry = EndpointRegistry()
-        Blueprint._blueprint_descriptors.clear()
         
         # Generate random number of endpoints (2-4)
         num_endpoints = random.randint(2, 4)
@@ -1701,12 +1697,10 @@ def test_property_blueprint_multi_attachment_all_inherit_constraints():
         **Validates: Requirements 1.1, 1.3, 1.4**
     """
     registry = EndpointRegistry()
-    Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
         registry = EndpointRegistry()
-        Blueprint._blueprint_descriptors.clear()
         
         # Generate random blueprint constraints
         blueprint_roles = ["role_" + generate_random_string(3, 5)]
@@ -1784,12 +1778,10 @@ def test_property_blueprint_router_integration_with_router():
         **Validates: Requirements 1.5, 1.6**
     """
     registry = EndpointRegistry()
-    Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
         registry = EndpointRegistry()
-        Blueprint._blueprint_descriptors.clear()
         
         # Generate random number of endpoints (1-5)
         num_endpoints = random.randint(1, 5)
@@ -1866,12 +1858,10 @@ def test_property_blueprint_router_integration_without_router():
         **Validates: Requirements 1.5, 1.6**
     """
     registry = EndpointRegistry()
-    Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
         registry = EndpointRegistry()
-        Blueprint._blueprint_descriptors.clear()
         
         # Generate random number of endpoints (1-5)
         num_endpoints = random.randint(1, 5)
@@ -1932,12 +1922,10 @@ def test_property_blueprint_router_integration_router_receives_complete_descript
         **Validates: Requirements 1.5, 1.6**
     """
     registry = EndpointRegistry()
-    Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
         registry = EndpointRegistry()
-        Blueprint._blueprint_descriptors.clear()
         
         # Generate random blueprint attributes
         blueprint_roles = ["role_" + generate_random_string(3, 5)]
@@ -2030,12 +2018,10 @@ def test_property_blueprint_idempotency():
         **Validates: Requirements 6.7**
     """
     registry = EndpointRegistry()
-    Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
         registry = EndpointRegistry()
-        Blueprint._blueprint_descriptors.clear()
         
         # Generate random number of endpoints (1-4)
         num_endpoints = random.randint(1, 4)
@@ -2097,12 +2083,10 @@ def test_property_blueprint_idempotency_same_methods():
         **Validates: Requirements 6.7**
     """
     registry = EndpointRegistry()
-    Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
         registry = EndpointRegistry()
-        Blueprint._blueprint_descriptors.clear()
         
         # Generate random methods
         methods = random.choice([["GET"], ["POST"], ["GET", "POST"], ["PUT", "DELETE"]])
@@ -2152,12 +2136,10 @@ def test_property_blueprint_idempotency_same_constraints():
         **Validates: Requirements 6.7**
     """
     registry = EndpointRegistry()
-    Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
         registry = EndpointRegistry()
-        Blueprint._blueprint_descriptors.clear()
         
         # Generate random constraints
         roles = generate_random_roles()
@@ -2221,12 +2203,10 @@ def test_property_blueprint_idempotency_with_router():
         **Validates: Requirements 6.7**
     """
     registry = EndpointRegistry()
-    Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
         registry = EndpointRegistry()
-        Blueprint._blueprint_descriptors.clear()
         
         # Create a Blueprint subclass
         class TestBlueprint(Blueprint):
@@ -2441,7 +2421,8 @@ def test_property_descriptor_emission_with_attach_child():
         
         # Attach child to parent
         descriptor = ParentBlueprint.attach_child(ChildEndpoint)
-        
+        registry.register(descriptor)
+
         # Verify descriptor was emitted to registry
         descriptors = registry.collect()
         
@@ -2882,6 +2863,7 @@ def test_property_handler_non_execution_during_decoration():
         
         # Apply the decorator - this should NOT call the handler
         decorated = TestBlueprint.attach_at(leaf=leaf)(tracking_handler)
+        registry.collect_from(tracking_handler)
         
         # Verify handler was NOT called during decoration
         if handler_called[0]:
@@ -2984,7 +2966,8 @@ def test_property_handler_non_execution_with_constraints():
             methods=["GET", "POST"],
             version="v1"
         )(tracking_handler)
-        
+        registry.collect_from(tracking_handler)
+
         # Verify handler was NOT called during decoration
         if handler_called[0]:
             errmsg = (
@@ -3111,8 +3094,6 @@ def test_property_handler_non_execution_during_register():
             pass
         
         TestBlueprint.base_path = base_path
-        # Clear the blueprint's internal cache
-        TestBlueprint.clear_registration()
         
         # Track which handlers were called
         handlers_called = {i: False for i in range(num_handlers)}
@@ -3184,7 +3165,6 @@ def test_property_handler_non_execution_with_router():
             pass
         
         TestBlueprint.base_path = base_path
-        TestBlueprint.clear_registration()
         
         # Track which handlers were called
         handlers_called = {i: False for i in range(num_handlers)}

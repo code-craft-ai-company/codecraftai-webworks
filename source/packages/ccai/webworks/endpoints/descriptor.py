@@ -55,6 +55,53 @@ def mark_handler(handler: Any, descriptor: "EndpointDescriptor") -> None:
     return
 
 
+#: Attribute stamped on the *class* an endpoint was declared through -- the
+#: ``cls`` in ``cls.attach_at(...)`` or ``cls.attach_child(...)``.
+#:
+#: A handler mark answers "what does this function serve?". This answers the
+#: other question, "what does this blueprint serve?", which the handler mark
+#: cannot: the usual way to write a blueprint attaches free functions, and a
+#: free function is not reachable from the class it was attached to.
+#:
+#:     class ApiBlueprint(Blueprint):
+#:         base_path = "/api"
+#:
+#:     @ApiBlueprint.attach_at(leaf="users")
+#:     def list_users(): ...
+#:
+#: ``list_users`` is a module-level name. Walking ``ApiBlueprint``'s body for
+#: marked members finds nothing, so ``ApiBlueprint.register()`` returned an
+#: empty list. It used to work only because attaching wrote into a
+#: process-global registry that ``register()`` then filtered by base path.
+ENDPOINT_DECLARED_ATTR = "__webworks_declared_descriptors__"
+
+
+def declare_on_class(owner: Any, descriptor: "EndpointDescriptor") -> None:
+    """
+        Record a descriptor on the class it was declared through.
+
+        Stored in ``owner.__dict__`` and read back the same way, never with
+        :func:`getattr`. That is deliberate and is the whole safety property
+        of this attribute: ``attach_at`` is inherited from
+        :class:`~ccai.webworks.endpoints.endpoint.Endpoint`, so every bare
+        ``Endpoint.attach_at(...)`` in a process declares on the shared root
+        class. If lookup walked the MRO, each blueprint would see that pile
+        and this would be the process-global registry again under another
+        name. A class is asked only what was declared through it.
+
+        :param owner: The class ``attach_at``/``attach_child`` was called on.
+        :param descriptor: The descriptor to record on it.
+    """
+    declared = owner.__dict__.get(ENDPOINT_DECLARED_ATTR)
+    if declared is None:
+        declared = []
+        setattr(owner, ENDPOINT_DECLARED_ATTR, declared)
+
+    declared.append(descriptor)
+
+    return
+
+
 @dataclass
 class EndpointDescriptor:
     """

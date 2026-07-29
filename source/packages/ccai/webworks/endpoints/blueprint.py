@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Type, TypeVar
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.constraints import EndpointConstraints
 from ccai.webworks.endpoints.descriptor import (
+    declare_on_class,
     EndpointDescriptor,
     mark_handler
 )
@@ -100,10 +101,6 @@ class Blueprint(Endpoint):
     replace_scopes: bool = False
     replace_roles: bool = False
     
-    # Internal tracking of registered descriptors per blueprint class
-    # This is a dict keyed by class name to avoid sharing across subclasses
-    _blueprint_descriptors: Dict[str, List[EndpointDescriptor]] = {}
-
     # Legacy storage for child descriptors registered via attach_at
     _child_descriptors: List[EndpointDescriptor] = []
 
@@ -152,76 +149,42 @@ class Blueprint(Endpoint):
             registered via attach_at on this blueprint class. If a router
             is provided, each descriptor is also added to the router.
             
-            The method is idempotent - calling it multiple times returns
-            the same descriptors. If re-registration is needed, the
-            internal cache is cleared and descriptors are re-collected.
-            
+            The method is idempotent: the descriptors belong to the handlers
+            and to this class, so every call recomputes the same answer from
+            the same objects.
+
             Subclasses can override this method to implement custom
             registration logic.
-            
+
             :param router: Optional router to add endpoints to. If None,
                           descriptors are returned without router registration.
-            
+
             :returns: List of EndpointDescriptor objects for all registered endpoints.
-            
+
             Requirements: 1.4, 1.5, 1.6, 6.7
         """
-        # Get the class key for tracking descriptors per blueprint class
-        class_key = cls._get_class_key()
-        
-        # Check if we already have cached descriptors (idempotency)
-        if class_key in cls._blueprint_descriptors:
-            cached_descriptors = cls._blueprint_descriptors[class_key]
-            
-            # If router is provided, add each cached descriptor to it
-            if router is not None:
-                for descriptor in cached_descriptors:
-                    router.add_endpoint(descriptor)
-            
-            return cached_descriptors.copy()
-        
-        # Collect descriptors from the registry that belong to this blueprint
+        # There used to be a cache here, a class-level dict keyed by
+        # f"{cls.__module__}.{cls.__name__}", holding the result of the first
+        # register() call. The key is not unique -- two blueprints defined in
+        # the same module under the same name are the same key, which is the
+        # ordinary shape of a test file, and each one then received whichever
+        # descriptors the first had collected. It was process-global state
+        # keyed by something that does not identify a class.
+        #
+        # It bought idempotency that is now free: marked_descriptors() reads
+        # the handlers and this class, and returns the same objects each call.
         all_descriptors = cls.marked_descriptors()
-        
+
         # Filter to descriptors that were registered by this blueprint class
         blueprint_descriptors = cls._collect_blueprint_descriptors(all_descriptors)
-        
-        # Cache the descriptors for idempotency
-        cls._blueprint_descriptors[class_key] = blueprint_descriptors
-        
+
         # If router is provided, add each descriptor to it
         if router is not None:
             for descriptor in blueprint_descriptors:
                 router.add_endpoint(descriptor)
-        
+
         return blueprint_descriptors.copy()
-    
-    @classmethod
-    def _get_class_key(cls) -> str:
-        """
-            Get a unique key for this blueprint class.
-            
-            This key is used to track registered descriptors per blueprint
-            class, ensuring that subclasses don't share descriptor caches.
-            
-            :returns: A unique string key for this class.
-        """
-        return f"{cls.__module__}.{cls.__name__}"
-    
-    @classmethod
-    def clear_registration(cls) -> None:
-        """
-            Clear the cached registration for this blueprint.
-            
-            This method clears the internal descriptor cache, allowing
-            the next call to register() to re-collect descriptors.
-            This is useful for testing or when the blueprint's endpoints
-            have changed.
-        """
-        class_key = cls._get_class_key()
-        if class_key in cls._blueprint_descriptors:
-            del cls._blueprint_descriptors[class_key]
-    
+
     @classmethod
     def _collect_blueprint_descriptors(
         cls,
@@ -711,7 +674,13 @@ class Blueprint(Endpoint):
             extras=extras_dict
         )
         
-        # Step 12: mark the handler. A registry collects it later.
+        # Step 12: mark the handler, and record the descriptor against this
+        # blueprint. The mark alone would be unreachable here -- the handler
+        # is the placeholder built above, which no caller holds a name for --
+        # so the class declaration is what lets `cls.register()` see the
+        # child. Callers wanting it in a registry pass the returned
+        # descriptor to `EndpointRegistry.register`.
         mark_handler(descriptor.handler, descriptor)
-        
+        declare_on_class(cls, descriptor)
+
         return descriptor

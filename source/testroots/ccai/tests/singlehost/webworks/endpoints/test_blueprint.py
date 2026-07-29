@@ -26,10 +26,8 @@ from ccai.webworks.endpoints import (
 # =============================================================================
 
 def _clear_registry():
-    """Helper to clear the registry before tests."""
-    registry = EndpointRegistry()
-    # Also clear the blueprint's internal descriptor cache
-    Blueprint._blueprint_descriptors.clear()
+    """Build a registry for a test to own."""
+    return EndpointRegistry()
 
 
 # =============================================================================

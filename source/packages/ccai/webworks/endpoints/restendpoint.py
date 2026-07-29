@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.constraints import EndpointConstraints
 from ccai.webworks.endpoints.descriptor import (
+    declare_on_class,
     EndpointDescriptor,
     mark_handler
 )
@@ -194,10 +195,15 @@ class RestEndpoint(Endpoint):
                 extras=extras_dict
             )
             
-            # Mark the handler; a registry collects it later.
+            # Mark the handler; a registry collects it later. Record it on
+            # the declaring class too, so `cls.register()` and `add_crud`
+            # find handlers that are free functions. This decorator builds
+            # its own descriptor rather than delegating to
+            # `Endpoint.attach_at`, so it has to do both halves itself.
             descriptor.on_conflict = on_conflict
             mark_handler(func, descriptor)
-            
+            declare_on_class(cls, descriptor)
+
             # Return the original function unchanged
             return func
         
