@@ -836,8 +836,15 @@ class HTTPProtocolHandler(asyncio.Protocol):
 
             Creates an asyncio task that calls ``_handle_request`` to
             process the parsed HTTP request through the ASGI application.
+
+            Asks for the *running* loop rather than the current one. This
+            runs from a protocol callback, which asyncio only ever invokes
+            from inside a running loop, so the stricter call says what is
+            actually required. ``get_event_loop`` no longer returns a loop
+            in 3.12 when none is set, and would either raise here or, worse,
+            hand back a loop that is not the one driving this connection.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         loop.create_task(self._handle_request())
         return
 

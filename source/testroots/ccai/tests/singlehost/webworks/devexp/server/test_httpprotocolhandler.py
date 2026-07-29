@@ -244,6 +244,25 @@ def _encode_chunked(data):
     return b"".join(parts)
 
 
+def _feed(handler, raw_request):
+    """
+        Hand raw bytes to the handler from inside a running loop.
+
+        data_received is a protocol callback: asyncio only ever calls it with
+        a loop running, and a request that arrives complete makes the handler
+        schedule the ASGI invocation as a task. Driving it from bare
+        synchronous code left it with no loop to schedule on. Most tests here
+        feed partial requests and never reach that point, which is why only
+        the two that complete a request failed.
+    """
+    async def drive():
+        handler.data_received(raw_request)
+
+    asyncio.run(drive())
+
+    return
+
+
 def _run_async(coro):
     """
         Run an async coroutine synchronously.
@@ -366,7 +385,7 @@ def test_property_content_length_body():
         handler = _create_handler()
         transport = _connect_handler(handler)
 
-        handler.data_received(raw_request)
+        _feed(handler, raw_request)
 
         if handler._body != body:
             errmsg = "Body mismatch: expected {} bytes, got {} bytes".format(
@@ -1086,7 +1105,7 @@ def test_empty_body_with_content_length_zero():
     headers = [("Content-Length", "0")]
     raw_request = _build_raw_request("POST", "/empty", "HTTP/1.1", headers, b"")
 
-    handler.data_received(raw_request)
+    _feed(handler, raw_request)
 
     # With Content-Length: 0, the body should be empty and state should
     # transition to PROCESSING (no body to wait for)
