@@ -18,8 +18,8 @@ the security decorators ends up with the corresponding policy on its
 :class:`EndpointDescriptor`.
 """
 
+from ccai.webworks.endpoints.descriptor import ENDPOINT_DESCRIPTORS_ATTR
 from ccai.webworks.endpoints.endpoint import Endpoint
-from ccai.webworks.endpoints.registry import EndpointRegistry
 from ccai.webworks.endpoints.restendpoint import RestEndpoint
 from ccai.webworks.security.accesspolicy import AccessPolicy
 from ccai.webworks.security.decorators import (
@@ -34,30 +34,22 @@ from ccai.webworks.security.decorators import (
 # Helpers
 # =============================================================================
 
-def _clear_registry():
-    """
-        Reset the global :class:`EndpointRegistry` between tests so route
-        registrations from earlier tests do not collide with new ones.
-    """
-    registry = EndpointRegistry()
-    return
-
-
 def _last_descriptor_for(handler):
     """
-        Return the :class:`EndpointDescriptor` whose handler matches the
-        supplied callable. Tests use this to inspect the policy that
-        attach_at recorded for a specific handler without depending on
-        registration order.
-    """
-    registry = EndpointRegistry()
-    descriptors = registry.collect()
-    for desc in descriptors:
-        if desc.handler is handler:
-            return desc
+        Return the :class:`EndpointDescriptor` that ``attach_at`` recorded
+        for the supplied callable.
 
-    errmsg = "No EndpointDescriptor found for handler {!r}".format(handler)
-    raise AssertionError(errmsg)
+        This used to scan a registry for a descriptor whose handler matched.
+        A descriptor now lives on the handler that declared it, so the
+        handler can be asked directly and the answer does not depend on any
+        registry having collected it, nor on registration order.
+    """
+    descriptors = list(getattr(handler, ENDPOINT_DESCRIPTORS_ATTR, ()))
+    if not descriptors:
+        errmsg = "No EndpointDescriptor found for handler {!r}".format(handler)
+        raise AssertionError(errmsg)
+
+    return descriptors[-1]
 
 
 # =============================================================================
@@ -70,8 +62,6 @@ def test_require_roles_propagates_into_descriptor_via_attach_at():
         produces an :class:`EndpointDescriptor` whose effective access
         policy includes ``"admin"``.
     """
-    registry = EndpointRegistry()
-
     @Endpoint.attach_at(leaf="rr-admin-only")
     @require_roles("admin")
     def handler_admin_only():
@@ -102,8 +92,6 @@ def test_require_auth_propagates_into_descriptor_via_attach_at():
         ``@require_auth`` (no roles) attaches a policy that requires
         authentication on the resulting descriptor.
     """
-    registry = EndpointRegistry()
-
     @Endpoint.attach_at(leaf="ra-auth-only")
     @require_auth
     def handler_auth_only():
@@ -128,8 +116,6 @@ def test_require_scopes_propagates_into_descriptor_via_attach_at():
         ``@require_scopes("read:posts")`` flows through to the descriptor
         as a scope on the effective access policy.
     """
-    registry = EndpointRegistry()
-
     @Endpoint.attach_at(leaf="rs-read-posts")
     @require_scopes("read:posts")
     def handler_read_posts():
@@ -160,8 +146,6 @@ def test_decorator_policy_merges_with_explicit_access_policy_kwarg():
         kwarg supply roles, the merged result is the union — neither side
         is silently dropped.
     """
-    registry = EndpointRegistry()
-
     @Endpoint.attach_at(
         leaf="merge-explicit",
         access_policy=AccessPolicy(roles=("editor",))
@@ -190,8 +174,6 @@ def test_decorator_policy_merges_with_class_default_access_policy():
         ``access_policy`` default. Decorator-supplied roles must merge
         with — not replace — that default.
     """
-    registry = EndpointRegistry()
-
     class HeroEndpoint(Endpoint):
         access_policy = AccessPolicy(roles=("hero",))
 
@@ -224,8 +206,6 @@ def test_stacked_security_decorators_all_propagate_via_attach_at():
         single merged policy (via the decorator's own merge logic), and
         attach_at must forward that merged policy into the descriptor.
     """
-    registry = EndpointRegistry()
-
     @Endpoint.attach_at(leaf="stack-rs-rr")
     @require_roles("admin")
     @require_scopes("write:posts")
@@ -255,8 +235,6 @@ def test_require_roles_propagates_into_descriptor_via_rest_attach_at():
         :meth:`RestEndpoint.attach_at` honors handler-attached policy the
         same way :meth:`Endpoint.attach_at` does.
     """
-    registry = EndpointRegistry()
-
     @RestEndpoint.attach_at(leaf="rest-admin-only")
     @require_roles("admin")
     def handler_rest_admin_only():
@@ -286,8 +264,6 @@ def test_public_endpoint_propagates_require_auth_false_via_attach_at():
         When no other source of policy is present, the descriptor's
         effective policy reflects that.
     """
-    registry = EndpointRegistry()
-
     @Endpoint.attach_at(leaf="public-only")
     @public_endpoint
     def handler_public():
