@@ -24,7 +24,7 @@
     installed.
 """
 
-from unittest.mock import patch
+from ccai.testbase.mocking import create_module_patch
 
 import builtins
 import importlib
@@ -103,13 +103,14 @@ def test_oauth_module_imports_without_oauth_libraries():
     """
     _drop_cached_modules(_BLOCKED_PREFIXES + ("ccai.webworks.authentication.oauth",))
 
-    # builtins.__import__ is process-wide state. patch.object restores it
-    # on exit; leaving it replaced would break every later import.
-    with patch.object(
-        builtins,
-        '__import__',
-        _make_blocking_import(_BLOCKED_PREFIXES),
-    ):
+    # builtins.__import__ cannot be replaced by a mock object: any
+    # import performed inside the mock's own call machinery re-enters
+    # the patch, and the test dies with RecursionError. It has to be a
+    # plain function, saved and restored by hand -- leaving it replaced
+    # would break every later import in the run.
+    _original_import = builtins.__import__
+    builtins.__import__ = _make_blocking_import(_BLOCKED_PREFIXES)
+    try:
 
         oauth_mod = importlib.import_module(
             "ccai.webworks.authentication.oauth",
@@ -121,6 +122,8 @@ def test_oauth_module_imports_without_oauth_libraries():
         return
 
 
+    finally:
+        builtins.__import__ = _original_import
 def test_oauthclient_blueprint_module_imports_without_oauth_libraries():
     """
         ``ccai.webworks.authentication.blueprints.oauthclient``
@@ -133,13 +136,14 @@ def test_oauthclient_blueprint_module_imports_without_oauth_libraries():
         ),
     )
 
-    # builtins.__import__ is process-wide state. patch.object restores it
-    # on exit; leaving it replaced would break every later import.
-    with patch.object(
-        builtins,
-        '__import__',
-        _make_blocking_import(_BLOCKED_PREFIXES),
-    ):
+    # builtins.__import__ cannot be replaced by a mock object: any
+    # import performed inside the mock's own call machinery re-enters
+    # the patch, and the test dies with RecursionError. It has to be a
+    # plain function, saved and restored by hand -- leaving it replaced
+    # would break every later import in the run.
+    _original_import = builtins.__import__
+    builtins.__import__ = _make_blocking_import(_BLOCKED_PREFIXES)
+    try:
 
         bp_mod = importlib.import_module(
             "ccai.webworks.authentication.blueprints.oauthclient",
@@ -151,6 +155,8 @@ def test_oauthclient_blueprint_module_imports_without_oauth_libraries():
         return
 
 
+    finally:
+        builtins.__import__ = _original_import
 # =============================================================================
 # OAuthClient construction and use succeed without the libraries
 # =============================================================================
@@ -167,13 +173,14 @@ def test_oauth_client_constructor_succeeds_without_oauth_libraries():
         ),
     )
 
-    # builtins.__import__ is process-wide state. patch.object restores it
-    # on exit; leaving it replaced would break every later import.
-    with patch.object(
-        builtins,
-        '__import__',
-        _make_blocking_import(_BLOCKED_PREFIXES),
-    ):
+    # builtins.__import__ cannot be replaced by a mock object: any
+    # import performed inside the mock's own call machinery re-enters
+    # the patch, and the test dies with RecursionError. It has to be a
+    # plain function, saved and restored by hand -- leaving it replaced
+    # would break every later import in the run.
+    _original_import = builtins.__import__
+    builtins.__import__ = _make_blocking_import(_BLOCKED_PREFIXES)
+    try:
 
         oauth_mod = importlib.import_module(
             "ccai.webworks.authentication.oauth",
@@ -196,6 +203,8 @@ def test_oauth_client_constructor_succeeds_without_oauth_libraries():
         return
 
 
+    finally:
+        builtins.__import__ = _original_import
 def test_build_authorization_url_succeeds_without_oauth_libraries():
     """
         ``build_authorization_url`` is pure standard-library URL
@@ -209,13 +218,14 @@ def test_build_authorization_url_succeeds_without_oauth_libraries():
         ),
     )
 
-    # builtins.__import__ is process-wide state. patch.object restores it
-    # on exit; leaving it replaced would break every later import.
-    with patch.object(
-        builtins,
-        '__import__',
-        _make_blocking_import(_BLOCKED_PREFIXES),
-    ):
+    # builtins.__import__ cannot be replaced by a mock object: any
+    # import performed inside the mock's own call machinery re-enters
+    # the patch, and the test dies with RecursionError. It has to be a
+    # plain function, saved and restored by hand -- leaving it replaced
+    # would break every later import in the run.
+    _original_import = builtins.__import__
+    builtins.__import__ = _make_blocking_import(_BLOCKED_PREFIXES)
+    try:
 
         oauth_mod = importlib.import_module(
             "ccai.webworks.authentication.oauth",
@@ -248,6 +258,8 @@ def test_build_authorization_url_succeeds_without_oauth_libraries():
         return
 
 
+    finally:
+        builtins.__import__ = _original_import
 def test_state_cookie_serializer_succeeds_without_oauth_libraries():
     """
         ``OAuthClientBlueprint._build_state_serializer`` uses the
@@ -262,13 +274,14 @@ def test_state_cookie_serializer_succeeds_without_oauth_libraries():
         ),
     )
 
-    # builtins.__import__ is process-wide state. patch.object restores it
-    # on exit; leaving it replaced would break every later import.
-    with patch.object(
-        builtins,
-        '__import__',
-        _make_blocking_import(_BLOCKED_PREFIXES),
-    ):
+    # builtins.__import__ cannot be replaced by a mock object: any
+    # import performed inside the mock's own call machinery re-enters
+    # the patch, and the test dies with RecursionError. It has to be a
+    # plain function, saved and restored by hand -- leaving it replaced
+    # would break every later import in the run.
+    _original_import = builtins.__import__
+    builtins.__import__ = _make_blocking_import(_BLOCKED_PREFIXES)
+    try:
 
         bp_mod = importlib.import_module(
             "ccai.webworks.authentication.blueprints.oauthclient",
@@ -293,3 +306,5 @@ def test_state_cookie_serializer_succeeds_without_oauth_libraries():
             raise AssertionError(errmsg)
 
         return
+    finally:
+        builtins.__import__ = _original_import

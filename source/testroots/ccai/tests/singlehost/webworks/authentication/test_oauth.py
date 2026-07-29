@@ -23,7 +23,7 @@
           URL-safe random tokens of the documented length.
 """
 
-from unittest.mock import patch
+from ccai.testbase.mocking import create_module_patch
 
 import base64
 import json
@@ -528,14 +528,12 @@ def test_parse_id_token_round_trip_validates_signed_jwt():
 
     from ccai.webworks.authentication import oauth as oauth_module
 
-    # patch.object restores on exit. The target is module state --
-    # oauth_module.http_requests.get -- so leaving it stubbed would hand the
-    # stub to every later test that reaches for HTTP.
-    with patch.object(
-        oauth_module.http_requests,
-        "get",
-        lambda url, timeout=None: _StubResponse(jwks),
-    ):
+    # http_requests.get is module state, so it has to be restored -- leaving
+    # it stubbed would hand the stub to every later test that reaches for
+    # HTTP. create_module_patch restores on exit.
+    with create_module_patch(oauth_module.http_requests, "get") as http_get:
+        http_get.configure(side_effect=lambda url, timeout=None: _StubResponse(jwks))
+
         decoded = client.parse_id_token(
             {"id_token": id_token_str},
             nonce=nonce_value,
@@ -591,11 +589,9 @@ def test_parse_id_token_rejects_wrong_nonce():
 
     # See the note above: module state, so the stub has to be undone.
     raised = False
-    with patch.object(
-        oauth_module.http_requests,
-        "get",
-        lambda url, timeout=None: _StubResponse(jwks),
-    ):
+    with create_module_patch(oauth_module.http_requests, "get") as http_get:
+        http_get.configure(side_effect=lambda url, timeout=None: _StubResponse(jwks))
+
         try:
             client.parse_id_token(
                 {"id_token": id_token_str},
