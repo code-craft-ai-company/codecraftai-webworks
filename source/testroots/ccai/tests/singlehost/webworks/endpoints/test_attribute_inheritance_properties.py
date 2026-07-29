@@ -104,7 +104,7 @@ def test_property_explicit_kwargs_override_class_attributes():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         # Generate class-level defaults
         class_methods = generate_random_methods()
@@ -139,6 +139,7 @@ def test_property_explicit_kwargs_override_class_attributes():
             access_policy=override_policy,
             rate_limit=override_rate_limit,
         )(handler)
+        registry.collect_from(handler)
 
         # Retrieve the descriptor from the registry
         descriptors = registry.collect()
@@ -194,7 +195,7 @@ def test_property_missing_kwargs_fallback_to_class_defaults():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         # Generate class-level defaults
         class_methods = generate_random_methods()
@@ -216,6 +217,7 @@ def test_property_missing_kwargs_fallback_to_class_defaults():
 
         # Call attach_at with only the mandatory leaf, no overrides
         SubEndpoint.attach_at(leaf=leaf)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         if len(descriptors) != 1:
@@ -270,7 +272,7 @@ def test_property_class_attributes_unchanged_after_attachment():
         **Validates: Requirements 2.3**
     """
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         # Generate class-level defaults
         class_methods = generate_random_methods()
@@ -306,6 +308,7 @@ def test_property_class_attributes_unchanged_after_attachment():
             access_policy=generate_random_access_policy(),
             rate_limit=generate_random_rate_limit(),
         )(handler)
+        registry.collect_from(handler)
 
         # Verify class attributes are unchanged
         if SubEndpoint.methods != before_methods:
@@ -356,7 +359,7 @@ def test_property_partial_override_mixes_class_and_kwargs():
     ATTR_KEYS = ["methods", "tags", "version", "access_policy", "rate_limit"]
 
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         # Generate class-level defaults
         class_attrs = {
@@ -390,6 +393,7 @@ def test_property_partial_override_mixes_class_and_kwargs():
         leaf = f"partial_{iteration}_{generate_random_leaf()}"
 
         SubEndpoint.attach_at(leaf=leaf, **override_values)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         if len(descriptors) != 1:
@@ -450,7 +454,7 @@ def test_property_subclass_defaults_inherited_by_handler():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         # Generate random class-level defaults
         class_methods = generate_random_methods()
@@ -473,6 +477,7 @@ def test_property_subclass_defaults_inherited_by_handler():
         leaf = f"inherit_{iteration}_{generate_random_leaf()}"
 
         SubEndpoint.attach_at(leaf=leaf)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]

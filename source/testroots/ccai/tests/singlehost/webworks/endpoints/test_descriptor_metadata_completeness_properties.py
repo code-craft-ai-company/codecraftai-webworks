@@ -116,7 +116,7 @@ def test_property_collect_descriptors_have_all_metadata_fields():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "meta")
         leaf = f"meta_{iteration}_{generate_random_leaf()}"
@@ -136,6 +136,7 @@ def test_property_collect_descriptors_have_all_metadata_fields():
             rate_limit=rate_limit,
             doc=doc,
         )(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
 
@@ -249,7 +250,7 @@ def test_property_collect_preserves_access_policy_in_constraints():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "policy")
         leaf = f"policy_{iteration}_{generate_random_leaf()}"
@@ -264,6 +265,7 @@ def test_property_collect_preserves_access_policy_in_constraints():
             leaf=leaf,
             access_policy=access_policy,
         )(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]
@@ -314,7 +316,7 @@ def test_property_collect_preserves_rate_limit_in_constraints():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "rlimit")
         leaf = f"rlimit_{iteration}_{generate_random_leaf()}"
@@ -328,6 +330,7 @@ def test_property_collect_preserves_rate_limit_in_constraints():
             leaf=leaf,
             rate_limit=rate_limit,
         )(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]
@@ -367,7 +370,7 @@ def test_property_collect_multiple_descriptors_all_complete():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         num_endpoints = random.randint(2, 5)
         registered = []
@@ -391,6 +394,7 @@ def test_property_collect_multiple_descriptors_all_complete():
                 version=version,
                 doc=doc,
             )(handler)
+            registry.collect_from(handler)
 
             registered.append({
                 "handler": handler,
@@ -474,12 +478,13 @@ def test_property_collect_no_policy_yields_empty_scopes_and_roles():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "nopol")
         leaf = f"nopol_{iteration}_{generate_random_leaf()}"
 
         Endpoint.attach_at(leaf=leaf)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]
@@ -529,7 +534,7 @@ def test_property_collect_security_row_has_all_columns():
     ]
 
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "secrow")
         leaf = f"secrow_{iteration}_{generate_random_leaf()}"
@@ -545,6 +550,7 @@ def test_property_collect_security_row_has_all_columns():
             rate_limit=rate_limit,
             doc=doc,
         )(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]

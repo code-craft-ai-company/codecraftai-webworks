@@ -72,7 +72,7 @@ def test_rest_blueprint_inside_class_body_decoration_resolves_subclass_base_path
         def thing(self, request):
             return {}
 
-    registry.collect_from(thing)
+    registry.collect_from(InsideRestBP)
     descriptors = registry.collect()
 
     if len(descriptors) != 1:
@@ -134,7 +134,7 @@ def test_rest_blueprint_inside_class_body_multi_method_stacking():
         def thing(self, request):
             return {}
 
-    registry.collect_from(thing)
+    registry.collect_from(StackedRestBP)
     descriptors = registry.collect()
 
     if len(descriptors) != 2:
@@ -175,7 +175,7 @@ def test_rest_blueprint_inside_class_body_absolute_path_not_reprefixed():
         def elsewhere(self, request):
             return {}
 
-    registry.collect_from(elsewhere)
+    registry.collect_from(AbsoluteRestBP)
     descriptors = registry.collect()
 
     if len(descriptors) != 1:
@@ -205,7 +205,7 @@ def test_rest_blueprint_inside_class_body_path_form():
         def list_things(self, request):
             return {}
 
-    registry.collect_from(list_things)
+    registry.collect_from(PathFormBP)
     descriptors = registry.collect()
 
     if len(descriptors) != 1:
@@ -237,7 +237,7 @@ def test_blueprint_inside_class_body_decoration_resolves_subclass_base_path():
         def thing(self, request):
             return {}
 
-    registry.collect_from(thing)
+    registry.collect_from(InsideBP)
     descriptors = registry.collect()
 
     if len(descriptors) != 1:
@@ -276,7 +276,7 @@ def test_multi_level_subclass_picks_up_each_levels_base_path():
         def beta(self, request):
             return {}
 
-    registry.collect_from(alpha, beta)
+    registry.collect_from(LevelOne, LevelTwo)
     descriptors = registry.collect()
 
     paths = sorted(d.path for d in descriptors)

@@ -108,7 +108,7 @@ def test_property_handler_not_called_during_attach_at():
         **Validates: Requirements 6.2**
     """
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         call_count = [0]
 
@@ -156,7 +156,7 @@ def test_property_handler_not_called_during_subclass_attach_at():
         **Validates: Requirements 6.2**
     """
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         class_methods = generate_random_methods()
         class_tags = generate_random_tags()
@@ -182,6 +182,7 @@ def test_property_handler_not_called_during_subclass_attach_at():
         leaf = f"sub_noexec_{iteration}_{generate_random_leaf()}"
 
         SubEndpoint.attach_at(leaf=leaf)(handler)
+        registry.collect_from(handler)
 
         if call_count[0] != 0:
             raise AssertionError(
@@ -205,7 +206,7 @@ def test_property_handler_not_called_during_registry_collect():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         num_handlers = random.randint(1, 5)
         call_counts = []
@@ -225,6 +226,7 @@ def test_property_handler_not_called_during_registry_collect():
             handler = make_handler(call_count, idx)
             leaf = f"collect_{iteration}_{idx}_{generate_random_leaf()}"
             Endpoint.attach_at(leaf=leaf)(handler)
+            registry.collect_from(handler)
 
         # Reset counts after registration (registration itself should not call them,
         # but we want to isolate the collect() call)
@@ -262,7 +264,7 @@ def test_property_handler_callable_preserved_after_attach_at():
         **Validates: Requirements 6.2**
     """
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         call_count = [0]
         expected_return = random.randint(0, 10000)

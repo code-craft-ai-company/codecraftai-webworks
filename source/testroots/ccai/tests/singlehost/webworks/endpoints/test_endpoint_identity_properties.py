@@ -116,7 +116,7 @@ def test_property_decorator_returns_identical_function():
         **Validates: Requirements 2.1, 4.3**
     """
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration)
         original_id = id(handler)
@@ -156,7 +156,7 @@ def test_property_decorator_preserves_function_callable():
         **Validates: Requirements 2.1, 4.3**
     """
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         expected_value = random.randint(0, 10000)
 
@@ -193,7 +193,7 @@ def test_property_decorator_preserves_identity_with_subclasses():
         **Validates: Requirements 2.1, 4.3**
     """
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         # Create a random subclass with random class-level defaults
         subclass_attrs = {
@@ -239,7 +239,7 @@ def test_property_decorator_preserves_identity_with_extras():
         **Validates: Requirements 2.1, 4.3**
     """
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration)
         leaf = f"extras_{iteration}_{generate_random_leaf()}"
@@ -275,7 +275,7 @@ def test_property_decorator_preserves_identity_with_path():
         **Validates: Requirements 2.1, 4.3**
     """
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration)
 

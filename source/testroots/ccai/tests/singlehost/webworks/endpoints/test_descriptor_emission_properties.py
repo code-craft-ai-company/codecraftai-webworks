@@ -120,7 +120,7 @@ def test_property_attach_at_emits_descriptor_to_registry():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "emit")
         leaf = f"emit_{iteration}_{generate_random_leaf()}"
@@ -140,6 +140,7 @@ def test_property_attach_at_emits_descriptor_to_registry():
             rate_limit=rate_limit,
             doc=doc,
         )(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
 
@@ -208,7 +209,7 @@ def test_property_attach_at_emits_descriptor_with_merged_class_attrs():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         # Generate class-level defaults
         class_methods = generate_random_methods()
@@ -247,6 +248,7 @@ def test_property_attach_at_emits_descriptor_with_merged_class_attrs():
             kwargs["version"] = override_version
 
         SubEndpoint.attach_at(**kwargs)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
 
@@ -303,7 +305,7 @@ def test_property_attach_at_with_path_emits_descriptor():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "path")
         segments = [generate_random_string(3, 8) for _ in range(random.randint(1, 4))]
@@ -311,6 +313,7 @@ def test_property_attach_at_with_path_emits_descriptor():
         methods = generate_random_methods()
 
         Endpoint.attach_at(path=path, methods=methods)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
 
@@ -354,7 +357,7 @@ def test_property_each_attach_at_call_adds_one_descriptor():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         num_handlers = random.randint(1, 6)
         handlers = []
@@ -363,6 +366,7 @@ def test_property_each_attach_at_call_adds_one_descriptor():
             handler = _make_handler(iteration * 100 + idx, f"accum_{idx}")
             leaf = f"accum_{iteration}_{idx}_{generate_random_leaf()}"
             Endpoint.attach_at(leaf=leaf)(handler)
+            registry.collect_from(handler)
             handlers.append(handler)
 
         descriptors = registry.collect()
@@ -398,7 +402,7 @@ def test_property_descriptor_has_constraints_object():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "constraints")
         leaf = f"constr_{iteration}_{generate_random_leaf()}"
@@ -410,6 +414,7 @@ def test_property_descriptor_has_constraints_object():
             access_policy=access_policy,
             rate_limit=rate_limit,
         )(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]
@@ -474,7 +479,7 @@ def test_property_attach_child_emits_descriptor():
         **Validates: Requirements 4.1, 6.1**
     """
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         # Create parent with base_path
         parent_base_path = f"/api/v{random.randint(1, 5)}"
@@ -537,12 +542,13 @@ def test_property_descriptor_module_matches_handler():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "module")
         leaf = f"mod_{iteration}_{generate_random_leaf()}"
 
         Endpoint.attach_at(leaf=leaf)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]

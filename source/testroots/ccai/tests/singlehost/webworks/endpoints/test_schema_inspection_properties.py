@@ -176,7 +176,7 @@ def test_property_dataclass_request_schema_captured_in_extras():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "dc_req")
         leaf = f"dc_req_{iteration}_{generate_random_leaf()}"
@@ -185,6 +185,7 @@ def test_property_dataclass_request_schema_captured_in_extras():
         schema_cls = _build_dataclass(dc_name, field_specs)
 
         RestEndpoint.attach_at(leaf=leaf, request_schema=schema_cls)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
 
@@ -246,7 +247,7 @@ def test_property_dataclass_response_schema_captured_in_extras():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "dc_resp")
         leaf = f"dc_resp_{iteration}_{generate_random_leaf()}"
@@ -255,6 +256,7 @@ def test_property_dataclass_response_schema_captured_in_extras():
         schema_cls = _build_dataclass(dc_name, field_specs)
 
         RestEndpoint.attach_at(leaf=leaf, response_schema=schema_cls)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]
@@ -302,7 +304,7 @@ def test_property_pydantic_model_schema_captured_via_model_json_schema():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "pydantic")
         leaf = f"pydantic_{iteration}_{generate_random_leaf()}"
@@ -312,6 +314,7 @@ def test_property_pydantic_model_schema_captured_via_model_json_schema():
 
         # Use as request_schema
         RestEndpoint.attach_at(leaf=leaf, request_schema=model_cls)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]
@@ -351,7 +354,7 @@ def test_property_both_request_and_response_schemas_captured():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "both")
         leaf = f"both_{iteration}_{generate_random_leaf()}"
@@ -367,6 +370,7 @@ def test_property_both_request_and_response_schemas_captured():
             request_schema=req_cls,
             response_schema=resp_cls
         )(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]
@@ -417,7 +421,7 @@ def test_property_dataclass_required_fields_marked_in_schema():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "required")
         leaf = f"required_{iteration}_{generate_random_leaf()}"
@@ -438,6 +442,7 @@ def test_property_dataclass_required_fields_marked_in_schema():
         schema_cls = _build_dataclass(dc_name, field_specs)
 
         RestEndpoint.attach_at(leaf=leaf, request_schema=schema_cls)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]

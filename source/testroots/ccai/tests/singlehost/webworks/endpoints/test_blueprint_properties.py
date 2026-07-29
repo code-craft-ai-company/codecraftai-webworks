@@ -116,11 +116,11 @@ def test_property_path_composition():
         **Feature: blueprint-endpoints, Property 4: Path Composition**
         **Validates: Requirements 1.7, 4.3, 4.4**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random base_path
         base_path = generate_random_base_path()
@@ -185,11 +185,11 @@ def test_property_path_composition_with_absolute_path():
         **Feature: blueprint-endpoints, Property 4: Path Composition**
         **Validates: Requirements 1.7, 4.3, 4.4**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random base_path
         base_path = generate_random_base_path()
@@ -230,11 +230,11 @@ def test_property_path_composition_with_base_leaf():
         **Feature: blueprint-endpoints, Property 4: Path Composition**
         **Validates: Requirements 1.7, 4.3, 4.4**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random base_leaf
         base_leaf = generate_random_leaf()
@@ -276,11 +276,11 @@ def test_property_path_composition_no_base():
         **Feature: blueprint-endpoints, Property 4: Path Composition**
         **Validates: Requirements 1.7, 4.3, 4.4**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random leaf
         leaf = generate_random_leaf()
@@ -328,11 +328,11 @@ def test_property_security_constraint_inheritance_child_inherits_parent():
         **Feature: blueprint-endpoints, Property 5: Security Constraint Inheritance**
         **Validates: Requirements 2.3, 2.4, 2.5, 6.5**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random parent access policy
         parent_roles = generate_random_roles()
@@ -412,11 +412,11 @@ def test_property_security_constraint_inheritance_child_overrides_parent():
         **Feature: blueprint-endpoints, Property 5: Security Constraint Inheritance**
         **Validates: Requirements 2.3, 2.4, 2.5, 6.5**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random parent access policy
         parent_roles = generate_random_roles()
@@ -489,11 +489,11 @@ def test_property_security_constraint_inheritance_replace_roles():
         **Feature: blueprint-endpoints, Property 5: Security Constraint Inheritance**
         **Validates: Requirements 2.3, 2.4, 2.5, 6.5**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random parent roles (ensure non-empty for meaningful test)
         parent_roles = ["parent_role_" + generate_random_string(3, 5)]
@@ -548,11 +548,11 @@ def test_property_security_constraint_inheritance_replace_scopes():
         **Feature: blueprint-endpoints, Property 5: Security Constraint Inheritance**
         **Validates: Requirements 2.3, 2.4, 2.5, 6.5**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random parent scopes (ensure non-empty for meaningful test)
         parent_scopes = ["parent_scope_" + generate_random_string(3, 5)]
@@ -607,11 +607,11 @@ def test_property_security_constraint_inheritance_rate_limit_most_restrictive():
         **Feature: blueprint-endpoints, Property 5: Security Constraint Inheritance**
         **Validates: Requirements 2.3, 2.4, 2.5, 6.5**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random parent rate limit
         parent_requests = random.randint(50, 200)
@@ -675,11 +675,11 @@ def test_property_decorator_identity_preservation():
         **Feature: blueprint-endpoints, Property 1: Decorator Identity Preservation**
         **Validates: Requirements 3.1, 5.3**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random base_path and leaf
         base_path = generate_random_base_path()
@@ -756,11 +756,11 @@ def test_property_decorator_identity_with_stacking():
         **Feature: blueprint-endpoints, Property 1: Decorator Identity Preservation**
         **Validates: Requirements 3.1, 5.3**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random base_path and leaf
         base_path = generate_random_base_path()
@@ -830,11 +830,11 @@ def test_property_class_default_inheritance():
         **Validates: Requirements 3.8, 3.9, 3.10**
     """
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random class attributes
         class_methods = random.choice([["GET"], ["POST"], ["GET", "POST"], ["PUT", "DELETE"]])
@@ -862,6 +862,7 @@ def test_property_class_default_inheritance():
             pass
         
         TestBlueprint.attach_at(leaf=leaf)(handler)
+        registry.collect_from(handler)
         
         # Get the registered descriptor
         descriptors = registry.collect()
@@ -915,11 +916,11 @@ def test_property_class_default_override():
         **Validates: Requirements 3.8, 3.9, 3.10**
     """
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random class attributes
         class_methods = ["GET"]
@@ -953,6 +954,7 @@ def test_property_class_default_override():
             version=kwarg_version,
             tags=kwarg_tags
         )(handler)
+        registry.collect_from(handler)
         
         # Get the registered descriptor
         descriptors = registry.collect()
@@ -999,11 +1001,11 @@ def test_property_class_attributes_unchanged():
         **Feature: blueprint-endpoints, Property 2: Class Default Inheritance and Override**
         **Validates: Requirements 3.8, 3.9, 3.10**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random class attributes
         class_methods = random.choice([["GET"], ["POST"], ["GET", "POST"]])
@@ -1037,6 +1039,7 @@ def test_property_class_attributes_unchanged():
             version="v999",
             tags=["different_tag"]
         )(handler)
+        registry.collect_from(handler)
         
         # Verify class attributes are unchanged
         if TestBlueprint.methods != original_methods:
@@ -1084,11 +1087,11 @@ def test_property_extra_kwargs_preservation():
         **Validates: Requirements 3.7**
     """
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random extra kwargs
         num_extras = random.randint(1, 5)
@@ -1123,6 +1126,7 @@ def test_property_extra_kwargs_preservation():
             pass
         
         TestBlueprint.attach_at(leaf=leaf, **extra_kwargs)(handler)
+        registry.collect_from(handler)
         
         # Get the registered descriptor
         descriptors = registry.collect()
@@ -1161,11 +1165,11 @@ def test_property_extra_kwargs_verbatim():
         **Validates: Requirements 3.7**
     """
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate complex nested structure
         nested_value = {
@@ -1196,6 +1200,7 @@ def test_property_extra_kwargs_verbatim():
             pass
         
         TestBlueprint.attach_at(leaf=leaf, nested_config=nested_value)(handler)
+        registry.collect_from(handler)
         
         # Get the registered descriptor
         descriptors = registry.collect()
@@ -1236,11 +1241,11 @@ def test_property_child_attribute_preservation():
         **Feature: blueprint-endpoints, Property 14: Child Attribute Preservation**
         **Validates: Requirements 4.6, 6.6**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random child attributes
         child_leaf = generate_random_leaf()
@@ -1309,11 +1314,11 @@ def test_property_child_attribute_preservation_with_overrides():
         **Feature: blueprint-endpoints, Property 14: Child Attribute Preservation**
         **Validates: Requirements 4.6, 6.6**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random child attributes
         child_leaf = generate_random_leaf()
@@ -1381,11 +1386,11 @@ def test_property_child_attribute_preservation_access_policy():
         **Feature: blueprint-endpoints, Property 14: Child Attribute Preservation**
         **Validates: Requirements 4.6, 6.6**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random child access policy
         child_roles = ["child_role_" + generate_random_string(3, 5)]
@@ -1443,11 +1448,11 @@ def test_property_child_attribute_preservation_rate_limit():
         **Feature: blueprint-endpoints, Property 14: Child Attribute Preservation**
         **Validates: Requirements 4.6, 6.6**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random child rate limit (more restrictive than parent)
         child_requests = random.randint(10, 50)
@@ -1493,11 +1498,11 @@ def test_property_child_attribute_preservation_serializers():
         **Feature: blueprint-endpoints, Property 14: Child Attribute Preservation**
         **Validates: Requirements 4.6, 6.6**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random serializers
         serializer_key = generate_random_string(3, 8)
@@ -1558,12 +1563,12 @@ def test_property_blueprint_multi_attachment():
         **Feature: blueprint-endpoints, Property 12: Blueprint Multi-Attachment**
         **Validates: Requirements 1.1, 1.3, 1.4**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         Blueprint._blueprint_descriptors.clear()
         
         # Generate random number of endpoints (1-5)
@@ -1628,12 +1633,12 @@ def test_property_blueprint_multi_attachment_separate_descriptors():
         **Feature: blueprint-endpoints, Property 12: Blueprint Multi-Attachment**
         **Validates: Requirements 1.1, 1.3, 1.4**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         Blueprint._blueprint_descriptors.clear()
         
         # Generate random number of endpoints (2-4)
@@ -1656,6 +1661,7 @@ def test_property_blueprint_multi_attachment_separate_descriptors():
             def handler():
                 pass
             TestBlueprint.attach_at(leaf=leaf)(handler)
+            registry.collect_from(handler)
         
         # Call register()
         result = TestBlueprint.register()
@@ -1694,12 +1700,12 @@ def test_property_blueprint_multi_attachment_all_inherit_constraints():
         **Feature: blueprint-endpoints, Property 12: Blueprint Multi-Attachment**
         **Validates: Requirements 1.1, 1.3, 1.4**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         Blueprint._blueprint_descriptors.clear()
         
         # Generate random blueprint constraints
@@ -1729,6 +1735,7 @@ def test_property_blueprint_multi_attachment_all_inherit_constraints():
                 pass
             
             TestBlueprint.attach_at(leaf=leaf)(handler)
+            registry.collect_from(handler)
         
         # Call register()
         result = TestBlueprint.register()
@@ -1776,12 +1783,12 @@ def test_property_blueprint_router_integration_with_router():
         **Feature: blueprint-endpoints, Property 13: Blueprint Router Integration**
         **Validates: Requirements 1.5, 1.6**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         Blueprint._blueprint_descriptors.clear()
         
         # Generate random number of endpoints (1-5)
@@ -1801,6 +1808,7 @@ def test_property_blueprint_router_integration_with_router():
                 pass
             
             TestBlueprint.attach_at(leaf=leaf)(handler)
+            registry.collect_from(handler)
         
         # Create a mock router that tracks calls
         added_descriptors = []
@@ -1857,12 +1865,12 @@ def test_property_blueprint_router_integration_without_router():
         **Feature: blueprint-endpoints, Property 13: Blueprint Router Integration**
         **Validates: Requirements 1.5, 1.6**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         Blueprint._blueprint_descriptors.clear()
         
         # Generate random number of endpoints (1-5)
@@ -1884,6 +1892,7 @@ def test_property_blueprint_router_integration_without_router():
                 pass
             
             TestBlueprint.attach_at(leaf=leaf)(handler)
+            registry.collect_from(handler)
         
         # Call register without router (router=None)
         result = TestBlueprint.register(router=None)
@@ -1922,12 +1931,12 @@ def test_property_blueprint_router_integration_router_receives_complete_descript
         **Feature: blueprint-endpoints, Property 13: Blueprint Router Integration**
         **Validates: Requirements 1.5, 1.6**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         Blueprint._blueprint_descriptors.clear()
         
         # Generate random blueprint attributes
@@ -1952,6 +1961,7 @@ def test_property_blueprint_router_integration_router_receives_complete_descript
             pass
         
         TestBlueprint.attach_at(leaf=leaf)(handler)
+        registry.collect_from(handler)
         
         # Create a mock router
         received_descriptor = None
@@ -2019,12 +2029,12 @@ def test_property_blueprint_idempotency():
         **Feature: blueprint-endpoints, Property 15: Blueprint Idempotency**
         **Validates: Requirements 6.7**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         Blueprint._blueprint_descriptors.clear()
         
         # Generate random number of endpoints (1-4)
@@ -2046,6 +2056,7 @@ def test_property_blueprint_idempotency():
                 pass
             
             TestBlueprint.attach_at(leaf=leaf)(handler)
+            registry.collect_from(handler)
         
         # Call register() multiple times
         result1 = TestBlueprint.register()
@@ -2085,12 +2096,12 @@ def test_property_blueprint_idempotency_same_methods():
         **Feature: blueprint-endpoints, Property 15: Blueprint Idempotency**
         **Validates: Requirements 6.7**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         Blueprint._blueprint_descriptors.clear()
         
         # Generate random methods
@@ -2110,6 +2121,7 @@ def test_property_blueprint_idempotency_same_methods():
             pass
         
         TestBlueprint.attach_at(leaf=leaf)(handler)
+        registry.collect_from(handler)
         
         # Call register() multiple times
         result1 = TestBlueprint.register()
@@ -2139,12 +2151,12 @@ def test_property_blueprint_idempotency_same_constraints():
         **Feature: blueprint-endpoints, Property 15: Blueprint Idempotency**
         **Validates: Requirements 6.7**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         Blueprint._blueprint_descriptors.clear()
         
         # Generate random constraints
@@ -2168,6 +2180,7 @@ def test_property_blueprint_idempotency_same_constraints():
             pass
         
         TestBlueprint.attach_at(leaf=leaf)(handler)
+        registry.collect_from(handler)
         
         # Call register() multiple times
         result1 = TestBlueprint.register()
@@ -2207,12 +2220,12 @@ def test_property_blueprint_idempotency_with_router():
         **Feature: blueprint-endpoints, Property 15: Blueprint Idempotency**
         **Validates: Requirements 6.7**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     Blueprint._blueprint_descriptors.clear()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         Blueprint._blueprint_descriptors.clear()
         
         # Create a Blueprint subclass
@@ -2230,6 +2243,7 @@ def test_property_blueprint_idempotency_with_router():
                 pass
             
             TestBlueprint.attach_at(leaf=leaf)(handler)
+            registry.collect_from(handler)
         
         # Create mock routers for each call
         added1 = []
@@ -2290,11 +2304,11 @@ def test_property_descriptor_emission():
         **Validates: Requirements 5.1, 5.6**
     """
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random configuration
         base_path = generate_random_base_path()
@@ -2325,6 +2339,7 @@ def test_property_descriptor_emission():
             version=version,
             tags=tags
         )(handler)
+        registry.collect_from(handler)
         
         # Verify descriptor was emitted to registry
         descriptors = registry.collect()
@@ -2395,11 +2410,11 @@ def test_property_descriptor_emission_with_attach_child():
         **Validates: Requirements 5.1, 5.6**
     """
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random configuration
         parent_base_path = generate_random_base_path()
@@ -2470,11 +2485,11 @@ def test_property_descriptor_emission_merged_metadata():
         **Validates: Requirements 5.1, 5.6**
     """
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random parent constraints
         parent_roles = [f"parent_role_{generate_random_string(3, 5)}"]
@@ -2505,6 +2520,7 @@ def test_property_descriptor_emission_merged_metadata():
             pass
         
         TestBlueprint.attach_at(leaf=leaf)(handler)
+        registry.collect_from(handler)
         
         # Verify descriptor was emitted with merged metadata
         descriptors = registry.collect()
@@ -2555,11 +2571,11 @@ def test_property_conflict_detection_missing_metadata():
     """
     from ccai.webworks.endpoints.exceptions import EndpointRegistrationError
     
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Create a Blueprint subclass
         class TestBlueprint(Blueprint):
@@ -2574,6 +2590,7 @@ def test_property_conflict_detection_missing_metadata():
         # Attempt to attach without leaf or path
         try:
             TestBlueprint.attach_at()(handler)
+            registry.collect_from(handler)
             errmsg = (
                 f"Iteration {iteration}: Expected EndpointRegistrationError "
                 f"when leaf and path are both missing"
@@ -2604,11 +2621,11 @@ def test_property_conflict_detection_duplicate_registration():
     """
     from ccai.webworks.endpoints.registry import EndpointConflictError
     
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random configuration
         base_path = generate_random_base_path()
@@ -2626,6 +2643,7 @@ def test_property_conflict_detection_duplicate_registration():
             pass
         
         TestBlueprint.attach_at(leaf=leaf, methods=methods)(handler1)
+        registry.collect_from(handler1)
         
         # Create second handler and attempt to attach at same path+method
         def handler2():
@@ -2633,6 +2651,7 @@ def test_property_conflict_detection_duplicate_registration():
         
         try:
             TestBlueprint.attach_at(leaf=leaf, methods=methods)(handler2)
+            registry.collect_from(handler2)
             errmsg = (
                 f"Iteration {iteration}: Expected EndpointConflictError "
                 f"when registering duplicate path+method"
@@ -2670,11 +2689,11 @@ def test_property_conflict_detection_replace_behavior():
         **Validates: Requirements 3.4, 3.5, 6.3, 6.4**
     """
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random configuration
         base_path = generate_random_base_path()
@@ -2694,6 +2713,7 @@ def test_property_conflict_detection_replace_behavior():
         handler1.__name__ = f"handler1_{iteration}"
         
         TestBlueprint.attach_at(leaf=leaf, methods=methods)(handler1)
+        registry.collect_from(handler1)
         
         # Verify first handler is registered
         descriptors = registry.collect()
@@ -2717,6 +2737,7 @@ def test_property_conflict_detection_replace_behavior():
             methods=methods,
             on_conflict="replace"
         )(handler2)
+        registry.collect_from(handler2)
         
         # Verify second handler replaced first
         descriptors = registry.collect()
@@ -2749,11 +2770,11 @@ def test_property_conflict_detection_different_methods_allowed():
         **Validates: Requirements 3.4, 3.5, 6.3, 6.4**
     """
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random configuration
         base_path = generate_random_base_path()
@@ -2777,8 +2798,11 @@ def test_property_conflict_detection_different_methods_allowed():
         
         # Attach handlers with different methods at same path
         TestBlueprint.attach_at(leaf=leaf, methods=["GET"])(get_handler)
+        registry.collect_from(get_handler)
         TestBlueprint.attach_at(leaf=leaf, methods=["POST"])(post_handler)
+        registry.collect_from(post_handler)
         TestBlueprint.attach_at(leaf=leaf, methods=["PUT"])(put_handler)
+        registry.collect_from(put_handler)
         
         # Verify all handlers are registered
         descriptors = registry.collect()
@@ -2828,11 +2852,11 @@ def test_property_handler_non_execution_during_decoration():
         **Validates: Requirements 5.4, 5.7**
     """
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random configuration
         base_path = generate_random_base_path()
@@ -2918,11 +2942,11 @@ def test_property_handler_non_execution_with_constraints():
         **Validates: Requirements 5.4, 5.7**
     """
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random configuration
         base_path = generate_random_base_path()
@@ -2998,11 +3022,11 @@ def test_property_handler_non_execution_multiple_handlers():
         **Validates: Requirements 5.4, 5.7**
     """
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random configuration
         base_path = generate_random_base_path()
@@ -3031,6 +3055,7 @@ def test_property_handler_non_execution_multiple_handlers():
             
             handler = make_tracking_handler(i)
             TestBlueprint.attach_at(leaf=leaf)(handler)
+            registry.collect_from(handler)
         
         # Verify NO handlers were called during decoration
         for i, called in handlers_called.items():
@@ -3071,11 +3096,11 @@ def test_property_handler_non_execution_during_register():
         **Feature: blueprint-endpoints, Property 10: Handler Non-Execution During Registration**
         **Validates: Requirements 5.4, 5.7**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random configuration
         base_path = generate_random_base_path()
@@ -3105,6 +3130,7 @@ def test_property_handler_non_execution_during_register():
             
             handler = make_tracking_handler(i)
             TestBlueprint.attach_at(leaf=leaf)(handler)
+            registry.collect_from(handler)
         
         # Call register() - this should NOT call any handlers
         result = TestBlueprint.register()
@@ -3143,11 +3169,11 @@ def test_property_handler_non_execution_with_router():
         **Feature: blueprint-endpoints, Property 10: Handler Non-Execution During Registration**
         **Validates: Requirements 5.4, 5.7**
     """
-    _clear_registry()
+    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
         
         # Generate random configuration
         base_path = generate_random_base_path()
@@ -3176,6 +3202,7 @@ def test_property_handler_non_execution_with_router():
             
             handler = make_tracking_handler(i)
             TestBlueprint.attach_at(leaf=leaf)(handler)
+            registry.collect_from(handler)
         
         # Create a mock router
         added_descriptors = []

@@ -95,13 +95,14 @@ def test_property_extra_kwargs_appear_verbatim_in_extras():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "verbatim")
         leaf = f"verbatim_{iteration}_{generate_random_leaf()}"
         extras = _generate_random_extras()
 
         Endpoint.attach_at(leaf=leaf, **extras)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
 
@@ -141,7 +142,7 @@ def test_property_unknown_keys_preserved_for_downstream():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "unknown")
         leaf = f"unknown_{iteration}_{generate_random_leaf()}"
@@ -158,6 +159,7 @@ def test_property_unknown_keys_preserved_for_downstream():
             }
 
         Endpoint.attach_at(leaf=leaf, **extras)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]
@@ -193,7 +195,7 @@ def test_property_extras_do_not_interfere_with_standard_params():
     all_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "nointerf")
         leaf = f"nointerf_{iteration}_{generate_random_leaf()}"
@@ -209,6 +211,7 @@ def test_property_extras_do_not_interfere_with_standard_params():
             version=version,
             **extras
         )(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]
@@ -271,12 +274,13 @@ def test_property_empty_extras_yields_no_spurious_keys():
     FRAMEWORK_KEYS = {"serializers", "rest"}
 
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "empty")
         leaf = f"empty_{iteration}_{generate_random_leaf()}"
 
         Endpoint.attach_at(leaf=leaf)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]
@@ -305,7 +309,7 @@ def test_property_extras_identity_preserved_for_mutable_values():
     """
     registry = EndpointRegistry()
     for iteration in range(100):
-        _clear_registry()
+        registry = EndpointRegistry()
 
         handler = _make_handler(iteration, "mutable")
         leaf = f"mutable_{iteration}_{generate_random_leaf()}"
@@ -327,6 +331,7 @@ def test_property_extras_identity_preserved_for_mutable_values():
                           for k, v in extras.items()}
 
         Endpoint.attach_at(leaf=leaf, **extras)(handler)
+        registry.collect_from(handler)
 
         descriptors = registry.collect()
         desc = descriptors[0]

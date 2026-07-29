@@ -70,7 +70,7 @@ def test_require_roles_propagates_into_descriptor_via_attach_at():
         produces an :class:`EndpointDescriptor` whose effective access
         policy includes ``"admin"``.
     """
-    _clear_registry()
+    registry = EndpointRegistry()
 
     @Endpoint.attach_at(leaf="rr-admin-only")
     @require_roles("admin")
@@ -102,7 +102,7 @@ def test_require_auth_propagates_into_descriptor_via_attach_at():
         ``@require_auth`` (no roles) attaches a policy that requires
         authentication on the resulting descriptor.
     """
-    _clear_registry()
+    registry = EndpointRegistry()
 
     @Endpoint.attach_at(leaf="ra-auth-only")
     @require_auth
@@ -128,7 +128,7 @@ def test_require_scopes_propagates_into_descriptor_via_attach_at():
         ``@require_scopes("read:posts")`` flows through to the descriptor
         as a scope on the effective access policy.
     """
-    _clear_registry()
+    registry = EndpointRegistry()
 
     @Endpoint.attach_at(leaf="rs-read-posts")
     @require_scopes("read:posts")
@@ -160,7 +160,7 @@ def test_decorator_policy_merges_with_explicit_access_policy_kwarg():
         kwarg supply roles, the merged result is the union — neither side
         is silently dropped.
     """
-    _clear_registry()
+    registry = EndpointRegistry()
 
     @Endpoint.attach_at(
         leaf="merge-explicit",
@@ -190,7 +190,7 @@ def test_decorator_policy_merges_with_class_default_access_policy():
         ``access_policy`` default. Decorator-supplied roles must merge
         with — not replace — that default.
     """
-    _clear_registry()
+    registry = EndpointRegistry()
 
     class HeroEndpoint(Endpoint):
         access_policy = AccessPolicy(roles=("hero",))
@@ -224,7 +224,7 @@ def test_stacked_security_decorators_all_propagate_via_attach_at():
         single merged policy (via the decorator's own merge logic), and
         attach_at must forward that merged policy into the descriptor.
     """
-    _clear_registry()
+    registry = EndpointRegistry()
 
     @Endpoint.attach_at(leaf="stack-rs-rr")
     @require_roles("admin")
@@ -255,7 +255,7 @@ def test_require_roles_propagates_into_descriptor_via_rest_attach_at():
         :meth:`RestEndpoint.attach_at` honors handler-attached policy the
         same way :meth:`Endpoint.attach_at` does.
     """
-    _clear_registry()
+    registry = EndpointRegistry()
 
     @RestEndpoint.attach_at(leaf="rest-admin-only")
     @require_roles("admin")
@@ -286,7 +286,7 @@ def test_public_endpoint_propagates_require_auth_false_via_attach_at():
         When no other source of policy is present, the descriptor's
         effective policy reflects that.
     """
-    _clear_registry()
+    registry = EndpointRegistry()
 
     @Endpoint.attach_at(leaf="public-only")
     @public_endpoint

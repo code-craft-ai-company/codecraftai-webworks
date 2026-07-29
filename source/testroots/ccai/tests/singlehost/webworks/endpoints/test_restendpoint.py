@@ -126,7 +126,7 @@ def test_restendpoint_default_attributes():
 def test_attach_at_with_dataclass_request_schema():
     """attach_at should inspect dataclass request schemas."""
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     @RestEndpoint.attach_at(leaf="users", methods=["POST"], request_schema=UserCreateSchema)
     def create_user():
@@ -161,7 +161,7 @@ def test_attach_at_with_dataclass_request_schema():
 def test_attach_at_with_dataclass_response_schema():
     """attach_at should inspect dataclass response schemas."""
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     @RestEndpoint.attach_at(leaf="users", methods=["GET"], response_schema=UserSchema)
     def get_users():
@@ -185,7 +185,7 @@ def test_attach_at_with_dataclass_response_schema():
 def test_attach_at_with_error_map():
     """attach_at should inspect error map schemas."""
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     @RestEndpoint.attach_at(
         leaf="users",
@@ -213,7 +213,7 @@ def test_attach_at_with_error_map():
 def test_attach_at_with_optional_fields_schema():
     """attach_at should correctly handle schemas with optional fields."""
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     @RestEndpoint.attach_at(leaf="optional", methods=["POST"], request_schema=OptionalFieldsSchema)
     def create_optional():
@@ -234,7 +234,7 @@ def test_attach_at_with_optional_fields_schema():
 def test_attach_at_with_list_fields_schema():
     """attach_at should correctly handle schemas with list fields."""
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     @RestEndpoint.attach_at(leaf="lists", methods=["POST"], request_schema=ListFieldSchema)
     def create_list():
@@ -260,7 +260,7 @@ def test_attach_at_with_list_fields_schema():
 def test_subclass_inherits_rest_attributes():
     """Subclass should inherit REST-specific attributes."""
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     class UserEndpoint(RestEndpoint):
         request_schema = UserCreateSchema
@@ -294,7 +294,7 @@ def test_subclass_inherits_rest_attributes():
 def test_kwargs_override_class_attributes():
     """Explicit kwargs should override class attributes."""
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     class UserEndpoint(RestEndpoint):
         request_schema = UserCreateSchema
@@ -332,7 +332,7 @@ def test_kwargs_override_class_attributes():
 def test_read_helper_uses_get_method():
     """read() helper should use GET method."""
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     @RestEndpoint.read(leaf="users", response_schema=UserSchema)
     def get_users():
@@ -348,7 +348,7 @@ def test_read_helper_uses_get_method():
 def test_create_helper_uses_post_method():
     """create() helper should use POST method."""
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     @RestEndpoint.create(leaf="users", request_schema=UserCreateSchema)
     def create_user():
@@ -364,7 +364,7 @@ def test_create_helper_uses_post_method():
 def test_update_helper_uses_put_patch_methods():
     """update() helper should use PUT and PATCH methods."""
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     @RestEndpoint.update(leaf="users", request_schema=UserCreateSchema)
     def update_user():
@@ -380,7 +380,7 @@ def test_update_helper_uses_put_patch_methods():
 def test_delete_helper_uses_delete_method():
     """delete() helper should use DELETE method."""
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     @RestEndpoint.delete(leaf="users")
     def delete_user():
@@ -395,7 +395,7 @@ def test_delete_helper_uses_delete_method():
 
 def test_crud_helpers_preserve_function_identity():
     """CRUD helpers should return the original function unchanged."""
-    _clear_registry()
+    registry = EndpointRegistry()
     
     def original_read():
         pass
@@ -430,7 +430,7 @@ def test_crud_helpers_preserve_function_identity():
 def test_crud_helpers_accept_all_parameters():
     """CRUD helpers should accept all standard parameters."""
     registry = EndpointRegistry()
-    _clear_registry()
+    registry = EndpointRegistry()
     
     policy = AccessPolicy(roles=["admin"])
     limit = RateLimit(requests=10, window=60)
@@ -475,7 +475,7 @@ def test_crud_helpers_accept_all_parameters():
 
 def test_attach_at_returns_original_function():
     """attach_at should return the original function unchanged."""
-    _clear_registry()
+    registry = EndpointRegistry()
     
     def original_handler():
         return "original"
@@ -491,7 +491,7 @@ def test_attach_at_returns_original_function():
 
 def test_attach_at_allows_decorator_stacking():
     """attach_at should allow stacking with other decorators."""
-    _clear_registry()
+    registry = EndpointRegistry()
     
     def custom_decorator(func):
         func.custom_attr = "custom"
@@ -515,7 +515,7 @@ def test_attach_at_allows_decorator_stacking():
 
 def test_attach_at_raises_on_missing_leaf_and_path():
     """attach_at should raise EndpointRegistrationError when both leaf and path are missing."""
-    _clear_registry()
+    registry = EndpointRegistry()
     
     raised = False
     error_instance = None
