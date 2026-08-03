@@ -84,12 +84,13 @@ class Response:
         self._headers: Dict[str, str] = {}
         self._body = body
         self._cookies: SimpleCookie = SimpleCookie()
-        
+        self._raw_set_cookies: List[str] = []
+
         # Initialize headers
         if headers is not None:
             for name, value in headers.items():
                 self._headers[name] = value
-        
+
         return
 
     @property
@@ -194,6 +195,37 @@ class Response:
         
         return
     
+    def add_raw_set_cookie(self, header_value: str) -> None:
+        """
+            Append a pre-built ``Set-Cookie`` header line to be
+            emitted verbatim as its own header.
+
+            Use this when the cookie string (name, value and
+            attributes) was assembled elsewhere. HTTP carries
+            multiple cookies as multiple ``Set-Cookie`` headers —
+            never joined into one value — and header values must not
+            contain CR/LF, so each call contributes one distinct
+            header line.
+
+            :param header_value: Complete ``Set-Cookie`` value, e.g.
+                                 ``"sid=abc; Path=/; HttpOnly"``.
+
+            :raises ValueError: When the value contains CR or LF.
+        """
+        value = str(header_value or "").strip()
+        if value == "":
+            return
+
+        if ("\r" in value) or ("\n" in value):
+            errmsg = (
+                "Set-Cookie header values must not contain CR/LF; "
+                "pass one cookie per add_raw_set_cookie call."
+            )
+            raise ValueError(errmsg)
+
+        self._raw_set_cookies.append(value)
+        return
+
     def delete_cookie(
         self,
         name: str,
@@ -242,7 +274,12 @@ class Response:
         for cookie_name in self._cookies:
             cookie_header = self._cookies[cookie_name].OutputString()
             headers_list.append(("Set-Cookie", cookie_header))
-        
+
+        # Add pre-built Set-Cookie lines registered via
+        # add_raw_set_cookie — one header per line.
+        for raw_cookie in self._raw_set_cookies:
+            headers_list.append(("Set-Cookie", raw_cookie))
+
         return headers_list
     
     def to_wsgi(self) -> Tuple[str, List[Tuple[str, str]], Iterable[bytes]]:

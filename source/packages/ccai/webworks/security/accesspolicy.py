@@ -302,9 +302,24 @@ class AccessPolicy:
 
         if len(self.roles) > 0:
             principal_roles = set(principal.roles)
-            required_roles = set(self.roles)
-            if len(principal_roles.intersection(required_roles)) == 0:
-                return False
+
+            # Optional class-level "do everything" role. When the
+            # application has opted in via
+            # :data:`SUPERUSER_ROLE_NAME`, a principal carrying that
+            # role satisfies any role-required policy — the same
+            # short-circuit :meth:`check_roles` applies. Without this
+            # the two check paths disagree and a superuser-only
+            # principal is rejected on the request-enforcement path.
+            superuser_role = type(self).SUPERUSER_ROLE_NAME
+            superuser_granted = (
+                superuser_role is not None
+                and superuser_role in principal_roles
+            )
+
+            if not superuser_granted:
+                required_roles = set(self.roles)
+                if len(principal_roles.intersection(required_roles)) == 0:
+                    return False
 
         if len(self.scopes) > 0:
             principal_permissions = set(principal.permissions)

@@ -380,9 +380,10 @@ class OAuthClientBlueprint(SecurityBlueprint):
     OAUTH_PARAM_CAPTCHA_RESPONSE: str = "captcha_response"
     OAUTH_PARAM_ID_TOKEN: str = "id_token"
 
-    # Multi-Set-Cookie joining literal used when emitting two cookies
-    # simultaneously on the wire.
-    MULTI_SET_COOKIE_SEPARATOR: str = "\r\n"
+    # NOTE: there is deliberately no multi-cookie joining separator.
+    # Multiple cookies are emitted as multiple ``Set-Cookie`` headers
+    # via :meth:`Response.add_raw_set_cookie`; any single joined
+    # header value would be illegal on the wire.
 
     # --------------------------------------------------------------
     # State cookie helpers (sign / unsign / build / read).
@@ -641,6 +642,15 @@ class OAuthClientBlueprint(SecurityBlueprint):
         """
             Build the absolute callback URL for a provider.
 
+            .. note::
+                This classmethod is a SUPPORTED subclass override
+                hook: downstream applications override it to pin a
+                provider-registered callback path (e.g. a legacy
+                ``/authorize`` URL). Renaming it is a breaking API
+                change — a silent rename would revert overriders to
+                the default callback path and every provider would
+                reject with ``redirect_uri_mismatch``.
+
             Uses the request's ``scheme`` and ``host`` so the URL
             carries the right host the provider should redirect back
             to. The path resolves against the blueprint's
@@ -686,35 +696,36 @@ class OAuthClientBlueprint(SecurityBlueprint):
             — dict-shape returns get JSON-serialised by
             ``Dispatcher.dispatch`` and lose their status / headers.
 
-            Multiple ``Set-Cookie`` headers are joined with ``\\r\\n``
-            because the underlying :class:`Response` exposes a
-            ``Dict[str, str]`` header surface; the joining string is
-            recognised by most ASGI adapters as the boundary between
-            distinct ``Set-Cookie`` lines on the wire. The blueprint
-            emits at most two cookies simultaneously (the new session
-            cookie and the OAuth state-clear cookie on the callback
-            success path).
+            Each cookie is registered on the response via
+            :meth:`Response.add_raw_set_cookie` so it is emitted as
+            its own ``Set-Cookie`` header on the wire. (Joining
+            multiple cookies into one header value with CR/LF is an
+            illegal header value — h11-based servers reject it with
+            ``LocalProtocolError`` — and no HTTP mechanism exists for
+            folding multiple ``Set-Cookie`` lines into one.) The
+            blueprint emits at most two cookies simultaneously: the
+            new session cookie and the OAuth state-clear cookie on
+            the callback success path.
 
             :param location: The URL to redirect to.
             :param set_cookies: Optional list of ``Set-Cookie``
                                 header values.
 
             :returns: A 302 :class:`Response` with the supplied
-                      ``Location`` header (and joined ``Set-Cookie``
-                      lines when provided).
+                      ``Location`` header (and one ``Set-Cookie``
+                      header per supplied cookie).
         """
         headers: Dict[str, str] = {cls.LOCATION_HEADER: location}
 
-        if set_cookies is not None:
-            non_empty = [
-                str(c).strip()
-                for c in set_cookies
-                if c is not None and str(c).strip() != ""
-            ]
-            if len(non_empty) > 0:
-                headers[cls.SET_COOKIE_HEADER] = cls.MULTI_SET_COOKIE_SEPARATOR.join(non_empty)
-
         response = Response(status_code=302, headers=headers, body=b"")
+
+        if set_cookies is not None:
+            for cookie_value in set_cookies:
+                cleaned_value = str(cookie_value or "").strip()
+                if cleaned_value == "":
+                    continue
+                response.add_raw_set_cookie(cleaned_value)
+
         return response
 
     @classmethod

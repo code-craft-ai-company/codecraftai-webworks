@@ -853,3 +853,69 @@ def test_check_permissions_missing_permission():
         raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# Superuser short-circuit parity between check paths
+# =============================================================================
+
+def test_check_authentication_context_honors_superuser_role():
+    """
+        With SUPERUSER_ROLE_NAME opted in, a principal carrying only
+        the superuser role must satisfy a role-required policy on the
+        request-enforcement path (check_authentication_context), the
+        same way check_roles already does.
+    """
+    saved = AccessPolicy.SUPERUSER_ROLE_NAME
+    AccessPolicy.SUPERUSER_ROLE_NAME = "superuser"
+    try:
+        policy = AccessPolicy(require_auth=True, roles=["rest"])
+        context = _create_test_context(roles={"superuser"})
+
+        context_result = policy.check_authentication_context(context)
+        roles_result = policy.check_roles(context)
+
+        if context_result is not True:
+            errmsg = (
+                "check_authentication_context must grant a "
+                "superuser-only principal on a role-required policy"
+            )
+            raise AssertionError(errmsg)
+
+        if roles_result != context_result:
+            errmsg = (
+                "check_roles and check_authentication_context disagree "
+                "on the superuser short-circuit"
+            )
+            raise AssertionError(errmsg)
+    finally:
+        AccessPolicy.SUPERUSER_ROLE_NAME = saved
+
+    return
+
+
+def test_check_authentication_context_superuser_off_by_default():
+    """
+        Without the opt-in, a principal with only a "superuser" role
+        must still be rejected by a role-required policy — the
+        short-circuit only exists when the application sets
+        SUPERUSER_ROLE_NAME.
+    """
+    saved = AccessPolicy.SUPERUSER_ROLE_NAME
+    AccessPolicy.SUPERUSER_ROLE_NAME = None
+    try:
+        policy = AccessPolicy(require_auth=True, roles=["rest"])
+        context = _create_test_context(roles={"superuser"})
+
+        result = policy.check_authentication_context(context)
+
+        if result is not False:
+            errmsg = (
+                "Expected rejection when SUPERUSER_ROLE_NAME is not "
+                "configured, got {}".format(result)
+            )
+            raise AssertionError(errmsg)
+    finally:
+        AccessPolicy.SUPERUSER_ROLE_NAME = saved
+
+    return

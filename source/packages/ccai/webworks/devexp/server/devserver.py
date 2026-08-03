@@ -610,9 +610,23 @@ class DevelopmentServer:
             self._setup_request_logging()
 
             # If the async server core is running, stop and restart it.
+            # This method is invoked from the FileWatcher's daemon
+            # thread, which has no running event loop —
+            # ``asyncio.get_running_loop()`` raises ``RuntimeError``
+            # there. Schedule the restart coroutine onto the serving
+            # loop captured in ``_run_async``, the same way the
+            # cross-thread shutdown path does.
             if self._server_core is not None:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._restart_server_core())
+                if self._loop is None:
+                    logger.error(
+                        "Reload requested but no serving loop is "
+                        "captured; skipping the async core restart."
+                    )
+                else:
+                    asyncio.run_coroutine_threadsafe(
+                        self._restart_server_core(),
+                        self._loop,
+                    )
             else:
                 self._running = True
                 self._restart_count += 1
