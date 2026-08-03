@@ -1470,3 +1470,58 @@ def test_property_3_send_via_response_object_message_ordering():
                 raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Cookie propagation through send() — the framework Response carries
+# cookies outside the plain headers dict
+# =============================================================================
+
+def test_send_emits_cookie_jar_and_raw_set_cookies_on_the_wire():
+    """
+        Cookies registered on the framework Response (set_cookie jar
+        entries and add_raw_set_cookie lines) must reach the ASGI
+        start message as distinct Set-Cookie header pairs — the
+        headers dict alone cannot represent them.
+    """
+    from ccai.webworks.routing.response import Response
+
+    response = Response(status_code=302, headers={"Location": "/dash"})
+    response.set_cookie(name="sid", value="abc", path="/", httponly=True)
+    response.add_raw_set_cookie("oauth_state=; Path=/; Max-Age=0")
+
+    sender = ResponseSender()
+    send, sent_messages = create_send_callable()
+
+    asyncio.get_event_loop().run_until_complete(
+        sender.send(send, response)
+    )
+
+    start_message = sent_messages[0]
+    if start_message.get("type") != MESSAGE_HTTP_RESPONSE_START:
+        errmsg = "Expected http.response.start first, got {!r}".format(
+            start_message.get("type")
+        )
+        raise AssertionError(errmsg)
+
+    set_cookie_pairs = [
+        pair for pair in start_message.get("headers", [])
+        if bytes(pair[0]).lower() == b"set-cookie"
+    ]
+
+    if len(set_cookie_pairs) != 2:
+        errmsg = (
+            "Expected 2 Set-Cookie header pairs on the wire, got "
+            "{}: {!r}".format(len(set_cookie_pairs), set_cookie_pairs)
+        )
+        raise AssertionError(errmsg)
+
+    for _name, value in set_cookie_pairs:
+        value_bytes = bytes(value)
+        if (b"\r" in value_bytes) or (b"\n" in value_bytes):
+            errmsg = "Illegal CR/LF in Set-Cookie value: {!r}".format(
+                value_bytes
+            )
+            raise AssertionError(errmsg)
+
+    return

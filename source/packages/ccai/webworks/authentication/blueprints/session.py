@@ -85,6 +85,25 @@ def _session_id_prefix(session_id: Optional[str]) -> str:
     return rtnval
 
 
+def run_async(coro: Any) -> Any:
+    """
+        Public, supported name for running an asynchronous coroutine
+        synchronously regardless of whether the calling thread
+        already has a running event loop.
+
+        Downstream applications bridge sync handler code onto async
+        session stores through this helper, so it is part of the
+        module's supported surface. Delegates to :func:`_run_async`,
+        which several framework modules still call internally.
+
+        :param coro: The coroutine to run to completion.
+
+        :returns: Whatever the coroutine returns.
+    """
+    rtnval = _run_async(coro)
+    return rtnval
+
+
 def _run_async(coro: Any) -> Any:
     """
         Run an asynchronous coroutine synchronously, regardless of
@@ -330,6 +349,22 @@ class SessionAuthBlueprint(SecurityBlueprint):
 
         cookie_header = cls.COOKIE_PART_SEPARATOR.join(parts)
         return cookie_header
+
+    @classmethod
+    def build_clear_cookie_header(cls) -> str:
+        """
+            Public, supported name for building a ``Set-Cookie``
+            header value that clears the session cookie.
+
+            Downstream applications issue logout responses with this
+            value, so it is part of the blueprint's supported
+            surface.
+
+            :returns: A Set-Cookie header value string that clears
+                      the cookie.
+        """
+        rtnval = cls._build_clear_cookie_header()
+        return rtnval
 
     @classmethod
     def _build_clear_cookie_header(cls) -> str:

@@ -1189,3 +1189,98 @@ def test_streaming_response_iter_content_before_body():
     return
 
 
+
+
+# =============================================================================
+# Multi-Set-Cookie emission (add_raw_set_cookie)
+# =============================================================================
+
+def test_response_add_raw_set_cookie_emits_one_header_per_cookie():
+    """
+        Two raw Set-Cookie lines must surface as two distinct
+        Set-Cookie headers — never joined into one value.
+    """
+    response = Response(status_code=302, headers={"Location": "/"})
+    response.add_raw_set_cookie("sid=abc; Path=/; HttpOnly")
+    response.add_raw_set_cookie("oauth_state=; Path=/; Max-Age=0")
+
+    all_headers = response._get_all_headers()
+    set_cookie_values = [
+        value for name, value in all_headers if name.lower() == "set-cookie"
+    ]
+
+    if len(set_cookie_values) != 2:
+        errmsg = "Expected 2 Set-Cookie headers, got {}: {!r}".format(
+            len(set_cookie_values), set_cookie_values
+        )
+        raise AssertionError(errmsg)
+
+    for value in set_cookie_values:
+        if ("\r" in value) or ("\n" in value):
+            errmsg = "Set-Cookie value contains CR/LF: {!r}".format(value)
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_response_add_raw_set_cookie_rejects_crlf():
+    """
+        A joined multi-cookie value containing CR/LF is an illegal
+        header and must be rejected at registration time.
+    """
+    response = Response()
+
+    try:
+        response.add_raw_set_cookie("a=1\r\nb=2")
+    except ValueError:
+        return
+
+    errmsg = "Expected ValueError for a CR/LF-joined cookie value"
+    raise AssertionError(errmsg)
+
+
+def test_response_add_raw_set_cookie_ignores_empty_values():
+    """
+        Empty / whitespace-only values are silently skipped rather
+        than emitting blank Set-Cookie headers.
+    """
+    response = Response()
+    response.add_raw_set_cookie("")
+    response.add_raw_set_cookie("   ")
+
+    all_headers = response._get_all_headers()
+    set_cookie_values = [
+        value for name, value in all_headers if name.lower() == "set-cookie"
+    ]
+
+    if len(set_cookie_values) != 0:
+        errmsg = "Expected no Set-Cookie headers, got {!r}".format(
+            set_cookie_values
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_response_to_asgi_carries_raw_set_cookies():
+    """
+        The ASGI event conversion must include one Set-Cookie header
+        pair per registered raw cookie.
+    """
+    response = Response(status_code=302, headers={"Location": "/dash"})
+    response.add_raw_set_cookie("sid=xyz; Path=/")
+    response.add_raw_set_cookie("state=; Max-Age=0")
+
+    events = response.to_asgi()
+    header_pairs = events["start"]["headers"]
+    set_cookie_pairs = [
+        pair for pair in header_pairs if pair[0].lower() == b"set-cookie"
+    ]
+
+    if len(set_cookie_pairs) != 2:
+        errmsg = "Expected 2 ASGI Set-Cookie pairs, got {}".format(
+            len(set_cookie_pairs)
+        )
+        raise AssertionError(errmsg)
+
+    return

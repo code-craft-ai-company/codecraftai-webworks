@@ -159,8 +159,21 @@ class ResponseSender:
             :param send_callable: ASGI send callable.
             :param response: Framework Response object with status, headers, and body.
         """
-        # Format headers from dict to list of byte tuples
-        headers = self.format_headers(response.headers)
+        # Serialize headers to a list of byte tuples. The framework
+        # Response carries cookies OUTSIDE the plain headers dict (a
+        # SimpleCookie jar plus raw Set-Cookie lines), and each
+        # cookie must go on the wire as its own Set-Cookie header —
+        # a dict cannot represent that. Prefer the full accessor and
+        # fall back to the dict for duck-typed response objects.
+        header_items = getattr(response, "_get_all_headers", None)
+        if callable(header_items):
+            headers = []
+            for name, value in header_items():
+                headers.append(
+                    (name.encode("latin-1"), str(value).encode("latin-1"))
+                )
+        else:
+            headers = self.format_headers(response.headers)
         
         # Check if the response has a streaming body
         body = response.body
