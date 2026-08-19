@@ -45,11 +45,11 @@ requests = "^2.32.5"
 # compact-serialization, claims-registry, and HMAC paths are pure
 # standard library.
 cryptography = ">=42.0.0,<46.0.0"
-codecraftai-this-app = { git = "https://github.com/automationmojo/codecraftai-this-app.git", branch = "main" }
-codecraftai-testbase = { git = "https://github.com/automationmojo/codecraftai-testbase.git", branch = "main" }
-codecraftai-configuration = { git = "https://github.com/automationmojo/codecraftai-configuration.git", branch = "main" }
-codecraftai-credentials = { git = "https://github.com/automationmojo/codecraftai-credentials.git", branch = "main" }
-codecraftai-dataprofiles = { git = "https://github.com/automationmojo/codecraftai-dataprofiles.git", branch = "main" }
+codecraftai-this-app = { git = "https://github.com/code-craft-ai-company/codecraftai-this-app.git", branch = "main" }
+codecraftai-testbase = { git = "https://github.com/code-craft-ai-company/codecraftai-testbase.git", branch = "main" }
+codecraftai-configuration = { git = "https://github.com/code-craft-ai-company/codecraftai-configuration.git", branch = "main" }
+codecraftai-credentials = { git = "https://github.com/code-craft-ai-company/codecraftai-credentials.git", branch = "main" }
+codecraftai-dataprofiles = { git = "https://github.com/code-craft-ai-company/codecraftai-dataprofiles.git", branch = "main" }
 
 [tool.poetry.group.dev.dependencies]
 
