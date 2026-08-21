@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "codecraftai-webworks"
 description = "Code Craft AI - WebWorks"
-version = "0.0.1"
+version = "1.0.0"
 authors = []
 readme = "README.rst"
 license = "LICENSE.txt"
@@ -45,15 +45,21 @@ requests = "^2.32.5"
 # compact-serialization, claims-registry, and HMAC paths are pure
 # standard library.
 cryptography = ">=42.0.0,<46.0.0"
-codecraftai-this-app = { git = "https://github.com/code-craft-ai-company/codecraftai-this-app.git", branch = "main" }
-codecraftai-testbase = { git = "https://github.com/code-craft-ai-company/codecraftai-testbase.git", branch = "main" }
-codecraftai-configuration = { git = "https://github.com/code-craft-ai-company/codecraftai-configuration.git", branch = "main" }
-codecraftai-credentials = { git = "https://github.com/code-craft-ai-company/codecraftai-credentials.git", branch = "main" }
-codecraftai-dataprofiles = { git = "https://github.com/code-craft-ai-company/codecraftai-dataprofiles.git", branch = "main" }
+codecraftai-this-app = { version = "<2.0.0", source = "codecraftai" }
+codecraftai-testbase = { version = "<2.0.0", source = "codecraftai" }
+codecraftai-configuration = { version = "<2.0.0", source = "codecraftai" }
+codecraftai-credentials = { version = "<2.0.0", source = "codecraftai" }
+codecraftai-dataprofiles = { version = "<2.0.0", source = "codecraftai" }
 
 [tool.poetry.group.dev.dependencies]
 
 [tool.poetry.group.dbio.dependencies]
+
+
+[[tool.poetry.source]]
+name = "codecraftai"
+url = "https://code-craft.ai/licensed-repository/simple/"
+priority = "supplemental"
 
 [build-system]
 requires = ["poetry-core"]
