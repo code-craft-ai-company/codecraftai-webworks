@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "codecraftai-webworks"
 description = "Code Craft AI - WebWorks"
-version = "1.0.1"
+version = "1.0.2"
 authors = []
 readme = "README.rst"
 license = "LICENSE.txt"
@@ -44,7 +44,7 @@ requests = "^2.32.5"
 # by ``ccai.webworks.configuration.sources``). The base64url,
 # compact-serialization, claims-registry, and HMAC paths are pure
 # standard library.
-cryptography = ">=42.0.0,<46.0.0"
+cryptography = ">=42.0.0,<51.0.0"
 codecraftai-this-app = { version = "<2.0.0", source = "codecraftai" }
 codecraftai-testbase = { version = "<2.0.0", source = "codecraftai" }
 codecraftai-configuration = { version = "<2.0.0", source = "codecraftai" }
