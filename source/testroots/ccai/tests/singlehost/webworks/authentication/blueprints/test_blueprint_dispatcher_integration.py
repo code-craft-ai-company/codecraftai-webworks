@@ -401,8 +401,11 @@ def test_oauth_callback_dispatch_returns_real_302_to_error_on_missing_provider()
         raise AssertionError(errmsg)
 
     # State-clear cookie should be attached on every callback exit
-    # path, including this one.
-    cookie = response.headers.get("Set-Cookie", "")
+    # path, including this one. The blueprint registers it as its own
+    # Set-Cookie header line, so read the wire headers rather than the
+    # plain header mapping.
+    _, wire_headers, _ = response.to_wsgi()
+    cookie = "; ".join(value for name, value in wire_headers if name == "Set-Cookie")
     if "Max-Age=0" not in cookie:
         errmsg = "Expected state-clear cookie on error redirect, got {!r}".format(
             cookie,

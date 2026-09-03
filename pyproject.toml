@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "codecraftai-webworks"
 description = "Code Craft AI - WebWorks"
-version = "1.0.0"
+version = "1.0.1"
 authors = []
 readme = "README.rst"
 license = "LICENSE.txt"
