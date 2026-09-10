@@ -1,18 +1,48 @@
-[tool.poetry]
+[project]
 name = "codecraftai-webworks"
+version = "1.1.0"
 description = "Code Craft AI - WebWorks"
-version = "1.0.2"
-authors = []
 readme = "README.rst"
 license = "LICENSE.txt"
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: POSIX"
-]
+authors = []
 keywords = [
     "python"
 ]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX",
+]
+requires-python = ">=3.10,<4.0"
+dependencies = [
+    "requests>=2.32.5,<3.0.0",
+    # The OAuth client, OIDC id_token validation, and the signed
+    # pre-auth state cookie are implemented in-house — see
+    # ``ccai.webworks.authentication.oauth``,
+    # ``ccai.webworks.security.jsonwebtoken``, and
+    # ``ccai.webworks.security.signedserializer``. They previously
+    # relied on ``authlib`` / ``joserfc`` / ``itsdangerous`` (behind an
+    # ``oauth`` extra); those framework libraries have been dropped.
+    # ``cryptography`` is the one primitive that remains: RSA / ECDSA
+    # signature verification cannot be hand-rolled safely in pure
+    # Python, so the JOSE module delegates the asymmetric verify step to
+    # PyCA ``cryptography`` (the same foundational library already used
+    # by ``ccai.webworks.configuration.sources``). The base64url,
+    # compact-serialization, claims-registry, and HMAC paths are pure
+    # standard library.
+    "cryptography>=42.0.0,<51.0.0",
+    "codecraftai-this-app<2.0.0",
+    "codecraftai-testbase<2.0.0",
+    "codecraftai-configuration<2.0.0",
+    "codecraftai-credentials<2.0.0",
+    "codecraftai-dataprofiles<2.0.0",
+
+    ]
+
+[dependency-groups]
+dev = []
+dbio = []
+
+[tool.poetry]
 packages = [{include="ccai", from="source/packages"}]
 include = [
     # Vendored Swagger UI / OpenAPI assets served by SwaggerUIBlueprint.
@@ -27,39 +57,24 @@ include = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.10,<4.0"
-requests = "^2.32.5"
-# The OAuth client, OIDC id_token validation, and the signed
-# pre-auth state cookie are implemented in-house — see
-# ``ccai.webworks.authentication.oauth``,
-# ``ccai.webworks.security.jsonwebtoken``, and
-# ``ccai.webworks.security.signedserializer``. They previously
-# relied on ``authlib`` / ``joserfc`` / ``itsdangerous`` (behind an
-# ``oauth`` extra); those framework libraries have been dropped.
-#
-# ``cryptography`` is the one primitive that remains: RSA / ECDSA
-# signature verification cannot be hand-rolled safely in pure
-# Python, so the JOSE module delegates the asymmetric verify step to
-# PyCA ``cryptography`` (the same foundational library already used
-# by ``ccai.webworks.configuration.sources``). The base64url,
-# compact-serialization, claims-registry, and HMAC paths are pure
-# standard library.
-cryptography = ">=42.0.0,<51.0.0"
-codecraftai-this-app = { version = "<2.0.0", source = "codecraftai" }
-codecraftai-testbase = { version = "<2.0.0", source = "codecraftai" }
-codecraftai-configuration = { version = "<2.0.0", source = "codecraftai" }
-codecraftai-credentials = { version = "<2.0.0", source = "codecraftai" }
-codecraftai-dataprofiles = { version = "<2.0.0", source = "codecraftai" }
-
-[tool.poetry.group.dev.dependencies]
-
-[tool.poetry.group.dbio.dependencies]
-
+codecraftai-this-app = {source = "codecraftai"}
+codecraftai-testbase = {source = "codecraftai"}
+codecraftai-configuration = {source = "codecraftai"}
+codecraftai-credentials = {source = "codecraftai"}
+codecraftai-dataprofiles = {source = "codecraftai"}
 
 [[tool.poetry.source]]
 name = "codecraftai"
 url = "https://code-craft.ai/licensed-repository/simple/"
 priority = "supplemental"
+
+[[tool.uv.index]]
+# Same licensed index as [[tool.poetry.source]]. Listed before PyPI so that
+# codecraftai-* packages (direct and transitive) resolve from it; everything
+# else falls through to PyPI. Credentials: UV_INDEX_CODECRAFTAI_USERNAME /
+# UV_INDEX_CODECRAFTAI_PASSWORD, or `uv auth login`.
+name = "codecraftai"
+url = "https://code-craft.ai/licensed-repository/simple/"
 
 [tool.ruff.lint]
 # Deliberately narrow.  This gate exists for one reason: a bare `except:`
