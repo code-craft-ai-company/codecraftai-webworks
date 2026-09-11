@@ -40,8 +40,6 @@ import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
-import pytest
-
 from ccai.webworks.authentication.blueprints.oauthclient import (
     DEFAULT_STATE_COOKIE_NAME,
     ERROR_AUTHORIZATION_FAILED,
@@ -278,6 +276,29 @@ def _provider_name_lister():
     return list(_DEFAULT_PROVIDER_CONFIG.keys())
 
 
+def _set_cookie_headers(response) -> str:
+    """
+        Join every ``Set-Cookie`` header the response emits on the wire.
+
+        The blueprint registers cookies through
+        :meth:`Response.add_raw_set_cookie`, which emits one
+        ``Set-Cookie`` header per cookie via :meth:`Response.to_wsgi`
+        rather than a single entry in :attr:`Response.headers`, so
+        the assertions read the wire headers.
+
+        :param response: The :class:`Response` under test.
+
+        :returns: The ``Set-Cookie`` header values joined by newlines,
+                  or an empty string when the response sets no cookie.
+    """
+    _status, headers, _body = response.to_wsgi()
+
+    values = [value for name, value in headers if name.lower() == "set-cookie"]
+
+    rtnval = "\n".join(values)
+    return rtnval
+
+
 # =============================================================================
 # State cookie round-trip
 # =============================================================================
@@ -399,7 +420,7 @@ def test_kickoff_success_redirects_with_signed_cookie():
         errmsg = "Expected provider authorization URL, got {!r}".format(location)
         raise AssertionError(errmsg)
 
-    cookie = response.headers.get("Set-Cookie", "")
+    cookie = _set_cookie_headers(response)
     if DEFAULT_STATE_COOKIE_NAME not in cookie:
         errmsg = "Expected state cookie in Set-Cookie, got {!r}".format(cookie)
         raise AssertionError(errmsg)
@@ -995,7 +1016,7 @@ def test_callback_user_resolver_error_code_propagates():
         raise AssertionError(errmsg)
 
     # State-clear cookie should be attached on every callback exit path.
-    cookie_header = response.headers.get("Set-Cookie", "")
+    cookie_header = _set_cookie_headers(response)
     if "Max-Age=0" not in cookie_header:
         errmsg = "Expected state-clear cookie on error redirect, got {!r}".format(cookie_header)
         raise AssertionError(errmsg)
@@ -1103,7 +1124,7 @@ def test_callback_success_invokes_token_persister_and_establishes_session():
         errmsg = "Expected /dashboard/, got {!r}".format(response.headers["Location"])
         raise AssertionError(errmsg)
 
-    cookie_header = response.headers.get("Set-Cookie", "")
+    cookie_header = _set_cookie_headers(response)
     if "site_session=" not in cookie_header:
         errmsg = "Expected session cookie, got {!r}".format(cookie_header)
         raise AssertionError(errmsg)

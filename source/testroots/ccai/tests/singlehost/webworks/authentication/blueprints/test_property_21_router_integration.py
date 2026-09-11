@@ -11,8 +11,6 @@
 
 import random
 
-import pytest
-
 from ccai.webworks.endpoints.registry import EndpointRegistry
 from ccai.webworks.routing.router import Router
 from ccai.webworks.routing.request import Request
@@ -25,7 +23,7 @@ from ccai.webworks.authentication.blueprints.oidc import OIDCBlueprint
 
 
 # =============================================================================
-# Fixtures
+# Registry setup
 # =============================================================================
 
 
@@ -43,11 +41,11 @@ _SECURITY_BLUEPRINT_CLASSES = [
 ]
 
 
-@pytest.fixture(autouse=True)
-def _populated_registry():
+def _populated_registry() -> EndpointRegistry:
     """
-        Populate the global :class:`EndpointRegistry` for each test in
-        this module.
+        Build a fresh :class:`EndpointRegistry` populated with the six
+        security blueprints. Every test in this module calls this at
+        the top so its setup is explicit and its state is its own.
 
         :class:`SecurityBlueprint` subclasses deliberately defer
         registration to an explicit :meth:`register` call (their
@@ -58,19 +56,21 @@ def _populated_registry():
 
         Property 21's assertions exercise the *populated* registry, so
         each test needs the six blueprint classes registered before it
-        runs. The fixture clears any pollution from earlier tests, then
-        registers the canonical blueprint set with
-        ``on_conflict="replace"`` so a re-run within the same process
-        is idempotent. Teardown clears the registry again to keep this
-        module's side effects contained.
+        runs. A registry is an ordinary instance-scoped object, so a new
+        one per test carries no pollution from earlier tests and needs
+        no teardown. Registration uses ``on_conflict="replace"`` so a
+        re-run within the same process is idempotent.
+
+        :returns: A registry holding the descriptors of every blueprint
+                  in :data:`_SECURITY_BLUEPRINT_CLASSES`.
     """
     registry = EndpointRegistry()
     for blueprint_cls in _SECURITY_BLUEPRINT_CLASSES:
         blueprint_cls.register_with_registry(registry=registry, on_conflict="replace")
 
-    yield
+    return registry
 
-    registry = EndpointRegistry()
+
 # =============================================================================
 # Test Helpers
 # =============================================================================
@@ -83,9 +83,11 @@ def _create_request(path, method="GET"):
     return request
 
 
-def _build_router_from_registry():
+def _build_router_from_registry(registry: EndpointRegistry):
     """
-        Build a Router and load all endpoints from the global registry.
+        Build a Router and load all endpoints from the given registry.
+
+        :param registry: The populated registry to load routes from.
     """
     router = Router(strict_slashes=False, case_sensitive=True)
     router.load_from_registry(registry)
@@ -116,7 +118,7 @@ def test_property_21_registry_descriptors_have_handlers():
 
         **Validates: Requirements 9.1**
     """
-    registry = EndpointRegistry()
+    registry = _populated_registry()
     descriptors = registry.collect()
 
     if len(descriptors) == 0:
@@ -150,7 +152,8 @@ def test_property_21_router_loads_all_registry_endpoints():
 
         **Validates: Requirements 9.1, 9.2**
     """
-    router = _build_router_from_registry()
+    registry = _populated_registry()
+    router = _build_router_from_registry(registry)
 
     # The router should have loaded routes
     route_count = len(router._routes)
@@ -171,8 +174,8 @@ def test_property_21_router_matches_registered_endpoints():
 
         **Validates: Requirements 9.1, 9.2, 9.6**
     """
-    registry = EndpointRegistry()
-    router = _build_router_from_registry()
+    registry = _populated_registry()
+    router = _build_router_from_registry(registry)
 
     descriptors = registry.collect()
 
@@ -264,7 +267,8 @@ def test_property_21_unregistered_paths_do_not_match():
 
         **Validates: Requirements 9.6**
     """
-    router = _build_router_from_registry()
+    registry = _populated_registry()
+    router = _build_router_from_registry(registry)
 
     num_iterations = 100
 
@@ -297,8 +301,8 @@ def test_property_21_router_preserves_handler_reference():
 
         **Validates: Requirements 9.2, 9.6**
     """
-    registry = EndpointRegistry()
-    router = _build_router_from_registry()
+    registry = _populated_registry()
+    router = _build_router_from_registry(registry)
 
     descriptors = registry.collect()
 
