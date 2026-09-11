@@ -1,9 +1,9 @@
 [project]
 name = "codecraftai-webworks"
-version = "1.1.2"
+version = "1.1.3"
 description = "Code Craft AI - WebWorks"
 readme = "README.rst"
-license = "LICENSE.txt"
+license = "LicenseRef-CodeCraftAI-Dual-License"
 authors = []
 keywords = [
     "python"
