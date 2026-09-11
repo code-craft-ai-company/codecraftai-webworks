@@ -1,5 +1,5 @@
 """
-    test_dyn_charts_schedule.py
+    .. module:: testcomponents.tests.test_dyn_charts_schedule
 
     Playwright tests covering interactivity and dynamic data updates for the
     four schedule/timeline chart components:
@@ -34,7 +34,9 @@
     which deletes any own-property shadow then assigns via the setter.
 """
 
-import pytest
+import ccai.testbase as testbase
+
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +202,8 @@ _GANTT_DATA_B = {
 }
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_gantt_chart_initial_render(page, base_url):
     """
         mj-gantt-chart renders task bars after data is assigned.
@@ -219,7 +222,8 @@ def test_gantt_chart_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_gantt_chart_dynamic_update(page, base_url):
     """
         Reassigning .data on mj-gantt-chart re-renders the SVG.
@@ -249,7 +253,8 @@ def test_gantt_chart_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_gantt_chart_task_select_event(page, base_url):
     """
         Clicking a task bar fires the mj-task-select event.
@@ -321,7 +326,8 @@ _ROADMAP_DATA_B = {
 }
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_roadmap_chart_initial_render(page, base_url):
     """
         mj-roadmap-chart renders initiative bars after data is assigned.
@@ -340,7 +346,8 @@ def test_roadmap_chart_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_roadmap_chart_dynamic_update(page, base_url):
     """
         Reassigning .data on mj-roadmap-chart re-renders the SVG.
@@ -367,7 +374,8 @@ def test_roadmap_chart_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_roadmap_chart_initiative_select_event(page, base_url):
     """
         Clicking an initiative bar fires the mj-initiative-select event.
@@ -423,7 +431,8 @@ _MILESTONE_DATA_B = {
 }
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_milestone_timeline_initial_render(page, base_url):
     """
         mj-milestone-timeline renders marker groups after data is assigned.
@@ -442,7 +451,8 @@ def test_milestone_timeline_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_milestone_timeline_dynamic_update(page, base_url):
     """
         Reassigning .data on mj-milestone-timeline re-renders the SVG.
@@ -469,7 +479,8 @@ def test_milestone_timeline_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_milestone_timeline_marker_select_event(page, base_url):
     """
         Clicking a marker group fires the mj-marker-select event.
@@ -568,7 +579,8 @@ def _navigate_to_may_2026(frame) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_release_calendar_initial_render(page, base_url):
     """
         mj-release-calendar renders day cells after data is assigned.
@@ -587,7 +599,8 @@ def test_release_calendar_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_release_calendar_dynamic_update(page, base_url):
     """
         Reassigning .data on mj-release-calendar re-renders the grid.
@@ -621,7 +634,8 @@ def test_release_calendar_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_release_calendar_event_select_event(page, base_url):
     """
         Clicking an event chip fires the mj-event-select event.
@@ -650,3 +664,8 @@ def test_release_calendar_event_select_event(page, base_url):
     assert "mj-event-select" in events
 
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

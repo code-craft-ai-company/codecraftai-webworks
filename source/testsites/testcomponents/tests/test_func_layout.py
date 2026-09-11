@@ -1,5 +1,5 @@
 """
-    test_func_layout.py
+    .. module:: testcomponents.tests.test_func_layout
 
     Functional Playwright tests for the 'layout' component group.
 
@@ -14,8 +14,10 @@
     components receive lighter render / attribute / structure tests.
 """
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
+
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +97,8 @@ def _render_custom_html(page, base_url, group, anchor_tag, html):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_card_renders(page, base_url):
     """
         mj-card renders in the preview iframe and upgrades to a live custom
@@ -118,7 +121,8 @@ def test_card_renders(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_card_heading_attribute(page, base_url):
     """
         mj-card reflects the heading attribute into its shadow DOM heading
@@ -153,7 +157,8 @@ def test_card_heading_attribute(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_card_elevation_attribute_reflected(page, base_url):
     """
         mj-card reflects the elevation attribute on the host element.
@@ -184,7 +189,8 @@ def test_card_elevation_attribute_reflected(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_surface_renders(page, base_url):
     """
         mj-surface renders with a shadow root in the preview iframe.
@@ -206,7 +212,8 @@ def test_surface_renders(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_surface_slotted_content_visible(page, base_url):
     """
         mj-surface passes slotted content through to the page.
@@ -240,7 +247,8 @@ def test_surface_slotted_content_visible(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_grid_renders_children(page, base_url):
     """
         mj-grid renders and its slotted children are visible.
@@ -269,7 +277,8 @@ def test_grid_renders_children(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_grid_columns_attribute_reflected(page, base_url):
     """
         mj-grid reflects the columns attribute on its host element.
@@ -300,7 +309,8 @@ def test_grid_columns_attribute_reflected(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_stack_renders_slotted_children(page, base_url):
     """
         mj-stack renders slotted children in a flex container.
@@ -329,7 +339,8 @@ def test_stack_renders_slotted_children(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_stack_direction_attribute_reflected(page, base_url):
     """
         mj-stack reflects the direction attribute on its host element.
@@ -360,7 +371,8 @@ def test_stack_direction_attribute_reflected(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_spacer_renders(page, base_url):
     """
         mj-spacer renders in the preview iframe as a custom element.
@@ -377,7 +389,8 @@ def test_spacer_renders(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_spacer_size_attribute_reflected(page, base_url):
     """
         mj-spacer reflects the size attribute on the host element.
@@ -414,7 +427,8 @@ def test_spacer_size_attribute_reflected(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_aspect_ratio_renders(page, base_url):
     """
         mj-aspect-ratio renders with a shadow root in the preview iframe.
@@ -436,7 +450,8 @@ def test_aspect_ratio_renders(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_aspect_ratio_attribute_reflected(page, base_url):
     """
         mj-aspect-ratio reflects the ratio attribute on the host element.
@@ -475,7 +490,8 @@ def test_aspect_ratio_attribute_reflected(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_disclosure_renders_and_is_collapsed_by_default(page, base_url):
     """
         mj-disclosure renders with the trigger button visible and the panel
@@ -514,7 +530,8 @@ def test_disclosure_renders_and_is_collapsed_by_default(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_disclosure_expands_on_click(page, base_url):
     """
         Clicking the trigger button opens the disclosure panel and sets
@@ -554,7 +571,8 @@ def test_disclosure_expands_on_click(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_disclosure_open_attribute_starts_expanded(page, base_url):
     """
         mj-disclosure with the open attribute renders with aria-expanded="true"
@@ -590,7 +608,8 @@ def test_disclosure_open_attribute_starts_expanded(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_disclosure_toggle_event_fires(page, base_url):
     """
         Clicking the trigger emits the mj-disclosure-toggle event.
@@ -636,7 +655,8 @@ def test_disclosure_toggle_event_fires(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_accordion_renders_panels(page, base_url):
     """
         mj-accordion renders with multiple mj-disclosure children visible.
@@ -654,7 +674,8 @@ def test_accordion_renders_panels(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_accordion_single_open_mode(page, base_url):
     """
         In default (single-open) mode, opening a second disclosure closes the
@@ -717,7 +738,8 @@ def test_accordion_single_open_mode(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_accordion_allow_multiple(page, base_url):
     """
         With allow-multiple set, both panels can be open simultaneously.
@@ -759,7 +781,8 @@ def test_accordion_allow_multiple(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_accordion_close_event_fires(page, base_url):
     """
         mj-accordion emits mj-accordion-close when single-open mode forces a
@@ -811,7 +834,8 @@ def test_accordion_close_event_fires(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_split_pane_renders_both_panes(page, base_url):
     """
         mj-split-pane renders slotted content in both the start and end panes.
@@ -840,7 +864,8 @@ def test_split_pane_renders_both_panes(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_split_pane_separator_has_correct_role(page, base_url):
     """
         mj-split-pane renders a separator element with role="separator".
@@ -876,7 +901,8 @@ def test_split_pane_separator_has_correct_role(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_split_pane_keyboard_resize(page, base_url):
     """
         Pressing ArrowRight on the separator emits mj-split-resize-end and
@@ -925,7 +951,8 @@ def test_split_pane_keyboard_resize(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_scroll_area_renders_viewport(page, base_url):
     """
         mj-scroll-area renders a viewport element with role="region" inside
@@ -962,7 +989,8 @@ def test_scroll_area_renders_viewport(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_scroll_area_scroll_event_fires(page, base_url):
     """
         Programmatically scrolling the viewport emits the mj-scroll event.
@@ -1019,7 +1047,8 @@ def test_scroll_area_scroll_event_fires(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_carousel_renders_slides(page, base_url):
     """
         mj-carousel renders mj-carousel-slide children and shows the first
@@ -1041,7 +1070,8 @@ def test_carousel_renders_slides(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_carousel_first_slide_visible(page, base_url):
     """
         The first mj-carousel-slide has aria-hidden="false" on initial render.
@@ -1072,7 +1102,8 @@ def test_carousel_first_slide_visible(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_carousel_next_button_advances_slide(page, base_url):
     """
         Clicking the next-slide button advances to slide index 1 and sets
@@ -1119,7 +1150,8 @@ def test_carousel_next_button_advances_slide(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_carousel_picker_dots_render(page, base_url):
     """
         mj-carousel renders picker-item buttons matching the number of slides.
@@ -1155,7 +1187,8 @@ def test_carousel_picker_dots_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_carousel_change_event_fires(page, base_url):
     """
         Clicking next emits the mj-carousel-change event.
@@ -1207,7 +1240,8 @@ def test_carousel_change_event_fires(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_feed_renders_items(page, base_url):
     """
         mj-feed renders mj-feed-item children.
@@ -1236,7 +1270,8 @@ def test_feed_renders_items(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_feed_has_feed_role(page, base_url):
     """
         mj-feed shadow root contains an element with role="feed".
@@ -1271,7 +1306,8 @@ def test_feed_has_feed_role(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_feed_load_more_button_visible(page, base_url):
     """
         When load-mode is "button" and has-more is not false, the Load More
@@ -1314,7 +1350,8 @@ def test_feed_load_more_button_visible(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_media_object_renders(page, base_url):
     """
         mj-media-object renders with a shadow root.
@@ -1336,7 +1373,8 @@ def test_media_object_renders(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_media_object_slotted_content_visible(page, base_url):
     """
         mj-media-object makes both the media slot and default slot content
@@ -1371,7 +1409,8 @@ def test_media_object_slotted_content_visible(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_hero_renders(page, base_url):
     """
         mj-hero renders with a shadow root in the preview iframe.
@@ -1393,7 +1432,8 @@ def test_hero_renders(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_hero_heading_attribute_reflected(page, base_url):
     """
         mj-hero reflects the heading attribute and renders it in the shadow DOM.
@@ -1424,7 +1464,8 @@ def test_hero_heading_attribute_reflected(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_empty_state_renders(page, base_url):
     """
         mj-empty-state renders with a shadow root.
@@ -1446,7 +1487,8 @@ def test_empty_state_renders(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_empty_state_heading_in_shadow_dom(page, base_url):
     """
         mj-empty-state renders the heading attribute in its shadow DOM.
@@ -1485,7 +1527,8 @@ def test_empty_state_heading_in_shadow_dom(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_skeleton_renders_rectangle_variant(page, base_url):
     """
         mj-skeleton rectangle variant renders and is attached to the DOM.
@@ -1509,7 +1552,8 @@ def test_skeleton_renders_rectangle_variant(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_skeleton_circle_variant_reflected(page, base_url):
     """
         mj-skeleton reflects the variant="circle" attribute on the host.
@@ -1535,7 +1579,8 @@ def test_skeleton_circle_variant_reflected(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_skeleton_root_div_is_aria_hidden(page, base_url):
     """
         mj-skeleton renders its inner root div with aria-hidden="true" to
@@ -1583,7 +1628,8 @@ def test_skeleton_root_div_is_aria_hidden(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_divider_renders_with_separator_role(page, base_url):
     """
         mj-divider shadow DOM contains an element with role="separator" by
@@ -1608,7 +1654,8 @@ def test_divider_renders_with_separator_role(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_divider_label_attribute(page, base_url):
     """
         mj-divider with a label attribute reflects that attribute on the host.
@@ -1639,7 +1686,8 @@ def test_divider_label_attribute(page, base_url):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dock_layout_renders(page, base_url):
     """
         mj-dock-layout renders with a shadow root and is attached to the DOM.
@@ -1661,7 +1709,8 @@ def test_dock_layout_renders(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dock_layout_positions_top_child(page, base_url):
     """
         mj-dock-layout sets position:absolute on a child with dock="top" after
@@ -1702,7 +1751,8 @@ def test_dock_layout_positions_top_child(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dock_layout_fill_child_positioned(page, base_url):
     """
         mj-dock-layout sets position:absolute on the dock="fill" child and
@@ -1749,7 +1799,8 @@ def test_dock_layout_fill_child_positioned(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dock_layout_emits_mj_layout_event(page, base_url):
     """
         mj-dock-layout emits a mj-layout event after each layout pass.
@@ -1796,3 +1847,8 @@ def test_dock_layout_emits_mj_layout_event(page, base_url):
     assert "mj-layout" in events
 
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

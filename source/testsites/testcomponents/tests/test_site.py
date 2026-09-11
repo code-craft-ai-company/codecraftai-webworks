@@ -1,19 +1,24 @@
 """
-    test_site.py
+    .. module:: testcomponents.tests.test_site
+    :platform: Darwin, Linux, Unix, Windows
+    :synopsis: Site-level tests for the testcomponents site.
 
-    Site-level Playwright tests for the testcomponents site: the browse
-    page, group index pages, navigation, theme switching, static assets,
-    and not-found handling.
+    Site-level tests for the testcomponents site: the browse page, group index
+    pages, navigation, theme switching, static assets, and not-found handling.
 """
 
 import urllib.request
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
 
-from conftest import all_groups
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.catalogs import all_groups
+from testcomponents.harness.catalogs import identifier_for
+from testcomponents.harness.factories import create_page
+from testcomponents.harness.generation import define_page_tests
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_browse_page_loads(page, base_url):
     """
         The browse page loads and shows its heading and component count.
@@ -30,6 +35,7 @@ def test_browse_page_loads(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_browse_page_shows_all_groups(page, base_url):
     """
         The browse page renders a section for every component group.
@@ -45,6 +51,7 @@ def test_browse_page_shows_all_groups(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_browse_page_lists_every_component(page, base_url):
     """
         The browse page renders a card for all 139 components.
@@ -58,8 +65,7 @@ def test_browse_page_lists_every_component(page, base_url):
     return
 
 
-@pytest.mark.parametrize("group_key, title", all_groups())
-def test_group_index_page_loads(page, base_url, group_key, title):
+def _check_group_index_page_loads(page, base_url, group_key, title):
     """
         Each group index page loads and shows the group heading.
 
@@ -80,6 +86,7 @@ def test_group_index_page_loads(page, base_url, group_key, title):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_group_link_navigates_from_browse(page, base_url):
     """
         Clicking a group link on the browse page navigates to that group.
@@ -94,6 +101,7 @@ def test_group_link_navigates_from_browse(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_component_card_navigates_to_test_page(page, base_url):
     """
         Clicking a component card opens that component's test page.
@@ -108,6 +116,7 @@ def test_component_card_navigates_to_test_page(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_theme_toggle_switches_theme(page, base_url):
     """
         The header theme toggle flips the document data-theme attribute.
@@ -127,6 +136,7 @@ def test_theme_toggle_switches_theme(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_brand_link_returns_home(page, base_url):
     """
         The header brand link returns to the browse page.
@@ -141,6 +151,7 @@ def test_brand_link_returns_home(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_unknown_component_returns_not_found(page, base_url):
     """
         Requesting an unknown component renders the not-found page.
@@ -155,8 +166,8 @@ def test_unknown_component_returns_not_found(page, base_url):
     return
 
 
-@pytest.mark.parametrize(
-    "asset_path, expected_type",
+@testbase.parametrize(
+    "asset_path,expected_type",
     [
         ("/static/javascript/index.js", "text/javascript"),
         ("/static/styles/tokens.css", "text/css"),
@@ -172,9 +183,9 @@ def test_static_asset_content_type(base_url, asset_path, expected_type):
     """
 
     with urllib.request.urlopen(base_url + asset_path, timeout=10) as response:
-        assert response.status == 200
+        assert response.status == 200, asset_path
         content_type = response.headers.get("Content-Type", "")
-        assert expected_type in content_type
+        assert expected_type in content_type, (asset_path, content_type)
 
     return
 
@@ -184,6 +195,7 @@ def test_static_asset_content_type(base_url, asset_path, expected_type):
 # --------------------------------------------------------------------------
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_charts_page_loads(page, base_url):
     """
         The dedicated Charts landing page loads and shows its heading and
@@ -199,6 +211,7 @@ def test_charts_page_loads(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_charts_page_lists_all_charts(page, base_url):
     """
         The Charts page lists every chart component -- the 13 of the
@@ -216,7 +229,8 @@ def test_charts_page_lists_all_charts(page, base_url):
     return
 
 
-@pytest.mark.parametrize(
+@testbase.attach.parameter(create_page, identifier="page")
+@testbase.parametrize(
     "path",
     [
         "/",
@@ -243,6 +257,7 @@ def test_view_toggle_present_on_every_page(page, base_url, path):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_view_toggle_navigates_between_landing_pages(page, base_url):
     """
         The header toggle switches back and forth between the Components
@@ -261,8 +276,9 @@ def test_view_toggle_navigates_between_landing_pages(page, base_url):
     return
 
 
-@pytest.mark.parametrize(
-    "path, active",
+@testbase.attach.parameter(create_page, identifier="page")
+@testbase.parametrize(
+    "path,active",
     [
         ("/", "components"),
         ("/charts", "charts"),
@@ -286,3 +302,15 @@ def test_view_toggle_marks_active_view(page, base_url, path, active):
     expect(active_link).to_have_attribute("aria-current", "page")
 
     return
+
+
+# One test per component group, named test_group_index_page_loads__<group>.
+define_page_tests(globals(), "test_group_index_page_loads",
+                  _check_group_index_page_loads,
+                  [(identifier_for(group_key), (group_key, title))
+                   for group_key, title in all_groups()])
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

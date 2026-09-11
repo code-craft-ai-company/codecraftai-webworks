@@ -1,5 +1,5 @@
 """
-    test_dyn_charts_media.py
+    .. module:: testcomponents.tests.test_dyn_charts_media
 
     Functional Playwright tests covering dynamic updates and interactivity for
     the four media-group chart components:
@@ -26,7 +26,9 @@
     the draw is triggered.
 """
 
-import pytest
+import ccai.testbase as testbase
+
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +156,8 @@ def _collect_events(frame, tag: str, event_names: list) -> None:
 # mj-gauge
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_gauge_initial_render_arc_svg(page, base_url):
     """
         mj-gauge renders a gauge-svg SVG element after the component connects.
@@ -172,7 +175,8 @@ def test_mj_gauge_initial_render_arc_svg(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_gauge_dynamic_update_value_attribute(page, base_url):
     """
         Changing the value attribute re-renders the gauge value label.
@@ -232,7 +236,8 @@ def test_mj_gauge_dynamic_update_value_attribute(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_gauge_value_change_event_on_attribute(page, base_url):
     """
         Changing the value attribute fires the mj-gauge-value-change event.
@@ -265,7 +270,8 @@ def test_mj_gauge_value_change_event_on_attribute(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_gauge_click_emits_gauge_click_event(page, base_url):
     """
         Clicking anywhere on the gauge container fires the mj-gauge-click event.
@@ -299,7 +305,8 @@ def test_mj_gauge_click_emits_gauge_click_event(page, base_url):
 # mj-sparkline
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_sparkline_initial_render_svg_path(page, base_url):
     """
         mj-sparkline renders an SVG with a line path after the values attribute
@@ -328,7 +335,8 @@ def test_mj_sparkline_initial_render_svg_path(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_sparkline_dynamic_update_bar_count_changes(page, base_url):
     """
         Changing the values attribute on a connected component re-renders bars.
@@ -375,7 +383,8 @@ def test_mj_sparkline_dynamic_update_bar_count_changes(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_sparkline_bar_click_emits_sparkline_click(page, base_url):
     """
         Clicking a bar rect fires the mj-sparkline-click event.
@@ -417,7 +426,8 @@ def test_mj_sparkline_bar_click_emits_sparkline_click(page, base_url):
 # mj-diagram
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_diagram_initial_render_node_list(page, base_url):
     """
         After .graph is set the shadow DOM node list contains buttons for each
@@ -453,7 +463,8 @@ def test_mj_diagram_initial_render_node_list(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_diagram_dynamic_update_graph_node_count_changes(page, base_url):
     """
         Reassigning .graph on a live component updates the node list.
@@ -511,7 +522,8 @@ def test_mj_diagram_dynamic_update_graph_node_count_changes(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_diagram_node_button_click_emits_select_event(page, base_url):
     """
         Clicking a node button in the accessible list fires the
@@ -549,3 +561,8 @@ def test_mj_diagram_node_button_click_emits_select_event(page, base_url):
     assert "mj-diagram-node-select" in events
 
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

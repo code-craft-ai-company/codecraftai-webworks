@@ -1,5 +1,5 @@
 """
-    test_func_buttons.py
+    .. module:: testcomponents.tests.test_func_buttons
 
     Functional Playwright tests for every component in the 'buttons' group.
 
@@ -16,8 +16,10 @@
     interacts with the rendered component.  All tests are independent.
 """
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
+
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +119,8 @@ def _get_events(frame) -> list:
 # mj-button
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_button_click_fires_mj_click(page, base_url):
     """
         Clicking an enabled mj-button fires the mj-click custom event.
@@ -138,7 +141,8 @@ def test_mj_button_click_fires_mj_click(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_button_disabled_blocks_mj_click(page, base_url):
     """
         Clicking a disabled mj-button does NOT fire mj-click.
@@ -164,7 +168,8 @@ def test_mj_button_disabled_blocks_mj_click(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_button_loading_blocks_mj_click(page, base_url):
     """
         A mj-button in the loading state does NOT fire mj-click when its
@@ -189,7 +194,8 @@ def test_mj_button_loading_blocks_mj_click(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_button_loading_sets_aria_busy(page, base_url):
     """
         A mj-button with the loading attribute has aria-busy="true" on its
@@ -211,7 +217,8 @@ def test_mj_button_loading_sets_aria_busy(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_button_inner_button_disabled_when_disabled_attr(page, base_url):
     """
         When mj-button carries the disabled attribute the inner <button> is
@@ -237,7 +244,8 @@ def test_mj_button_inner_button_disabled_when_disabled_attr(page, base_url):
 # mj-fab
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_fab_click_fires_mj_click(page, base_url):
     """
         Clicking a plain mj-fab (no speed-dial) fires the mj-click event.
@@ -270,7 +278,8 @@ def test_mj_fab_click_fires_mj_click(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_fab_speed_dial_toggles_expanded(page, base_url):
     """
         Clicking a speed-dial mj-fab toggles the expanded attribute and
@@ -311,7 +320,8 @@ def test_mj_fab_speed_dial_toggles_expanded(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_fab_speed_dial_aria_expanded(page, base_url):
     """
         The inner button of a speed-dial mj-fab reflects aria-expanded as
@@ -348,7 +358,8 @@ def test_mj_fab_speed_dial_aria_expanded(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_fab_speed_dial_collapse_on_second_click(page, base_url):
     """
         Clicking a speed-dial mj-fab a second time collapses it.
@@ -383,7 +394,8 @@ def test_mj_fab_speed_dial_collapse_on_second_click(page, base_url):
 # mj-toggle-button
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_toggle_button_click_fires_mj_change_and_mj_pressed(page, base_url):
     """
         Clicking an mj-toggle-button fires mj-change followed by mj-pressed.
@@ -409,7 +421,8 @@ def test_mj_toggle_button_click_fires_mj_change_and_mj_pressed(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_toggle_button_pressed_attribute_reflects(page, base_url):
     """
         After clicking, the pressed attribute is set on the mj-toggle-button
@@ -437,7 +450,8 @@ def test_mj_toggle_button_pressed_attribute_reflects(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_toggle_button_aria_pressed_reflects_state(page, base_url):
     """
         The inner button's aria-pressed attribute tracks the pressed state.
@@ -466,7 +480,8 @@ def test_mj_toggle_button_aria_pressed_reflects_state(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_toggle_button_initial_pressed_state(page, base_url):
     """
         A mj-toggle-button with the pressed attribute starts with
@@ -488,7 +503,8 @@ def test_mj_toggle_button_initial_pressed_state(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_toggle_button_disabled_blocks_interaction(page, base_url):
     """
         A disabled mj-toggle-button does not fire mj-change or change its
@@ -523,7 +539,8 @@ def test_mj_toggle_button_disabled_blocks_interaction(page, base_url):
 # mj-disclosure-button
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_disclosure_button_click_fires_mj_change_and_mj_expanded(page, base_url):
     """
         Clicking an mj-disclosure-button fires mj-change and mj-expanded.
@@ -552,7 +569,8 @@ def test_mj_disclosure_button_click_fires_mj_change_and_mj_expanded(page, base_u
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_disclosure_button_aria_expanded_toggles(page, base_url):
     """
         The inner button's aria-expanded reflects the expanded state after
@@ -585,7 +603,8 @@ def test_mj_disclosure_button_aria_expanded_toggles(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_disclosure_button_expanded_attribute_reflects(page, base_url):
     """
         After clicking, the expanded attribute is set on the host element.
@@ -615,7 +634,8 @@ def test_mj_disclosure_button_expanded_attribute_reflects(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_disclosure_button_initial_expanded_state(page, base_url):
     """
         A mj-disclosure-button with the expanded attribute starts with
@@ -640,7 +660,8 @@ def test_mj_disclosure_button_initial_expanded_state(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_disclosure_button_disabled_blocks_interaction(page, base_url):
     """
         A disabled mj-disclosure-button does not toggle when its inner button
@@ -677,7 +698,8 @@ def test_mj_disclosure_button_disabled_blocks_interaction(page, base_url):
 # mj-copy-button
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_copy_button_click_fires_mj_copy(page, base_url):
     """
         Clicking an mj-copy-button with a value attribute fires mj-copy
@@ -705,7 +727,8 @@ def test_mj_copy_button_click_fires_mj_copy(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_copy_button_success_sets_data_status(page, base_url):
     """
         After a successful copy the host element gains data-status="success".
@@ -730,7 +753,8 @@ def test_mj_copy_button_success_sets_data_status(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_copy_button_disabled_blocks_copy(page, base_url):
     """
         A disabled mj-copy-button does not fire mj-copy when its inner
@@ -759,7 +783,8 @@ def test_mj_copy_button_disabled_blocks_copy(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_copy_button_label_shown_in_button(page, base_url):
     """
         The label attribute text is rendered inside the mj-copy-button.
@@ -784,7 +809,8 @@ def test_mj_copy_button_label_shown_in_button(page, base_url):
 # mj-share-button
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_share_button_force_menu_opens_fallback(page, base_url):
     """
         With force-menu set the fallback menu appears on click.
@@ -816,7 +842,8 @@ def test_mj_share_button_force_menu_opens_fallback(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_share_button_force_menu_aria_expanded(page, base_url):
     """
         The inner button's aria-expanded reflects the open state of the
@@ -849,7 +876,8 @@ def test_mj_share_button_force_menu_aria_expanded(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_share_button_force_menu_second_click_closes(page, base_url):
     """
         A second click on the share button closes the fallback menu.
@@ -876,7 +904,8 @@ def test_mj_share_button_force_menu_second_click_closes(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_share_button_disabled_blocks_menu(page, base_url):
     """
         A disabled mj-share-button does not open the fallback menu when
@@ -910,7 +939,8 @@ def test_mj_share_button_disabled_blocks_menu(page, base_url):
 # mj-favorite-button
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_favorite_button_click_fires_mj_change_and_mj_pressed(page, base_url):
     """
         Clicking an mj-favorite-button fires mj-change and mj-pressed.
@@ -936,7 +966,8 @@ def test_mj_favorite_button_click_fires_mj_change_and_mj_pressed(page, base_url)
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_favorite_button_pressed_attribute_reflects(page, base_url):
     """
         Clicking an mj-favorite-button sets the pressed attribute on the host.
@@ -963,7 +994,8 @@ def test_mj_favorite_button_pressed_attribute_reflects(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_favorite_button_aria_pressed_reflects_state(page, base_url):
     """
         The inner button's aria-pressed mirrors the optimistic pressed state.
@@ -992,7 +1024,8 @@ def test_mj_favorite_button_aria_pressed_reflects_state(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_favorite_button_initial_pressed_state(page, base_url):
     """
         An mj-favorite-button with pressed starts with aria-pressed="true"
@@ -1019,7 +1052,8 @@ def test_mj_favorite_button_initial_pressed_state(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_favorite_button_count_displayed(page, base_url):
     """
         When the count attribute is set the count element is visible and
@@ -1047,7 +1081,8 @@ def test_mj_favorite_button_count_displayed(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_favorite_button_rollback_fires_mj_rollback(page, base_url):
     """
         Calling rollback() on an mj-favorite-button after a click fires
@@ -1079,7 +1114,8 @@ def test_mj_favorite_button_rollback_fires_mj_rollback(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_favorite_button_disabled_blocks_interaction(page, base_url):
     """
         A disabled mj-favorite-button does not toggle when its inner button
@@ -1110,7 +1146,8 @@ def test_mj_favorite_button_disabled_blocks_interaction(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_favorite_button_pending_blocks_interaction(page, base_url):
     """
         An mj-favorite-button in the pending state does not toggle when
@@ -1139,3 +1176,8 @@ def test_mj_favorite_button_pending_blocks_interaction(page, base_url):
     assert "mj-pressed" not in events
 
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

@@ -1,5 +1,5 @@
 """
-    test_func_overlays.py
+    .. module:: testcomponents.tests.test_func_overlays
 
     Functional Playwright tests for the 'overlays' component group.
 
@@ -12,8 +12,10 @@
     the component JS source.
 """
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
+
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.factories import create_page
 
 
 _GROUP = "overlays"
@@ -98,7 +100,8 @@ def _get_events(frame):
 # mj-dialog
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dialog_opens_and_has_role(page, base_url):
     """
         mj-dialog: the component renders a dialog with role=dialog and
@@ -128,7 +131,8 @@ def test_dialog_opens_and_has_role(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dialog_close_button_dismisses(page, base_url):
     """
         mj-dialog: clicking the built-in close button removes the open
@@ -160,7 +164,8 @@ def test_dialog_close_button_dismisses(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dialog_escape_key_dismisses(page, base_url):
     """
         mj-dialog: dispatching Escape on the native dialog element closes
@@ -196,7 +201,8 @@ def test_dialog_escape_key_dismisses(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dialog_show_modal_api(page, base_url):
     """
         mj-dialog: calling showModal() on a closed dialog opens it and
@@ -226,7 +232,8 @@ def test_dialog_show_modal_api(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dialog_close_api(page, base_url):
     """
         mj-dialog: calling close() programmatically removes the open
@@ -257,7 +264,8 @@ def test_dialog_close_api(page, base_url):
 # mj-popover
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_popover_visible_when_open(page, base_url):
     """
         mj-popover: the popup panel is visible when the open attribute is
@@ -275,7 +283,8 @@ def test_popover_visible_when_open(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_popover_close_button_dismisses(page, base_url):
     """
         mj-popover: clicking the close button removes the open attribute
@@ -311,7 +320,8 @@ def test_popover_close_button_dismisses(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_popover_escape_key_closes(page, base_url):
     """
         mj-popover: dispatching Escape on the popup div closes the popover.
@@ -350,7 +360,8 @@ def test_popover_escape_key_closes(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_popover_show_and_close_api(page, base_url):
     """
         mj-popover: calling show() opens the popover; calling close()
@@ -392,7 +403,8 @@ def test_popover_show_and_close_api(page, base_url):
 # mj-drawer
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_drawer_panel_visible_when_open(page, base_url):
     """
         mj-drawer: the panel element is present and the host has the open
@@ -415,7 +427,8 @@ def test_drawer_panel_visible_when_open(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_drawer_has_dialog_role(page, base_url):
     """
         mj-drawer: in modal mode the panel has role=dialog and aria-modal=true.
@@ -441,7 +454,8 @@ def test_drawer_has_dialog_role(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_drawer_close_button_dismisses(page, base_url):
     """
         mj-drawer: clicking the built-in close button removes the open
@@ -473,7 +487,8 @@ def test_drawer_close_button_dismisses(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_drawer_escape_key_dismisses(page, base_url):
     """
         mj-drawer: dispatching Escape on the panel element closes the drawer.
@@ -506,7 +521,8 @@ def test_drawer_escape_key_dismisses(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_drawer_show_and_close_api(page, base_url):
     """
         mj-drawer: calling show() opens the drawer; close() dismisses it
@@ -568,7 +584,8 @@ def _lightbox_open_with_items(frame):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_lightbox_opens_with_open_attribute(page, base_url):
     """
         mj-lightbox: after assigning items and calling show(0) the
@@ -590,7 +607,8 @@ def test_lightbox_opens_with_open_attribute(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_lightbox_has_dialog_role(page, base_url):
     """
         mj-lightbox: the backdrop div carries role=dialog and aria-modal=true.
@@ -618,7 +636,8 @@ def test_lightbox_has_dialog_role(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_lightbox_close_button_dismisses(page, base_url):
     """
         mj-lightbox: clicking the close button removes the open attribute
@@ -651,7 +670,8 @@ def test_lightbox_close_button_dismisses(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_lightbox_escape_key_dismisses(page, base_url):
     """
         mj-lightbox: dispatching Escape on the backdrop closes the lightbox.
@@ -687,7 +707,8 @@ def test_lightbox_escape_key_dismisses(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_lightbox_navigate_next_fires_change(page, base_url):
     """
         mj-lightbox: clicking the next button navigates to item 1 and
@@ -720,7 +741,8 @@ def test_lightbox_navigate_next_fires_change(page, base_url):
 # mj-overlay
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_overlay_visible_attribute_activates_backdrop(page, base_url):
     """
         mj-overlay: the backdrop div is present when the visible attribute
@@ -743,7 +765,8 @@ def test_overlay_visible_attribute_activates_backdrop(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_overlay_show_and_hide_api(page, base_url):
     """
         mj-overlay: show() sets the visible attribute; hide() removes it,
@@ -778,7 +801,8 @@ def test_overlay_show_and_hide_api(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_overlay_click_fires_event(page, base_url):
     """
         mj-overlay: clicking the backdrop element fires the mj-overlay-click
@@ -812,7 +836,8 @@ def test_overlay_click_fires_event(page, base_url):
 # mj-toast-region
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_toast_region_add_shows_toast(page, base_url):
     """
         mj-toast-region: calling add() with a message shows a toast item
@@ -848,7 +873,8 @@ def test_toast_region_add_shows_toast(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_toast_region_dismiss_all(page, base_url):
     """
         mj-toast-region: dismissAll() removes all visible toasts.
@@ -883,7 +909,8 @@ def test_toast_region_dismiss_all(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_toast_region_severity_variants(page, base_url):
     """
         mj-toast-region: adding toasts of each severity sets the correct
@@ -927,7 +954,8 @@ def test_toast_region_severity_variants(page, base_url):
 # mj-notification-center
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_notification_center_add_item_shows_entry(page, base_url):
     """
         mj-notification-center: addItem() appends a notification to the
@@ -962,7 +990,8 @@ def test_notification_center_add_item_shows_entry(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_notification_center_unread_badge(page, base_url):
     """
         mj-notification-center: the unread badge count matches the number
@@ -1001,7 +1030,8 @@ def test_notification_center_unread_badge(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_notification_center_mark_all_read(page, base_url):
     """
         mj-notification-center: clicking Mark all read fires
@@ -1048,7 +1078,8 @@ def test_notification_center_mark_all_read(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_notification_center_clear_all(page, base_url):
     """
         mj-notification-center: clicking Clear all removes all items and
@@ -1099,7 +1130,8 @@ def test_notification_center_clear_all(page, base_url):
 # mj-context-menu
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_context_menu_opens_on_right_click(page, base_url):
     """
         mj-context-menu: right-clicking the slotted target opens the menu
@@ -1132,7 +1164,8 @@ def test_context_menu_opens_on_right_click(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_context_menu_escape_closes(page, base_url):
     """
         mj-context-menu: pressing Escape while the menu is open closes it
@@ -1176,7 +1209,8 @@ def test_context_menu_escape_closes(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_context_menu_item_select_fires_event(page, base_url):
     """
         mj-context-menu: clicking a menu item fires mj-context-menu-select
@@ -1217,7 +1251,8 @@ def test_context_menu_item_select_fires_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_context_menu_show_close_api(page, base_url):
     """
         mj-context-menu: show(x, y) opens the menu; close() dismisses it.
@@ -1250,7 +1285,8 @@ def test_context_menu_show_close_api(page, base_url):
 # mj-command-palette
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_command_palette_opens_with_open_attribute(page, base_url):
     """
         mj-command-palette: the backdrop has role=dialog and aria-modal=true
@@ -1282,7 +1318,8 @@ def test_command_palette_opens_with_open_attribute(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_command_palette_escape_closes(page, base_url):
     """
         mj-command-palette: dispatching Escape on the backdrop closes the
@@ -1322,7 +1359,8 @@ def test_command_palette_escape_closes(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_command_palette_search_filters_results(page, base_url):
     """
         mj-command-palette: dispatching input events on the search input
@@ -1360,7 +1398,8 @@ def test_command_palette_search_filters_results(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_command_palette_show_and_close_api(page, base_url):
     """
         mj-command-palette: calling close() removes the open attribute;
@@ -1389,7 +1428,8 @@ def test_command_palette_show_and_close_api(page, base_url):
 # mj-tour
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tour_starts_with_start_api(page, base_url):
     """
         mj-tour: calling start() sets the active attribute and fires
@@ -1429,7 +1469,8 @@ def test_tour_starts_with_start_api(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tour_card_has_dialog_role(page, base_url):
     """
         mj-tour: the coach-mark card element carries role=dialog and
@@ -1464,7 +1505,8 @@ def test_tour_card_has_dialog_role(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tour_next_advances_step(page, base_url):
     """
         mj-tour: clicking the Next button advances to step 1 and fires
@@ -1510,7 +1552,8 @@ def test_tour_next_advances_step(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tour_skip_button_dismisses(page, base_url):
     """
         mj-tour: clicking the skip button removes the active attribute and
@@ -1553,7 +1596,8 @@ def test_tour_skip_button_dismisses(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tour_escape_key_skips(page, base_url):
     """
         mj-tour: dispatching Escape on the card element skips the tour
@@ -1590,7 +1634,8 @@ def test_tour_escape_key_skips(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tour_complete_fires_event(page, base_url):
     """
         mj-tour: clicking Done on the last step fires mj-tour-complete and
@@ -1631,3 +1676,8 @@ def test_tour_complete_fires_event(page, base_url):
     assert "mj-tour-complete" in events
 
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

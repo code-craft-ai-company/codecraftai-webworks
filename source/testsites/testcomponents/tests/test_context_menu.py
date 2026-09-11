@@ -1,24 +1,28 @@
 """
-    test_context_menu.py
+    .. module:: testcomponents.tests.test_context_menu
+    :platform: Darwin, Linux, Unix, Windows
+    :synopsis: The popup context menu inherited from MjElement.
 
-    Playwright tests for the popup context menu provided by the MjElement
-    base class. Because the capability lives on the base class, every mj-*
-    component inherits it -- these tests exercise it on components drawn
-    from several different groups to confirm that.
+    Tests for the popup context menu provided by the MjElement base class.
+    Because the capability lives on the base class, every mj-* component
+    inherits it -- these tests exercise it on components drawn from several
+    different groups to confirm that.
 """
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
+
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.factories import create_page
 
 
 # Representative components from distinct groups; each extends MjElement,
 # so each must inherit the context-menu capability.
 _SAMPLE = [
-    pytest.param("buttons", "mj-button", id="buttons/mj-button"),
-    pytest.param("text", "mj-text-field", id="text/mj-text-field"),
-    pytest.param("layout", "mj-card", id="layout/mj-card"),
-    pytest.param("feedback", "mj-chip", id="feedback/mj-chip"),
-    pytest.param("feedback", "mj-alert", id="feedback/mj-alert"),
+    ("buttons", "mj-button"),
+    ("text", "mj-text-field"),
+    ("layout", "mj-card"),
+    ("feedback", "mj-chip"),
+    ("feedback", "mj-alert"),
 ]
 
 
@@ -74,7 +78,8 @@ def _configure_menu(frame, tag):
     return
 
 
-@pytest.mark.parametrize("group, tag", _SAMPLE)
+@testbase.attach.parameter(create_page, identifier="page")
+@testbase.parametrize("group,tag", _SAMPLE)
 def test_context_menu_opens_on_right_click(page, base_url, group, tag):
     """
         Right-clicking a component that has a context menu configured opens
@@ -98,7 +103,8 @@ def test_context_menu_opens_on_right_click(page, base_url, group, tag):
     return
 
 
-@pytest.mark.parametrize("group, tag", _SAMPLE)
+@testbase.attach.parameter(create_page, identifier="page")
+@testbase.parametrize("group,tag", _SAMPLE)
 def test_context_menu_selection_emits_event(page, base_url, group, tag):
     """
         Choosing an item emits the mj-context-select event with the item's
@@ -123,6 +129,7 @@ def test_context_menu_selection_emits_event(page, base_url, group, tag):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_context_menu_default_is_absent(page, base_url):
     """
         A component with no context menu configured does not open a popup
@@ -138,6 +145,7 @@ def test_context_menu_default_is_absent(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_context_menu_disabled_item_does_not_select(page, base_url):
     """
         A disabled menu item cannot be chosen and does not emit an event.
@@ -157,6 +165,7 @@ def test_context_menu_disabled_item_does_not_select(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_context_menu_escape_closes(page, base_url):
     """
         Pressing Escape dismisses the context menu without selecting.
@@ -177,6 +186,7 @@ def test_context_menu_escape_closes(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_context_menu_keyboard_navigation_selects(page, base_url):
     """
         The context menu is operable from the keyboard: arrow keys move the
@@ -200,6 +210,7 @@ def test_context_menu_keyboard_navigation_selects(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_context_menu_via_attribute(page, base_url):
     """
         The context menu can also be configured declaratively through the
@@ -230,3 +241,8 @@ def test_context_menu_via_attribute(page, base_url):
     assert events == ["inspect"]
 
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

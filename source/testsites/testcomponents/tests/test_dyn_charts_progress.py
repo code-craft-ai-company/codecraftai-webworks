@@ -1,5 +1,5 @@
 """
-    test_dyn_charts_progress.py
+    .. module:: testcomponents.tests.test_dyn_charts_progress
 
     Playwright tests covering dynamic updates and interactivity for the four
     progress/metrics chart components in the mj-* library:
@@ -31,7 +31,9 @@
     value through the setter so _draw() / _renderRows() is called.
 """
 
-import pytest
+import ccai.testbase as testbase
+
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +225,8 @@ _BURNDOWN_DATA_B = {
 }
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_burndown_chart_initial_render(page, base_url):
     """
         mj-burndown-chart renders SVG data points when data is assigned.
@@ -245,7 +248,8 @@ def test_burndown_chart_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_burndown_chart_dynamic_update(page, base_url):
     """
         Reassigning .data re-renders mj-burndown-chart with the new values.
@@ -280,7 +284,8 @@ def test_burndown_chart_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_burndown_chart_point_select_event(page, base_url):
     """
         Clicking a data-point circle fires the mj-point-select event.
@@ -345,7 +350,8 @@ _CFD_DATA_B = {
 }
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_cumulative_flow_initial_render(page, base_url):
     """
         mj-cumulative-flow renders polygon bands and legend buttons when data
@@ -368,7 +374,8 @@ def test_cumulative_flow_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_cumulative_flow_dynamic_update(page, base_url):
     """
         Reassigning .data re-renders mj-cumulative-flow with the new states.
@@ -405,7 +412,8 @@ def test_cumulative_flow_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_cumulative_flow_state_toggle_event(page, base_url):
     """
         Clicking a legend button fires the mj-state-toggle event.
@@ -458,7 +466,8 @@ _VELOCITY_DATA_B = {
 }
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_velocity_chart_initial_render(page, base_url):
     """
         mj-velocity-chart renders one bar-group per sprint when data is
@@ -480,7 +489,8 @@ def test_velocity_chart_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_velocity_chart_dynamic_update(page, base_url):
     """
         Reassigning .data re-renders mj-velocity-chart with the new sprint
@@ -516,7 +526,8 @@ def test_velocity_chart_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_velocity_chart_sprint_select_event(page, base_url):
     """
         Clicking a bar group fires the mj-sprint-select event.
@@ -602,7 +613,8 @@ _BSB_DATA_B = {
 }
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_build_status_board_initial_render(page, base_url):
     """
         mj-build-status-board renders one data-row per row in the supplied
@@ -625,7 +637,8 @@ def test_build_status_board_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_build_status_board_dynamic_update(page, base_url):
     """
         Reassigning .data re-renders mj-build-status-board with the new rows.
@@ -660,7 +673,8 @@ def test_build_status_board_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_build_status_board_sort_change_event(page, base_url):
     """
         Clicking the Status column header fires the mj-sort-change event.
@@ -689,7 +703,8 @@ def test_build_status_board_sort_change_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_build_status_board_row_select_event(page, base_url):
     """
         Clicking a row checkbox fires the mj-row-select event.
@@ -718,7 +733,8 @@ def test_build_status_board_row_select_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_build_status_board_sort_updates_row_order(page, base_url):
     """
         Clicking the Name column header sorts the rows alphabetically.
@@ -765,3 +781,8 @@ def test_build_status_board_sort_updates_row_order(page, base_url):
     assert names[0] <= names[1]
 
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

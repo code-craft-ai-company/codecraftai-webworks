@@ -1,5 +1,5 @@
 """
-    test_func_charts.py
+    .. module:: testcomponents.tests.test_func_charts
 
     Functional Playwright tests for the 'charts' component group.
 
@@ -30,8 +30,10 @@
     setter so the component's `_draw()` method is invoked properly.
 """
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
+
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +183,8 @@ def _wait_for_shadow(frame, tag: str, selector: str, timeout: int = 10000) -> No
 # mj-branch-graph
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_branch_graph_svg_rendered(page, base_url):
     """
         mj-branch-graph renders an SVG in its shadow DOM.
@@ -196,7 +199,8 @@ def test_branch_graph_svg_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_branch_graph_accessible_table_present(page, base_url):
     """
         mj-branch-graph always renders an accessible data table.
@@ -214,7 +218,8 @@ def test_branch_graph_accessible_table_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_branch_graph_commit_nodes_present(page, base_url):
     """
         mj-branch-graph renders one commit-node circle per commit.
@@ -235,7 +240,8 @@ def test_branch_graph_commit_nodes_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_branch_graph_merge_edge_rendered(page, base_url):
     """
         mj-branch-graph renders Bezier merge-edge paths between lanes.
@@ -256,7 +262,8 @@ def test_branch_graph_merge_edge_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_branch_graph_milestone_marker_rendered(page, base_url):
     """
         mj-branch-graph renders a milestone marker line for each marker entry.
@@ -274,7 +281,8 @@ def test_branch_graph_milestone_marker_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_branch_graph_node_select_event(page, base_url):
     """
         Clicking a commit node fires the mj-node-select event.
@@ -309,7 +317,8 @@ def test_branch_graph_node_select_event(page, base_url):
 # mj-pipeline-chart
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_pipeline_chart_svg_rendered(page, base_url):
     """
         mj-pipeline-chart renders an SVG in its shadow DOM.
@@ -324,7 +333,8 @@ def test_pipeline_chart_svg_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_pipeline_chart_accessible_list_present(page, base_url):
     """
         mj-pipeline-chart always renders an accessible ordered list.
@@ -339,7 +349,8 @@ def test_pipeline_chart_accessible_list_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_pipeline_chart_stage_nodes_present(page, base_url):
     """
         mj-pipeline-chart renders one stage-node group per stage.
@@ -360,7 +371,8 @@ def test_pipeline_chart_stage_nodes_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_pipeline_chart_gate_node_rendered(page, base_url):
     """
         mj-pipeline-chart renders a gate-node diamond for the example gate.
@@ -378,7 +390,8 @@ def test_pipeline_chart_gate_node_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_pipeline_chart_stage_select_event(page, base_url):
     """
         Clicking a stage node fires the mj-stage-select event.
@@ -413,7 +426,8 @@ def test_pipeline_chart_stage_select_event(page, base_url):
 # mj-gantt-chart
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_gantt_chart_svg_rendered(page, base_url):
     """
         mj-gantt-chart renders an SVG in its shadow DOM.
@@ -428,7 +442,8 @@ def test_gantt_chart_svg_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_gantt_chart_accessible_table_present(page, base_url):
     """
         mj-gantt-chart always includes a data table in the shadow DOM.
@@ -443,7 +458,8 @@ def test_gantt_chart_accessible_table_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_gantt_chart_task_bars_present(page, base_url):
     """
         mj-gantt-chart renders task bars for all 6 tasks in the example.
@@ -462,7 +478,8 @@ def test_gantt_chart_task_bars_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_gantt_chart_dependency_arrows_present(page, base_url):
     """
         mj-gantt-chart renders dependency arrows between tasks.
@@ -480,7 +497,8 @@ def test_gantt_chart_dependency_arrows_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_gantt_chart_task_select_event(page, base_url):
     """
         Clicking a task bar fires the mj-task-select event.
@@ -515,7 +533,8 @@ def test_gantt_chart_task_select_event(page, base_url):
 # mj-roadmap-chart
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_roadmap_chart_svg_rendered(page, base_url):
     """
         mj-roadmap-chart renders an SVG in its shadow DOM.
@@ -530,7 +549,8 @@ def test_roadmap_chart_svg_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_roadmap_chart_accessible_table_present(page, base_url):
     """
         mj-roadmap-chart includes a data table in the shadow DOM.
@@ -545,7 +565,8 @@ def test_roadmap_chart_accessible_table_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_roadmap_chart_initiative_bars_present(page, base_url):
     """
         mj-roadmap-chart renders initiative bars for all 6 initiatives.
@@ -564,7 +585,8 @@ def test_roadmap_chart_initiative_bars_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_roadmap_chart_column_headers_present(page, base_url):
     """
         mj-roadmap-chart renders column headers for the bucket columns.
@@ -585,7 +607,8 @@ def test_roadmap_chart_column_headers_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_roadmap_chart_initiative_select_event(page, base_url):
     """
         Clicking an initiative bar fires the mj-initiative-select event.
@@ -620,7 +643,8 @@ def test_roadmap_chart_initiative_select_event(page, base_url):
 # mj-milestone-timeline
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_milestone_timeline_svg_rendered(page, base_url):
     """
         mj-milestone-timeline renders an SVG in its shadow DOM.
@@ -635,7 +659,8 @@ def test_milestone_timeline_svg_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_milestone_timeline_accessible_list_present(page, base_url):
     """
         mj-milestone-timeline includes an accessible ordered list.
@@ -650,7 +675,8 @@ def test_milestone_timeline_accessible_list_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_milestone_timeline_time_axis_rendered(page, base_url):
     """
         mj-milestone-timeline renders a horizontal time axis line.
@@ -668,7 +694,8 @@ def test_milestone_timeline_time_axis_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_milestone_timeline_markers_present(page, base_url):
     """
         mj-milestone-timeline renders one marker group per marker entry.
@@ -689,7 +716,8 @@ def test_milestone_timeline_markers_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_milestone_timeline_marker_select_event(page, base_url):
     """
         Clicking a marker group fires the mj-marker-select event.
@@ -724,7 +752,8 @@ def test_milestone_timeline_marker_select_event(page, base_url):
 # mj-burndown-chart
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_burndown_chart_svg_rendered(page, base_url):
     """
         mj-burndown-chart renders an SVG in its shadow DOM.
@@ -739,7 +768,8 @@ def test_burndown_chart_svg_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_burndown_chart_accessible_table_present(page, base_url):
     """
         mj-burndown-chart always includes a data table in the shadow DOM.
@@ -754,7 +784,8 @@ def test_burndown_chart_accessible_table_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_burndown_chart_actual_line_present(page, base_url):
     """
         mj-burndown-chart renders an actual-line polyline for past data points.
@@ -772,7 +803,8 @@ def test_burndown_chart_actual_line_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_burndown_chart_ideal_line_present(page, base_url):
     """
         mj-burndown-chart renders a dashed ideal-line by default.
@@ -790,7 +822,8 @@ def test_burndown_chart_ideal_line_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_burndown_chart_data_points_rendered(page, base_url):
     """
         mj-burndown-chart renders clickable data-point circles for past values.
@@ -811,7 +844,8 @@ def test_burndown_chart_data_points_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_burndown_chart_point_select_event(page, base_url):
     """
         Clicking a data point circle fires the mj-point-select event.
@@ -846,7 +880,8 @@ def test_burndown_chart_point_select_event(page, base_url):
 # mj-cumulative-flow
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_cumulative_flow_svg_rendered(page, base_url):
     """
         mj-cumulative-flow renders an SVG in its shadow DOM.
@@ -861,7 +896,8 @@ def test_cumulative_flow_svg_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_cumulative_flow_accessible_table_present(page, base_url):
     """
         mj-cumulative-flow includes a data table in the shadow DOM.
@@ -876,7 +912,8 @@ def test_cumulative_flow_accessible_table_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_cumulative_flow_state_bands_present(page, base_url):
     """
         mj-cumulative-flow renders one polygon state-band per workflow state.
@@ -897,7 +934,8 @@ def test_cumulative_flow_state_bands_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_cumulative_flow_legend_buttons_present(page, base_url):
     """
         mj-cumulative-flow renders a legend button for each workflow state.
@@ -916,7 +954,8 @@ def test_cumulative_flow_legend_buttons_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_cumulative_flow_state_toggle_event(page, base_url):
     """
         Clicking a legend button fires the mj-state-toggle event.
@@ -949,7 +988,8 @@ def test_cumulative_flow_state_toggle_event(page, base_url):
 # mj-velocity-chart
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_velocity_chart_svg_rendered(page, base_url):
     """
         mj-velocity-chart renders an SVG in its shadow DOM.
@@ -964,7 +1004,8 @@ def test_velocity_chart_svg_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_velocity_chart_accessible_table_present(page, base_url):
     """
         mj-velocity-chart includes a data table in the shadow DOM.
@@ -979,7 +1020,8 @@ def test_velocity_chart_accessible_table_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_velocity_chart_bar_groups_present(page, base_url):
     """
         mj-velocity-chart renders one bar-group per sprint (7 in example).
@@ -998,7 +1040,8 @@ def test_velocity_chart_bar_groups_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_velocity_chart_rolling_average_line_present(page, base_url):
     """
         mj-velocity-chart renders the rolling-average polyline by default.
@@ -1016,7 +1059,8 @@ def test_velocity_chart_rolling_average_line_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_velocity_chart_sprint_select_event(page, base_url):
     """
         Clicking a bar group fires the mj-sprint-select event.
@@ -1051,7 +1095,8 @@ def test_velocity_chart_sprint_select_event(page, base_url):
 # mj-dependency-graph
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dependency_graph_svg_rendered(page, base_url):
     """
         mj-dependency-graph renders an SVG in its shadow DOM.
@@ -1066,7 +1111,8 @@ def test_dependency_graph_svg_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dependency_graph_accessible_list_present(page, base_url):
     """
         mj-dependency-graph includes an accessible definition list.
@@ -1081,7 +1127,8 @@ def test_dependency_graph_accessible_list_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dependency_graph_nodes_present(page, base_url):
     """
         mj-dependency-graph renders one node element per graph node.
@@ -1112,7 +1159,8 @@ def test_dependency_graph_nodes_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dependency_graph_critical_path_highlighted(page, base_url):
     """
         mj-dependency-graph highlights critical-path nodes with amber border.
@@ -1133,7 +1181,8 @@ def test_dependency_graph_critical_path_highlighted(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dependency_graph_node_select_event(page, base_url):
     """
         Clicking a node fires the mj-node-select event.
@@ -1175,7 +1224,8 @@ def test_dependency_graph_node_select_event(page, base_url):
 # mj-workflow-diagram
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_workflow_diagram_svg_rendered(page, base_url):
     """
         mj-workflow-diagram renders an SVG in its shadow DOM.
@@ -1190,7 +1240,8 @@ def test_workflow_diagram_svg_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_workflow_diagram_accessible_list_present(page, base_url):
     """
         mj-workflow-diagram includes an accessible definition list.
@@ -1205,7 +1256,8 @@ def test_workflow_diagram_accessible_list_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_workflow_diagram_state_nodes_present(page, base_url):
     """
         mj-workflow-diagram renders one node group per state.
@@ -1236,7 +1288,8 @@ def test_workflow_diagram_state_nodes_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_workflow_diagram_current_state_pulsing_ring(page, base_url):
     """
         The state matching current-state='review' gets a pulsing ring element.
@@ -1257,7 +1310,8 @@ def test_workflow_diagram_current_state_pulsing_ring(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_workflow_diagram_node_select_event(page, base_url):
     """
         Clicking a state node fires the mj-node-select event.
@@ -1299,7 +1353,8 @@ def test_workflow_diagram_node_select_event(page, base_url):
 # mj-release-calendar
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_release_calendar_grid_rendered(page, base_url):
     """
         mj-release-calendar renders a calendar grid of day cells.
@@ -1321,7 +1376,8 @@ def test_release_calendar_grid_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_release_calendar_accessible_list_present(page, base_url):
     """
         mj-release-calendar includes an accessible ordered list of events.
@@ -1336,7 +1392,8 @@ def test_release_calendar_accessible_list_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_release_calendar_event_chips_present(page, base_url):
     """
         mj-release-calendar renders event chips for events in the visible month.
@@ -1371,7 +1428,8 @@ def test_release_calendar_event_chips_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_release_calendar_event_select_event(page, base_url):
     """
         Clicking an event chip fires the mj-event-select event.
@@ -1417,7 +1475,8 @@ def test_release_calendar_event_select_event(page, base_url):
 # mj-env-promotion-chart
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_env_promotion_chart_env_columns_rendered(page, base_url):
     """
         mj-env-promotion-chart renders one environment column per environment.
@@ -1438,7 +1497,8 @@ def test_env_promotion_chart_env_columns_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_env_promotion_chart_accessible_list_present(page, base_url):
     """
         mj-env-promotion-chart includes an accessible ordered list.
@@ -1453,7 +1513,8 @@ def test_env_promotion_chart_accessible_list_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_env_promotion_chart_pending_gate_approve_button(page, base_url):
     """
         mj-env-promotion-chart renders Approve and Reject buttons for pending gates.
@@ -1474,7 +1535,8 @@ def test_env_promotion_chart_pending_gate_approve_button(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_env_promotion_chart_environment_select_event(page, base_url):
     """
         Clicking an environment column fires the mj-environment-select event.
@@ -1503,7 +1565,8 @@ def test_env_promotion_chart_environment_select_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_env_promotion_chart_gate_action_event(page, base_url):
     """
         Clicking the Approve button fires the mj-gate-action event.
@@ -1536,7 +1599,8 @@ def test_env_promotion_chart_gate_action_event(page, base_url):
 # mj-build-status-board
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_build_status_board_table_rendered(page, base_url):
     """
         mj-build-status-board renders a table with data rows.
@@ -1555,7 +1619,8 @@ def test_build_status_board_table_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_build_status_board_status_badges_present(page, base_url):
     """
         mj-build-status-board renders a status badge in each data row.
@@ -1574,7 +1639,8 @@ def test_build_status_board_status_badges_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_build_status_board_filter_bar_present(page, base_url):
     """
         mj-build-status-board renders a filter bar with a status select.
@@ -1589,7 +1655,8 @@ def test_build_status_board_filter_bar_present(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_build_status_board_sort_on_header_click(page, base_url):
     """
         Clicking the 'Status' column header fires the mj-sort-change event.
@@ -1618,7 +1685,8 @@ def test_build_status_board_sort_on_header_click(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_build_status_board_row_select_event(page, base_url):
     """
         Checking a row checkbox fires the mj-row-select event.
@@ -1647,7 +1715,8 @@ def test_build_status_board_row_select_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_build_status_board_pagination_controls_present(page, base_url):
     """
         mj-build-status-board renders pagination controls.
@@ -1660,3 +1729,8 @@ def test_build_status_board_pagination_controls_present(page, base_url):
     assert _shadow_exists(frame, "mj-build-status-board", "[part=pagination]") is True
 
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

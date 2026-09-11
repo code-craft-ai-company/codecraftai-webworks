@@ -1,8 +1,10 @@
 """
-    test_playground.py
+    .. module:: testcomponents.tests.test_playground
+    :platform: Darwin, Linux, Unix, Windows
+    :synopsis: Every component works through its live playground.
 
-    Parametrized Playwright tests that exercise every component through
-    its live playground. For all 139 components these verify that:
+    Tests that exercise every component through its live playground. For all
+    139 components these verify that:
 
       - the mj-* library loads inside the isolated preview iframe and
         registers the component's custom element,
@@ -16,17 +18,20 @@
     and example <script> blocks execute to populate data-driven widgets.
 
     This is the broad functional sweep that touches every component; the
-    per-group test_func_*.py modules add deeper interaction tests.
+    per-group test_func_*.py modules add deeper interaction tests. The
+    cases are defined as individual module-level tests named
+    ``<check>__<group>_<tag>`` so a broken component is reported by name.
 """
 
-import pytest
-from playwright.sync_api import expect
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.catalogs import all_components
+from testcomponents.harness.catalogs import identifier_for
+from testcomponents.harness.generation import define_page_tests
 
-from conftest import all_components
 
-
-_PARAMS = [
-    pytest.param(group, tag, title, id=f"{group}/{tag}")
+# One case per component: (identifier, (group, tag, title)).
+_CASES = [
+    (identifier_for(group, tag), (group, tag, title))
     for group, tag, title in all_components()
 ]
 
@@ -68,8 +73,7 @@ def _open_component(page, base_url, group, tag):
     return frame
 
 
-@pytest.mark.parametrize("group, tag, title", _PARAMS)
-def test_component_is_registered(page, base_url, group, tag, title):
+def _check_component_is_registered(page, base_url, group, tag, title):
     """
         The component's custom element is registered by the library.
 
@@ -86,8 +90,7 @@ def test_component_is_registered(page, base_url, group, tag, title):
     return
 
 
-@pytest.mark.parametrize("group, tag, title", _PARAMS)
-def test_playground_renders_component(page, base_url, group, tag, title):
+def _check_playground_renders_component(page, base_url, group, tag, title):
     """
         The playground preview renders the component and it upgrades to a
         live custom element with a populated shadow root.
@@ -117,8 +120,7 @@ def test_playground_renders_component(page, base_url, group, tag, title):
     return
 
 
-@pytest.mark.parametrize("group, tag, title", _PARAMS)
-def test_playground_run_and_reset(page, base_url, group, tag, title):
+def _check_playground_run_and_reset(page, base_url, group, tag, title):
     """
         Editing the playground source and pressing Run re-renders the
         preview; pressing Reset restores the original example.
@@ -152,3 +154,16 @@ def test_playground_run_and_reset(page, base_url, group, tag, title):
     )
 
     return
+
+
+define_page_tests(globals(), "test_component_is_registered",
+                  _check_component_is_registered, _CASES)
+define_page_tests(globals(), "test_playground_renders_component",
+                  _check_playground_renders_component, _CASES)
+define_page_tests(globals(), "test_playground_run_and_reset",
+                  _check_playground_run_and_reset, _CASES)
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

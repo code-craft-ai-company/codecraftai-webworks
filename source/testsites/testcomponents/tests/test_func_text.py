@@ -1,5 +1,5 @@
 """
-    test_func_text.py
+    .. module:: testcomponents.tests.test_func_text
 
     Functional Playwright tests for the 'text' component group.
 
@@ -12,8 +12,10 @@
       mj-character-counter.
 """
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
+
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +111,8 @@ def _get_events(frame) -> list:
 # mj-text-field
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_text_field_renders(base_url, page):
     """
         Verify mj-text-field renders with a label and placeholder.
@@ -126,7 +129,8 @@ def test_text_field_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_text_field_typing_emits_mj_input(base_url, page):
     """
         Typing into mj-text-field fires mj-input events with the typed value.
@@ -152,7 +156,8 @@ def test_text_field_typing_emits_mj_input(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_text_field_value_property(base_url, page):
     """
         The value property on mj-text-field reflects the current input value.
@@ -172,7 +177,8 @@ def test_text_field_value_property(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_text_field_clearable_shows_clear_button(base_url, page):
     """
         When clearable and a value is present, the clear button is visible.
@@ -199,7 +205,8 @@ def test_text_field_clearable_shows_clear_button(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_text_field_maxlength_shows_counter(base_url, page):
     """
         Setting maxlength on mj-text-field enables the character counter.
@@ -223,7 +230,8 @@ def test_text_field_maxlength_shows_counter(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_text_field_disabled_prevents_input(base_url, page):
     """
         A disabled mj-text-field has a disabled inner input.
@@ -251,7 +259,8 @@ def test_text_field_disabled_prevents_input(base_url, page):
 # mj-search-input
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_search_input_renders(base_url, page):
     """
         Verify mj-search-input renders in the preview.
@@ -268,7 +277,8 @@ def test_search_input_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_search_input_emits_mj_input(base_url, page):
     """
         Typing into mj-search-input fires mj-input events.
@@ -293,7 +303,8 @@ def test_search_input_emits_mj_input(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_search_input_emits_mj_search_on_enter(base_url, page):
     """
         Pressing Enter on mj-search-input fires an mj-search event.
@@ -322,7 +333,8 @@ def test_search_input_emits_mj_search_on_enter(base_url, page):
 # mj-password-field
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_password_field_renders(base_url, page):
     """
         Verify mj-password-field renders with a password input type.
@@ -339,7 +351,8 @@ def test_password_field_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_password_field_toggle_visibility(base_url, page):
     """
         Clicking the toggle button on mj-password-field changes input type to text
@@ -371,7 +384,8 @@ def test_password_field_toggle_visibility(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_password_field_emits_mj_input(base_url, page):
     """
         Typing into mj-password-field fires mj-input with the current value.
@@ -399,7 +413,8 @@ def test_password_field_emits_mj_input(base_url, page):
 # mj-typed-field
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_typed_field_email_type(base_url, page):
     """
         mj-typed-field with type=email renders an email input.
@@ -423,7 +438,8 @@ def test_typed_field_email_type(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_typed_field_emits_mj_input(base_url, page):
     """
         Typing into mj-typed-field fires mj-input events.
@@ -458,7 +474,8 @@ def test_typed_field_emits_mj_input(base_url, page):
 # mj-number-field
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_number_field_renders_with_spinners(base_url, page):
     """
         mj-number-field renders increment and decrement buttons by default.
@@ -484,7 +501,8 @@ def test_number_field_renders_with_spinners(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_number_field_increment_emits_mj_increment(base_url, page):
     """
         Clicking the increment button fires an mj-increment event with a numeric value.
@@ -515,7 +533,8 @@ def test_number_field_increment_emits_mj_increment(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_number_field_value_as_number(base_url, page):
     """
         After incrementing, valueAsNumber on mj-number-field returns a numeric value.
@@ -547,7 +566,8 @@ def test_number_field_value_as_number(base_url, page):
 # mj-textarea
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_textarea_renders(base_url, page):
     """
         Verify mj-textarea renders a visible textarea element.
@@ -564,7 +584,8 @@ def test_textarea_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_textarea_emits_mj_input(base_url, page):
     """
         Typing into mj-textarea fires mj-input with value and charCount.
@@ -590,7 +611,8 @@ def test_textarea_emits_mj_input(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_textarea_count_words(base_url, page):
     """
         When count-words is set, mj-input events include a wordCount.
@@ -626,7 +648,8 @@ def test_textarea_count_words(base_url, page):
 # mj-rich-text-editor
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_rich_text_editor_renders(base_url, page):
     """
         Verify mj-rich-text-editor renders with a toolbar.
@@ -643,7 +666,8 @@ def test_rich_text_editor_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_rich_text_editor_toolbar_buttons_present(base_url, page):
     """
         mj-rich-text-editor has toolbar buttons (tb-btn) rendered.
@@ -661,7 +685,8 @@ def test_rich_text_editor_toolbar_buttons_present(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_rich_text_editor_typing_emits_mj_input(base_url, page):
     """
         Typing in the contenteditable area of mj-rich-text-editor fires mj-input.
@@ -696,7 +721,8 @@ def test_rich_text_editor_typing_emits_mj_input(base_url, page):
 # mj-markdown-editor
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_markdown_editor_renders(base_url, page):
     """
         Verify mj-markdown-editor renders in the preview.
@@ -713,7 +739,8 @@ def test_markdown_editor_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_markdown_editor_emits_mj_input(base_url, page):
     """
         Typing in mj-markdown-editor fires mj-input with the markdown value.
@@ -737,7 +764,8 @@ def test_markdown_editor_emits_mj_input(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_markdown_editor_view_change(base_url, page):
     """
         Clicking the Preview mode button on mj-markdown-editor emits mj-view-change.
@@ -770,7 +798,8 @@ def test_markdown_editor_view_change(base_url, page):
 # mj-code-editor
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_code_editor_renders(base_url, page):
     """
         Verify mj-code-editor renders with a textarea.
@@ -787,7 +816,8 @@ def test_code_editor_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_code_editor_emits_mj_input(base_url, page):
     """
         Typing in mj-code-editor fires mj-input events with value and lineCount.
@@ -813,7 +843,8 @@ def test_code_editor_emits_mj_input(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_code_editor_value_property(base_url, page):
     """
         The value property on mj-code-editor reflects the current content.
@@ -837,7 +868,8 @@ def test_code_editor_value_property(base_url, page):
 # mj-inline-edit
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_inline_edit_renders_display_value(base_url, page):
     """
         mj-inline-edit shows the value set via the JS property in display mode.
@@ -868,7 +900,8 @@ def test_inline_edit_renders_display_value(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_inline_edit_emits_mj_edit_start(base_url, page):
     """
         Clicking the edit button fires mj-edit-start.
@@ -906,7 +939,8 @@ def test_inline_edit_emits_mj_edit_start(base_url, page):
 # mj-masked-input
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_masked_input_renders(base_url, page):
     """
         Verify mj-masked-input renders with a mask applied.
@@ -923,7 +957,8 @@ def test_masked_input_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_masked_input_emits_mj_input_with_raw_value(base_url, page):
     """
         Typing digits into a date mask fires mj-input with rawValue.
@@ -964,7 +999,8 @@ def test_masked_input_emits_mj_input_with_raw_value(base_url, page):
 # mj-token-input
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_token_input_renders(base_url, page):
     """
         Verify mj-token-input renders in the preview.
@@ -981,7 +1017,8 @@ def test_token_input_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_token_input_add_token_on_enter(base_url, page):
     """
         Typing a value and pressing Enter adds a token and emits mj-change.
@@ -1021,7 +1058,8 @@ def test_token_input_add_token_on_enter(base_url, page):
 # mj-otp-input
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_otp_input_renders_segments(base_url, page):
     """
         mj-otp-input renders the correct number of segment inputs.
@@ -1045,7 +1083,8 @@ def test_otp_input_renders_segments(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_otp_input_emits_mj_complete_on_fill(base_url, page):
     """
         Filling all OTP segments fires the mj-complete event.
@@ -1085,7 +1124,8 @@ def test_otp_input_emits_mj_complete_on_fill(base_url, page):
 # mj-slider
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_slider_renders(base_url, page):
     """
         Verify mj-slider renders with a thumb element.
@@ -1102,7 +1142,8 @@ def test_slider_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_slider_keyboard_emits_mj_change(base_url, page):
     """
         Arrow-key on mj-slider thumb fires mj-change event.
@@ -1134,7 +1175,8 @@ def test_slider_keyboard_emits_mj_change(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_slider_value_attribute(base_url, page):
     """
         mj-slider reflects the value attribute on the thumb aria-valuenow.
@@ -1162,7 +1204,8 @@ def test_slider_value_attribute(base_url, page):
 # mj-rating
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_rating_renders_stars(base_url, page):
     """
         mj-rating renders the correct number of star items.
@@ -1186,7 +1229,8 @@ def test_rating_renders_stars(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_rating_click_emits_mj_change(base_url, page):
     """
         Clicking a star in mj-rating fires mj-change with the new value.
@@ -1222,7 +1266,8 @@ def test_rating_click_emits_mj_change(base_url, page):
 # mj-captcha
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_captcha_renders(base_url, page):
     """
         Verify mj-captcha renders its container in the preview.
@@ -1239,7 +1284,8 @@ def test_captcha_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_captcha_fallback_slot(base_url, page):
     """
         The fallback slot content is accessible when no provider is configured.
@@ -1271,7 +1317,8 @@ def test_captcha_fallback_slot(base_url, page):
 # mj-form
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_form_renders(base_url, page):
     """
         Verify mj-form renders with child controls.
@@ -1288,7 +1335,8 @@ def test_form_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_form_submit_emits_mj_submit(base_url, page):
     """
         Submitting an mj-form fires mj-submit with valid=True when fields are filled.
@@ -1332,7 +1380,8 @@ def test_form_submit_emits_mj_submit(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_form_invalid_required_field_emits_mj_invalid(base_url, page):
     """
         Submitting mj-form with an empty required field (after triggering validation) fires mj-invalid.
@@ -1380,7 +1429,8 @@ def test_form_invalid_required_field_emits_mj_invalid(base_url, page):
 # mj-fieldset
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_fieldset_renders_legend(base_url, page):
     """
         mj-fieldset renders the legend text from the legend attribute.
@@ -1404,7 +1454,8 @@ def test_fieldset_renders_legend(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_fieldset_collapsible_toggle_emits_mj_toggle(base_url, page):
     """
         Clicking the legend button on a collapsible mj-fieldset emits mj-toggle.
@@ -1434,7 +1485,8 @@ def test_fieldset_collapsible_toggle_emits_mj_toggle(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_fieldset_disabled_propagates_to_children(base_url, page):
     """
         A disabled mj-fieldset has the disabled attribute on its inner fieldset element.
@@ -1462,7 +1514,8 @@ def test_fieldset_disabled_propagates_to_children(base_url, page):
 # mj-label
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_label_renders(base_url, page):
     """
         Verify mj-label renders visible label text.
@@ -1479,7 +1532,8 @@ def test_label_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_label_required_indicator(base_url, page):
     """
         mj-label with required attribute shows the required indicator.
@@ -1503,7 +1557,8 @@ def test_label_required_indicator(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_label_emits_mj_click(base_url, page):
     """
         Clicking mj-label emits an mj-click event.
@@ -1537,7 +1592,8 @@ def test_label_emits_mj_click(base_url, page):
 # mj-help-text
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_help_text_renders(base_url, page):
     """
         Verify mj-help-text renders its content.
@@ -1554,7 +1610,8 @@ def test_help_text_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_help_text_links_aria_describedby(base_url, page):
     """
         mj-help-text with a for attribute wires aria-describedby on the target.
@@ -1589,7 +1646,8 @@ def test_help_text_links_aria_describedby(base_url, page):
 # mj-error-message
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_error_message_hidden_by_default(base_url, page):
     """
         mj-error-message without visible attribute is not rendered in DOM.
@@ -1613,7 +1671,8 @@ def test_error_message_hidden_by_default(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_error_message_shows_and_emits_mj_show(base_url, page):
     """
         Adding visible attribute to mj-error-message makes it visible and emits mj-show.
@@ -1653,7 +1712,8 @@ def test_error_message_shows_and_emits_mj_show(base_url, page):
 # mj-validation-summary
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_validation_summary_renders_hidden_by_default(base_url, page):
     """
         mj-validation-summary is hidden until a form fires mj-invalid.
@@ -1677,7 +1737,8 @@ def test_validation_summary_renders_hidden_by_default(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_validation_summary_shows_on_mj_invalid(base_url, page):
     """
         mj-validation-summary becomes visible when set to visible with errors.
@@ -1718,7 +1779,8 @@ def test_validation_summary_shows_on_mj_invalid(base_url, page):
 # mj-character-counter
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_character_counter_renders(base_url, page):
     """
         Verify mj-character-counter renders in the preview.
@@ -1735,7 +1797,8 @@ def test_character_counter_renders(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_character_counter_updates_on_input(base_url, page):
     """
         mj-character-counter updates its count display as the user types.
@@ -1774,7 +1837,8 @@ def test_character_counter_updates_on_input(base_url, page):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_character_counter_emits_mj_count_change(base_url, page):
     """
         mj-character-counter emits mj-count-change when the linked input changes.
@@ -1814,3 +1878,8 @@ def test_character_counter_emits_mj_count_change(base_url, page):
     count_events = [e for e in events if e["name"] == "mj-count-change"]
     assert len(count_events) > 0
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

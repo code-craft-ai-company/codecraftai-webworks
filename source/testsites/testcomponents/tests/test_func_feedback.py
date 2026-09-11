@@ -1,5 +1,5 @@
 """
-    test_func_feedback.py
+    .. module:: testcomponents.tests.test_func_feedback
 
     Functional Playwright tests for the 'feedback' component group.
 
@@ -10,8 +10,10 @@
     derived from the component's JavaScript implementation.
 """
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
+
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +123,8 @@ def _focus_shadow(frame, selector: str, shadow_selector: str) -> None:
 # mj-alert tests
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_alert_default_role_is_status(page, base_url):
     """
         An mj-alert with severity='info' renders a container whose ARIA
@@ -144,7 +147,8 @@ def test_mj_alert_default_role_is_status(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_alert_error_severity_role_is_alert(page, base_url):
     """
         An mj-alert with severity='error' renders a container whose ARIA
@@ -167,7 +171,8 @@ def test_mj_alert_error_severity_role_is_alert(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_alert_dismissible_fires_event_and_hides(page, base_url):
     """
         Clicking the dismiss button on a dismissible mj-alert fires the
@@ -197,7 +202,8 @@ def test_mj_alert_dismissible_fires_event_and_hides(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_alert_dismiss_event_is_cancelable(page, base_url):
     """
         When a listener calls preventDefault() on mj-alert-dismiss the
@@ -227,7 +233,8 @@ def test_mj_alert_dismiss_event_is_cancelable(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_alert_open_false_hides_element(page, base_url):
     """
         Setting open='false' hides the mj-alert via CSS (:host([open=false])).
@@ -244,7 +251,8 @@ def test_mj_alert_open_false_hides_element(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_alert_heading_attribute_renders(page, base_url):
     """
         The heading attribute text appears inside the shadow DOM title slot.
@@ -270,7 +278,8 @@ def test_mj_alert_heading_attribute_renders(page, base_url):
 # mj-toast tests
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_toast_open_attribute_makes_visible(page, base_url):
     """
         An mj-toast with the open attribute present is visible; without it
@@ -288,7 +297,8 @@ def test_mj_toast_open_attribute_makes_visible(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_toast_dismiss_button_fires_event(page, base_url):
     """
         Clicking the dismiss button fires mj-toast-dismiss with reason='user'.
@@ -317,7 +327,8 @@ def test_mj_toast_dismiss_button_fires_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_toast_dismiss_event_is_cancelable(page, base_url):
     """
         When a listener calls preventDefault() on mj-toast-dismiss the
@@ -347,7 +358,8 @@ def test_mj_toast_dismiss_event_is_cancelable(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_toast_escape_key_dismisses(page, base_url):
     """
         Pressing Escape while focus is within an open mj-toast fires
@@ -380,7 +392,8 @@ def test_mj_toast_escape_key_dismisses(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_toast_auto_dismiss_fires_event(page, base_url):
     """
         A toast with auto-dismiss set fires mj-toast-dismiss with
@@ -418,7 +431,8 @@ def test_mj_toast_auto_dismiss_fires_event(page, base_url):
 # mj-progress tests
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_progress_aria_valuenow_reflects_value(page, base_url):
     """
         The progressbar's aria-valuenow attribute matches the value
@@ -441,7 +455,8 @@ def test_mj_progress_aria_valuenow_reflects_value(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_progress_indeterminate_removes_aria_valuenow(page, base_url):
     """
         When mj-progress has the indeterminate attribute, the progressbar
@@ -464,7 +479,8 @@ def test_mj_progress_indeterminate_removes_aria_valuenow(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_progress_fill_width_reflects_value(page, base_url):
     """
         The inner .fill element's inline width style corresponds to the
@@ -487,7 +503,8 @@ def test_mj_progress_fill_width_reflects_value(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_progress_change_event_fires_on_value_update(page, base_url):
     """
         Changing the value attribute dispatches mj-progress-change with
@@ -521,7 +538,8 @@ def test_mj_progress_change_event_fires_on_value_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_progress_complete_event_fires_at_max(page, base_url):
     """
         Setting value equal to max dispatches the mj-progress-complete
@@ -553,7 +571,8 @@ def test_mj_progress_complete_event_fires_at_max(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_progress_ring_variant_renders_svg(page, base_url):
     """
         The ring variant renders an SVG with the progressbar role.
@@ -579,7 +598,8 @@ def test_mj_progress_ring_variant_renders_svg(page, base_url):
 # mj-badge tests
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_badge_count_displays_number(page, base_url):
     """
         The count variant displays the raw count number when it is at or
@@ -602,7 +622,8 @@ def test_mj_badge_count_displays_number(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_badge_overflow_displays_max_plus(page, base_url):
     """
         When count exceeds max the indicator displays 'max+'.
@@ -624,7 +645,8 @@ def test_mj_badge_overflow_displays_max_plus(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_badge_overflow_event_fires(page, base_url):
     """
         Setting a count that exceeds max triggers mj-badge-overflow with
@@ -658,7 +680,8 @@ def test_mj_badge_overflow_event_fires(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_badge_zero_count_hidden_by_default(page, base_url):
     """
         A count badge with count=0 hides the indicator element unless
@@ -681,7 +704,8 @@ def test_mj_badge_zero_count_hidden_by_default(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_badge_show_zero_makes_indicator_visible(page, base_url):
     """
         With show-zero present a count=0 badge shows the indicator.
@@ -703,7 +727,8 @@ def test_mj_badge_show_zero_makes_indicator_visible(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_badge_status_variant_renders_aria_label(page, base_url):
     """
         The status variant sets role='img' and a descriptive aria-label on
@@ -731,7 +756,8 @@ def test_mj_badge_status_variant_renders_aria_label(page, base_url):
 # mj-chip tests
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_chip_selectable_has_checkbox_role(page, base_url):
     """
         A chip with mode='selectable' exposes role='checkbox' on its inner
@@ -754,7 +780,8 @@ def test_mj_chip_selectable_has_checkbox_role(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_chip_selectable_toggle_fires_change_event(page, base_url):
     """
         Clicking a selectable chip fires mj-chip-change with the toggled
@@ -787,7 +814,8 @@ def test_mj_chip_selectable_toggle_fires_change_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_chip_selectable_aria_checked_updates(page, base_url):
     """
         After toggling a selectable chip, aria-checked reflects the new
@@ -821,7 +849,8 @@ def test_mj_chip_selectable_aria_checked_updates(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_chip_selectable_select_event_is_cancelable(page, base_url):
     """
         Calling preventDefault() on mj-chip-select prevents the chip from
@@ -852,7 +881,8 @@ def test_mj_chip_selectable_select_event_is_cancelable(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_chip_removable_fires_remove_event(page, base_url):
     """
         Clicking the remove button on a removable chip fires the
@@ -885,7 +915,8 @@ def test_mj_chip_removable_fires_remove_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_chip_removable_remove_event_is_cancelable(page, base_url):
     """
         Calling preventDefault() on mj-chip-remove prevents the chip from
@@ -917,7 +948,8 @@ def test_mj_chip_removable_remove_event_is_cancelable(page, base_url):
 # mj-tooltip tests
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_tooltip_popup_hidden_initially(page, base_url):
     """
         The tooltip popup is hidden before any interaction occurs.
@@ -943,7 +975,8 @@ def test_mj_tooltip_popup_hidden_initially(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_tooltip_open_attribute_forces_visible(page, base_url):
     """
         Setting the open attribute on mj-tooltip makes the popup visible
@@ -970,7 +1003,8 @@ def test_mj_tooltip_open_attribute_forces_visible(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_tooltip_focus_shows_popup(page, base_url):
     """
         Focusing the trigger element causes the tooltip popup to become
@@ -1012,7 +1046,8 @@ def test_mj_tooltip_focus_shows_popup(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_tooltip_escape_hides_popup(page, base_url):
     """
         Pressing Escape while the tooltip is visible hides the popup. We
@@ -1068,7 +1103,8 @@ def test_mj_tooltip_escape_hides_popup(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_tooltip_show_event_fires_on_focus(page, base_url):
     """
         The mj-tooltip-show event fires with detail.trigger='focus' when
@@ -1110,7 +1146,8 @@ def test_mj_tooltip_show_event_fires_on_focus(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_tooltip_disabled_suppresses_popup(page, base_url):
     """
         A tooltip with the disabled attribute does not show its popup on
@@ -1142,3 +1179,8 @@ def test_mj_tooltip_disabled_suppresses_popup(page, base_url):
 
     assert popup_hidden is True
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

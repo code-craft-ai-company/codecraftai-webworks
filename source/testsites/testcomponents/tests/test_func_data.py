@@ -1,5 +1,5 @@
 """
-    test_func_data.py
+    .. module:: testcomponents.tests.test_func_data
 
     Functional Playwright tests for the 'data' component group.
 
@@ -23,8 +23,10 @@
     the class setters run and ``afterRender`` internals are used.
 """
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
+
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +103,8 @@ _TABLE_SETUP = """() => {
 }"""
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_table_renders_header_cells(page, base_url):
     """
         After data is pushed through the class setters the thead contains
@@ -127,7 +130,8 @@ def test_mj_table_renders_header_cells(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_table_renders_data_rows(page, base_url):
     """
         After the class setters run the tbody has one row per data record.
@@ -152,7 +156,8 @@ def test_mj_table_renders_data_rows(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_table_cell_text_matches_data(page, base_url):
     """
         The first body cell of the first row contains the first fruit name.
@@ -179,7 +184,8 @@ def test_mj_table_cell_text_matches_data(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_table_programmatic_rows_update(page, base_url):
     """
         Setting new ``rows`` via the class setter replaces the rendered
@@ -240,7 +246,8 @@ _DT_SETUP = """() => {
 }"""
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_data_table_renders_columns(page, base_url):
     """
         After data is injected, the header row shows one cell per column.
@@ -265,7 +272,8 @@ def test_mj_data_table_renders_columns(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_data_table_renders_rows(page, base_url):
     """
         After data is injected the body renders at least one row element.
@@ -290,7 +298,8 @@ def test_mj_data_table_renders_rows(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_data_table_footer_shows_row_count(page, base_url):
     """
         The footer row-count label reflects the number of data rows supplied.
@@ -315,7 +324,8 @@ def test_mj_data_table_footer_shows_row_count(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_data_table_sort_fires_event(page, base_url):
     """
         Clicking a sortable column header fires the ``mj-sort-change`` event
@@ -375,7 +385,8 @@ def test_mj_data_table_sort_fires_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_data_table_selection_fires_event(page, base_url):
     """
         Clicking a data cell when ``selection`` is ``single`` fires
@@ -453,7 +464,8 @@ _TG_SETUP = """() => {
 }"""
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_tree_grid_renders_header(page, base_url):
     """
         The tree grid shows at least two header cells (one per column).
@@ -478,7 +490,8 @@ def test_mj_tree_grid_renders_header(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_tree_grid_renders_rows(page, base_url):
     """
         With ``expand-depth="1"`` the two top-level parents plus their
@@ -504,7 +517,8 @@ def test_mj_tree_grid_renders_rows(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_tree_grid_has_expander_buttons(page, base_url):
     """
         Parent rows have expander buttons; leaf rows have hidden expanders.
@@ -529,7 +543,8 @@ def test_mj_tree_grid_has_expander_buttons(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_tree_grid_collapse_fires_event(page, base_url):
     """
         Clicking the expander button on an expanded parent row fires the
@@ -588,7 +603,8 @@ _LIST_SETUP = """() => {
 }"""
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_list_renders_items(page, base_url):
     """
         After items are set four ``<li>`` elements appear in the list.
@@ -613,7 +629,8 @@ def test_mj_list_renders_items(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_list_items_with_href_are_links(page, base_url):
     """
         Items with an ``href`` are rendered as ``<a>`` anchors.
@@ -638,7 +655,8 @@ def test_mj_list_items_with_href_are_links(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_list_item_click_fires_event(page, base_url):
     """
         Clicking a button-type item (``action`` key) fires ``mj-item-click``
@@ -691,7 +709,8 @@ def test_mj_list_item_click_fires_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_list_description_type_renders_dl(page, base_url):
     """
         When ``type="description"`` is set programmatically the list
@@ -741,7 +760,8 @@ _VL_SETUP = """() => {
 }"""
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_virtual_list_renders_items_window(page, base_url):
     """
         The virtual list renders at least one ``.vl-item`` in the DOM for
@@ -767,7 +787,8 @@ def test_mj_virtual_list_renders_items_window(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_virtual_list_dom_count_less_than_total(page, base_url):
     """
         For a 40-item dataset the virtual window renders fewer than 40 DOM
@@ -793,7 +814,8 @@ def test_mj_virtual_list_dom_count_less_than_total(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_virtual_list_item_content_renders(page, base_url):
     """
         The ``renderItem`` function is applied; the first visible item
@@ -819,7 +841,8 @@ def test_mj_virtual_list_item_content_renders(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_virtual_list_load_more_button_present(page, base_url):
     """
         The example uses ``load-strategy="manual"``; a Load-more button
@@ -866,7 +889,8 @@ _KB_SETUP = """() => {
 }"""
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_kanban_renders_columns(page, base_url):
     """
         After data is injected the board contains three column sections.
@@ -891,7 +915,8 @@ def test_mj_kanban_renders_columns(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_kanban_renders_cards(page, base_url):
     """
         The board renders four cards spread across columns.
@@ -916,7 +941,8 @@ def test_mj_kanban_renders_cards(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_kanban_card_click_fires_event(page, base_url):
     """
         Clicking a card body fires ``mj-card-click`` with ``cardId`` and
@@ -959,7 +985,8 @@ def test_mj_kanban_card_click_fires_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_kanban_column_titles_correct(page, base_url):
     """
         Column header titles match the labels supplied in the example.
@@ -1009,7 +1036,8 @@ _CAL_SETUP = """() => {
 }"""
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_calendar_renders_month_grid(page, base_url):
     """
         In month view the calendar renders at least 28 day cells.
@@ -1033,7 +1061,8 @@ def test_mj_calendar_renders_month_grid(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_calendar_renders_event_chips(page, base_url):
     """
         After events are injected at least one event chip appears in the
@@ -1065,7 +1094,8 @@ def test_mj_calendar_renders_event_chips(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_calendar_event_click_fires_event(page, base_url):
     """
         Clicking an event chip fires ``mj-event-click`` with an ``eventId``
@@ -1112,7 +1142,8 @@ def test_mj_calendar_event_click_fires_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_calendar_date_select_fires_event(page, base_url):
     """
         Clicking a day cell fires ``mj-date-select`` with an ISO date string.
@@ -1155,7 +1186,8 @@ def test_mj_calendar_date_select_fires_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_calendar_navigation_fires_period_change(page, base_url):
     """
         Clicking the Previous navigation button fires ``mj-period-change``
@@ -1213,7 +1245,8 @@ _MD_SETUP = """() => {
 }"""
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_master_detail_renders_items(page, base_url):
     """
         After items are injected three master list items are rendered.
@@ -1238,7 +1271,8 @@ def test_mj_master_detail_renders_items(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_master_detail_item_labels_rendered(page, base_url):
     """
         The label text of each injected item is visible in the master list.
@@ -1265,7 +1299,8 @@ def test_mj_master_detail_item_labels_rendered(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_master_detail_item_select_fires_event(page, base_url):
     """
         Clicking a master item fires ``mj-item-select`` with the correct key.
@@ -1326,7 +1361,8 @@ _CP_SETUP = """() => {
 }"""
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_column_picker_trigger_button_visible(page, base_url):
     """
         The trigger button is rendered and labelled correctly.
@@ -1350,7 +1386,8 @@ def test_mj_column_picker_trigger_button_visible(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_column_picker_opens_panel(page, base_url):
     """
         Clicking the trigger button opens the panel (``aria-hidden`` becomes
@@ -1386,7 +1423,8 @@ def test_mj_column_picker_opens_panel(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_column_picker_lists_columns(page, base_url):
     """
         When the panel is open the column list contains one row per column
@@ -1419,7 +1457,8 @@ def test_mj_column_picker_lists_columns(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_column_picker_fires_open_event(page, base_url):
     """
         Opening the panel fires ``mj-picker-open``.
@@ -1458,7 +1497,8 @@ def test_mj_column_picker_fires_open_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_column_picker_visibility_change_immediate_mode(page, base_url):
     """
         Toggling an unlocked checkbox in ``apply-mode="immediate"`` fires
@@ -1529,7 +1569,8 @@ _BAB_SETUP = """() => {
 }"""
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_bulk_action_bar_visible_when_selected(page, base_url):
     """
         After ``selected-count`` is set and ``visible`` is applied the bar
@@ -1557,7 +1598,8 @@ def test_mj_bulk_action_bar_visible_when_selected(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_bulk_action_bar_count_label(page, base_url):
     """
         The count label reflects the ``selected-count`` attribute value.
@@ -1583,7 +1625,8 @@ def test_mj_bulk_action_bar_count_label(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_bulk_action_bar_renders_action_buttons(page, base_url):
     """
         After the ``actions`` property is set three action buttons are
@@ -1609,7 +1652,8 @@ def test_mj_bulk_action_bar_renders_action_buttons(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_bulk_action_bar_action_fires_event(page, base_url):
     """
         Clicking an action button fires ``mj-action`` with the correct
@@ -1652,7 +1696,8 @@ def test_mj_bulk_action_bar_action_fires_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_bulk_action_bar_clear_fires_event(page, base_url):
     """
         Clicking the clear (×) button fires ``mj-clear-selection``.
@@ -1691,3 +1736,8 @@ def test_mj_bulk_action_bar_clear_fires_event(page, base_url):
     assert fired is True
 
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

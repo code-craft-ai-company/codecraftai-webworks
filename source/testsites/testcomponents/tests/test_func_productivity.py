@@ -1,5 +1,5 @@
 """
-    test_func_productivity.py
+    .. module:: testcomponents.tests.test_func_productivity
 
     Functional Playwright tests for the 'productivity' component group.
 
@@ -14,8 +14,10 @@
     asserts functional behaviour based on the real JS implementation.
 """
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
+
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +70,8 @@ def _load_example(page, base_url: str, tag: str):
 # mj-toolbar
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_toolbar_has_role(page, base_url: str) -> None:
     """
         The toolbar root element has role="toolbar" in the shadow DOM.
@@ -94,7 +97,8 @@ def test_toolbar_has_role(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_toolbar_aria_label(page, base_url: str) -> None:
     """
         The toolbar carries the accessible label from the ``label`` attribute.
@@ -121,7 +125,8 @@ def test_toolbar_aria_label(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_toolbar_aria_orientation(page, base_url: str) -> None:
     """
         The toolbar sets aria-orientation on its root element.
@@ -148,7 +153,8 @@ def test_toolbar_aria_orientation(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_toolbar_children_rendered(page, base_url: str) -> None:
     """
         The slotted button children are rendered inside the toolbar.
@@ -168,7 +174,8 @@ def test_toolbar_children_rendered(page, base_url: str) -> None:
 # mj-menubar
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_menubar_has_role(page, base_url: str) -> None:
     """
         The menubar shadow DOM root has role="menubar".
@@ -194,7 +201,8 @@ def test_menubar_has_role(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_menubar_aria_label(page, base_url: str) -> None:
     """
         The menubar has the accessible label from the ``label`` attribute.
@@ -221,7 +229,8 @@ def test_menubar_aria_label(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_menubar_top_level_items_have_role_menuitem(page, base_url: str) -> None:
     """
         The injected top-level buttons have role="menuitem".
@@ -244,7 +253,8 @@ def test_menubar_top_level_items_have_role_menuitem(page, base_url: str) -> None
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_menubar_click_opens_dropdown(page, base_url: str) -> None:
     """
         Clicking a top-level menu button opens its dropdown.
@@ -269,7 +279,8 @@ def test_menubar_click_opens_dropdown(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_menubar_click_fires_select_event(page, base_url: str) -> None:
     """
         Choosing a dropdown item fires the mj-menubar-select event.
@@ -302,7 +313,8 @@ def test_menubar_click_fires_select_event(page, base_url: str) -> None:
 # mj-status-bar
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_status_bar_has_role_status(page, base_url: str) -> None:
     """
         The status bar shadow DOM contains an element with role="status".
@@ -328,7 +340,8 @@ def test_status_bar_has_role_status(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_status_bar_has_live_region(page, base_url: str) -> None:
     """
         The status bar contains a polite live region for announcements.
@@ -354,7 +367,8 @@ def test_status_bar_has_live_region(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_status_bar_slots_content(page, base_url: str) -> None:
     """
         Slotted content is visible in the status bar.
@@ -375,7 +389,8 @@ def test_status_bar_slots_content(page, base_url: str) -> None:
 # mj-app-shell
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_app_shell_landmark_structure(page, base_url: str) -> None:
     """
         The app shell shadow DOM contains header, nav, main, aside, footer.
@@ -408,7 +423,8 @@ def test_app_shell_landmark_structure(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_app_shell_nav_open_attribute(page, base_url: str) -> None:
     """
         When nav-open is set the shell has the nav-open attribute.
@@ -428,7 +444,8 @@ def test_app_shell_nav_open_attribute(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_app_shell_toggle_inspector_fires_event(page, base_url: str) -> None:
     """
         Toggling the inspector via JS fires mj-shell-inspector-toggle.
@@ -455,7 +472,8 @@ def test_app_shell_toggle_inspector_fires_event(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_app_shell_toggle_nav_fires_event(page, base_url: str) -> None:
     """
         Toggling the nav via JS fires mj-shell-nav-toggle.
@@ -486,7 +504,8 @@ def test_app_shell_toggle_nav_fires_event(page, base_url: str) -> None:
 # mj-search-results
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_search_results_renders_count_bar(page, base_url: str) -> None:
     """
         The count bar is visible after results are loaded.
@@ -512,7 +531,8 @@ def test_search_results_renders_count_bar(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_search_results_shows_result_items(page, base_url: str) -> None:
     """
         After setting results via JS, at least one result item is rendered.
@@ -553,7 +573,8 @@ def test_search_results_shows_result_items(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_search_results_highlights_term(page, base_url: str) -> None:
     """
         Words matching the highlight-term are wrapped in <mark> elements.
@@ -590,7 +611,8 @@ def test_search_results_highlights_term(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_search_results_result_links_have_href(page, base_url: str) -> None:
     """
         Each result link element has an href attribute.
@@ -627,7 +649,8 @@ def test_search_results_result_links_have_href(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_search_results_loading_shows_skeletons(page, base_url: str) -> None:
     """
         Setting the loading attribute renders skeleton rows.
@@ -662,7 +685,8 @@ def test_search_results_loading_shows_skeletons(page, base_url: str) -> None:
 # mj-filter-panel
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_filter_panel_renders_filter_groups(page, base_url: str) -> None:
     """
         After setting filterConfig the filter groups are rendered.
@@ -700,7 +724,8 @@ def test_filter_panel_renders_filter_groups(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_filter_panel_checkbox_fires_change_event(page, base_url: str) -> None:
     """
         Checking a checkbox fires mj-filter-change with the updated value.
@@ -744,7 +769,8 @@ def test_filter_panel_checkbox_fires_change_event(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_filter_panel_chip_appears_after_selection(page, base_url: str) -> None:
     """
         Selecting a filter option creates a chip in the chips bar.
@@ -792,7 +818,8 @@ def test_filter_panel_chip_appears_after_selection(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_filter_panel_sort_control_rendered(page, base_url: str) -> None:
     """
         The sort select and direction button are rendered.
@@ -834,7 +861,8 @@ def test_filter_panel_sort_control_rendered(page, base_url: str) -> None:
 # mj-query-builder
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_query_builder_renders_root_group(page, base_url: str) -> None:
     """
         The query builder renders a root condition group.
@@ -860,7 +888,8 @@ def test_query_builder_renders_root_group(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_query_builder_has_and_or_buttons(page, base_url: str) -> None:
     """
         The AND and OR combinator buttons are rendered.
@@ -887,7 +916,8 @@ def test_query_builder_has_and_or_buttons(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_query_builder_add_condition_adds_rule_row(page, base_url: str) -> None:
     """
         Clicking Add condition inserts a new rule row.
@@ -925,7 +955,8 @@ def test_query_builder_add_condition_adds_rule_row(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_query_builder_add_condition_fires_change_event(page, base_url: str) -> None:
     """
         Adding a condition fires the mj-query-change event.
@@ -958,7 +989,8 @@ def test_query_builder_add_condition_fires_change_event(page, base_url: str) -> 
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_query_builder_show_preview_renders_json(page, base_url: str) -> None:
     """
         When show-preview is set the JSON preview panel is visible.
@@ -990,7 +1022,8 @@ def test_query_builder_show_preview_renders_json(page, base_url: str) -> None:
 # mj-dropzone
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dropzone_renders_drop_target(page, base_url: str) -> None:
     """
         The drop target region is visible and accessible.
@@ -1007,7 +1040,8 @@ def test_dropzone_renders_drop_target(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dropzone_browse_button_visible(page, base_url: str) -> None:
     """
         The Browse files button is rendered inside the drop zone.
@@ -1024,7 +1058,8 @@ def test_dropzone_browse_button_visible(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dropzone_has_aria_label(page, base_url: str) -> None:
     """
         The drop region has an accessible aria-label.
@@ -1042,7 +1077,8 @@ def test_dropzone_has_aria_label(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dropzone_files_added_via_js(page, base_url: str) -> None:
     """
         Programmatically adding a file via _processFiles fires mj-files-added.
@@ -1085,7 +1121,8 @@ def test_dropzone_files_added_via_js(page, base_url: str) -> None:
 # mj-file-browser
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_file_browser_renders_panes(page, base_url: str) -> None:
     """
         The file browser renders its tree and file panes in the shadow DOM.
@@ -1113,7 +1150,8 @@ def test_file_browser_renders_panes(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_file_browser_view_toggle_buttons(page, base_url: str) -> None:
     """
         The toolbar view toggle buttons (list / grid) are in the shadow DOM.
@@ -1141,7 +1179,8 @@ def test_file_browser_view_toggle_buttons(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_file_browser_loads_data_source(page, base_url: str) -> None:
     """
         Setting a dataSource renders the directory contents.
@@ -1192,7 +1231,8 @@ def test_file_browser_loads_data_source(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_file_browser_view_change_fires_event(page, base_url: str) -> None:
     """
         Clicking the grid view button fires the mj-view-change event.
@@ -1229,7 +1269,8 @@ def test_file_browser_view_change_fires_event(page, base_url: str) -> None:
 # mj-activity-feed
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_activity_feed_has_role_feed(page, base_url: str) -> None:
     """
         The activity feed root has role="feed".
@@ -1279,7 +1320,8 @@ def _inject_activity_feed_items(frame) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_activity_feed_renders_items(page, base_url: str) -> None:
     """
         After setting the items property activity articles are rendered.
@@ -1313,7 +1355,8 @@ def test_activity_feed_renders_items(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_activity_feed_load_more_button_visible(page, base_url: str) -> None:
     """
         The Load older activity button is visible after items are set.
@@ -1350,7 +1393,8 @@ def test_activity_feed_load_more_button_visible(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_activity_feed_load_more_fires_event(page, base_url: str) -> None:
     """
         Clicking Load older activity fires the mj-load-older event.
@@ -1392,7 +1436,8 @@ def test_activity_feed_load_more_fires_event(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_activity_feed_actor_name_rendered(page, base_url: str) -> None:
     """
         The actor name from each item is visible in the feed.
@@ -1431,7 +1476,8 @@ def test_activity_feed_actor_name_rendered(page, base_url: str) -> None:
 # mj-comments
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_comments_has_role_feed(page, base_url: str) -> None:
     """
         The comments root element has role="feed".
@@ -1457,7 +1503,8 @@ def test_comments_has_role_feed(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_comments_renders_comment_articles(page, base_url: str) -> None:
     """
         After setting the comments property, comment articles are visible.
@@ -1501,7 +1548,8 @@ def test_comments_renders_comment_articles(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_comments_count_heading_reflects_count(page, base_url: str) -> None:
     """
         The count heading reflects the number of loaded comments.
@@ -1528,7 +1576,8 @@ def test_comments_count_heading_reflects_count(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_comments_composer_textarea_present(page, base_url: str) -> None:
     """
         The top-level composer textarea is present for new comments.
@@ -1554,7 +1603,8 @@ def test_comments_composer_textarea_present(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_comments_post_fires_event(page, base_url: str) -> None:
     """
         Clicking Post while text is in the composer fires mj-comment-post.
@@ -1595,7 +1645,8 @@ def test_comments_post_fires_event(page, base_url: str) -> None:
 # mj-mention-input
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mention_input_renders_editable(page, base_url: str) -> None:
     """
         The contenteditable editable div is in the shadow DOM with role="textbox".
@@ -1621,7 +1672,8 @@ def test_mention_input_renders_editable(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mention_input_label_rendered(page, base_url: str) -> None:
     """
         When a label attribute is set the label element is rendered in shadow DOM.
@@ -1648,7 +1700,8 @@ def test_mention_input_label_rendered(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mention_input_fires_mj_input_on_keystroke(page, base_url: str) -> None:
     """
         Typing into the editable field fires the mj-input event.
@@ -1684,7 +1737,8 @@ def test_mention_input_fires_mj_input_on_keystroke(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mention_input_trigger_opens_suggestion_popup(page, base_url: str) -> None:
     """
         Typing a trigger character opens the suggestion popup.
@@ -1762,7 +1816,8 @@ def test_mention_input_trigger_opens_suggestion_popup(page, base_url: str) -> No
 # mj-chat-composer
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_composer_renders_textarea(page, base_url: str) -> None:
     """
         The composer textarea is in the shadow DOM.
@@ -1788,7 +1843,8 @@ def test_chat_composer_renders_textarea(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_composer_send_button_rendered(page, base_url: str) -> None:
     """
         The Send button is rendered with aria-disabled="true" when empty.
@@ -1815,7 +1871,8 @@ def test_chat_composer_send_button_rendered(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_composer_send_enabled_when_text_entered(page, base_url: str) -> None:
     """
         Setting text on the composer enables the Send button.
@@ -1852,7 +1909,8 @@ def test_chat_composer_send_enabled_when_text_entered(page, base_url: str) -> No
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_composer_send_fires_event(page, base_url: str) -> None:
     """
         Clicking Send fires the mj-send event with the message value.
@@ -1888,7 +1946,8 @@ def test_chat_composer_send_fires_event(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_composer_clear_after_send(page, base_url: str) -> None:
     """
         After a successful send the textarea is cleared.
@@ -1926,7 +1985,8 @@ def test_chat_composer_clear_after_send(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_composer_attach_and_emoji_buttons(page, base_url: str) -> None:
     """
         The attach and emoji toolbar buttons are in the shadow DOM.
@@ -1958,7 +2018,8 @@ def test_chat_composer_attach_and_emoji_buttons(page, base_url: str) -> None:
 # mj-chat-message
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_message_incoming_renders_bubble(page, base_url: str) -> None:
     """
         An incoming chat message renders its bubble in the shadow DOM.
@@ -1985,7 +2046,8 @@ def test_chat_message_incoming_renders_bubble(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_message_outgoing_has_status(page, base_url: str) -> None:
     """
         An outgoing message renders its delivery status element.
@@ -2012,7 +2074,8 @@ def test_chat_message_outgoing_has_status(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_message_system_variant_renders(page, base_url: str) -> None:
     """
         A system message element is in the DOM.
@@ -2029,7 +2092,8 @@ def test_chat_message_system_variant_renders(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_message_allow_actions_shows_trigger(page, base_url: str) -> None:
     """
         When allow-actions is set the actions trigger button is in the shadow DOM.
@@ -2056,7 +2120,8 @@ def test_chat_message_allow_actions_shows_trigger(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_message_reactions_rendered_via_js(page, base_url: str) -> None:
     """
         Setting the reactions property renders reaction chips in the shadow DOM.
@@ -2090,7 +2155,8 @@ def test_chat_message_reactions_rendered_via_js(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_message_react_fires_event(page, base_url: str) -> None:
     """
         Clicking a reaction chip fires the mj-message-react event.
@@ -2130,7 +2196,8 @@ def test_chat_message_react_fires_event(page, base_url: str) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chat_message_body_html_property(page, base_url: str) -> None:
     """
         Setting bodyHtml renders sanitized HTML in the message body shadow DOM.
@@ -2167,3 +2234,8 @@ def test_chat_message_body_html_property(page, base_url: str) -> None:
     assert has_strong is True
 
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

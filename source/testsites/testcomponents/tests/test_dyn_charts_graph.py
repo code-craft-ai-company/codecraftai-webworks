@@ -1,5 +1,5 @@
 """
-    test_dyn_charts_graph.py
+    .. module:: testcomponents.tests.test_dyn_charts_graph
 
     Functional Playwright tests for the five graph/flow-chart components:
 
@@ -16,7 +16,8 @@
 
     Key fixture facts
     -----------------
-    - ``base_url`` and ``page`` come from conftest.py.
+    - ``base_url`` and ``page`` are testbase resources from
+      :mod:`testcomponents.harness`.
     - Pages live at /components/charts/<tag>.
     - The playground preview iframe has data-testid="playground-preview".
     - The inline <script> may assign .data before the element upgrades, creating
@@ -26,7 +27,9 @@
       is dispatched via frame.evaluate with bubbles:true so delegated handlers fire.
 """
 
-import pytest
+import ccai.testbase as testbase
+
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +213,8 @@ _BRANCH_GRAPH_DATA_B = {
 }
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_branch_graph_initial_render(page, base_url):
     """
         mj-branch-graph renders commit-node circles after .data is assigned.
@@ -229,7 +233,8 @@ def test_branch_graph_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_branch_graph_dynamic_update(page, base_url):
     """
         Reassigning .data on mj-branch-graph re-renders the SVG.
@@ -265,7 +270,8 @@ def test_branch_graph_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_branch_graph_interactivity(page, base_url):
     """
         Clicking a commit node fires the mj-node-select event.
@@ -331,7 +337,8 @@ _PIPELINE_DATA_B = {
 }
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_pipeline_chart_initial_render(page, base_url):
     """
         mj-pipeline-chart renders one stage-node per stage after .data is set.
@@ -352,7 +359,8 @@ def test_pipeline_chart_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_pipeline_chart_dynamic_update(page, base_url):
     """
         Reassigning .data on mj-pipeline-chart re-renders with new stage count.
@@ -387,7 +395,8 @@ def test_pipeline_chart_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_pipeline_chart_interactivity(page, base_url):
     """
         Clicking a stage node fires the mj-stage-select event.
@@ -453,7 +462,8 @@ _DEP_GRAPH_DATA_B = {
 }
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dependency_graph_initial_render(page, base_url):
     """
         mj-dependency-graph renders one node element per graph node.
@@ -482,7 +492,8 @@ def test_dependency_graph_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dependency_graph_dynamic_update(page, base_url):
     """
         Reassigning .data on mj-dependency-graph re-renders with a new node count.
@@ -529,7 +540,8 @@ def test_dependency_graph_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_dependency_graph_interactivity(page, base_url):
     """
         Clicking a node element fires the mj-node-select event.
@@ -602,7 +614,8 @@ _WORKFLOW_DATA_B = {
 }
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_workflow_diagram_initial_render(page, base_url):
     """
         mj-workflow-diagram renders one node group per state after .data is set.
@@ -633,7 +646,8 @@ def test_workflow_diagram_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_workflow_diagram_dynamic_update(page, base_url):
     """
         Reassigning .data on mj-workflow-diagram re-renders with new state count.
@@ -680,7 +694,8 @@ def test_workflow_diagram_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_workflow_diagram_interactivity(page, base_url):
     """
         Clicking a state node fires the mj-node-select event.
@@ -749,7 +764,8 @@ _ENV_PROMO_DATA_B = {
 }
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_env_promotion_chart_initial_render(page, base_url):
     """
         mj-env-promotion-chart renders one environment column per environment.
@@ -770,7 +786,8 @@ def test_env_promotion_chart_initial_render(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_env_promotion_chart_dynamic_update(page, base_url):
     """
         Reassigning .data on mj-env-promotion-chart re-renders with new column count.
@@ -805,7 +822,8 @@ def test_env_promotion_chart_dynamic_update(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_env_promotion_chart_interactivity_env_select(page, base_url):
     """
         Clicking an environment column fires the mj-environment-select event.
@@ -834,7 +852,8 @@ def test_env_promotion_chart_interactivity_env_select(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_env_promotion_chart_gate_approve_event(page, base_url):
     """
         Clicking the Approve gate button fires the mj-gate-action event.
@@ -863,3 +882,8 @@ def test_env_promotion_chart_gate_approve_event(page, base_url):
     assert "mj-gate-action" in events
 
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

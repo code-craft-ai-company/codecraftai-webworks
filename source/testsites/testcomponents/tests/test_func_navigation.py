@@ -1,5 +1,5 @@
 """
-    test_func_navigation.py
+    .. module:: testcomponents.tests.test_func_navigation
 
     Functional Playwright tests for the 'navigation' component group.
 
@@ -13,8 +13,10 @@
       mj-skip-link, mj-footer-nav, mj-menu, mj-tree-nav
 """
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
+
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +76,8 @@ def _load_example(page, base_url: str, tag: str, html: str):
 # mj-link
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_link_renders_anchor(page, base_url):
     """
         mj-link renders an inner <a> element inside its shadow DOM.
@@ -95,7 +98,8 @@ def test_link_renders_anchor(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_link_disabled_blocks_navigation(page, base_url):
     """
         A disabled mj-link sets aria-disabled=true on the inner anchor.
@@ -120,7 +124,8 @@ def test_link_disabled_blocks_navigation(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_link_external_sets_target_blank(page, base_url):
     """
         An external mj-link adds target=_blank and rel containing noopener.
@@ -146,7 +151,8 @@ def test_link_external_sets_target_blank(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_link_fires_mj_link_click(page, base_url):
     """
         Clicking an active mj-link dispatches the mj-link-click custom event.
@@ -181,7 +187,8 @@ def test_link_fires_mj_link_click(page, base_url):
 # mj-app-bar
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_app_bar_renders_header_landmark(page, base_url):
     """
         mj-app-bar renders a <header role=banner> landmark.
@@ -202,7 +209,8 @@ def test_app_bar_renders_header_landmark(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_app_bar_toggle_opens_drawer(page, base_url):
     """
         Clicking the hamburger toggle sets open attribute on mj-app-bar.
@@ -246,7 +254,8 @@ def test_app_bar_toggle_opens_drawer(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_app_bar_escape_closes_drawer(page, base_url):
     """
         Pressing Escape while the drawer is open removes the open attribute.
@@ -292,7 +301,8 @@ def test_app_bar_escape_closes_drawer(page, base_url):
 # mj-side-nav
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_side_nav_static_renders_nav(page, base_url):
     """
         mj-side-nav in static mode renders a <nav> landmark.
@@ -313,7 +323,8 @@ def test_side_nav_static_renders_nav(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_side_nav_collapsible_toggle(page, base_url):
     """
         mj-side-nav in collapsible mode opens when the toggle is clicked.
@@ -349,7 +360,8 @@ def test_side_nav_collapsible_toggle(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_side_nav_aria_current_page_on_active_item(page, base_url):
     """
         An item with aria-current=page in mj-side-nav is accessible as current.
@@ -379,7 +391,8 @@ def test_side_nav_aria_current_page_on_active_item(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_side_nav_overlay_drawer_closes_on_escape(page, base_url):
     """
         mj-side-nav in overlay-drawer mode closes on Escape key.
@@ -424,7 +437,8 @@ def test_side_nav_overlay_drawer_closes_on_escape(page, base_url):
 # mj-breadcrumb
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_breadcrumb_nav_landmark(page, base_url):
     """
         mj-breadcrumb renders a <nav> landmark with an aria-label.
@@ -455,7 +469,8 @@ def test_breadcrumb_nav_landmark(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_breadcrumb_separator_collapse_state(page, base_url):
     """
         mj-breadcrumb starts in a collapsed state (collapsed property is True).
@@ -480,7 +495,8 @@ def test_breadcrumb_separator_collapse_state(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_breadcrumb_separator_rendered(page, base_url):
     """
         mj-breadcrumb renders separator elements between items.
@@ -507,7 +523,8 @@ def test_breadcrumb_separator_rendered(page, base_url):
 # mj-tabs
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tabs_first_tab_selected_by_default(page, base_url):
     """
         mj-tabs selects the first tab by default and sets aria-selected=true.
@@ -532,7 +549,8 @@ def test_tabs_first_tab_selected_by_default(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tabs_arrow_key_switches_panel(page, base_url):
     """
         The mj-tabs component uses keyboard navigation (ArrowRight) to switch
@@ -587,7 +605,8 @@ def test_tabs_arrow_key_switches_panel(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tabs_roving_tabindex(page, base_url):
     """
         mj-tabs gives tabindex=0 to the selected tab and tabindex=-1 to others.
@@ -620,7 +639,8 @@ def test_tabs_roving_tabindex(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tabs_keyboard_dispatch_activates_tab(page, base_url):
     """
         Dispatching an ArrowRight keydown event on the tablist shadow element
@@ -666,7 +686,8 @@ def test_tabs_keyboard_dispatch_activates_tab(page, base_url):
 # mj-nav-stepper
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_nav_stepper_current_step_aria_current(page, base_url):
     """
         The button for the current step carries aria-current=step.
@@ -698,7 +719,8 @@ def test_nav_stepper_current_step_aria_current(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_nav_stepper_linear_disables_upcoming(page, base_url):
     """
         In linear mode (default) future step buttons are aria-disabled=true.
@@ -730,7 +752,8 @@ def test_nav_stepper_linear_disables_upcoming(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_nav_stepper_click_complete_step(page, base_url):
     """
         Clicking a completed step fires mj-nav-stepper-change and updates current.
@@ -776,7 +799,8 @@ def test_nav_stepper_click_complete_step(page, base_url):
 # mj-wizard
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_wizard_renders_first_step(page, base_url):
     """
         mj-wizard shows the first step and hides the rest on initial load.
@@ -802,7 +826,8 @@ def test_wizard_renders_first_step(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_wizard_next_button_advances_step(page, base_url):
     """
         Clicking Next advances mj-wizard from step 0 to step 1.
@@ -844,7 +869,8 @@ def test_wizard_next_button_advances_step(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_wizard_back_button_retreats_step(page, base_url):
     """
         Clicking Back on step 1 returns mj-wizard to step 0.
@@ -877,7 +903,8 @@ def test_wizard_back_button_retreats_step(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_wizard_submit_fires_event(page, base_url):
     """
         Clicking Submit on the last step fires mj-wizard-submit.
@@ -918,7 +945,8 @@ def test_wizard_submit_fires_event(page, base_url):
 # mj-pagination
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_pagination_current_page_aria_current(page, base_url):
     """
         The current page button has aria-current=page.
@@ -943,7 +971,8 @@ def test_pagination_current_page_aria_current(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_pagination_next_fires_change_event(page, base_url):
     """
         Clicking the Next button fires mj-pagination-change with page+1.
@@ -980,7 +1009,8 @@ def test_pagination_next_fires_change_event(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_pagination_prev_disabled_on_first_page(page, base_url):
     """
         The Previous button is disabled when on the first page.
@@ -1005,7 +1035,8 @@ def test_pagination_prev_disabled_on_first_page(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_pagination_page_button_navigates(page, base_url):
     """
         Clicking a numbered page button changes the current page.
@@ -1048,7 +1079,8 @@ def test_pagination_page_button_navigates(page, base_url):
 # mj-toc
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_toc_renders_links_for_headings(page, base_url):
     """
         mj-toc generates anchor links for all h2 headings in the target.
@@ -1079,7 +1111,8 @@ def test_toc_renders_links_for_headings(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_toc_link_click_fires_mj_toc_navigate(page, base_url):
     """
         Clicking a TOC link fires the mj-toc-navigate event.
@@ -1122,7 +1155,8 @@ def test_toc_link_click_fires_mj_toc_navigate(page, base_url):
 # mj-skip-link
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_skip_link_renders_anchor_with_href(page, base_url):
     """
         mj-skip-link renders an inner anchor pointing to the target id.
@@ -1149,7 +1183,8 @@ def test_skip_link_renders_anchor_with_href(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_skip_link_click_fires_activate_event(page, base_url):
     """
         Clicking the inline skip link fires mj-skip-link-activate.
@@ -1187,7 +1222,8 @@ def test_skip_link_click_fires_activate_event(page, base_url):
 # mj-footer-nav
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_footer_nav_renders_contentinfo_landmark(page, base_url):
     """
         mj-footer-nav renders a <footer role=contentinfo> landmark.
@@ -1210,7 +1246,8 @@ def test_footer_nav_renders_contentinfo_landmark(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_footer_nav_copyright_includes_year(page, base_url):
     """
         mj-footer-nav copyright attribute prepends the current year.
@@ -1236,7 +1273,8 @@ def test_footer_nav_copyright_includes_year(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_footer_nav_link_click_fires_navigate_event(page, base_url):
     """
         Clicking a slotted link fires mj-footer-nav-navigate.
@@ -1278,7 +1316,8 @@ def test_footer_nav_link_click_fires_navigate_event(page, base_url):
 # mj-menu
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_menu_opens_on_attribute(page, base_url):
     """
         Setting the open attribute shows the mj-menu popup.
@@ -1314,7 +1353,8 @@ def test_menu_opens_on_attribute(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_menu_escape_closes(page, base_url):
     """
         Pressing Escape while the menu is open removes the open attribute.
@@ -1351,7 +1391,8 @@ def test_menu_escape_closes(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_menu_arrow_key_moves_focus(page, base_url):
     """
         ArrowDown moves virtual focus to the next menu item (data-active).
@@ -1395,7 +1436,8 @@ def test_menu_arrow_key_moves_focus(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_menu_select_fires_event(page, base_url):
     """
         Pressing Enter on the active menu item fires mj-menu-select.
@@ -1437,7 +1479,8 @@ def test_menu_select_fires_event(page, base_url):
 # mj-tree-nav
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tree_nav_renders_tree_role(page, base_url):
     """
         mj-tree-nav renders a [role=tree] element.
@@ -1460,7 +1503,8 @@ def test_tree_nav_renders_tree_role(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tree_nav_items_have_treeitem_role(page, base_url):
     """
         Slotted <li> elements are assigned role=treeitem by the component.
@@ -1488,7 +1532,8 @@ def test_tree_nav_items_have_treeitem_role(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tree_nav_expand_collapse_branch(page, base_url):
     """
         Clicking the toggle button expands a collapsed branch and fires events.
@@ -1546,7 +1591,8 @@ def test_tree_nav_expand_collapse_branch(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tree_nav_current_item_aria_current(page, base_url):
     """
         Setting the current attribute to a treeitem element id marks that item
@@ -1577,7 +1623,8 @@ def test_tree_nav_current_item_aria_current(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tree_nav_click_sets_active_focus(page, base_url):
     """
         Clicking a tree item sets aria-activedescendant on the tree root,
@@ -1613,3 +1660,8 @@ def test_tree_nav_click_sets_active_focus(page, base_url):
         "clicking a tree item should set aria-activedescendant to that item's id"
     )
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

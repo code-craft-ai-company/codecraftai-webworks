@@ -1,5 +1,5 @@
 """
-    test_func_selection.py
+    .. module:: testcomponents.tests.test_func_selection
 
     Functional Playwright tests for every component in the 'selection' group.
 
@@ -14,8 +14,10 @@
     interactions observable via the preview iframe.
 """
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
+
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +67,8 @@ def _reload_example(page, html: str, tag: str):
 # mj-select
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_select_renders_trigger(base_url: str, page) -> None:
     """
     mj-select renders a trigger button with the placeholder text when no
@@ -81,7 +84,8 @@ def test_select_renders_trigger(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_select_opens_on_click(base_url: str, page) -> None:
     """
     mj-select opens the popup when the trigger is clicked and exposes an
@@ -102,7 +106,8 @@ def test_select_opens_on_click(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_select_picks_option_and_fires_mj_change(base_url: str, page) -> None:
     """
     Clicking an option in the open popup selects it and fires mj-change.
@@ -128,7 +133,8 @@ def test_select_picks_option_and_fires_mj_change(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_select_disabled_blocks_open(base_url: str, page) -> None:
     """
     A disabled mj-select does not open when the trigger is clicked.
@@ -151,7 +157,8 @@ def test_select_disabled_blocks_open(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_select_preselected_value_shown(base_url: str, page) -> None:
     """
     mj-select with a pre-set value attribute shows the matching option label
@@ -177,7 +184,8 @@ def test_select_preselected_value_shown(base_url: str, page) -> None:
 # mj-listbox
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_listbox_renders_with_role(base_url: str, page) -> None:
     """
     mj-listbox renders a container with role='listbox'.
@@ -192,7 +200,8 @@ def test_listbox_renders_with_role(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_listbox_single_selection_fires_mj_change(base_url: str, page) -> None:
     """
     Clicking an option in a single-select mj-listbox fires mj-change.
@@ -218,7 +227,8 @@ def test_listbox_single_selection_fires_mj_change(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_listbox_multiple_preselect(base_url: str, page) -> None:
     """
     mj-listbox with multiple and a comma-separated value pre-selects the
@@ -245,7 +255,8 @@ def test_listbox_multiple_preselect(base_url: str, page) -> None:
 # mj-combobox
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_combobox_renders_input(base_url: str, page) -> None:
     """
     mj-combobox renders a visible text input.
@@ -260,7 +271,8 @@ def test_combobox_renders_input(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_combobox_typing_opens_popup(base_url: str, page) -> None:
     """
     Typing into a mj-combobox opens the suggestion popup (host gets [open]).
@@ -282,7 +294,8 @@ def test_combobox_typing_opens_popup(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_combobox_clearable_attribute(base_url: str, page) -> None:
     """
     mj-combobox with clearable attribute renders a clear button.
@@ -303,7 +316,8 @@ def test_combobox_clearable_attribute(base_url: str, page) -> None:
 # mj-cascading-select
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_cascading_select_renders(base_url: str, page) -> None:
     """
     mj-cascading-select renders and its shadow root is populated after
@@ -321,7 +335,8 @@ def test_cascading_select_renders(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_cascading_select_first_level_visible(base_url: str, page) -> None:
     """
     After setting the levels property programmatically the shadow DOM contains
@@ -361,7 +376,8 @@ def test_cascading_select_first_level_visible(base_url: str, page) -> None:
 # mj-radio-group
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_radio_group_renders_radiogroup_role(base_url: str, page) -> None:
     """
     mj-radio-group renders a container with role='radiogroup'.
@@ -376,7 +392,8 @@ def test_radio_group_renders_radiogroup_role(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_radio_group_preselects_value(base_url: str, page) -> None:
     """
     mj-radio-group with a value attribute marks the corresponding radio item
@@ -395,7 +412,8 @@ def test_radio_group_preselects_value(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_radio_group_click_fires_mj_change(base_url: str, page) -> None:
     """
     Clicking a radio item fires mj-change on the group.
@@ -425,7 +443,8 @@ def test_radio_group_click_fires_mj_change(base_url: str, page) -> None:
 # mj-checkbox-group
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_checkbox_group_renders_group_role(base_url: str, page) -> None:
     """
     mj-checkbox-group renders a container with role='group'.
@@ -440,7 +459,8 @@ def test_checkbox_group_renders_group_role(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_checkbox_group_preselected_value(base_url: str, page) -> None:
     """
     mj-checkbox-group with value='email' pre-checks the email checkbox.
@@ -458,7 +478,8 @@ def test_checkbox_group_preselected_value(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_checkbox_group_click_fires_mj_change(base_url: str, page) -> None:
     """
     Clicking a checkbox item fires mj-change on the group.
@@ -488,7 +509,8 @@ def test_checkbox_group_click_fires_mj_change(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_checkbox_group_select_all_rendered(base_url: str, page) -> None:
     """
     mj-checkbox-group with select-all attribute renders the select-all item.
@@ -510,7 +532,8 @@ def test_checkbox_group_select_all_rendered(base_url: str, page) -> None:
 # mj-segmented-control
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_segmented_control_renders(base_url: str, page) -> None:
     """
     mj-segmented-control renders a visible container.
@@ -525,7 +548,8 @@ def test_segmented_control_renders(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_segmented_control_select_mode_fires_mj_change(base_url: str, page) -> None:
     """
     Clicking a segment in select mode fires mj-change with the segment value.
@@ -551,7 +575,8 @@ def test_segmented_control_select_mode_fires_mj_change(base_url: str, page) -> N
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_segmented_control_preselected_segment(base_url: str, page) -> None:
     """
     The pre-selected segment (value='week') has aria-checked='true'.
@@ -576,7 +601,8 @@ def test_segmented_control_preselected_segment(base_url: str, page) -> None:
 # mj-split-button
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_split_button_renders_primary(base_url: str, page) -> None:
     """
     mj-split-button renders a visible primary button.
@@ -591,7 +617,8 @@ def test_split_button_renders_primary(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_split_button_primary_fires_mj_primary_click(base_url: str, page) -> None:
     """
     Clicking the primary button fires mj-primary-click.
@@ -616,7 +643,8 @@ def test_split_button_primary_fires_mj_primary_click(base_url: str, page) -> Non
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_split_button_dropdown_opens(base_url: str, page) -> None:
     """
     Clicking the dropdown chevron button opens the menu popup.
@@ -643,7 +671,8 @@ def test_split_button_dropdown_opens(base_url: str, page) -> None:
 # mj-menu-button
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_menu_button_renders_trigger(base_url: str, page) -> None:
     """
     mj-menu-button renders a visible trigger button.
@@ -658,7 +687,8 @@ def test_menu_button_renders_trigger(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_menu_button_opens_on_click(base_url: str, page) -> None:
     """
     Clicking the mj-menu-button trigger opens the popup (host gains [open]).
@@ -677,7 +707,8 @@ def test_menu_button_opens_on_click(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_menu_button_fires_mj_select_on_item_click(base_url: str, page) -> None:
     """
     Clicking a menu item fires mj-select with the item value.
@@ -709,7 +740,8 @@ def test_menu_button_fires_mj_select_on_item_click(base_url: str, page) -> None:
 # mj-color-picker
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_color_picker_renders_swatch_trigger(base_url: str, page) -> None:
     """
     mj-color-picker renders a visible swatch trigger button.
@@ -724,7 +756,8 @@ def test_color_picker_renders_swatch_trigger(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_color_picker_opens_on_click(base_url: str, page) -> None:
     """
     Clicking the swatch trigger opens the picker popup.
@@ -743,7 +776,8 @@ def test_color_picker_opens_on_click(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_color_picker_value_attribute_reflected(base_url: str, page) -> None:
     """
     The value attribute on mj-color-picker is readable via JS.
@@ -765,7 +799,8 @@ def test_color_picker_value_attribute_reflected(base_url: str, page) -> None:
 # mj-date-picker
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_date_picker_renders_input(base_url: str, page) -> None:
     """
     mj-date-picker renders a visible text input for date entry.
@@ -780,7 +815,8 @@ def test_date_picker_renders_input(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_date_picker_calendar_opens_on_trigger(base_url: str, page) -> None:
     """
     Clicking the calendar trigger button opens the popup.
@@ -799,7 +835,8 @@ def test_date_picker_calendar_opens_on_trigger(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_date_picker_clearable_renders_clear_button(base_url: str, page) -> None:
     """
     mj-date-picker with clearable attribute has a clear button element.
@@ -820,7 +857,8 @@ def test_date_picker_clearable_renders_clear_button(base_url: str, page) -> None
 # mj-file-picker
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_file_picker_renders_dropzone(base_url: str, page) -> None:
     """
     mj-file-picker renders a visible drop zone.
@@ -835,7 +873,8 @@ def test_file_picker_renders_dropzone(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_file_picker_choose_button_visible(base_url: str, page) -> None:
     """
     mj-file-picker renders a choose-files button inside the dropzone.
@@ -850,7 +889,8 @@ def test_file_picker_choose_button_visible(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_file_picker_multiple_attribute_reflected(base_url: str, page) -> None:
     """
     mj-file-picker with multiple attribute reports hasAttribute('multiple')=true.
@@ -871,7 +911,8 @@ def test_file_picker_multiple_attribute_reflected(base_url: str, page) -> None:
 # mj-asset-picker
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_asset_picker_renders(base_url: str, page) -> None:
     """
     mj-asset-picker renders in the preview frame.
@@ -886,7 +927,8 @@ def test_asset_picker_renders(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_asset_picker_has_shadow_root(base_url: str, page) -> None:
     """
     mj-asset-picker attaches a shadow root on upgrade.
@@ -903,7 +945,8 @@ def test_asset_picker_has_shadow_root(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_asset_picker_opens_on_click(base_url: str, page) -> None:
     """
     Clicking the mj-asset-picker trigger opens the popup (host gains [open]).
@@ -927,7 +970,8 @@ def test_asset_picker_opens_on_click(base_url: str, page) -> None:
 # mj-locale-picker
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_locale_picker_renders_input(base_url: str, page) -> None:
     """
     mj-locale-picker renders a visible input field.
@@ -942,7 +986,8 @@ def test_locale_picker_renders_input(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_locale_picker_mode_attribute(base_url: str, page) -> None:
     """
     The first mj-locale-picker in the catalog example has mode='language'.
@@ -959,7 +1004,8 @@ def test_locale_picker_mode_attribute(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_locale_picker_typing_opens_popup(base_url: str, page) -> None:
     """
     Typing into a locale-picker opens the suggestion popup.
@@ -984,7 +1030,8 @@ def test_locale_picker_typing_opens_popup(base_url: str, page) -> None:
 # mj-tag-picker
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tag_picker_renders_input(base_url: str, page) -> None:
     """
     mj-tag-picker renders a visible input area.
@@ -999,7 +1046,8 @@ def test_tag_picker_renders_input(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tag_picker_typing_opens_suggestions(base_url: str, page) -> None:
     """
     Typing into the tag-picker input opens the suggestion popup.  The
@@ -1029,7 +1077,8 @@ def test_tag_picker_typing_opens_suggestions(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tag_picker_placeholder_attribute(base_url: str, page) -> None:
     """
     mj-tag-picker with placeholder attribute reflects it in the shadow DOM.
@@ -1050,7 +1099,8 @@ def test_tag_picker_placeholder_attribute(base_url: str, page) -> None:
 # mj-tree-selector
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tree_selector_renders(base_url: str, page) -> None:
     """
     mj-tree-selector renders and attaches a shadow root.
@@ -1067,7 +1117,8 @@ def test_tree_selector_renders(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tree_selector_nodes_property_renders_items(base_url: str, page) -> None:
     """
     Setting the nodes property via JS causes the tree to render tree-item rows.
@@ -1102,7 +1153,8 @@ def test_tree_selector_nodes_property_renders_items(base_url: str, page) -> None
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_tree_selector_node_click_fires_mj_change(base_url: str, page) -> None:
     """
     Clicking a leaf node in the tree fires mj-change.
@@ -1145,7 +1197,8 @@ def test_tree_selector_node_click_fires_mj_change(base_url: str, page) -> None:
 # mj-transfer-list
 # ===========================================================================
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_transfer_list_renders_panes(base_url: str, page) -> None:
     """
     mj-transfer-list renders both source and target panes.
@@ -1162,7 +1215,8 @@ def test_transfer_list_renders_panes(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_transfer_list_preselected_option_in_target(base_url: str, page) -> None:
     """
     mj-option with selected attribute starts in the target pane.
@@ -1183,7 +1237,8 @@ def test_transfer_list_preselected_option_in_target(base_url: str, page) -> None
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_transfer_list_move_right_button_present(base_url: str, page) -> None:
     """
     mj-transfer-list renders a move-right control button.
@@ -1198,7 +1253,8 @@ def test_transfer_list_move_right_button_present(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_transfer_list_move_item_to_target(base_url: str, page) -> None:
     """
     Selecting a source item and clicking move-right moves it to the target.
@@ -1233,7 +1289,8 @@ def test_transfer_list_move_item_to_target(base_url: str, page) -> None:
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_transfer_list_searchable_renders_filter_inputs(base_url: str, page) -> None:
     """
     mj-transfer-list with searchable attribute renders search inputs in both panes.
@@ -1253,3 +1310,8 @@ def test_transfer_list_searchable_renders_filter_inputs(base_url: str, page) -> 
     }""")
     assert input_count >= 2, f"Expected at least 2 search inputs in searchable transfer list, got {input_count}"
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

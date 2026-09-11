@@ -1,30 +1,31 @@
 """
-    test_pages.py
+    .. module:: testcomponents.tests.test_pages
+    :platform: Darwin, Linux, Unix, Windows
+    :synopsis: Every component test page is complete.
 
-    Parametrized Playwright tests asserting that every component test page
-    is complete: it documents the component (description, how-to), shows
-    example code, and provides the interactive playground.
+    Tests asserting that every component test page is complete: it documents the
+    component (description, how-to), shows example code, and provides the
+    interactive playground.
 
-    These run once per catalogued component (139 cases).
+    Each check runs once per catalogued component (139 cases). The cases are
+    defined as individual module-level tests named
+    ``<check>__<group>_<tag>`` so a broken page is reported by component.
 """
 
-import pytest
-from playwright.sync_api import expect
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.catalogs import all_components
+from testcomponents.harness.catalogs import identifier_for
+from testcomponents.harness.generation import define_page_tests
 
-from conftest import all_components
 
-
-_COMPONENTS = all_components()
-
-# Build readable test ids: "group/tag".
-_PARAMS = [
-    pytest.param(group, tag, title, id=f"{group}/{tag}")
-    for group, tag, title in _COMPONENTS
+# One case per component: (identifier, (group, tag, title)).
+_CASES = [
+    (identifier_for(group, tag), (group, tag, title))
+    for group, tag, title in all_components()
 ]
 
 
-@pytest.mark.parametrize("group, tag, title", _PARAMS)
-def test_component_page_has_documentation(page, base_url, group, tag, title):
+def _check_component_page_has_documentation(page, base_url, group, tag, title):
     """
         Each component page shows its title, description, and how-to text.
 
@@ -50,8 +51,7 @@ def test_component_page_has_documentation(page, base_url, group, tag, title):
     return
 
 
-@pytest.mark.parametrize("group, tag, title", _PARAMS)
-def test_component_page_has_example_code(page, base_url, group, tag, title):
+def _check_component_page_has_example_code(page, base_url, group, tag, title):
     """
         Each component page carries the example code in the Play tab's
         editable HTML editor.
@@ -72,8 +72,7 @@ def test_component_page_has_example_code(page, base_url, group, tag, title):
     return
 
 
-@pytest.mark.parametrize("group, tag, title", _PARAMS)
-def test_component_page_has_demo_tabs(page, base_url, group, tag, title):
+def _check_component_page_has_demo_tabs(page, base_url, group, tag, title):
     """
         Each component page has the Example / Play tabbed demo section
         with the Play tab selected by default.
@@ -104,8 +103,7 @@ def test_component_page_has_demo_tabs(page, base_url, group, tag, title):
     return
 
 
-@pytest.mark.parametrize("group, tag, title", _PARAMS)
-def test_component_page_has_playground(page, base_url, group, tag, title):
+def _check_component_page_has_playground(page, base_url, group, tag, title):
     """
         Each component page provides the editable Play sandbox with an
         HTML editor, a Style editor, run/reset controls, and a preview.
@@ -129,8 +127,7 @@ def test_component_page_has_playground(page, base_url, group, tag, title):
     return
 
 
-@pytest.mark.parametrize("group, tag, title", _PARAMS)
-def test_playground_controls_visible_without_scroll(page, base_url, group, tag, title):
+def _check_playground_controls_visible_without_scroll(page, base_url, group, tag, title):
     """
         The demo controls (tabs, Run, Reset) and the component preview are
         within the viewport on load, so no scrolling is needed to operate
@@ -160,3 +157,20 @@ def test_playground_controls_visible_without_scroll(page, base_url, group, tag, 
         assert 0 <= box["y"] < height, testid
 
     return
+
+
+define_page_tests(globals(), "test_component_page_has_documentation",
+                  _check_component_page_has_documentation, _CASES)
+define_page_tests(globals(), "test_component_page_has_example_code",
+                  _check_component_page_has_example_code, _CASES)
+define_page_tests(globals(), "test_component_page_has_demo_tabs",
+                  _check_component_page_has_demo_tabs, _CASES)
+define_page_tests(globals(), "test_component_page_has_playground",
+                  _check_component_page_has_playground, _CASES)
+define_page_tests(globals(), "test_playground_controls_visible_without_scroll",
+                  _check_playground_controls_visible_without_scroll, _CASES)
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

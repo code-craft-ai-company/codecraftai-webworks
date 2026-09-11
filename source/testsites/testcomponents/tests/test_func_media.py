@@ -1,5 +1,5 @@
 """
-    test_func_media.py
+    .. module:: testcomponents.tests.test_func_media
 
     Functional Playwright tests for the 'media' component group.
 
@@ -12,8 +12,10 @@
     using real implementation details from the component JS source.
 """
 
-import pytest
-from playwright.sync_api import expect
+import ccai.testbase as testbase
+
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.factories import create_page
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +85,8 @@ def _wait_for_element(frame, tag: str, timeout: int = 15000):
 # mj-image
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_image_renders_with_alt_and_caption(page, base_url):
     """
         mj-image renders a figure with an img whose alt attribute matches
@@ -121,7 +124,8 @@ def test_mj_image_renders_with_alt_and_caption(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_image_eager_loading_sets_src(page, base_url):
     """
         When loading='eager' the component sets the src on the inner img
@@ -157,7 +161,8 @@ def test_mj_image_eager_loading_sets_src(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_image_caption_attribute_renders_figcaption(page, base_url):
     """
         The caption attribute causes a figcaption to appear in the shadow DOM.
@@ -192,7 +197,8 @@ def test_mj_image_caption_attribute_renders_figcaption(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_image_placeholder_visible_before_load(page, base_url):
     """
         Before the image loads the placeholder div is present in the shadow DOM.
@@ -221,7 +227,8 @@ def test_mj_image_placeholder_visible_before_load(page, base_url):
 # mj-avatar
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_avatar_shows_initials_from_name(page, base_url):
     """
         When no src is provided, mj-avatar derives initials from the name
@@ -250,7 +257,8 @@ def test_mj_avatar_shows_initials_from_name(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_avatar_explicit_initials_override_name(page, base_url):
     """
         When the initials attribute is set it takes precedence over name-derived
@@ -279,7 +287,8 @@ def test_mj_avatar_explicit_initials_override_name(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_avatar_presence_dot_is_shown(page, base_url):
     """
         When the presence attribute is set the .presence dot becomes visible
@@ -308,7 +317,8 @@ def test_mj_avatar_presence_dot_is_shown(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_avatar_no_src_shows_icon_fallback(page, base_url):
     """
         When no src and no name/initials are given the icon fallback becomes
@@ -337,7 +347,8 @@ def test_mj_avatar_no_src_shows_icon_fallback(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_avatar_container_has_aria_label(page, base_url):
     """
         The .container element carries an aria-label derived from the name.
@@ -369,7 +380,8 @@ def test_mj_avatar_container_has_aria_label(page, base_url):
 # mj-media-player
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_media_player_renders_controls(page, base_url):
     """
         mj-media-player renders a play button, seek range, and volume control
@@ -399,7 +411,8 @@ def test_mj_media_player_renders_controls(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_media_player_video_type_renders_video_element(page, base_url):
     """
         When type='video' the component creates a native <video> element
@@ -425,7 +438,8 @@ def test_mj_media_player_video_type_renders_video_element(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_media_player_audio_type_renders_audio_element(page, base_url):
     """
         When type='audio' the component creates a native <audio> element.
@@ -458,7 +472,8 @@ def test_mj_media_player_audio_type_renders_audio_element(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_media_player_accessible_label(page, base_url):
     """
         The player section element carries the aria-label from the label
@@ -493,7 +508,8 @@ def test_mj_media_player_accessible_label(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_media_player_speed_select_has_options(page, base_url):
     """
         The speed select element contains the default playback rate options.
@@ -525,7 +541,8 @@ def test_mj_media_player_speed_select_has_options(page, base_url):
 # mj-chart
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_chart_accessible_table_is_present(page, base_url):
     """
         The chart always renders an accessible data table (possibly hidden)
@@ -590,7 +607,8 @@ def test_mj_chart_accessible_table_is_present(page, base_url):
 # mj-map
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_map_renders_accessible_marker_list(page, base_url):
     """
         After setting .markers the accessible list is populated with <li>
@@ -643,7 +661,8 @@ def test_mj_map_renders_accessible_marker_list(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_map_show_list_makes_list_visible(page, base_url):
     """
         When show-list is present the .marker-list element has the 'visible'
@@ -671,7 +690,8 @@ def test_mj_map_show_list_makes_list_visible(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_map_has_zoom_controls(page, base_url):
     """
         The map renders zoom-in and zoom-out control buttons in its shadow DOM.
@@ -699,7 +719,8 @@ def test_mj_map_has_zoom_controls(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_map_region_label_from_attribute(page, base_url):
     """
         The section element carries an aria-label derived from the label
@@ -727,7 +748,8 @@ def test_mj_map_region_label_from_attribute(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_map_marker_click_opens_popup(page, base_url):
     """
         Clicking a marker link in the accessible list opens the popup panel
@@ -788,7 +810,8 @@ def test_mj_map_marker_click_opens_popup(page, base_url):
 # mj-gauge
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_gauge_arc_renders_svg(page, base_url):
     """
         The default arc gauge renders an SVG element in its shadow DOM.
@@ -813,7 +836,8 @@ def test_mj_gauge_arc_renders_svg(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_gauge_value_label_reflects_value(page, base_url):
     """
         The .value-label element displays the formatted numeric value.
@@ -845,7 +869,8 @@ def test_mj_gauge_value_label_reflects_value(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_gauge_linear_shape_renders_fill_bar(page, base_url):
     """
         When shape='linear' the component renders a .linear-fill bar instead
@@ -878,7 +903,8 @@ def test_mj_gauge_linear_shape_renders_fill_bar(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_gauge_native_meter_provides_semantics(page, base_url):
     """
         The shadow DOM contains a native <meter> element that holds the
@@ -917,7 +943,8 @@ def test_mj_gauge_native_meter_provides_semantics(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_gauge_title_attribute_renders_label(page, base_url):
     """
         The title attribute text is rendered in the .title div.
@@ -949,7 +976,8 @@ def test_mj_gauge_title_attribute_renders_label(page, base_url):
 # mj-sparkline
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_sparkline_renders_svg(page, base_url):
     """
         mj-sparkline renders an SVG element inside its shadow DOM.
@@ -974,7 +1002,8 @@ def test_mj_sparkline_renders_svg(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_sparkline_line_type_draws_path(page, base_url):
     """
         For type='line' the SVG contains a <path> element with class 'line'.
@@ -1006,7 +1035,8 @@ def test_mj_sparkline_line_type_draws_path(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_sparkline_area_type_draws_area_path(page, base_url):
     """
         For type='area' the SVG contains a <path> element with class 'area'.
@@ -1038,7 +1068,8 @@ def test_mj_sparkline_area_type_draws_area_path(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_sparkline_bar_type_draws_rect_elements(page, base_url):
     """
         For type='bar' the SVG contains <rect> elements with class 'bar-pos'
@@ -1071,7 +1102,8 @@ def test_mj_sparkline_bar_type_draws_rect_elements(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_sparkline_label_sets_accessible_role(page, base_url):
     """
         When the label attribute is set the SVG gets role='img' and the
@@ -1111,7 +1143,8 @@ def test_mj_sparkline_label_sets_accessible_role(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_sparkline_svg_dimensions_match_attributes(page, base_url):
     """
         The rendered SVG width and height attributes match the component's
@@ -1154,7 +1187,8 @@ def test_mj_sparkline_svg_dimensions_match_attributes(page, base_url):
 # mj-diagram
 # ---------------------------------------------------------------------------
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_diagram_renders_accessible_node_list(page, base_url):
     """
         After .graph is set the node list is populated with <li> elements
@@ -1209,7 +1243,8 @@ def test_mj_diagram_renders_accessible_node_list(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_diagram_show_list_makes_node_list_visible(page, base_url):
     """
         When show-list is present the .node-list element has the 'visible'
@@ -1237,7 +1272,8 @@ def test_mj_diagram_show_list_makes_node_list_visible(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_diagram_node_labels_in_list(page, base_url):
     """
         The node list buttons contain the node labels from the graph data.
@@ -1293,7 +1329,8 @@ def test_mj_diagram_node_labels_in_list(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_diagram_has_zoom_controls(page, base_url):
     """
         The diagram renders zoom-in, zoom-out, and fit-to-view buttons.
@@ -1322,7 +1359,8 @@ def test_mj_diagram_has_zoom_controls(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_diagram_region_label_from_attribute(page, base_url):
     """
         The section element carries an aria-label derived from the label
@@ -1350,7 +1388,8 @@ def test_mj_diagram_region_label_from_attribute(page, base_url):
     return
 
 
-@pytest.mark.functional
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_mj_diagram_node_button_click_emits_select_event(page, base_url):
     """
         Clicking a node button in the list emits the mj-diagram-node-select
@@ -1401,3 +1440,8 @@ def test_mj_diagram_node_button_click_emits_select_event(page, base_url):
     assert event_received is True
 
     return
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()

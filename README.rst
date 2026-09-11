@@ -23,7 +23,18 @@ This repository provides a standard Poetry environment.
 1. Activate virtual environment:
    Run `poetry shell` and `poetry install`
 2. Test Execution:
-   Run `poetry run pytest`
+   Tests run under the `testbase` runner. The single-host suite:
+
+   .. code-block:: bash
+
+       testbase testing run --root source/testroots/ccai --includes=ccai.tests.singlehost --output=./.output/
+
+   The functional site suite for the testcomponents site (needs Playwright and
+   its Chromium browser; skipped cleanly without them):
+
+   .. code-block:: bash
+
+       testbase testing run --root ./source/testsites/testcomponents --includes=testcomponents.tests --output=./.output/testcomponents-tests
 
 References
 ==========

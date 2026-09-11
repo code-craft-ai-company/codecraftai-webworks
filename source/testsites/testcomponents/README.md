@@ -52,9 +52,13 @@ Then open <http://127.0.0.1:8000/>.
 
 ## Tests
 
-See `tests/README.md`. The suite is Playwright-based:
+See `tests/README.md`. The suite drives the site through Playwright and runs
+under the `testbase` runner (from the repository root):
 
 ```sh
-cd source/testsites/testcomponents/tests
-pytest -n 8
+testbase testing run --root ./source/testsites/testcomponents \
+    --includes=testcomponents.tests --output=./.output/testcomponents-tests
 ```
+
+Without Playwright and its Chromium browser every test is skipped with a
+reason naming the missing piece.

@@ -1,52 +1,45 @@
 """
-    test_chart_library.py
+    .. module:: testcomponents.tests.test_chart_library
+    :platform: Darwin, Linux, Unix, Windows
+    :synopsis: The comprehensive <mj-chart> chart library.
 
-    Playwright tests for the comprehensive <mj-chart> chart library and
-    its dedicated landing/gallery on /charts plus per-type playground
-    pages at /chart-type/<type>.
+    Tests for the comprehensive <mj-chart> chart library and its dedicated
+    landing/gallery on /charts plus per-type playground pages at
+    /chart-type/<type>. The per-type sweeps are defined as individual
+    module-level tests named ``<check>__<type>`` so a broken chart type is
+    reported by name.
 """
 
-import sys
+import ccai.testbase as testbase
 
-import pytest
-from playwright.sync_api import expect
+from testcomponents.charttypes import chart_type_count
 
-
-def _charts():
-    """
-        Resolve the chart-type catalog for parametrization.
-    """
-
-    sys.path  # forces conftest path setup to have run
-    from testcomponents.charttypes import CHART_TYPE_CATALOG
-
-    entries = []
-    for doc in CHART_TYPE_CATALOG:
-        entries.append(pytest.param(doc.type_key, doc.title, id=doc.type_key))
-    return entries
+from testcomponents.harness.browsers import expect
+from testcomponents.harness.catalogs import SAMPLE_CHART_TYPES
+from testcomponents.harness.catalogs import all_chart_types
+from testcomponents.harness.catalogs import identifier_for
+from testcomponents.harness.factories import create_page
+from testcomponents.harness.generation import define_page_tests
 
 
-def _sample_charts():
-    """
-        A small representative sample for the deeper render check.
-    """
+# One case per catalogued chart type: (identifier, (type_key, title)).
+_CHART_CASES = [
+    (identifier_for(type_key), (type_key, title))
+    for type_key, title in all_chart_types()
+]
 
-    sample = [
-        "bar", "line", "area", "pie", "donut", "scatter", "bubble",
-        "sankey", "treemap", "sunburst", "histogram", "boxplot",
-        "heatmap", "choropleth", "gantt", "timeline", "polar",
-        "radar", "ohlc", "candlestick", "gauge", "kpi", "funnel",
-        "network", "calendar-heatmap", "sparkline", "step",
-    ]
-    return [pytest.param(t, id=t) for t in sample]
+# A representative sample for the deeper render check: (identifier, (type_key,)).
+_SAMPLE_CASES = [
+    (identifier_for(type_key), (type_key,))
+    for type_key in SAMPLE_CHART_TYPES
+]
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chart_library_landing_lists_every_type(page, base_url):
     """
         The /charts page renders one card per catalogued chart type.
     """
-
-    from testcomponents.charttypes import chart_type_count
 
     page.goto(base_url + "/charts")
 
@@ -57,8 +50,7 @@ def test_chart_library_landing_lists_every_type(page, base_url):
     return
 
 
-@pytest.mark.parametrize("type_key, title", _charts())
-def test_chart_type_page_loads(page, base_url, type_key, title):
+def _check_chart_type_page_loads(page, base_url, type_key, title):
     """
         Every catalogued chart type has its own playground page that
         loads and shows the chart heading and the playground.
@@ -78,8 +70,7 @@ def test_chart_type_page_loads(page, base_url, type_key, title):
     return
 
 
-@pytest.mark.parametrize("type_key", _sample_charts())
-def test_chart_type_renders_svg(page, base_url, type_key):
+def _check_chart_type_renders_svg(page, base_url, type_key):
     """
         A representative sample of chart types draws an SVG with marks in
         the playground preview iframe.
@@ -118,6 +109,7 @@ def test_chart_type_renders_svg(page, base_url, type_key):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_charts_page_has_chart_library_section(page, base_url):
     """
         The Chart Library section is present and labelled correctly.
@@ -132,6 +124,7 @@ def test_charts_page_has_chart_library_section(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chart_library_card_navigates(page, base_url):
     """
         Clicking a chart-type card opens the chart-type playground.
@@ -143,3 +136,14 @@ def test_chart_library_card_navigates(page, base_url):
     expect(page.get_by_test_id("chart-type-heading")).to_contain_text("Bar")
 
     return
+
+
+define_page_tests(globals(), "test_chart_type_page_loads",
+                  _check_chart_type_page_loads, _CHART_CASES)
+define_page_tests(globals(), "test_chart_type_renders_svg",
+                  _check_chart_type_renders_svg, _SAMPLE_CASES)
+
+
+if __name__ == "__main__":
+    from ccai.testbase.entrypoints import generic_test_entrypoint
+    generic_test_entrypoint()
