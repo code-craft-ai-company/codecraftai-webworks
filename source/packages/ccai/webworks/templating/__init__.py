@@ -12,9 +12,10 @@
     Adapter import policy
     ---------------------
 
-    Neither ``jinja2`` nor ``mako`` is declared as a webworks
-    dependency: each consumer is expected to install whichever
-    template engine it actually uses. :class:`Jinja2Adapter` and
+    Neither ``jinja2`` nor ``mako`` is a required webworks
+    dependency: each is an extra (``codecraftai-webworks[jinja2]``,
+    ``[mako]`` or ``[templating]`` for both) and each consumer
+    installs whichever template engine it actually uses. :class:`Jinja2Adapter` and
     :class:`MakoAdapter` are therefore both available via *lazy*
     attribute access (``__getattr__``) rather than eager imports
     here — greedy-importing either adapter at package-import time
