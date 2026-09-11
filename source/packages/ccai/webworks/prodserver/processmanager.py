@@ -6,13 +6,25 @@
     working directory changes for production deployments.
 """
 
-import grp
 import logging
 import os
-import pwd
 import signal
 import sys
 from typing import Any, Dict, Optional, TYPE_CHECKING
+
+from ccai.errors.exceptions import ConfigurationError
+
+# The POSIX account database modules do not exist on Windows. Importing
+# them conditionally keeps the rest of the process manager (PID files,
+# working directory, status) usable there; the privilege-dropping paths
+# that need them raise ConfigurationError when they are configured on a
+# platform that cannot honour them.
+try:
+    import grp
+    import pwd
+except ImportError:
+    grp = None
+    pwd = None
 
 if TYPE_CHECKING:
     from ccai.webworks.prodserver.serverconfig import ServerConfig
@@ -220,13 +232,18 @@ class ProcessManager:
         """
             Check if a process with the given PID is running.
 
-            Uses signal 0 to check process existence without
-            actually sending a signal.
+            On POSIX, uses signal 0 to check process existence without
+            actually sending a signal. On Windows ``os.kill(pid, 0)`` is
+            not a probe, it terminates the target, so the process is
+            queried through the Win32 API instead.
 
             :param pid: The process ID to check.
 
             :returns: True if the process is running.
         """
+        if sys.platform == "win32":
+            return ProcessManager._is_process_running_windows(pid)
+
         try:
             os.kill(pid, 0)
             rtnval = True
@@ -235,6 +252,54 @@ class ProcessManager:
         except PermissionError:
             # Process exists but we lack permission to signal it
             rtnval = True
+
+        return rtnval
+
+    @staticmethod
+    def _is_process_running_windows(pid: int) -> bool:
+        """
+            Check if a process with the given PID is running on Windows.
+
+            Opens the process with the least privilege that allows its
+            exit code to be read. A process that cannot be opened for
+            lack of access still exists; one whose PID is unknown does
+            not. An opened process is only considered running while its
+            exit code reads as STILL_ACTIVE.
+
+            :param pid: The process ID to check.
+
+            :returns: True if the process is running.
+        """
+        import ctypes
+        from ctypes import wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        ERROR_ACCESS_DENIED = 5
+        STILL_ACTIVE = 259
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            # Access denied means the process exists but is not ours to
+            # inspect; any other failure means there is no such process.
+            rtnval = ctypes.get_last_error() == ERROR_ACCESS_DENIED
+            return rtnval
+
+        try:
+            exit_code = wintypes.DWORD()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                rtnval = exit_code.value == STILL_ACTIVE
+            else:
+                rtnval = True
+        finally:
+            kernel32.CloseHandle(handle)
 
         return rtnval
 
@@ -334,12 +399,22 @@ class ProcessManager:
         """
             Change the process group to the configured group.
 
+            :raises ConfigurationError: If a group is configured on a
+                platform without the POSIX account database.
             :raises PrivilegeError: If the group does not exist or
                 the operation fails.
         """
         group_name = self._config.group
         if group_name is None:
             return
+
+        if grp is None:
+            errmsg = (
+                f"Cannot apply group '{group_name}': POSIX group lookup is not "
+                f"available on platform '{sys.platform}'. Remove the 'group' "
+                "setting from the server configuration on this platform."
+            )
+            raise ConfigurationError(errmsg)
 
         try:
             group_info = grp.getgrnam(group_name)
@@ -361,12 +436,22 @@ class ProcessManager:
             Also sets supplementary groups and initializes the
             user's group access list.
 
+            :raises ConfigurationError: If a user is configured on a
+                platform without the POSIX account database.
             :raises PrivilegeError: If the user does not exist or
                 the operation fails.
         """
         user_name = self._config.user
         if user_name is None:
             return
+
+        if pwd is None:
+            errmsg = (
+                f"Cannot apply user '{user_name}': POSIX user lookup is not "
+                f"available on platform '{sys.platform}'. Remove the 'user' "
+                "setting from the server configuration on this platform."
+            )
+            raise ConfigurationError(errmsg)
 
         try:
             user_info = pwd.getpwnam(user_name)

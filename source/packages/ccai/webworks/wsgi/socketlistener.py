@@ -100,9 +100,14 @@ class SocketListener:
             Creates a Unix domain socket and binds to the path specified in
             the configuration. Removes any existing socket file at the path.
             
-            :raises: BindError if binding fails.
+            :raises: BindError if binding fails or the platform has no
+                     Unix domain socket support.
         """
         socket_path = self._config.unix_socket
+        
+        if not hasattr(socket_module, "AF_UNIX"):
+            errmsg = "Unix domain sockets are not supported on this platform"
+            raise BindError(socket_path, errmsg)
         
         # Remove existing socket file if present
         if os.path.exists(socket_path):

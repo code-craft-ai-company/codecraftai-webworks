@@ -4,7 +4,9 @@
     This module provides the SignalHandler class that registers and
     manages OS signal handlers for server control. It handles SIGTERM
     and SIGINT for graceful shutdown, and SIGHUP for configuration
-    reload without dropping connections.
+    reload without dropping connections. SIGHUP is only registered on
+    platforms that define it; Windows has no SIGHUP, so only SIGTERM
+    and SIGINT are installed there.
 """
 
 import logging
@@ -74,19 +76,40 @@ class SignalHandler:
             _logger.warning("Signal handlers already registered")
             return
 
-        self._previous_handlers[signal.SIGTERM] = signal.getsignal(signal.SIGTERM)
-        self._previous_handlers[signal.SIGINT] = signal.getsignal(signal.SIGINT)
-        self._previous_handlers[signal.SIGHUP] = signal.getsignal(signal.SIGHUP)
+        handlers = self.supported_handlers()
 
-        signal.signal(signal.SIGTERM, self.handle_sigterm)
-        signal.signal(signal.SIGINT, self.handle_sigint)
-        signal.signal(signal.SIGHUP, self.handle_sighup)
+        for signum in handlers:
+            self._previous_handlers[signum] = signal.getsignal(signum)
+
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
 
         self._registered = True
 
-        _logger.info("Signal handlers registered (SIGTERM, SIGINT, SIGHUP)")
+        names = ", ".join(signal.Signals(signum).name for signum in handlers)
+        _logger.info("Signal handlers registered (%s)", names)
 
         return
+
+    def supported_handlers(self) -> Dict[int, Callable[[int, Optional["FrameType"]], None]]:
+        """
+            Get the signals this platform supports and the handler for each.
+
+            SIGTERM and SIGINT exist everywhere. SIGHUP is included only
+            when the signal module defines it, so the reload handler is
+            never registered on platforms that cannot deliver the signal.
+
+            :returns: Mapping of signal number to handler method.
+        """
+        handlers: Dict[int, Callable[[int, Optional["FrameType"]], None]] = {
+            signal.SIGTERM: self.handle_sigterm,
+            signal.SIGINT: self.handle_sigint,
+        }
+
+        if hasattr(signal, "SIGHUP"):
+            handlers[signal.SIGHUP] = self.handle_sighup
+
+        return handlers
 
     def unregister(self) -> None:
         """
