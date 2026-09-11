@@ -1,0 +1,13 @@
+# Line-ending policy for every platform the merge gate runs on.
+#
+# Text files are normalised to LF in the repository and checked out with LF
+# everywhere, so a Windows runner with core.autocrlf=true sees the same bytes
+# as Linux and macOS.
+* text=auto eol=lf
+
+# The vendored OpenAPI UI assets are recorded in manifest.json with a SHA-256
+# over their exact bytes, and the integrity tests recompute those digests.
+# Mark the whole tree as not-text so git never rewrites their line endings on
+# checkout (autocrlf turned swagger-ui-bundle.js into CRLF on Windows and the
+# checksum no longer matched).
+source/packages/ccai/webworks/openapi/static/** -text

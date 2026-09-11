@@ -8,8 +8,20 @@
 
 import signal
 
+from ccai.errors.exceptions import SkipError
 from ccai.testbase.mocking import Mock
 from ccai.webworks.prodserver.signalhandler import SignalHandler
+
+
+def _require_sighup() -> None:
+    """
+        Skip the calling test on platforms whose signal module has no SIGHUP.
+
+        :raises SkipError: When SIGHUP is not defined (Windows).
+    """
+    if not hasattr(signal, "SIGHUP"):
+        raise SkipError("SIGHUP is not defined on this platform")
+    return
 
 
 def _create_mock_server():
@@ -133,6 +145,8 @@ def test_signal_handler_register_installs_sighup_handler():
         Test that register() installs a custom SIGHUP handler
         that is not the default handler.
     """
+    _require_sighup()
+
     mock_server, _, _ = _create_mock_server()
     handler = SignalHandler(mock_server)
 
@@ -167,6 +181,36 @@ def test_signal_handler_double_register_is_safe():
             raise AssertionError(errmsg)
     finally:
         handler.unregister()
+
+    return
+
+
+def test_signal_handler_supported_handlers_follow_platform():
+    """
+        Test that supported_handlers() lists SIGTERM and SIGINT everywhere
+        and SIGHUP only where the signal module defines it.
+    """
+    mock_server, _, _ = _create_mock_server()
+    handler = SignalHandler(mock_server)
+
+    handlers = handler.supported_handlers()
+
+    if handlers.get(signal.SIGTERM) != handler.handle_sigterm:
+        errmsg = "Expected SIGTERM to map to handle_sigterm"
+        raise AssertionError(errmsg)
+
+    if handlers.get(signal.SIGINT) != handler.handle_sigint:
+        errmsg = "Expected SIGINT to map to handle_sigint"
+        raise AssertionError(errmsg)
+
+    expected_count = 3 if hasattr(signal, "SIGHUP") else 2
+    if len(handlers) != expected_count:
+        errmsg = f"Expected {expected_count} supported signals, got {sorted(handlers)}"
+        raise AssertionError(errmsg)
+
+    if hasattr(signal, "SIGHUP") and handlers.get(signal.SIGHUP) != handler.handle_sighup:
+        errmsg = "Expected SIGHUP to map to handle_sighup"
+        raise AssertionError(errmsg)
 
     return
 
@@ -213,6 +257,8 @@ def test_handle_sighup_calls_server_reload():
 
         Validates: Requirements 2.7
     """
+    _require_sighup()
+
     mock_server, _, reload_mock = _create_mock_server()
     handler = SignalHandler(mock_server)
 
@@ -248,9 +294,11 @@ def test_signal_handler_unregister_restores_previous_handlers():
     """
         Test that unregister() restores the previous signal handlers.
     """
+    has_sighup = hasattr(signal, "SIGHUP")
+
     previous_sigterm = signal.getsignal(signal.SIGTERM)
     previous_sigint = signal.getsignal(signal.SIGINT)
-    previous_sighup = signal.getsignal(signal.SIGHUP)
+    previous_sighup = signal.getsignal(signal.SIGHUP) if has_sighup else None
 
     mock_server, _, _ = _create_mock_server()
     handler = SignalHandler(mock_server)
@@ -259,7 +307,7 @@ def test_signal_handler_unregister_restores_previous_handlers():
 
     restored_sigterm = signal.getsignal(signal.SIGTERM)
     restored_sigint = signal.getsignal(signal.SIGINT)
-    restored_sighup = signal.getsignal(signal.SIGHUP)
+    restored_sighup = signal.getsignal(signal.SIGHUP) if has_sighup else None
 
     if restored_sigterm != previous_sigterm:
         errmsg = "Expected SIGTERM handler to be restored to previous handler"
@@ -269,7 +317,8 @@ def test_signal_handler_unregister_restores_previous_handlers():
         errmsg = "Expected SIGINT handler to be restored to previous handler"
         raise AssertionError(errmsg)
 
-    if restored_sighup != previous_sighup:
+    # SIGHUP is only registered where the platform defines it
+    if has_sighup and restored_sighup != previous_sighup:
         errmsg = "Expected SIGHUP handler to be restored to previous handler"
         raise AssertionError(errmsg)
 

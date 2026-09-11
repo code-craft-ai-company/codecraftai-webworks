@@ -6,6 +6,8 @@
     ValidationError, and ConfigChangeEvent.
 """
 
+import os
+
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -1185,7 +1187,10 @@ def test_configuration_file_not_found_error_message_without_reference():
     path = Path("/etc/myapp/settings.yaml")
     error = ConfigurationFileNotFoundError(path)
     
-    expected_msg = "Configuration file not found: /etc/myapp/settings.yaml"
+    # Path renders with the platform separator (backslashes on Windows),
+    # so the expected text is built from the same normalisation.
+    expected_path = os.path.normpath("/etc/myapp/settings.yaml")
+    expected_msg = f"Configuration file not found: {expected_path}"
     if str(error) != expected_msg:
         errmsg = f"Expected message '{expected_msg}', got {str(error)}"
         raise AssertionError(errmsg)
@@ -1216,11 +1221,16 @@ def test_configuration_file_not_found_error_message_with_reference():
     referenced_from = Path("/etc/myapp/settings.yaml")
     error = ConfigurationFileNotFoundError(path, referenced_from=referenced_from)
     
-    if "Configuration file not found: /etc/myapp/secrets.yaml" not in str(error):
+    # Path renders with the platform separator (backslashes on Windows),
+    # so the expected text is built from the same normalisation.
+    expected_path = os.path.normpath("/etc/myapp/secrets.yaml")
+    expected_reference = os.path.normpath("/etc/myapp/settings.yaml")
+    
+    if f"Configuration file not found: {expected_path}" not in str(error):
         errmsg = f"Expected path in message, got {str(error)}"
         raise AssertionError(errmsg)
     
-    if "(referenced from /etc/myapp/settings.yaml)" not in str(error):
+    if f"(referenced from {expected_reference})" not in str(error):
         errmsg = f"Expected referenced_from in message, got {str(error)}"
         raise AssertionError(errmsg)
     

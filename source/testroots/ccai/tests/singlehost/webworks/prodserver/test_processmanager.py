@@ -8,8 +8,10 @@
 
 import os
 import signal
+import sys
 import tempfile
 
+from ccai.errors.exceptions import SkipError
 from ccai.webworks.prodserver.serverconfig import ServerConfig
 from ccai.webworks.prodserver.processmanager import (
     DaemonError,
@@ -18,6 +20,21 @@ from ccai.webworks.prodserver.processmanager import (
     ProcessManager,
     ProcessManagerError,
 )
+
+
+def _require_posix_privileges() -> None:
+    """
+        Skip the calling test on platforms without POSIX privilege semantics.
+
+        Windows has no user or group database for pwd/grp to consult and
+        its umask only models the owner read/write bits, so the privilege
+        dropping behaviour cannot be exercised there.
+
+        :raises SkipError: When running on Windows.
+    """
+    if sys.platform == "win32":
+        raise SkipError("POSIX privilege dropping (pwd, grp, umask) is not available on Windows")
+    return
 
 
 # =============================================================================
@@ -392,6 +409,8 @@ def test_apply_umask_sets_value():
     """
         Test that drop_privileges applies the configured umask.
     """
+    _require_posix_privileges()
+
     original_umask = os.umask(0o022)
     os.umask(original_umask)
 
@@ -439,6 +458,8 @@ def test_apply_user_raises_for_nonexistent_user():
         Test that drop_privileges raises PrivilegeError for a
         nonexistent user.
     """
+    _require_posix_privileges()
+
     config = ServerConfig(user="nonexistent_user_xyz_12345")
     manager = ProcessManager(config)
 
@@ -460,6 +481,8 @@ def test_apply_group_raises_for_nonexistent_group():
         Test that drop_privileges raises PrivilegeError for a
         nonexistent group.
     """
+    _require_posix_privileges()
+
     config = ServerConfig(group="nonexistent_group_xyz_12345")
     manager = ProcessManager(config)
 

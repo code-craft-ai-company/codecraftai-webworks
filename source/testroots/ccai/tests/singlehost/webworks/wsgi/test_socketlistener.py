@@ -13,6 +13,7 @@ import threading
 import time
 from typing import Optional
 
+from ccai.errors.exceptions import SkipError
 from ccai.webworks.wsgi.socketlistener import SocketListener
 from ccai.webworks.wsgi.serverconfig import ServerConfig
 from ccai.webworks.wsgi.exceptions import BindError
@@ -32,6 +33,17 @@ def find_available_port() -> int:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     return port
+
+
+def _require_unix_sockets() -> None:
+    """
+        Skip the calling test on platforms whose socket module has no AF_UNIX.
+
+        :raises SkipError: When Unix domain sockets are unavailable (Windows).
+    """
+    if not hasattr(socket_module, "AF_UNIX"):
+        raise SkipError("Unix domain sockets (AF_UNIX) are not available on this platform")
+    return
 
 
 # =============================================================================
@@ -181,6 +193,8 @@ def test_bind_unix_socket():
     """
         Test binding to a Unix domain socket.
     """
+    _require_unix_sockets()
+
     with tempfile.TemporaryDirectory() as temp_dir:
         socket_path = os.path.join(temp_dir, "test.sock")
         config = ServerConfig(unix_socket=socket_path)
@@ -215,6 +229,8 @@ def test_bind_unix_socket_removes_existing():
     """
         Test that binding removes existing socket file.
     """
+    _require_unix_sockets()
+
     with tempfile.TemporaryDirectory() as temp_dir:
         socket_path = os.path.join(temp_dir, "test.sock")
         
@@ -364,6 +380,8 @@ def test_accept_unix_socket_returns_empty_address():
     """
         Test that accept on Unix socket returns empty address tuple.
     """
+    _require_unix_sockets()
+
     with tempfile.TemporaryDirectory() as temp_dir:
         socket_path = os.path.join(temp_dir, "test.sock")
         config = ServerConfig(unix_socket=socket_path)
@@ -439,6 +457,8 @@ def test_close_removes_unix_socket_file():
     """
         Test that close removes Unix socket file.
     """
+    _require_unix_sockets()
+
     with tempfile.TemporaryDirectory() as temp_dir:
         socket_path = os.path.join(temp_dir, "test.sock")
         config = ServerConfig(unix_socket=socket_path)
@@ -581,14 +601,21 @@ def test_bind_raises_for_port_in_use():
     """
         Test that bind raises BindError when port is already in use.
         
-        Note: This test creates a socket without SO_REUSEPORT to ensure
-        the port is truly in use and cannot be shared.
+        Note: This test creates a listening socket that holds the port
+        without SO_REUSEPORT so the port is truly in use and cannot be
+        shared. On Windows SO_REUSEADDR lets a second socket bind an
+        address that is already in LISTEN state, so the holder is bound
+        with SO_EXCLUSIVEADDRUSE there, which makes the second bind fail
+        with WSAEADDRINUSE just as it fails with EADDRINUSE on POSIX.
     """
     port = find_available_port()
     
     # Create a socket that holds the port without SO_REUSEPORT
     blocking_socket = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_STREAM)
-    blocking_socket.setsockopt(socket_module.SOL_SOCKET, socket_module.SO_REUSEADDR, 1)
+    if hasattr(socket_module, "SO_EXCLUSIVEADDRUSE"):
+        blocking_socket.setsockopt(socket_module.SOL_SOCKET, socket_module.SO_EXCLUSIVEADDRUSE, 1)
+    else:
+        blocking_socket.setsockopt(socket_module.SOL_SOCKET, socket_module.SO_REUSEADDR, 1)
     # Explicitly disable SO_REUSEPORT if available
     if hasattr(socket_module, "SO_REUSEPORT"):
         try:
