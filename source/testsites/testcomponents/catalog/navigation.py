@@ -345,11 +345,14 @@ COMPONENTS = [
             "summary shows the record range for the current page.</p>"
         ),
         how_to_use=(
-            "<p>Set <code>page</code> (1-based) and <code>total-pages</code>. "
-            "Listen for <code>mj-pagination-change</code> and update "
-            "<code>page</code> in the handler. Add <code>show-summary</code> "
-            "along with <code>total-items</code> and <code>page-size</code> "
-            "to display a &ldquo;Showing X&ndash;Y of Z&rdquo; summary. "
+            "<p>Set <code>page</code> (1-based) and either <code>total-pages</code> "
+            "or <code>total-items</code> with <code>page-size</code> (the page "
+            "count is then derived). Listen for <code>mj-pagination-change</code> "
+            "and update <code>page</code> in the handler. With "
+            "<code>total-items</code> the pager shows a &ldquo;Showing "
+            "X&ndash;Y of Z&rdquo; summary (<code>hide-summary</code> turns it "
+            "off). When everything fits on one page the pager hides itself "
+            "unless <code>show-single-page</code> is set. "
             "Use <code>variant=\"compact\"</code> for narrow containers.</p>"
         ),
         example=(
@@ -359,13 +362,15 @@ COMPONENTS = [
         ),
         attributes=[
             ("page", "Current page number (1-based)."),
-            ("total-pages", "Total number of pages."),
-            ("total-items", "Total record count used for the summary."),
-            ("page-size", "Records per page used for the summary."),
+            ("total-pages", "Total number of pages; derived from total-items and page-size when absent."),
+            ("total-items", "Total record count; drives the derived page count and the summary."),
+            ("page-size", "Records per page (default 10)."),
             ("sibling-count", "Number of page buttons shown on each side of the current page (default 1)."),
             ("boundary-count", "Number of page buttons always shown at each end (default 1)."),
             ("variant", "full | compact | simple layout."),
-            ("show-summary", "Boolean; shows a results-range summary."),
+            ("show-summary", "Boolean; always shows the results-range summary."),
+            ("hide-summary", "Boolean; hides the summary that total-items would show."),
+            ("show-single-page", "Boolean; keeps the pager visible when there is only one page."),
             ("nav-label", "Accessible label for the <nav> landmark."),
             ("disabled", "Boolean; disables all controls."),
         ],

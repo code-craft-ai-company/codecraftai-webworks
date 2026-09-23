@@ -1077,6 +1077,113 @@ def test_pagination_page_button_navigates(page, base_url):
 
 
 # ---------------------------------------------------------------------------
+# mj-pagination: page count from total-items, single-page state, strings
+# ---------------------------------------------------------------------------
+
+_PAGE_BUTTON_LABELS_JS = """
+(selector) => Array.from(
+    document.querySelector(selector).shadowRoot.querySelectorAll('.page-btn')
+).map((node) => node.textContent.trim())
+"""
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_pagination_derives_page_count_from_total_items(page, base_url):
+    """
+        Without total-pages, the page count is derived from total-items and
+        page-size: 31 items at 25 per page render pages 1 and 2.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = '<mj-pagination id="pager" page="1" page-size="25" total-items="31"></mj-pagination>'
+    load_fixture(page, base_url, markup, ["mj-pagination"])
+    labels = page.evaluate(_PAGE_BUTTON_LABELS_JS, "#pager")
+    assert labels == ["1", "2"], "Expected page buttons 1 and 2, got {}".format(labels)
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_pagination_next_reaches_the_derived_second_page(page, base_url):
+    """
+        With a derived page count, Next is enabled on page 1 and moves to
+        page 2.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = '<mj-pagination id="pager" page="1" page-size="25" total-items="31"></mj-pagination>'
+    load_fixture(page, base_url, markup, ["mj-pagination"])
+    page.locator("#pager").locator("[part='next']").click()
+    current = page.evaluate("() => document.querySelector('#pager').getAttribute('page')")
+    assert current == "2", "Next should move to page 2, page is {}".format(current)
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_pagination_single_page_is_hidden(page, base_url):
+    """
+        When every item fits on one page the pager hides itself, even when the
+        page gives the host a layout display.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-pagination id="pager" style="display: flex" page="1" page-size="25" total-items="7">'
+        '</mj-pagination>'
+    )
+    load_fixture(page, base_url, markup, ["mj-pagination"])
+    expect(page.locator("#pager")).to_be_hidden()
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_pagination_shows_item_range_summary(page, base_url):
+    """
+        With total-items known, the pager shows the range of items on the
+        current page.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = '<mj-pagination id="pager" page="1" page-size="25" total-items="31"></mj-pagination>'
+    load_fixture(page, base_url, markup, ["mj-pagination"])
+    summary = page.evaluate(
+        "() => document.querySelector('#pager').shadowRoot.querySelector('.summary').textContent"
+    )
+    assert summary == "Showing 1–25 of 31", "Unexpected summary {!r}".format(summary)
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_pagination_labels_are_words_not_catalog_keys(page, base_url):
+    """
+        The Previous / Next buttons and the landmark name read as words, not
+        as unregistered catalog keys such as "mj.pagination.next".
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = '<mj-pagination id="pager" page="1" total-pages="3"></mj-pagination>'
+    load_fixture(page, base_url, markup, ["mj-pagination"])
+    expect(page.get_by_role("navigation", name="Pagination", exact=True)).to_have_count(1)
+    expect(page.get_by_role("button", name="Previous", exact=True)).to_have_count(1)
+    expect(page.get_by_role("button", name="Next", exact=True)).to_have_count(1)
+    return
+
+
+# ---------------------------------------------------------------------------
 # Catalog strings: no component shows a raw "mj.*" key
 # ---------------------------------------------------------------------------
 

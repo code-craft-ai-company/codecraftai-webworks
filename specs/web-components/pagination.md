@@ -50,15 +50,18 @@ form navigation — use `<mj-wizard>`. **Do not use** for tab-like views — use
 | Attribute | Type | Default | Reflects | Description |
 |-----------|------|---------|----------|-------------|
 | `page` | number | `1` | Yes | Current 1-based page number |
-| `total-pages` | number | `1` | Yes | Total number of pages |
-| `total-items` | number | `0` | Yes | Total result count; used to compute summary text |
+| `total-pages` | number | derived | Yes | Total number of pages. When absent it is derived as `ceil(total-items / page-size)` (at least 1), so a view that only knows its row count gets working page buttons |
+| `total-items` | number | — | Yes | Total result count; drives the derived page count and the summary text |
 | `page-size` | number | `10` | Yes | Items per page; also drives the page-size selector |
 | `page-size-options` | string | `"10,25,50,100"` | Yes | Comma-separated list of page-size options |
 | `sibling-count` | number | `1` | Yes | Number of page buttons shown on each side of the current page |
 | `boundary-count` | number | `1` | Yes | Number of page buttons always shown at start and end |
 | `variant` | string | `"full"` | Yes | Display variant: `full` \| `compact` \| `simple` |
 | `show-page-size` | boolean | `false` | Yes | Shows the page-size selector |
-| `show-summary` | boolean | `false` | Yes | Shows the "Showing X–Y of Z" summary |
+| `show-summary` | boolean | `false` | Yes | Always shows the "Showing X–Y of Z" summary (it is shown by default whenever `total-items` is set) |
+| `hide-summary` | boolean | `false` | Yes | Hides the summary that `total-items` would otherwise show |
+| `show-single-page` | boolean | `false` | Yes | Keeps the pager visible when there is only one page |
+| `single-page` | boolean | — | Yes (read-only state) | Set by the component when there is at most one page; the pager then hides itself unless `show-single-page` is set |
 | `nav-label` | string | `"Pagination"` | Yes | `aria-label` for the `<nav>` landmark |
 | `disabled` | boolean | `false` | Yes | Disables all controls |
 
@@ -111,7 +114,7 @@ form navigation — use `<mj-wizard>`. **Do not use** for tab-like views — use
 - **hover** — page buttons show hover background.
 - **focus-visible** — focused button shows focus ring.
 - **disabled** — all controls have `aria-disabled="true"`; no interaction.
-- **single-page** — `total-pages === 1`; Prev and Next both disabled; no numbered pages beyond 1.
+- **single-page** — at most one page (`total-pages` or the derived count is 1, including zero items): the host carries `single-page` and is hidden (`display: none !important`, so a consumer layout display cannot resurface it). With `show-single-page` it stays visible with Prev and Next disabled.
 
 ## 11. Behavior & interactions
 - Page buttons are `<button>` elements by default; if an `href-template` attribute
@@ -161,6 +164,7 @@ N/A — `<mj-pagination>` is a navigation component, not a form control.
 - Previous/Next labels: `mj.pagination.previous` / `mj.pagination.next`.
 - Compact variant label: `mj.pagination.pageOf` with `{page}` and `{total}`.
 - Summary template: `mj.pagination.summary` with `{from}`, `{to}`, `{total}`.
+- Every key above has an English default registered in `core/intl.js`; `registerStrings()` overrides them.
 - In RTL, Previous and Next buttons swap positions; arrow icons flip via CSS
   `transform: scaleX(-1)` or logical-property equivalents.
 
@@ -178,7 +182,7 @@ N/A — `<mj-pagination>` is a navigation component, not a form control.
 - `<mj-select>` — used for the page-size selector when `show-page-size` is true.
 
 ## 18. Edge cases & error handling
-- **`page` > `total-pages`**: clamped to `total-pages`; console warning emitted.
+- **`page` > `total-pages`**: clamped to `total-pages`.
 - **`page` < 1**: clamped to 1.
 - **`total-pages` = 0**: component renders with all controls disabled.
 - **`total-pages` = 1**: only one page button rendered; Prev and Next disabled.
