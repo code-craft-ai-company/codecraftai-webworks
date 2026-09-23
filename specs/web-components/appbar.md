@@ -112,6 +112,11 @@ When the application requires both a top bar and a side nav, compose them in
   slot content.
 - The overlay drawer traps focus per the `<mj-side-nav>` spec; closing it
   returns focus to the toggle button.
+- With nothing in the `navigation` slot the bar renders no navigation
+  landmark (an empty `<nav>` would still be announced), and with nothing in
+  either the `navigation` or the `mobile-navigation` slot it renders no mobile
+  toggle, drawer, or backdrop -- a bar that only carries brand and actions
+  never offers a button that opens an empty drawer.
 - When `transparent` is set, a `scroll` listener (passive, using
   `IntersectionObserver` on a sentinel element to avoid scroll-handler jank)
   toggles the `scrolled` attribute.

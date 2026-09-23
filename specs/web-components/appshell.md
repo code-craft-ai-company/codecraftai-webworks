@@ -49,6 +49,8 @@ Use as the single root layout element for desktop-style web applications that ne
 | `split` | boolean | `false` | Yes | Enables a two-pane split in the main area |
 | `split-ratio` | number | `0.5` | No | Ratio of the primary pane (0–1); persisted |
 | `storage-key` | string | `"mj-app-shell"` | Yes | Prefix for localStorage panel-size entries |
+| `nav-label` | string | `"Primary navigation"` | Yes | Accessible name of the nav region when the shell supplies the navigation landmark |
+| `inspector-label` | string | `"Inspector"` | Yes | Accessible name of the inspector landmark |
 
 ## 6. Properties
 | Property | Type | Description |
@@ -85,7 +87,8 @@ Use as the single root layout element for desktop-style web applications that ne
 |-----------------|---------|-------------|
 | `--mj-shell-nav-width` | `240px` | Collapsed/expanded side-nav width (overridden by `nav-size`) |
 | `--mj-shell-inspector-width` | `320px` | Inspector default width (overridden by `inspector-size`) |
-| `--mj-shell-dock-width` | `48px` | Dock rail width |
+| `--mj-shell-dock-width` | `48px` | Dock rail width (the rail is not rendered while the `dock` slot is empty) |
+| `--mj-shell-breakpoint-nav` | `768px` | Width below which the nav becomes an overlay drawer |
 | `--mj-shell-appbar-height` | `var(--mj-size-control-lg)` | App-bar height |
 | `--mj-shell-statusbar-height` | `22px` | Status-bar height |
 | `--mj-shell-bg` | `var(--mj-color-surface-1)` | Root background |
@@ -101,7 +104,7 @@ Use as the single root layout element for desktop-style web applications that ne
 - **resizing** — user is dragging a split handle; `resizing` attribute on the handle for cursor styling.
 
 ## 11. Behavior & interactions
-Panel sizes are stored in `localStorage` under the `storage-key` prefix and restored on mount. `ResizeObserver` on the root switches `nav-mode` to `"overlay"` automatically when the viewport is narrower than `--mj-shell-breakpoint-nav` (default 768 px). The inspector panel and split pane handle use `<mj-split-pane>` internally; the separator is keyboard-resizable. When the nav is in overlay mode and `nav-open` is set, a backdrop is rendered behind it using the Overlay primitive; focus is trapped in the nav and restored on close. The main slot maps to a `<main>` landmark; clicking the backdrop closes the overlay nav.
+Panel sizes are stored in `localStorage` under the `storage-key` prefix and restored on mount. `ResizeObserver` on the root switches `nav-mode` to `"overlay"` automatically when the shell is narrower than the `--mj-shell-breakpoint-nav` custom property (px, rem or em; default 768 px) set on the host or an ancestor. Entering overlay mode closes the drawer (the wide-layout mode and `nav-open` state are remembered and restored when the shell widens again), so a narrow viewport never loads with the drawer covering the content; the first measurement is applied without transitions. The inspector panel and split pane handle use `<mj-split-pane>` internally; the separator is keyboard-resizable. When the nav is in overlay mode and `nav-open` is set, a backdrop is rendered behind it; focus moves to the first tabbable element in the drawer and is trapped there (slotted content included), the other regions are `inert`, and focus returns to the opener on close. Clicking the backdrop or pressing Escape closes the overlay nav; Escape works wherever focus is and is skipped when an inner component already handled it (`defaultPrevented`), and the shell marks the Escape it handled with `preventDefault()`. A closed overlay drawer is `visibility: hidden`, so its links are out of the tab order.
 
 ## 12. Keyboard interaction
 | Key | Action |
@@ -114,7 +117,7 @@ Panel sizes are stored in `localStorage` under the `storage-key` prefix and rest
 | `Escape` | Close overlay nav (when in overlay mode) |
 
 ## 13. Accessibility
-The shell wraps each region in the appropriate HTML5 landmark: `<header>` for the app-bar, `<nav aria-label="Primary navigation">` for the side-nav, `<main>` for the main area, `<aside aria-label="Inspector">` for the inspector, `<footer>` for the status bar. The dock (if slotted) is inside the `<nav>`. All panels have distinct `aria-label`s so screen-reader landmark navigation is unambiguous. Split handles carry `role="separator"`, `aria-orientation="vertical"`, `aria-valuenow`, `aria-valuemin`, and `aria-valuemax`. The nav toggle button has `aria-expanded` reflecting the nav's open state and `aria-controls` pointing to the nav element ID. `F6` panel cycling is announced via a polite live region ("Focus moved to Inspector").
+The shell wraps each region in the appropriate landmark, without ever nesting or duplicating one: `<header>` (banner) for the app-bar; `role="navigation"` with `nav-label` (default "Primary navigation") for the side-nav region unless the slotted nav content is itself a navigation landmark (`<nav>`, `role="navigation"`, `<mj-side-nav>`, `<mj-tree-nav>`), in which case the region adds no landmark; `role="main"` for the main area unless the slotted content is itself a `<main>` / `role="main"`; `<aside aria-label="Inspector">` for the inspector and `<footer>` for the status bar. The dock, inspector, and status-bar regions are not rendered while their slots are empty, so an unused region exposes no empty landmark and takes no space. The dock (if slotted) is inside the `<nav>`. All panels have distinct `aria-label`s so screen-reader landmark navigation is unambiguous. Split handles carry `role="separator"`, `aria-orientation="vertical"`, `aria-valuenow`, `aria-valuemin`, and `aria-valuemax`. The nav toggle button has `aria-expanded` reflecting the nav's open state and `aria-controls` pointing to the nav element ID. `F6` panel cycling is announced via a polite live region ("Focus moved to Inspector").
 
 ## 14. Form participation
 N/A — structural layout component.

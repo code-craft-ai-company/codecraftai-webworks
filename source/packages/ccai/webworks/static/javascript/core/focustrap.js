@@ -15,34 +15,72 @@ const FOCUSABLE_SELECTOR = [
   "select:not([disabled])",
   "textarea:not([disabled])",
   "[tabindex]:not([tabindex='-1'])",
+  "[contenteditable]:not([contenteditable='false'])",
   "audio[controls]",
   "video[controls]",
   "details>summary:first-of-type"
 ].join(",");
 
 /*
- * Return focusable descendants of `root` in document order. Crosses into open
- * shadow roots so composed overlays trap correctly.
+ * The element children of `node` in the flat tree: a <slot>'s assigned
+ * elements (or its fallback content when nothing is assigned), a shadow
+ * host's shadow root content, and plain children otherwise.
+ */
+function flatChildren(node) {
+  if (node instanceof HTMLSlotElement) {
+    const assigned = node.assignedElements({ flatten: true })
+    if (assigned.length > 0) {
+      return assigned
+    }
+    return Array.from(node.children)
+  }
+  if (node instanceof Element && node.shadowRoot !== null && node.shadowRoot !== undefined) {
+    return Array.from(node.shadowRoot.children)
+  }
+  return Array.from(node.children)
+}
+
+function isVisible(element) {
+  const visible = element.offsetParent !== null || element.getClientRects().length > 0
+  return visible
+}
+
+/*
+ * Return the tabbable elements under `root` (an element, shadow root, or
+ * document) in flat-tree order: open shadow roots are entered and slotted
+ * content is visited where its slot sits, so a trap on a shadow container
+ * that only holds <slot>s still finds the light-DOM controls projected into
+ * it. Elements taken out of the tab order (tabindex="-1", e.g. the inactive
+ * items of a roving-tabindex group) and invisible elements are skipped.
  */
 export function getFocusable(root) {
   const results = []
 
   const visit = (node) => {
-    const candidates = node.querySelectorAll(FOCUSABLE_SELECTOR)
-    for (let index = 0; index < candidates.length; index = index + 1) {
-      const candidate = candidates[index]
-      const visible = candidate.offsetParent !== null || candidate.getClientRects().length > 0
-      if (visible === true) {
-        results.push(candidate)
+    const children = flatChildren(node)
+    for (let index = 0; index < children.length; index = index + 1) {
+      const child = children[index]
+      if (child.matches(FOCUSABLE_SELECTOR) === true && child.tabIndex >= 0 && isVisible(child) === true) {
+        results.push(child)
       }
-      if (candidate.shadowRoot !== null && candidate.shadowRoot !== undefined) {
-        visit(candidate.shadowRoot)
-      }
+      visit(child)
     }
   }
 
   visit(root)
   return results
+}
+
+/*
+ * The element that really has focus, following focus down through open
+ * shadow roots (document.activeElement stops at the outermost shadow host).
+ */
+export function deepActiveElement() {
+  let active = document.activeElement
+  while (active !== null && active.shadowRoot !== null && active.shadowRoot !== undefined && active.shadowRoot.activeElement !== null) {
+    active = active.shadowRoot.activeElement
+  }
+  return active
 }
 
 /*
@@ -52,7 +90,7 @@ export function getFocusable(root) {
  * focused element.
  */
 export function trapFocus(container, initial) {
-  const previouslyFocused = document.activeElement
+  const previouslyFocused = deepActiveElement()
 
   const onKeydown = (event) => {
     if (event.key !== "Tab") {
@@ -67,9 +105,19 @@ export function trapFocus(container, initial) {
 
     const first = focusable[0]
     const last = focusable[focusable.length - 1]
-    const active = container.getRootNode().activeElement
+    const active = deepActiveElement()
 
-    if (event.shiftKey === true && active === first) {
+    if (focusable.includes(active) === false) {
+      // Focus sits on something outside the tab sequence (a roving item
+      // with tabindex="-1", a plain focused container): wrap into the
+      // sequence instead of letting the browser leave the container.
+      event.preventDefault()
+      if (event.shiftKey === true) {
+        last.focus()
+      } else {
+        first.focus()
+      }
+    } else if (event.shiftKey === true && active === first) {
       event.preventDefault()
       last.focus()
     } else if (event.shiftKey === false && active === last) {
@@ -86,9 +134,16 @@ export function trapFocus(container, initial) {
     target.focus()
   }
 
-  const dispose = () => {
+  /*
+   * Release the trap. Focus returns to the element focused before the trap
+   * was set unless `options.restoreFocus` is false (used when the container
+   * stops being modal without closing, e.g. a drawer that becomes a static
+   * sidebar).
+   */
+  const dispose = (options) => {
     container.removeEventListener("keydown", onKeydown)
-    if (previouslyFocused !== null && typeof previouslyFocused.focus === "function") {
+    const restore = options === undefined || options === null || options.restoreFocus !== false
+    if (restore === true && previouslyFocused !== null && typeof previouslyFocused.focus === "function") {
       previouslyFocused.focus()
     }
   }

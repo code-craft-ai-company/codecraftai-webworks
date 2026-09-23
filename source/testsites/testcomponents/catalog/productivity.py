@@ -152,9 +152,13 @@ COMPONENTS = [
             "component that assembles the canonical five-zone application "
             "chrome: app bar, icon dock, collapsible side navigation, main "
             "content area, inspector panel, and status bar. It manages "
-            "responsive collapse (overlay mode below 768 px), panel "
-            "size persistence in <code>localStorage</code>, focus cycling "
-            "with <kbd>F6</kbd>, and an accessible overlay backdrop.</p>"
+            "responsive collapse (an overlay drawer, closed by default, "
+            "below <code>--mj-shell-breakpoint-nav</code>, 768 px unless "
+            "set), panel size persistence in <code>localStorage</code>, focus "
+            "cycling with <kbd>F6</kbd>, and an accessible overlay drawer "
+            "that traps focus and closes on <kbd>Escape</kbd>. It adds a "
+            "main or navigation landmark only where the slotted content "
+            "does not bring one, and leaves empty regions out.</p>"
         ),
         how_to_use=(
             "<p>Assign content to named slots: <code>app-bar</code>, "

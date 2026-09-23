@@ -298,6 +298,41 @@ def test_app_bar_escape_closes_drawer(page, base_url):
     return
 
 
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_bar_without_navigation_exposes_no_navigation_landmark(page, base_url):
+    """
+        An app bar with nothing in its navigation slot renders no (empty)
+        navigation landmark.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = '<mj-app-bar><span slot="brand">App</span><button slot="actions">Sign out</button></mj-app-bar>'
+    load_fixture(page, base_url, markup, ["mj-app-bar"])
+    expect(page.get_by_role("navigation")).to_have_count(0)
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_bar_without_navigation_has_no_drawer_toggle_on_phones(page, base_url):
+    """
+        At phone width an app bar without navigation shows no drawer toggle
+        (it would open an empty drawer).
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    page.set_viewport_size({"width": 390, "height": 800})
+    markup = '<mj-app-bar><span slot="brand">App</span><button slot="actions">Sign out</button></mj-app-bar>'
+    load_fixture(page, base_url, markup, ["mj-app-bar"])
+    expect(page.locator("mj-app-bar").locator(".toggle")).to_be_hidden()
+    return
+
+
 # ===========================================================================
 # mj-side-nav
 # ===========================================================================

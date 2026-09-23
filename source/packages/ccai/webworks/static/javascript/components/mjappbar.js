@@ -87,6 +87,11 @@ const STYLES = `
   .drawer { display: none; }
   .backdrop { display: none !important; }
 }
+/* No navigation slotted: no empty nav landmark, no drawer toggle. */
+.nav[hidden],
+.toggle[hidden],
+.drawer[hidden],
+.backdrop[hidden] { display: none !important; }
 `;
 
 export class MjAppBar extends MjElement {
@@ -134,13 +139,36 @@ export class MjAppBar extends MjElement {
     this._toggle = this.$(".toggle");
     this._drawer = this.$(".drawer");
     this._backdrop = this.$(".backdrop");
+    this._navEl = this.$(".nav");
 
     this.listen(this._toggle, "click", this._onToggleClick.bind(this));
     this.listen(this._backdrop, "click", this._onBackdropClick.bind(this));
     this.listen(this, "keydown", this._onKeydown.bind(this));
 
+    const slots = this.shadowRoot.querySelectorAll("slot[name='navigation'], slot[name='mobile-navigation']");
+    for (let index = 0; index < slots.length; index = index + 1) {
+      this.listen(slots[index], "slotchange", this._syncNavigationPresence.bind(this));
+    }
+    this._syncNavigationPresence();
+
     this._setupScrollSpy();
     this._syncOpen();
+    return
+  }
+
+  /*
+   * The nav landmark, the mobile drawer, and its toggle exist only for
+   * slotted navigation. Without any, they are hidden so the bar exposes no
+   * empty navigation landmark and no toggle that opens an empty drawer.
+   */
+  _syncNavigationPresence() {
+    const navigation = this.querySelectorAll(":scope > [slot='navigation']").length > 0;
+    const mobileNavigation = this.querySelectorAll(":scope > [slot='mobile-navigation']").length > 0;
+    this._navEl.hidden = navigation === false;
+    const hasDrawerContent = navigation === true || mobileNavigation === true;
+    this._toggle.hidden = hasDrawerContent === false;
+    this._drawer.hidden = hasDrawerContent === false;
+    this._backdrop.hidden = hasDrawerContent === false;
     return
   }
 

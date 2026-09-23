@@ -18,6 +18,7 @@ import ccai.testbase as testbase
 
 from testcomponents.harness.browsers import expect
 from testcomponents.harness.factories import create_page
+from testcomponents.harness.fixtures import load_fixture
 
 
 # ---------------------------------------------------------------------------
@@ -393,32 +394,256 @@ def test_status_bar_slots_content(page, base_url: str) -> None:
 @testbase.attach.parameter(create_page, identifier="page")
 def test_app_shell_landmark_structure(page, base_url: str) -> None:
     """
-        The app shell shadow DOM contains header, nav, main, aside, footer.
+        The app shell's regions are exposed as one banner, one navigation
+        landmark and one main landmark when the slotted content brings its own
+        <nav> and <main> (the catalog example does), without nesting.
 
         :param page: The Playwright page.
         :param base_url: The site base URL.
     """
 
-    frame = _load_example(page, base_url, "mj-app-shell")
+    markup = (
+        '<mj-app-shell nav-open style="height:300px;">'
+        '<div slot="app-bar">App Bar</div>'
+        '<nav slot="nav" aria-label="Sections">Navigation</nav>'
+        '<main slot="main">Main content area</main>'
+        '<div slot="status-bar">Ready</div>'
+        '</mj-app-shell>'
+    )
+    load_fixture(page, base_url, markup, ["mj-app-shell"])
+    expect(page.get_by_role("banner")).to_have_count(1)
+    expect(page.get_by_role("navigation")).to_have_count(1)
+    expect(page.get_by_role("main")).to_have_count(1)
+    expect(page.get_by_role("contentinfo")).to_have_count(1)
 
-    frame.wait_for_function('''() => {
-        const el = document.querySelector("mj-app-shell");
-        return el && el.shadowRoot &&
-               el.shadowRoot.querySelector("header") !== null &&
-               el.shadowRoot.querySelector("nav") !== null &&
-               el.shadowRoot.querySelector("main") !== null;
-    }''', timeout=10000)
+    return
 
-    has_landmarks = frame.evaluate('''() => {
-        const el = document.querySelector("mj-app-shell");
-        const sr = el.shadowRoot;
-        return sr.querySelector("header") !== null &&
-               sr.querySelector("nav") !== null &&
-               sr.querySelector("main") !== null &&
-               sr.querySelector("aside") !== null &&
-               sr.querySelector("footer") !== null;
-    }''')
-    assert has_landmarks is True
+
+# Shell markup whose regions hold plain (non-landmark) content.
+_PLAIN_SHELL_MARKUP = (
+    '<mj-app-shell id="shell" nav-open style="height:600px;">'
+    '<div slot="app-bar"><button id="menu" type="button">Menu</button></div>'
+    '<div slot="nav"><a id="first-link" href="#one">One</a><a href="#two">Two</a></div>'
+    '<div slot="main"><h1>Main</h1><a id="content-link" href="#content">Content</a></div>'
+    '</mj-app-shell>'
+)
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_shell_wraps_plain_content_in_one_main(page, base_url: str) -> None:
+    """
+        Plain slotted content gets exactly one main landmark from the shell.
+
+        :param page: The Playwright page.
+        :param base_url: The site base URL.
+    """
+
+    load_fixture(page, base_url, _PLAIN_SHELL_MARKUP, ["mj-app-shell"])
+    expect(page.get_by_role("main")).to_have_count(1)
+
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_shell_slotted_main_is_not_nested(page, base_url: str) -> None:
+    """
+        When the slotted main content is itself a <main>, the shell does not
+        wrap it in a second main landmark.
+
+        :param page: The Playwright page.
+        :param base_url: The site base URL.
+    """
+
+    markup = '<mj-app-shell style="height:300px;"><main slot="main">Content</main></mj-app-shell>'
+    load_fixture(page, base_url, markup, ["mj-app-shell"])
+    expect(page.get_by_role("main")).to_have_count(1)
+
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_shell_empty_regions_expose_no_landmarks(page, base_url: str) -> None:
+    """
+        With nothing slotted into the inspector or status bar, the shell
+        exposes no complementary or contentinfo landmark.
+
+        :param page: The Playwright page.
+        :param base_url: The site base URL.
+    """
+
+    load_fixture(page, base_url, _PLAIN_SHELL_MARKUP, ["mj-app-shell"])
+    expect(page.get_by_role("complementary")).to_have_count(0)
+    expect(page.get_by_role("contentinfo")).to_have_count(0)
+
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_shell_empty_dock_takes_no_space(page, base_url: str) -> None:
+    """
+        An empty dock rail is not rendered, so it takes no width beside the nav.
+
+        :param page: The Playwright page.
+        :param base_url: The site base URL.
+    """
+
+    load_fixture(page, base_url, _PLAIN_SHELL_MARKUP, ["mj-app-shell"])
+    dock_width = page.evaluate(
+        "() => document.querySelector('#shell').shadowRoot.querySelector('.dock').getBoundingClientRect().width"
+    )
+    assert dock_width == 0, "An empty dock should take no width, got {}".format(dock_width)
+
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_shell_narrow_viewport_starts_with_drawer_closed(page, base_url: str) -> None:
+    """
+        Below the nav breakpoint the shell becomes an overlay drawer and closes
+        it, even when the markup asks for nav-open (the wide-layout state).
+
+        :param page: The Playwright page.
+        :param base_url: The site base URL.
+    """
+
+    page.set_viewport_size({"width": 390, "height": 800})
+    load_fixture(page, base_url, _PLAIN_SHELL_MARKUP, ["mj-app-shell"])
+    page.wait_for_function(
+        "() => document.querySelector('#shell').getAttribute('nav-mode') === 'overlay'",
+        timeout=5000,
+    )
+    is_open = page.evaluate("() => document.querySelector('#shell').hasAttribute('nav-open')")
+    assert is_open is False, "The overlay drawer should start closed"
+
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_shell_breakpoint_custom_property_moves_the_overlay_threshold(page, base_url: str) -> None:
+    """
+        --mj-shell-breakpoint-nav raises the overlay threshold: at 900px wide,
+        a 1000px breakpoint puts the nav in overlay mode.
+
+        :param page: The Playwright page.
+        :param base_url: The site base URL.
+    """
+
+    page.set_viewport_size({"width": 900, "height": 800})
+    markup = _PLAIN_SHELL_MARKUP.replace(
+        'style="height:600px;"', 'style="height:600px; --mj-shell-breakpoint-nav: 1000px;"'
+    )
+    load_fixture(page, base_url, markup, ["mj-app-shell"])
+    page.wait_for_function(
+        "() => document.querySelector('#shell').getAttribute('nav-mode') === 'overlay'",
+        timeout=5000,
+    )
+
+    return
+
+
+def _open_overlay_drawer(page, base_url: str) -> None:
+    """
+        Load the plain shell at phone width and open its overlay drawer from
+        the app-bar button, as a user would.
+
+        :param page: The Playwright page.
+        :param base_url: The site base URL.
+    """
+
+    page.set_viewport_size({"width": 390, "height": 800})
+    load_fixture(page, base_url, _PLAIN_SHELL_MARKUP, ["mj-app-shell"])
+    page.wait_for_function(
+        "() => document.querySelector('#shell').getAttribute('nav-mode') === 'overlay'",
+        timeout=5000,
+    )
+    page.evaluate(
+        "() => document.querySelector('#menu').addEventListener('click', () => document.querySelector('#shell').toggleNav())"
+    )
+    page.locator("#menu").click()
+    page.wait_for_function("() => document.querySelector('#shell').hasAttribute('nav-open')", timeout=5000)
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_shell_overlay_moves_focus_into_the_drawer(page, base_url: str) -> None:
+    """
+        Opening the overlay drawer moves focus to its first link.
+
+        :param page: The Playwright page.
+        :param base_url: The site base URL.
+    """
+
+    _open_overlay_drawer(page, base_url)
+    focused = page.evaluate("() => document.activeElement.id")
+    assert focused == "first-link", "Focus should move into the drawer, it is on {!r}".format(focused)
+
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_shell_overlay_keeps_tab_inside_the_drawer(page, base_url: str) -> None:
+    """
+        While the overlay drawer is open, Tab cycles through the drawer's links
+        and never reaches the app bar or the main content.
+
+        :param page: The Playwright page.
+        :param base_url: The site base URL.
+    """
+
+    _open_overlay_drawer(page, base_url)
+    visited = []
+    for _ in range(5):
+        page.keyboard.press("Tab")
+        visited.append(page.evaluate("() => document.activeElement.textContent.trim()"))
+    outside = [label for label in visited if label not in ("One", "Two")]
+    assert outside == [], "Tab left the drawer: {}".format(visited)
+
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_shell_escape_closes_overlay_when_focus_is_elsewhere(page, base_url: str) -> None:
+    """
+        Escape closes the overlay drawer even when nothing inside it has
+        focus.
+
+        :param page: The Playwright page.
+        :param base_url: The site base URL.
+    """
+
+    _open_overlay_drawer(page, base_url)
+    page.evaluate("() => document.activeElement.blur()")
+    page.keyboard.press("Escape")
+    is_open = page.evaluate("() => document.querySelector('#shell').hasAttribute('nav-open')")
+    assert is_open is False, "Escape should close the overlay drawer"
+
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_shell_closing_overlay_returns_focus_to_the_opener(page, base_url: str) -> None:
+    """
+        Closing the overlay drawer with Escape returns focus to the control
+        that opened it.
+
+        :param page: The Playwright page.
+        :param base_url: The site base URL.
+    """
+
+    _open_overlay_drawer(page, base_url)
+    page.keyboard.press("Escape")
+    focused = page.evaluate("() => document.activeElement.id")
+    assert focused == "menu", "Focus should return to the opener, it is on {!r}".format(focused)
 
     return
 
