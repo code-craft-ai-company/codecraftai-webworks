@@ -107,7 +107,7 @@ class CachedOpenAPIGenerator(OpenAPIGenerator):
         :param cache_ttl: Optional time-to-live in seconds for the cache.
         :param production_mode: When ``True`` the cache never expires.
         :param kwargs: Additional keyword arguments forwarded to
-            :class:`OpenAPI_Generator`.
+            :class:`OpenAPIGenerator`.
     """
 
     def __init__(

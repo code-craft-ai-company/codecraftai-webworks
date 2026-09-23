@@ -107,7 +107,7 @@ def test_config_source_is_abstract():
         Test that ConfigSource cannot be instantiated directly.
     """
     try:
-        source = ConfigSource()
+        ConfigSource()
         errmsg = "ConfigSource should not be instantiable"
         raise AssertionError(errmsg)
     except TypeError:
@@ -126,7 +126,7 @@ def test_config_source_subclass_must_implement_load():
             return ConfigSourceType.FILE
     
     try:
-        source = IncompleteSource()
+        IncompleteSource()
         errmsg = "IncompleteSource should not be instantiable without load()"
         raise AssertionError(errmsg)
     except TypeError:
@@ -144,7 +144,7 @@ def test_config_source_subclass_must_implement_source_type():
             return {}
     
     try:
-        source = IncompleteSource()
+        IncompleteSource()
         errmsg = "IncompleteSource should not be instantiable without source_type"
         raise AssertionError(errmsg)
     except TypeError:
@@ -833,7 +833,7 @@ def test_config_loader_is_abstract():
         Test that ConfigLoader cannot be instantiated directly.
     """
     try:
-        loader = ConfigLoader()
+        ConfigLoader()
         errmsg = "ConfigLoader should not be instantiable"
         raise AssertionError(errmsg)
     except TypeError:
@@ -851,7 +851,7 @@ def test_config_loader_subclass_must_implement_load():
             return ""
     
     try:
-        loader = IncompleteLoader()
+        IncompleteLoader()
         errmsg = "IncompleteLoader should not be instantiable without load()"
         raise AssertionError(errmsg)
     except TypeError:
@@ -869,7 +869,7 @@ def test_config_loader_subclass_must_implement_dump():
             return {}
     
     try:
-        loader = IncompleteLoader()
+        IncompleteLoader()
         errmsg = "IncompleteLoader should not be instantiable without dump()"
         raise AssertionError(errmsg)
     except TypeError:
@@ -2652,9 +2652,8 @@ def test_property_16_no_audit_logging_without_logger():
 
 from ccai.webworks.configuration import (
     ConfigFileDiscovery,
-    ProfileConfigSource,
     DEFAULT_SEARCH_DIRECTORIES,
-    DEFAULT_FILE_PATTERNS
+    DEFAULT_FILE_PATTERNS,
 )
 
 

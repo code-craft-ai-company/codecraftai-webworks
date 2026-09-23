@@ -5,11 +5,10 @@
     in the built-in WSGI server.
 """
 
-import io
 import socket
 import threading
 import time
-from typing import Any, Callable, Dict, Iterable, List, Tuple
+from typing import Any, Callable, Dict, Iterable, Tuple
 
 from ccai.webworks.wsgi.worker import Worker
 from ccai.webworks.wsgi.serverconfig import ServerConfig

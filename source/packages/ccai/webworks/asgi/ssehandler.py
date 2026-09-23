@@ -382,6 +382,7 @@ class SSEHandler:
                 try:
                     await disconnect_task
                 except asyncio.CancelledError:
+                    # Expected: we just cancelled the disconnect monitor; awaiting it only reaps the task.
                     pass
             
             # Send final empty body with more_body=False to close stream

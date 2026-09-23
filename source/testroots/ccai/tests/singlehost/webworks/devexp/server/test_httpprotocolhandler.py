@@ -13,7 +13,6 @@ import string
 
 from ccai.webworks.devexp.server.httpprotocolhandler import (
     HTTPProtocolHandler,
-    _ParseState,
     _get_reason_phrase,
     MAX_REQUEST_LINE_BYTES,
     MAX_HEADER_BLOCK_BYTES,
@@ -383,7 +382,7 @@ def test_property_content_length_body():
         raw_request = _build_raw_request(method, path, version, headers, body)
 
         handler = _create_handler()
-        transport = _connect_handler(handler)
+        _connect_handler(handler)
 
         _feed(handler, raw_request)
 
@@ -577,7 +576,6 @@ def test_property_query_string_split():
     for _ in range(100):
         base_path = _random_path()
         query = _random_query_string()
-        full_target = "{}?{}".format(base_path, query)
 
         handler = _create_handler()
         handler._client_host = "127.0.0.1"
@@ -1100,7 +1098,7 @@ def test_empty_body_with_content_length_zero():
         Requirements: 2.3
     """
     handler = _create_handler()
-    transport = _connect_handler(handler)
+    _connect_handler(handler)
 
     headers = [("Content-Length", "0")]
     raw_request = _build_raw_request("POST", "/empty", "HTTP/1.1", headers, b"")

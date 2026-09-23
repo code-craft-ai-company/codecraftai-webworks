@@ -10,7 +10,6 @@ from ccai.webworks.endpoints.descriptor import EndpointDescriptor
 from ccai.webworks.endpoints.constraints import EndpointConstraints
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.ratelimit import RateLimit
-from ccai.webworks.endpoints.doc import Doc
 
 
 # =============================================================================

@@ -6,7 +6,7 @@
 
 .. moduleauthor:: Code Craft AI LLC
 
-This module provides the Swagger_UI_Blueprint class that extends RestBlueprint
+This module provides the SwaggerUIBlueprint class that extends RestBlueprint
 to serve the Swagger UI interactive documentation interface and the generated
 OpenAPI specification as JSON. All static assets (JavaScript, CSS, favicon) are
 served from vendored files bundled within the package so that no external CDN
@@ -17,14 +17,15 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
-import json
-
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from ccai.webworks.endpoints.descriptor import EndpointDescriptor
 from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.restblueprint import RestBlueprint, Router
 from ccai.webworks.openapi.assets import AssetResolver
+
+if TYPE_CHECKING:
+    from ccai.webworks.openapi.generator import OpenAPIGenerator
 
 
 SWAGGER_UI_HTML_TEMPLATE = """<!DOCTYPE html>
@@ -69,7 +70,7 @@ class SwaggerUIBlueprint(RestBlueprint):
         OpenAPI specification as JSON, and a static asset route that
         serves the vendored JavaScript, CSS, and image files.
 
-        :param generator: The OpenAPI_Generator instance used to produce
+        :param generator: The OpenAPIGenerator instance used to produce
             the specification JSON.
         :param ui_path: URL path for the Swagger UI page. Defaults to "/docs".
         :param spec_path: URL path for the OpenAPI JSON specification.
@@ -90,7 +91,7 @@ class SwaggerUIBlueprint(RestBlueprint):
 
     def __init__(
         self,
-        generator: "OpenAPI_Generator",
+        generator: "OpenAPIGenerator",
         ui_path: str = "/docs",
         spec_path: str = "/openapi.json",
         static_path: str = "/_swagger",

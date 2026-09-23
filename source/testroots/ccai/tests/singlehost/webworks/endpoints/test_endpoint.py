@@ -14,7 +14,6 @@ from ccai.webworks.endpoints import (
     AccessPolicy,
     Doc,
     Endpoint,
-    EndpointConstraints,
     EndpointDescriptor,
     EndpointRegistry,
     EndpointRegistrationError,
@@ -24,19 +23,11 @@ from ccai.webworks.endpoints import (
 
 
 # =============================================================================
-# Test Setup - Clear registry before each test
-# =============================================================================
-
-def _clear_registry():
-    """Helper to clear the registry before tests."""
-    registry = EndpointRegistry()
-# =============================================================================
 # Task 5.1: Endpoint class with class-level defaults
 # =============================================================================
 
 def test_endpoint_has_class_level_defaults():
     """Test that Endpoint class has expected class-level default attributes."""
-    registry = EndpointRegistry()
     
     # Verify default attributes exist
     if not hasattr(Endpoint, "access_policy"):
@@ -81,7 +72,6 @@ def test_endpoint_has_class_level_defaults():
 
 def test_endpoint_subclass_can_override_defaults():
     """Test that subclasses can override class-level defaults."""
-    registry = EndpointRegistry()
     
     class CustomEndpoint(Endpoint):
         access_policy = AccessPolicy(roles=["admin"])
@@ -126,7 +116,6 @@ def test_endpoint_subclass_can_override_defaults():
 
 def test_attach_at_returns_original_function():
     """Test that attach_at decorator returns the original function unchanged."""
-    registry = EndpointRegistry()
     
     def my_handler():
         return "hello"
@@ -151,7 +140,6 @@ def test_attach_at_returns_original_function():
 
 def test_attach_at_registers_descriptor():
     """Test that attach_at registers an EndpointDescriptor with the registry."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     @Endpoint.attach_at(leaf="test")
@@ -181,7 +169,6 @@ def test_attach_at_registers_descriptor():
 def test_attach_at_with_path_parameter():
     """Test that attach_at accepts path parameter instead of leaf."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     @Endpoint.attach_at(path="/api/v1/status")
     def status_handler():
@@ -206,7 +193,6 @@ def test_attach_at_with_path_parameter():
 
 def test_attach_at_raises_error_without_leaf_or_path():
     """Test that attach_at raises EndpointRegistrationError without leaf or path."""
-    registry = EndpointRegistry()
     
     error_raised = False
     error_instance = None
@@ -230,7 +216,6 @@ def test_attach_at_raises_error_without_leaf_or_path():
 
 def test_attach_at_kwargs_override_class_defaults():
     """Test that explicit kwargs override class-level defaults."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     class CustomEndpoint(Endpoint):
@@ -266,7 +251,6 @@ def test_attach_at_kwargs_override_class_defaults():
 
 def test_attach_at_inherits_class_defaults_when_not_specified():
     """Test that class defaults are used when kwargs not specified."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     class CustomEndpoint(Endpoint):
@@ -305,7 +289,6 @@ def test_attach_at_inherits_class_defaults_when_not_specified():
 
 def test_attach_at_accepts_all_documented_parameters():
     """Test that attach_at accepts all documented parameters."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     policy = AccessPolicy(roles=["admin"], scopes=["read", "write"])
@@ -356,7 +339,6 @@ def test_attach_at_accepts_all_documented_parameters():
 
 def test_attach_at_stores_extra_kwargs_in_extras():
     """Test that additional kwargs are stored in descriptor.extras."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     @Endpoint.attach_at(
@@ -439,7 +421,6 @@ def test_separate_registries_do_not_conflict():
 def test_attach_at_allows_replace_on_conflict():
     """Test that attach_at allows replacement when on_conflict='replace'."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     @Endpoint.attach_at(leaf="replace", methods=["GET"])
     def first_handler():
@@ -468,7 +449,6 @@ def test_attach_at_allows_replace_on_conflict():
 
 def test_attach_child_creates_descriptor():
     """Test that attach_child creates an EndpointDescriptor."""
-    registry = EndpointRegistry()
     
     class ParentEndpoint(Endpoint):
         base_path = "/api/v1"
@@ -492,7 +472,6 @@ def test_attach_child_creates_descriptor():
 
 def test_attach_child_computes_relative_path_from_base_path():
     """Test that attach_child computes path relative to parent's base_path."""
-    registry = EndpointRegistry()
     
     class ParentEndpoint(Endpoint):
         base_path = "/api/v1"
@@ -510,7 +489,6 @@ def test_attach_child_computes_relative_path_from_base_path():
 
 def test_attach_child_computes_relative_path_from_base_leaf():
     """Test that attach_child computes path relative to parent's base_leaf."""
-    registry = EndpointRegistry()
     
     class ParentEndpoint(Endpoint):
         base_leaf = "api"
@@ -528,7 +506,6 @@ def test_attach_child_computes_relative_path_from_base_leaf():
 
 def test_attach_child_inherits_parent_constraints():
     """Test that attach_child inherits parent constraints when child doesn't set them."""
-    registry = EndpointRegistry()
     
     class ParentEndpoint(Endpoint):
         base_path = "/api"
@@ -552,7 +529,6 @@ def test_attach_child_inherits_parent_constraints():
 
 def test_attach_child_merges_constraints():
     """Test that attach_child merges parent and child constraints."""
-    registry = EndpointRegistry()
     
     class ParentEndpoint(Endpoint):
         base_path = "/api"
@@ -581,7 +557,6 @@ def test_attach_child_merges_constraints():
 
 def test_attach_child_allows_placement_overrides():
     """Test that attach_child allows overriding child's placement."""
-    registry = EndpointRegistry()
     
     class ParentEndpoint(Endpoint):
         base_path = "/api/v1"
@@ -607,7 +582,6 @@ def test_attach_child_allows_placement_overrides():
 
 def test_attach_child_inherits_version_from_parent():
     """Test that attach_child inherits version from parent when child doesn't set it."""
-    registry = EndpointRegistry()
     
     class ParentEndpoint(Endpoint):
         base_path = "/api"
@@ -626,7 +600,6 @@ def test_attach_child_inherits_version_from_parent():
 
 def test_attach_child_child_version_overrides_parent():
     """Test that child's version overrides parent's version."""
-    registry = EndpointRegistry()
     
     class ParentEndpoint(Endpoint):
         base_path = "/api"
@@ -645,7 +618,6 @@ def test_attach_child_child_version_overrides_parent():
 
 def test_attach_child_merge_tags_appends_parent_tags():
     """Test that merge_tags=True appends parent tags to child tags."""
-    registry = EndpointRegistry()
     
     class ParentEndpoint(Endpoint):
         base_path = "/api"
@@ -675,7 +647,6 @@ def test_attach_child_merge_tags_appends_parent_tags():
 
 def test_attach_child_default_tags_behavior():
     """Test that by default child tags win over parent tags."""
-    registry = EndpointRegistry()
     
     class ParentEndpoint(Endpoint):
         base_path = "/api"
@@ -699,7 +670,6 @@ def test_attach_child_default_tags_behavior():
 
 def test_dataclass_to_schema_detects_required_fields():
     """Test that _dataclass_to_schema correctly distinguishes required from optional fields."""
-    registry = EndpointRegistry()
     
     from dataclasses import dataclass, field
     
@@ -747,7 +717,6 @@ def test_dataclass_to_schema_detects_required_fields():
 
 def test_dataclass_to_schema_no_required_fields():
     """Test that _dataclass_to_schema omits 'required' key when all fields have defaults."""
-    registry = EndpointRegistry()
     
     from dataclasses import dataclass, field
     

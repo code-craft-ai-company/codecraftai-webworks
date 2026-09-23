@@ -25,7 +25,6 @@ __credits__ = []
 
 import asyncio
 import logging
-import secrets
 import time
 
 from typing import Any, Dict, List, Optional

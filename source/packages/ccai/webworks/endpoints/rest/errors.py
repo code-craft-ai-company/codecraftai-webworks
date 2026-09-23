@@ -12,7 +12,7 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
-from typing import Any, Dict, Optional, Tuple, Type
+from typing import Dict, Optional, Tuple, Type
 
 from ccai.webworks.endpoints.rest.models import (
     ErrorMapping,

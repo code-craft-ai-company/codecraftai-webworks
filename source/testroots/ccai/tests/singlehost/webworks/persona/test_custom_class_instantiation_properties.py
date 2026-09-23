@@ -26,7 +26,6 @@ from ccai.webworks.webapplication import (
     reset_webapp_persona,
 )
 from ccai.webworks.webapplication import WebApplication
-from ccai.webworks.wellknown import ThisWebApplicationSingleton
 import ccai.webworks.wellknown as webworks_wellknown
 import ccai.thisapp.wellknown as thisapp_wellknown
 
@@ -263,7 +262,7 @@ def test_property_custom_cls_persona_attributes_set(app_name, suffix, chosen_cls
     try:
         reset_webapp_persona()
 
-        app = establish_webapp_persona(
+        establish_webapp_persona(
             name=app_name,
             logger_name=logger_name,
             log_basename=log_basename,

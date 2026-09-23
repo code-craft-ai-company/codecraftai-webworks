@@ -612,7 +612,6 @@ def test_load_config_pin_set_from_env():
 # Validates: Requirements 1.5, 1.6
 # =============================================================================
 
-import copy
 import random
 import string
 

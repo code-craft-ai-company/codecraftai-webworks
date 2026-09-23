@@ -18,7 +18,6 @@
 
 import ccai.testbase as testbase
 
-from testcomponents.harness.browsers import expect
 from testcomponents.harness.factories import create_page
 
 

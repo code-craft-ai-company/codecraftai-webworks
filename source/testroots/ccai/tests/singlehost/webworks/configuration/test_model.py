@@ -15,10 +15,8 @@ from ccai.webworks.configuration import (
     ConfigRegistry,
     ConfigSchema,
     ConfigSourceType,
-    ConfigValue,
     ConfigValueMetadata,
     ConfigurationError,
-    ConfigurationTypeError
 )
 
 

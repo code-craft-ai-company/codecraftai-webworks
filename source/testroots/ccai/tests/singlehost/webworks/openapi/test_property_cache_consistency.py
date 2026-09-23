@@ -10,8 +10,6 @@
     **Validates: Requirements 12.1, 12.2**
 """
 
-from typing import Any, Dict, List, Optional
-
 from ccai.testbase.mocking import Mock
 
 from ccai.webworks.openapi.cache import CachedOpenAPIGenerator

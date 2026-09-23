@@ -168,6 +168,7 @@ class LifespanManager:
                 try:
                     app_task.exception()
                 except Exception:
+                    # Retrieval only marks the exception as observed; the outcome is handled just below.
                     pass
 
             self._startup_complete = True
@@ -253,6 +254,8 @@ class LifespanManager:
                 )
                 self._app_task.cancel()
             except Exception:
+                # Best-effort wait; the shutdown outcome was already recorded above, so an error raised
+                # while the app task unwinds must not abort the dev server's shutdown.
                 pass
 
         return

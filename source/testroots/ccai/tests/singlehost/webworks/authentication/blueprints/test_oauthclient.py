@@ -38,7 +38,6 @@ import json
 import time
 
 from typing import Any, Dict, List, Optional
-from urllib.parse import parse_qs, urlparse
 
 from ccai.webworks.authentication.blueprints.oauthclient import (
     DEFAULT_STATE_COOKIE_NAME,

@@ -18,15 +18,13 @@ __credits__ = []
 
 import base64
 import hashlib
-import json
 import logging
 import secrets
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, Optional, Protocol, Set, runtime_checkable
-from urllib.parse import parse_qs, urlencode, urlparse
+from typing import Any, Dict, Optional, Protocol, Set, runtime_checkable
+from urllib.parse import urlencode
 
 from ccai.webworks.authentication.core import (
     AuthenticationContext,
@@ -241,7 +239,6 @@ class OAuth2ClientStore(Protocol):
             
             :returns: Client information dictionary if valid, None otherwise.
         """
-        ...
     
     async def get_client(self, client_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -251,7 +248,6 @@ class OAuth2ClientStore(Protocol):
             
             :returns: Client information dictionary if found, None otherwise.
         """
-        ...
 
 
 @runtime_checkable
@@ -269,7 +265,6 @@ class OAuth2AuthorizationCodeStore(Protocol):
             
             :param auth_code: The authorization code to store.
         """
-        ...
     
     async def get_code(self, code: str) -> Optional[OAuth2AuthorizationCode]:
         """
@@ -279,7 +274,6 @@ class OAuth2AuthorizationCodeStore(Protocol):
             
             :returns: The OAuth2AuthorizationCode if found, None otherwise.
         """
-        ...
     
     async def delete_code(self, code: str) -> bool:
         """
@@ -289,7 +283,6 @@ class OAuth2AuthorizationCodeStore(Protocol):
             
             :returns: True if deleted, False if not found.
         """
-        ...
 
 
 @runtime_checkable
@@ -314,7 +307,6 @@ class OAuth2TokenStore(Protocol):
             :param client_id: The client that owns the token.
             :param user_id: Optional user identifier for user-bound tokens.
         """
-        ...
     
     async def validate_access_token(
         self,
@@ -327,7 +319,6 @@ class OAuth2TokenStore(Protocol):
             
             :returns: Token data dictionary if valid, None otherwise.
         """
-        ...
     
     async def validate_refresh_token(
         self,
@@ -340,7 +331,6 @@ class OAuth2TokenStore(Protocol):
             
             :returns: Token data dictionary if valid, None otherwise.
         """
-        ...
     
     async def revoke_token(self, token: str) -> bool:
         """
@@ -350,7 +340,6 @@ class OAuth2TokenStore(Protocol):
             
             :returns: True if revoked, False if not found.
         """
-        ...
 
 
 @runtime_checkable
@@ -375,7 +364,6 @@ class OAuth2UserAuthenticator(Protocol):
             
             :returns: User information dictionary if valid, None otherwise.
         """
-        ...
 
 
 # =============================================================================

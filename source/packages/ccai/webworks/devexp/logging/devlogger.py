@@ -19,17 +19,13 @@
 
 import contextvars
 import logging
-import os
 import sys
 import uuid
 
 from typing import Any, Dict, Optional
 
 
-from ccai.webworks.devexp.cli.output import (
-    colorize,
-    is_color_supported,
-)
+from ccai.webworks.devexp.cli.output import colorize
 
 
 # =============================================================================

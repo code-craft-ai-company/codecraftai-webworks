@@ -17,7 +17,7 @@ __credits__ = []
 import json
 import logging
 
-from typing import Any, Callable, Dict, List, Optional, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Type
 
 from ccai.webworks.configuration.core import (
     ConfigKeyDefinition,
@@ -30,10 +30,6 @@ from ccai.webworks.configuration.core import (
 # operator wants the original traceback so a misbehaving validator
 # is debuggable from the journal.
 logger = logging.getLogger(__name__)
-
-
-# Sentinel value for missing defaults
-_MISSING = object()
 
 
 class ConfigSchema:

@@ -13,7 +13,6 @@ from ccai.webworks.prodserver.resourcelimiter import (
     HeaderFieldTooLargeError,
     RequestBodyTooLargeError,
     ResourceLimiter,
-    RESOURCE_WARNING_THRESHOLD,
 )
 from ccai.webworks.prodserver.serverconfig import ServerConfig
 
@@ -667,6 +666,14 @@ def test_cleanup_worker_tmp_dir_removes_directory():
 
     if limiter.worker_tmp_dir is not None:
         errmsg = "Expected None after cleanup"
+        raise AssertionError(errmsg)
+
+    if path is None:
+        errmsg = "Expected setup_worker_tmp_dir() to return the created directory path"
+        raise AssertionError(errmsg)
+
+    if os.path.isdir(path):
+        errmsg = f"Expected directory '{path}' to be removed by cleanup_worker_tmp_dir()"
         raise AssertionError(errmsg)
 
     return

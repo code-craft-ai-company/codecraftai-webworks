@@ -5,7 +5,6 @@
     configuration files for changes and triggers reload callbacks.
 """
 
-import os
 import tempfile
 import time
 from pathlib import Path

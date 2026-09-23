@@ -10,9 +10,9 @@
 import logging
 import time
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ccai.webworks.prodserver.serverconfig import ServerConfig

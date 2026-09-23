@@ -106,6 +106,7 @@ class ItemsBlueprint(RestBlueprint):
     methods = ["GET"]
     tags = ["items"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         leaf="list",
         methods=["GET"],
@@ -128,6 +129,7 @@ class ItemsBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         leaf="detail",
         methods=["GET"],
@@ -150,6 +152,7 @@ class ItemsBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         leaf="create",
         methods=["POST"],
@@ -177,6 +180,7 @@ class ItemsV2Blueprint(ItemsBlueprint):
     base_path = "/api/v2/items"
     tags = ["items-v2"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         leaf="list",
         methods=["GET"],

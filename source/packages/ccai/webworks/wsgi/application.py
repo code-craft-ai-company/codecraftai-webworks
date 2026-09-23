@@ -15,7 +15,7 @@ from ccai.webworks.wsgi.environparser import EnvironParser
 from ccai.webworks.wsgi.response import Response, ResponseBuilder
 from ccai.webworks.wsgi.responseiterator import ResponseIterator
 from ccai.webworks.wsgi.errorhandler import ErrorHandler
-from ccai.webworks.wsgi.constants import ENVIRON_REQUEST, ENVIRON_DEBUG
+from ccai.webworks.wsgi.constants import ENVIRON_DEBUG
 
 
 # Module-level logger. The WSGI generator translates handler
@@ -175,15 +175,14 @@ class WSGIApplication:
                     for chunk in error_iterator:
                         yield chunk
                 finally:
-                    # Clear exc_info to avoid circular references
-                    exc_info = None
+                    # Drop the exc_info reference to avoid circular references
+                    del exc_info
             else:
                 # Exception before start_response - handle and return error response
                 error_status, error_headers, error_iterator = self._handle_error(
                     exc, environ
                 )
                 start_response(error_status, error_headers)
-                response_started = True
                 
                 for chunk in error_iterator:
                     yield chunk

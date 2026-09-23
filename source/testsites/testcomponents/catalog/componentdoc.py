@@ -5,8 +5,6 @@
     web component on the testcomponents site.
 """
 
-import os
-
 
 class ComponentDoc:
     """

@@ -14,7 +14,7 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
-from typing import Callable, Dict, List
+from typing import Dict
 
 import ccai.testbase as testbase
 
@@ -23,7 +23,6 @@ from ccai.testbase.properties import strategies as st
 
 from ccai.webworks.routing.middleware.cors import CORSMiddleware
 from ccai.webworks.routing.request import Request
-from ccai.webworks.routing.response import Response
 
 
 # =============================================================================

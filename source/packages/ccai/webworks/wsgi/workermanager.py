@@ -13,12 +13,11 @@ import signal
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from ccai.webworks.wsgi.serverconfig import ServerConfig
 from ccai.webworks.wsgi.socketlistener import SocketListener
 from ccai.webworks.wsgi.worker import Worker
-from ccai.webworks.wsgi.exceptions import WorkerError
 
 
 # Default logger for worker manager
@@ -385,6 +384,7 @@ class WorkerManager:
             try:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
+                # The worker already exited, which is the outcome the force kill wanted.
                 pass
             except Exception as exc:
                 _logger.error("Error killing worker %d: %s", worker_info.worker_id, str(exc))

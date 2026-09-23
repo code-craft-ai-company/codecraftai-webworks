@@ -9,7 +9,7 @@
 import random
 import string
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Set
 
 from ccai.webworks.authentication import (
     AuthenticationStatus,
@@ -620,14 +620,14 @@ def test_property_29_principal_structure_completeness():
         
         # Property: roles must be iterable
         try:
-            roles_list = list(principal.roles)
+            list(principal.roles)
         except TypeError:
             errmsg = f"Iteration {iteration}: roles is not iterable, got {type(principal.roles)}"
             raise AssertionError(errmsg)
         
         # Property: permissions must be iterable
         try:
-            permissions_list = list(principal.permissions)
+            list(principal.permissions)
         except TypeError:
             errmsg = f"Iteration {iteration}: permissions is not iterable, got {type(principal.permissions)}"
             raise AssertionError(errmsg)
@@ -663,10 +663,7 @@ def test_property_29_principal_structure_completeness():
 # Imports for AuthenticationSystem tests
 # =============================================================================
 
-from ccai.webworks.authentication import (
-    Authenticator,
-    AuthenticationSystem
-)
+from ccai.webworks.authentication import AuthenticationSystem
 
 
 # =============================================================================

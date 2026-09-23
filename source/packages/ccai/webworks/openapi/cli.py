@@ -33,7 +33,6 @@ from ccai.webworks.devexp.cli.group import CLIGroup
 
 if TYPE_CHECKING:
     from argparse import ArgumentParser, Namespace
-    from ccai.webworks.openapi.generator import OpenAPIGenerator
 
 
 class GenerateCommand(CLICommand):
@@ -94,7 +93,7 @@ class GenerateCommand(CLICommand):
 
             :param args: Parsed command-line arguments.
             :param config: Configuration dictionary. Must contain an
-                ``openapi_generator`` key with an :class:`OpenAPI_Generator` instance.
+                ``openapi_generator`` key with an :class:`OpenAPIGenerator` instance.
 
             :returns: Exit code where 0 indicates success and non-zero indicates an error.
         """
@@ -175,7 +174,7 @@ class ValidateCommand(CLICommand):
 
             :param args: Parsed command-line arguments.
             :param config: Configuration dictionary. Must contain an
-                ``openapi_generator`` key with an :class:`OpenAPI_Generator` instance.
+                ``openapi_generator`` key with an :class:`OpenAPIGenerator` instance.
 
             :returns: Exit code where 0 indicates the specification is valid
                 and 1 indicates validation issues were found.

@@ -9,16 +9,14 @@ import asyncio
 import base64
 import random
 import string
-from typing import Any, Dict, Optional, Set
+from typing import Dict, Optional, Set
 
 from ccai.webworks.authentication import (
     AuthenticationStatus,
-    AuthenticationResult,
     Principal,
-    AuthenticationContext,
     BasicAuthenticator,
     encode_basic_credentials,
-    create_basic_auth_header
+    create_basic_auth_header,
 )
 
 

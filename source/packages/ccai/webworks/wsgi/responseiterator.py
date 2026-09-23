@@ -8,7 +8,7 @@
 
 import logging
 
-from typing import Any, Callable, Generator, IO, Iterable, Iterator, List, Optional, Union
+from typing import Callable, Generator, IO, Iterable, Iterator, Optional, Union
 
 
 # Module-level logger. close() swallows file-handle and callback
@@ -114,11 +114,10 @@ class ResponseIterator:
                     raise TypeError(errmsg)
             
             rtnval = chunk
-            return rtnval
         except StopIteration:
             raise
         
-        return
+        return rtnval
     
     def close(self) -> None:
         """

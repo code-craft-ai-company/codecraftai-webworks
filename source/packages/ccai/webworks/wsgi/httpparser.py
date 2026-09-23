@@ -491,12 +491,9 @@ class HTTPParser:
         # Set Host header info if present
         host_header = headers.get("Host") or headers.get("host")
         if host_header is not None:
-            if ":" in host_header:
-                host_name, host_port = host_header.rsplit(":", 1)
-                environ["HTTP_HOST"] = host_header
-                # Don't override SERVER_NAME/PORT from actual server address
-            else:
-                environ["HTTP_HOST"] = host_header
+            # The Host header may carry a port; it is passed through as-is and does not
+            # override SERVER_NAME/PORT, which come from the actual server address.
+            environ["HTTP_HOST"] = host_header
         
         rtnval = environ
         return rtnval

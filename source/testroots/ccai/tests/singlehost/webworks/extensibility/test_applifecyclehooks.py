@@ -7,9 +7,6 @@
 """
 
 import random
-import string
-
-from typing import Any, List
 
 from ccai.webworks.extensibility.datastructures import HookPriority
 from ccai.webworks.extensibility.hookmanager import HookManager
@@ -203,7 +200,7 @@ def test_fire_on_app_shutdown_calls_all_callbacks():
     call_log = []
     manager.register(ON_APP_SHUTDOWN, _make_logging_callback("shutdown-a"), extension_name="ext-a")
 
-    results = lifecycle.fire_on_app_shutdown(call_log)
+    lifecycle.fire_on_app_shutdown(call_log)
 
     if len(call_log) != 1:
         errmsg = "Expected 1 call, got {}".format(len(call_log))
@@ -223,7 +220,7 @@ def test_fire_on_config_loaded_calls_all_callbacks():
     manager.register(ON_CONFIG_LOADED, _make_logging_callback("config-a"), extension_name="ext-a")
     manager.register(ON_CONFIG_LOADED, _make_logging_callback("config-b"), extension_name="ext-b")
 
-    results = lifecycle.fire_on_config_loaded(call_log)
+    lifecycle.fire_on_config_loaded(call_log)
 
     if len(call_log) != 2:
         errmsg = "Expected 2 calls, got {}".format(len(call_log))
@@ -242,7 +239,7 @@ def test_fire_on_routes_registered_calls_all_callbacks():
     call_log = []
     manager.register(ON_ROUTES_REGISTERED, _make_logging_callback("routes-a"), extension_name="ext-a")
 
-    results = lifecycle.fire_on_routes_registered(call_log)
+    lifecycle.fire_on_routes_registered(call_log)
 
     if len(call_log) != 1:
         errmsg = "Expected 1 call, got {}".format(len(call_log))

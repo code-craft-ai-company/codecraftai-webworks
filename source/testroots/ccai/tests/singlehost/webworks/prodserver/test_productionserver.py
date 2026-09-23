@@ -14,8 +14,6 @@ from ccai.webworks.prodserver.serverconfig import (
     EXIT_SUCCESS,
     EXIT_ERROR,
     EXIT_CONFIG_ERROR,
-    EXIT_APP_LOAD_ERROR,
-    EXIT_PID_FILE_ERROR,
 )
 from ccai.webworks.prodserver.applicationloader import ApplicationLoader
 from ccai.webworks.prodserver.connectionmanager import ConnectionManager
@@ -415,6 +413,10 @@ def test_stop_graceful_false_terminates_workers_immediately():
     # Spawn a worker to verify termination
     server._worker_manager.spawn_workers()
     initial_count = server._worker_manager.get_worker_count()
+
+    if initial_count == 0:
+        errmsg = "Expected at least 1 worker after spawn_workers() so termination can be verified, got 0"
+        raise AssertionError(errmsg)
 
     server.stop(graceful=False)
 

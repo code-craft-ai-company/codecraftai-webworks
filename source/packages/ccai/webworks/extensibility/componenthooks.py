@@ -13,7 +13,7 @@
 
 import logging
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 from ccai.webworks.extensibility.exceptions import ExtensionPointError
 from ccai.webworks.extensibility.hookmanager import HookManager

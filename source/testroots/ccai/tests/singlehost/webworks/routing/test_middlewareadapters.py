@@ -7,7 +7,7 @@
 """
 
 import asyncio
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Tuple
+from typing import Dict
 
 from ccai.webworks.routing.middlewareadapters import (
     ASGIMiddlewareAdapter,
@@ -100,7 +100,7 @@ def test_asgi_adapter_passthrough():
         call_log.append("call_next")
         return expected_response
 
-    response = asyncio.run(adapter(request, call_next))
+    asyncio.run(adapter(request, call_next))
 
     if "call_next" not in call_log:
         errmsg = f"Expected call_next to be called, log: {call_log}"
@@ -584,7 +584,7 @@ def test_wsgi_adapter_modifies_environ():
     def call_next(req: Request) -> Response:
         return _make_response(status_code=200, body=b"OK")
 
-    response = adapter(request, call_next)
+    adapter(request, call_next)
 
     if environ_captured[0] is None:
         errmsg = "Expected environ to be captured"
@@ -648,7 +648,7 @@ def test_middleware_to_wsgi_passthrough():
         captured_status[0] = status
         captured_headers.extend(headers)
 
-    body_parts = list(wrapped_app(environ, start_response))
+    list(wrapped_app(environ, start_response))
 
     if not app_called[0]:
         errmsg = "Expected inner app to be called"
@@ -703,7 +703,7 @@ def test_middleware_to_wsgi_short_circuit():
         captured_status[0] = status
         captured_headers.extend(headers)
 
-    body_parts = list(wrapped_app(environ, start_response))
+    list(wrapped_app(environ, start_response))
 
     if app_called[0]:
         errmsg = "Expected inner app NOT to be called due to short-circuit"
@@ -757,7 +757,7 @@ def test_middleware_to_wsgi_modifies_response():
         captured_status[0] = status
         captured_headers.extend(headers)
 
-    body_parts = list(wrapped_app(environ, start_response))
+    list(wrapped_app(environ, start_response))
 
     # Check that the custom header was added
     header_names = [h[0] for h in captured_headers]

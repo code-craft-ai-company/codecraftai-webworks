@@ -5,7 +5,7 @@
     and other extensibility metadata on classes and functions.
 """
 
-from typing import Optional, Type
+from typing import Type
 
 from ccai.webworks.extensibility.datastructures import ExtensionPointDefinition
 

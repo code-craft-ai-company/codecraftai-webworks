@@ -330,7 +330,7 @@ def test_hook_error_callback_is_invoked():
     manager.register("test_hook", failing_callback, priority=HookPriority.HIGH, extension_name="ext-bad")
     manager.register("test_hook", good_callback, priority=HookPriority.LOW, extension_name="ext-good")
 
-    results = manager.execute("test_hook", error_callback=on_error)
+    manager.execute("test_hook", error_callback=on_error)
 
     if len(error_reports) != 1:
         errmsg = "Expected 1 error report, got {}".format(len(error_reports))

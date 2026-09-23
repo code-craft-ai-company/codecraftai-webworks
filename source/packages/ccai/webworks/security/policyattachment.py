@@ -21,7 +21,7 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ccai.webworks.security.accesspolicy import AccessPolicy

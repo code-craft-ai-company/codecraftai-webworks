@@ -16,7 +16,6 @@ import shutil
 import tempfile
 
 from argparse import ArgumentParser, Namespace
-from typing import Any, Dict
 
 from ccai.webworks.devexp.cli.exitcodes import EXIT_ERROR
 from ccai.webworks.devexp.cli.exitcodes import EXIT_SUCCESS

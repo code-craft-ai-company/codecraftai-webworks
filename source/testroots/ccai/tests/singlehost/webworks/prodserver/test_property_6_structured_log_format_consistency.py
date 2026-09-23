@@ -121,7 +121,7 @@ def test_property_6_json_output_is_valid_json():
         result = logger.log(level, message, **context)
 
         try:
-            parsed = json.loads(result)
+            json.loads(result)
         except json.JSONDecodeError as exc:
             errmsg = (
                 f"Iteration {iteration}: expected valid JSON for level={level}, "

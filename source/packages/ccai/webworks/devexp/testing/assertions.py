@@ -21,7 +21,7 @@
 
 import json as _json_module
 
-from typing import Any, Optional
+from typing import Any
 
 from ccai.webworks.devexp.testing.testresponse import TestResponse
 

@@ -25,7 +25,6 @@ from ccai.testbase.properties import given
 from ccai.testbase.properties import strategies as st
 
 from ccai.thisapp.appvardesc import AppVarDesc, VariableSource
-from ccai.thisapp.appvarset import AppVarSet
 from ccai.thisapp.personavariables import PersonaVariablesDesc
 from ccai.webworks.webapplication import WebApplication
 

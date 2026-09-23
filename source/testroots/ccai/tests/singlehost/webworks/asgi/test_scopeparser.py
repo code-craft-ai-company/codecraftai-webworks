@@ -1211,8 +1211,6 @@ def test_property_2_http_scope_parsing_round_trip():
         expected_query_string = scope["query_string"].decode("utf-8")
         expected_scheme = scope["scheme"]
         expected_server = scope["server"]
-        expected_http_version = scope["http_version"]
-        expected_root_path = scope["root_path"]
 
         # Parse scope into Request
         request = parser.parse_http(scope)

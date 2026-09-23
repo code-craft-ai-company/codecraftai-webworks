@@ -9,7 +9,6 @@
 import json
 import os
 import tempfile
-from typing import Any, Dict
 
 from ccai.webworks.wsgi.serverconfig import ServerConfig, ConfigurationError
 

@@ -14,12 +14,10 @@ from ccai.webworks.devexp.cli.output import (
     ANSI_CYAN,
     ANSI_GREEN,
     ANSI_RED,
-    ANSI_RESET,
     ANSI_YELLOW,
 )
 from ccai.webworks.devexp.logging.devlogger import (
     ColoredFormatter,
-    DEFAULT_LOG_FORMAT_WITH_LOCATION,
     DevLogger,
     LOG_LEVEL_COLORS,
     SQL_LOGGER_NAME,
@@ -734,7 +732,7 @@ def test_get_request_id_default_is_none():
         Test that the default request ID is None.
     """
     # Reset to default
-    token = set_request_id(None)
+    set_request_id(None)
 
     request_id = get_request_id()
 
@@ -750,7 +748,7 @@ def test_set_and_get_request_id():
         Test that set_request_id stores the value and get_request_id
         retrieves it.
     """
-    token = set_request_id("abc12345")
+    set_request_id("abc12345")
 
     try:
         request_id = get_request_id()
@@ -759,7 +757,7 @@ def test_set_and_get_request_id():
             errmsg = "Expected 'abc12345', got '{}'".format(request_id)
             raise AssertionError(errmsg)
     finally:
-        _request_id_var = set_request_id(None)
+        set_request_id(None)
 
     return
 
@@ -814,7 +812,7 @@ def test_colored_formatter_includes_request_id():
     """
         Test that the ColoredFormatter includes the request ID in output.
     """
-    token = set_request_id("req-test1")
+    set_request_id("req-test1")
 
     try:
         formatter = ColoredFormatter(use_colors=False)

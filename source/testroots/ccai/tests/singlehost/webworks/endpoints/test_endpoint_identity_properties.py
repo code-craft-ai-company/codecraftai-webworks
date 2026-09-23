@@ -22,7 +22,6 @@ from ccai.webworks.endpoints import (
     AccessPolicy,
     Doc,
     Endpoint,
-    EndpointRegistry,
     RateLimit,
 )
 
@@ -82,9 +81,6 @@ def generate_random_doc() -> Optional[Doc]:
     )
 
 
-def _clear_registry():
-    """Helper to clear the registry before tests."""
-    registry = EndpointRegistry()
 def _make_handler(iteration: int):
     """Create a unique handler function for a given iteration."""
     def handler():
@@ -116,8 +112,6 @@ def test_property_decorator_returns_identical_function():
         **Validates: Requirements 2.1, 4.3**
     """
     for iteration in range(100):
-        registry = EndpointRegistry()
-
         handler = _make_handler(iteration)
         original_id = id(handler)
 
@@ -156,8 +150,6 @@ def test_property_decorator_preserves_function_callable():
         **Validates: Requirements 2.1, 4.3**
     """
     for iteration in range(100):
-        registry = EndpointRegistry()
-
         expected_value = random.randint(0, 10000)
 
         def handler():
@@ -193,8 +185,6 @@ def test_property_decorator_preserves_identity_with_subclasses():
         **Validates: Requirements 2.1, 4.3**
     """
     for iteration in range(100):
-        registry = EndpointRegistry()
-
         # Create a random subclass with random class-level defaults
         subclass_attrs = {
             "methods": generate_random_methods(),
@@ -239,8 +229,6 @@ def test_property_decorator_preserves_identity_with_extras():
         **Validates: Requirements 2.1, 4.3**
     """
     for iteration in range(100):
-        registry = EndpointRegistry()
-
         handler = _make_handler(iteration)
         leaf = f"extras_{iteration}_{generate_random_leaf()}"
 
@@ -275,8 +263,6 @@ def test_property_decorator_preserves_identity_with_path():
         **Validates: Requirements 2.1, 4.3**
     """
     for iteration in range(100):
-        registry = EndpointRegistry()
-
         handler = _make_handler(iteration)
 
         # Generate a random path

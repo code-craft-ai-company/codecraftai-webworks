@@ -10,7 +10,6 @@
 
 import hashlib
 import random
-import secrets
 import string
 
 from base64 import urlsafe_b64encode

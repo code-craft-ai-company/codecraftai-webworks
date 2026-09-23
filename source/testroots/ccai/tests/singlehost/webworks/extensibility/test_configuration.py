@@ -10,7 +10,7 @@ import os
 import random
 import string
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ccai.webworks.extensibility.configuration import apply_config_defaults
 from ccai.webworks.extensibility.configuration import apply_env_overrides

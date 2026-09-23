@@ -16,7 +16,6 @@ import shutil
 import string
 import tempfile
 
-from ccai.webworks.templating.engine import TemplateEngine
 from ccai.webworks.templating.jinja2_adapter import Jinja2Adapter
 from ccai.webworks.templating.renderer import TemplateRenderer
 

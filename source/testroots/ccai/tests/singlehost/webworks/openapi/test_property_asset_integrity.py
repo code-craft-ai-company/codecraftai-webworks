@@ -34,8 +34,6 @@ def test_property_asset_integrity():
     resolver = AssetResolver()
 
     # Load the manifest directly to iterate all entries
-    static_dir = os.path.join(os.path.dirname(resolver._static_dir), "static")
-
     # Use the resolver's own static dir
     static_dir = resolver._static_dir
 

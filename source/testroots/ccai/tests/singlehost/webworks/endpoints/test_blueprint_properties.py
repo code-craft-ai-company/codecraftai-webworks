@@ -93,9 +93,6 @@ def generate_random_rate_limit() -> Optional[RateLimit]:
     )
 
 
-def _clear_registry():
-    """Helper to clear the registry before tests."""
-    registry = EndpointRegistry()
 # =============================================================================
 # Property 4: Path Composition
 # Feature: blueprint-endpoints, Property 4: Path Composition
@@ -116,12 +113,9 @@ def test_property_path_composition():
         **Feature: blueprint-endpoints, Property 4: Path Composition**
         **Validates: Requirements 1.7, 4.3, 4.4**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random base_path
         base_path = generate_random_base_path()
         
@@ -185,12 +179,9 @@ def test_property_path_composition_with_absolute_path():
         **Feature: blueprint-endpoints, Property 4: Path Composition**
         **Validates: Requirements 1.7, 4.3, 4.4**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random base_path
         base_path = generate_random_base_path()
         
@@ -230,12 +221,9 @@ def test_property_path_composition_with_base_leaf():
         **Feature: blueprint-endpoints, Property 4: Path Composition**
         **Validates: Requirements 1.7, 4.3, 4.4**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random base_leaf
         base_leaf = generate_random_leaf()
         
@@ -276,12 +264,9 @@ def test_property_path_composition_no_base():
         **Feature: blueprint-endpoints, Property 4: Path Composition**
         **Validates: Requirements 1.7, 4.3, 4.4**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random leaf
         leaf = generate_random_leaf()
         
@@ -328,12 +313,9 @@ def test_property_security_constraint_inheritance_child_inherits_parent():
         **Feature: blueprint-endpoints, Property 5: Security Constraint Inheritance**
         **Validates: Requirements 2.3, 2.4, 2.5, 6.5**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random parent access policy
         parent_roles = generate_random_roles()
         parent_scopes = generate_random_scopes()
@@ -412,12 +394,9 @@ def test_property_security_constraint_inheritance_child_overrides_parent():
         **Feature: blueprint-endpoints, Property 5: Security Constraint Inheritance**
         **Validates: Requirements 2.3, 2.4, 2.5, 6.5**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random parent access policy
         parent_roles = generate_random_roles()
         parent_scopes = generate_random_scopes()
@@ -489,12 +468,9 @@ def test_property_security_constraint_inheritance_replace_roles():
         **Feature: blueprint-endpoints, Property 5: Security Constraint Inheritance**
         **Validates: Requirements 2.3, 2.4, 2.5, 6.5**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random parent roles (ensure non-empty for meaningful test)
         parent_roles = ["parent_role_" + generate_random_string(3, 5)]
         parent_policy = AccessPolicy(roles=parent_roles, scopes=[])
@@ -548,12 +524,9 @@ def test_property_security_constraint_inheritance_replace_scopes():
         **Feature: blueprint-endpoints, Property 5: Security Constraint Inheritance**
         **Validates: Requirements 2.3, 2.4, 2.5, 6.5**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random parent scopes (ensure non-empty for meaningful test)
         parent_scopes = ["parent_scope_" + generate_random_string(3, 5)]
         parent_policy = AccessPolicy(roles=[], scopes=parent_scopes)
@@ -607,12 +580,9 @@ def test_property_security_constraint_inheritance_rate_limit_most_restrictive():
         **Feature: blueprint-endpoints, Property 5: Security Constraint Inheritance**
         **Validates: Requirements 2.3, 2.4, 2.5, 6.5**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random parent rate limit
         parent_requests = random.randint(50, 200)
         parent_window = 60
@@ -675,12 +645,9 @@ def test_property_decorator_identity_preservation():
         **Feature: blueprint-endpoints, Property 1: Decorator Identity Preservation**
         **Validates: Requirements 3.1, 5.3**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random base_path and leaf
         base_path = generate_random_base_path()
         leaf = generate_random_leaf()
@@ -756,12 +723,9 @@ def test_property_decorator_identity_with_stacking():
         **Feature: blueprint-endpoints, Property 1: Decorator Identity Preservation**
         **Validates: Requirements 3.1, 5.3**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random base_path and leaf
         base_path = generate_random_base_path()
         leaf = generate_random_leaf()
@@ -829,8 +793,6 @@ def test_property_class_default_inheritance():
         **Feature: blueprint-endpoints, Property 2: Class Default Inheritance and Override**
         **Validates: Requirements 3.8, 3.9, 3.10**
     """
-    registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -915,8 +877,6 @@ def test_property_class_default_override():
         **Feature: blueprint-endpoints, Property 2: Class Default Inheritance and Override**
         **Validates: Requirements 3.8, 3.9, 3.10**
     """
-    registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -1001,7 +961,6 @@ def test_property_class_attributes_unchanged():
         **Feature: blueprint-endpoints, Property 2: Class Default Inheritance and Override**
         **Validates: Requirements 3.8, 3.9, 3.10**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -1086,8 +1045,6 @@ def test_property_extra_kwargs_preservation():
         **Feature: blueprint-endpoints, Property 3: Extra Kwargs Preservation**
         **Validates: Requirements 3.7**
     """
-    registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -1164,8 +1121,6 @@ def test_property_extra_kwargs_verbatim():
         **Feature: blueprint-endpoints, Property 3: Extra Kwargs Preservation**
         **Validates: Requirements 3.7**
     """
-    registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -1241,12 +1196,9 @@ def test_property_child_attribute_preservation():
         **Feature: blueprint-endpoints, Property 14: Child Attribute Preservation**
         **Validates: Requirements 4.6, 6.6**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random child attributes
         child_leaf = generate_random_leaf()
         child_methods = random.choice([["GET"], ["POST"], ["GET", "POST"], ["PUT", "DELETE"]])
@@ -1314,12 +1266,9 @@ def test_property_child_attribute_preservation_with_overrides():
         **Feature: blueprint-endpoints, Property 14: Child Attribute Preservation**
         **Validates: Requirements 4.6, 6.6**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random child attributes
         child_leaf = generate_random_leaf()
         child_methods = random.choice([["GET"], ["POST"], ["GET", "POST"]])
@@ -1386,12 +1335,9 @@ def test_property_child_attribute_preservation_access_policy():
         **Feature: blueprint-endpoints, Property 14: Child Attribute Preservation**
         **Validates: Requirements 4.6, 6.6**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random child access policy
         child_roles = ["child_role_" + generate_random_string(3, 5)]
         child_scopes = ["child_scope_" + generate_random_string(3, 5)]
@@ -1448,12 +1394,9 @@ def test_property_child_attribute_preservation_rate_limit():
         **Feature: blueprint-endpoints, Property 14: Child Attribute Preservation**
         **Validates: Requirements 4.6, 6.6**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random child rate limit (more restrictive than parent)
         child_requests = random.randint(10, 50)
         child_window = 60
@@ -1498,12 +1441,9 @@ def test_property_child_attribute_preservation_serializers():
         **Feature: blueprint-endpoints, Property 14: Child Attribute Preservation**
         **Validates: Requirements 4.6, 6.6**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random serializers
         serializer_key = generate_random_string(3, 8)
         serializer_value = generate_random_string(5, 15)
@@ -1563,12 +1503,9 @@ def test_property_blueprint_multi_attachment():
         **Feature: blueprint-endpoints, Property 12: Blueprint Multi-Attachment**
         **Validates: Requirements 1.1, 1.3, 1.4**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
-        registry = EndpointRegistry()
-        
         # Generate random number of endpoints (1-5)
         num_endpoints = random.randint(1, 5)
         
@@ -1631,7 +1568,6 @@ def test_property_blueprint_multi_attachment_separate_descriptors():
         **Feature: blueprint-endpoints, Property 12: Blueprint Multi-Attachment**
         **Validates: Requirements 1.1, 1.3, 1.4**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -1696,7 +1632,6 @@ def test_property_blueprint_multi_attachment_all_inherit_constraints():
         **Feature: blueprint-endpoints, Property 12: Blueprint Multi-Attachment**
         **Validates: Requirements 1.1, 1.3, 1.4**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -1777,7 +1712,6 @@ def test_property_blueprint_router_integration_with_router():
         **Feature: blueprint-endpoints, Property 13: Blueprint Router Integration**
         **Validates: Requirements 1.5, 1.6**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -1857,7 +1791,6 @@ def test_property_blueprint_router_integration_without_router():
         **Feature: blueprint-endpoints, Property 13: Blueprint Router Integration**
         **Validates: Requirements 1.5, 1.6**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -1921,7 +1854,6 @@ def test_property_blueprint_router_integration_router_receives_complete_descript
         **Feature: blueprint-endpoints, Property 13: Blueprint Router Integration**
         **Validates: Requirements 1.5, 1.6**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2017,7 +1949,6 @@ def test_property_blueprint_idempotency():
         **Feature: blueprint-endpoints, Property 15: Blueprint Idempotency**
         **Validates: Requirements 6.7**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2082,7 +2013,6 @@ def test_property_blueprint_idempotency_same_methods():
         **Feature: blueprint-endpoints, Property 15: Blueprint Idempotency**
         **Validates: Requirements 6.7**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2135,7 +2065,6 @@ def test_property_blueprint_idempotency_same_constraints():
         **Feature: blueprint-endpoints, Property 15: Blueprint Idempotency**
         **Validates: Requirements 6.7**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2202,7 +2131,6 @@ def test_property_blueprint_idempotency_with_router():
         **Feature: blueprint-endpoints, Property 15: Blueprint Idempotency**
         **Validates: Requirements 6.7**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2283,8 +2211,6 @@ def test_property_descriptor_emission():
         **Feature: blueprint-endpoints, Property 9: Descriptor Emission**
         **Validates: Requirements 5.1, 5.6**
     """
-    registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2389,8 +2315,6 @@ def test_property_descriptor_emission_with_attach_child():
         **Feature: blueprint-endpoints, Property 9: Descriptor Emission**
         **Validates: Requirements 5.1, 5.6**
     """
-    registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2465,8 +2389,6 @@ def test_property_descriptor_emission_merged_metadata():
         **Feature: blueprint-endpoints, Property 9: Descriptor Emission**
         **Validates: Requirements 5.1, 5.6**
     """
-    registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2552,8 +2474,6 @@ def test_property_conflict_detection_missing_metadata():
     """
     from ccai.webworks.endpoints.exceptions import EndpointRegistrationError
     
-    registry = EndpointRegistry()
-    
     # Run 100 iterations with different random configurations
     for iteration in range(100):
         registry = EndpointRegistry()
@@ -2601,8 +2521,6 @@ def test_property_conflict_detection_duplicate_registration():
         **Validates: Requirements 3.4, 3.5, 6.3, 6.4**
     """
     from ccai.webworks.endpoints.registry import EndpointConflictError
-    
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2669,8 +2587,6 @@ def test_property_conflict_detection_replace_behavior():
         **Feature: blueprint-endpoints, Property 11: Conflict Detection and Replace**
         **Validates: Requirements 3.4, 3.5, 6.3, 6.4**
     """
-    registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2750,8 +2666,6 @@ def test_property_conflict_detection_different_methods_allowed():
         **Feature: blueprint-endpoints, Property 11: Conflict Detection and Replace**
         **Validates: Requirements 3.4, 3.5, 6.3, 6.4**
     """
-    registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2832,8 +2746,6 @@ def test_property_handler_non_execution_during_decoration():
         **Feature: blueprint-endpoints, Property 10: Handler Non-Execution During Registration**
         **Validates: Requirements 5.4, 5.7**
     """
-    registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2923,8 +2835,6 @@ def test_property_handler_non_execution_with_constraints():
         **Feature: blueprint-endpoints, Property 10: Handler Non-Execution During Registration**
         **Validates: Requirements 5.4, 5.7**
     """
-    registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -2958,7 +2868,7 @@ def test_property_handler_non_execution_with_constraints():
             return "result"
         
         # Apply the decorator with various constraints
-        decorated = TestBlueprint.attach_at(
+        TestBlueprint.attach_at(
             leaf=leaf,
             tags=tags,
             access_policy=access_policy,
@@ -3004,8 +2914,6 @@ def test_property_handler_non_execution_multiple_handlers():
         **Feature: blueprint-endpoints, Property 10: Handler Non-Execution During Registration**
         **Validates: Requirements 5.4, 5.7**
     """
-    registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -3079,7 +2987,6 @@ def test_property_handler_non_execution_during_register():
         **Feature: blueprint-endpoints, Property 10: Handler Non-Execution During Registration**
         **Validates: Requirements 5.4, 5.7**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):
@@ -3114,7 +3021,7 @@ def test_property_handler_non_execution_during_register():
             registry.collect_from(handler)
         
         # Call register() - this should NOT call any handlers
-        result = TestBlueprint.register()
+        TestBlueprint.register()
         
         # Verify NO handlers were called during register()
         for i, called in handlers_called.items():
@@ -3125,7 +3032,7 @@ def test_property_handler_non_execution_during_register():
                 raise AssertionError(errmsg)
         
         # Call register() again (idempotency) - still should not call handlers
-        result2 = TestBlueprint.register()
+        TestBlueprint.register()
         
         # Verify handlers STILL were not called
         for i, called in handlers_called.items():
@@ -3150,7 +3057,6 @@ def test_property_handler_non_execution_with_router():
         **Feature: blueprint-endpoints, Property 10: Handler Non-Execution During Registration**
         **Validates: Requirements 5.4, 5.7**
     """
-    registry = EndpointRegistry()
     
     # Run 100 iterations with different random configurations
     for iteration in range(100):

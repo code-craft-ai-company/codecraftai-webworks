@@ -12,7 +12,7 @@
 """
 
 import logging
-from typing import Any, Awaitable, Callable, Dict, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from ccai.webworks.asgi.constants import (
     SCOPE_TYPE_HTTP,

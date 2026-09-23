@@ -9,8 +9,6 @@
 
 import time
 
-from typing import Any, Dict, List, Optional
-
 from ccai.testbase.mocking import Mock
 
 from ccai.webworks.openapi.cache import (
@@ -423,8 +421,6 @@ def test_cached_generator_auto_invalidates_on_registry_change():
     descriptors = [desc_1]
     registry = Mock()
     registry.configure(recursive=True)
-
-    call_count = [0]
 
     def collect_side_effect():
         return list(descriptors)

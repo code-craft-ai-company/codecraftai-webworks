@@ -13,9 +13,8 @@
 
 import io
 import random
-import socket
 import string
-from typing import Any, Dict, List, Tuple
+from typing import Dict, List
 
 from ccai.webworks.wsgi.httpparser import (
     HTTPParser,

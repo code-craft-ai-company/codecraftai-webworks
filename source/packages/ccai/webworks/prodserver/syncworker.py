@@ -12,7 +12,6 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, TYPE_CHECKING
 
 from ccai.webworks.prodserver.worker import Worker
-from ccai.webworks.prodserver.workerstate import WorkerState
 
 if TYPE_CHECKING:
     from ccai.webworks.prodserver.serverconfig import ServerConfig

@@ -45,7 +45,6 @@ class Serializer(Protocol):
             Returns:
                 Serialized bytes in the serializer's content type format.
         """
-        ...
 
 
 @runtime_checkable
@@ -77,7 +76,6 @@ class Deserializer(Protocol):
                 ValidationError: If deserialization fails due to malformed data
                                  or type mismatches.
         """
-        ...
 
 
 

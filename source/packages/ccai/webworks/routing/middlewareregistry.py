@@ -18,7 +18,6 @@ __credits__ = []
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from ccai.webworks.routing.middleware import (
-    AsyncMiddleware,
     Middleware,
     MiddlewareEntry,
     MiddlewarePipeline,

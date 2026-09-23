@@ -18,8 +18,8 @@
 
 import json as _json_module
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
-from urllib.parse import urlencode, quote as url_quote
+from typing import Any, Callable, Dict, Optional, Tuple
+from urllib.parse import urlencode
 
 from ccai.webworks.devexp.testing.testresponse import TestResponse
 

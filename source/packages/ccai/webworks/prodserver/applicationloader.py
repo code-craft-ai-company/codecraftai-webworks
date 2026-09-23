@@ -7,10 +7,8 @@
     on_exit), and application load error handling with proper exit codes.
 """
 
-import importlib
 import logging
-import sys
-from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
+from typing import Callable, Dict, Optional, TYPE_CHECKING
 
 from ccai.webworks.prodserver.serverconfig import EXIT_APP_LOAD_ERROR
 

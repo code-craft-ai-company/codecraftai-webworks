@@ -619,8 +619,6 @@ class WebApplication(ThisApplication):
         """
         self._require_phase(LifecyclePhase.CONFIGURED, "setup_credentials")
 
-        presence_dir = AppPersona.AM_PRESENCE_DIR or "(unknown)"
-
         # Placeholder — store None until codecraftai-credentials is integrated.
         # A real implementation would locate and load credential stores from
         # the presence directory.
@@ -652,8 +650,6 @@ class WebApplication(ThisApplication):
                 data profile source path.
         """
         self._require_phase(LifecyclePhase.CREDENTIALS_LOADED, "setup_data_profiles")
-
-        presence_dir = AppPersona.AM_PRESENCE_DIR or "(unknown)"
 
         # Placeholder — store None until codecraftai-dataprofiles is integrated.
         # A real implementation would locate and load data profile sources

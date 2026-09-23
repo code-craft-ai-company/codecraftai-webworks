@@ -10,8 +10,6 @@
     **Validates: Requirements 3.1, 3.2**
 """
 
-from typing import Any, Dict, List, Optional
-
 from ccai.testbase.mocking import Mock
 
 from ccai.webworks.openapi.configuration import OpenAPIInfo
@@ -89,19 +87,6 @@ def _create_default_info():
         Create a default OpenAPIInfo for testing.
     """
     return OpenAPIInfo(title="Test API", version="1.0.0")
-
-
-# =============================================================================
-# Expected type mappings for path parameter types
-# =============================================================================
-
-_EXPECTED_TYPE_MAP = {
-    "int": {"type": "integer"},
-    "float": {"type": "number"},
-    "str": {"type": "string"},
-    "bool": {"type": "boolean"},
-    "uuid": {"type": "string", "format": "uuid"},
-}
 
 
 # =============================================================================

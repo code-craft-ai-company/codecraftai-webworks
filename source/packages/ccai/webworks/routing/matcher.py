@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from ccai.webworks.routing.converters import CONVERTERS, Converter, get_converter
+from ccai.webworks.routing.converters import CONVERTERS, Converter
 
 
 class SegmentType(Enum):

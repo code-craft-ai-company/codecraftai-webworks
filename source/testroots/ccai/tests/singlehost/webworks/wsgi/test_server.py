@@ -2,16 +2,13 @@
     Tests for the WSGIServer class in the WSGI layer.
 """
 
-import os
-import signal
 import sys
 import threading
 import time
-from typing import Any, Callable, Dict, Iterable, List
+from typing import Any, Callable, Dict, Iterable
 
-from ccai.webworks.wsgi.server import WSGIServer, run_server
+from ccai.webworks.wsgi.server import WSGIServer
 from ccai.webworks.wsgi.serverconfig import ServerConfig
-from ccai.webworks.wsgi.exceptions import ServerError
 
 
 def create_simple_app() -> Callable:
@@ -394,7 +391,6 @@ def test_wsgiserver_config_property():
 # =============================================================================
 
 import random
-import socket
 from io import BytesIO
 
 

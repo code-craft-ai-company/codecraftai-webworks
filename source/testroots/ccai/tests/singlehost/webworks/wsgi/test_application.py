@@ -290,7 +290,7 @@ def test_wsgi_application_returns_iterator():
         raise AssertionError(errmsg)
     
     # Consume the iterator
-    body_chunks = list(result)
+    list(result)
     
     return
 
@@ -915,24 +915,27 @@ def test_property_exception_propagation():
         # Create mock start_response
         start_response = MockStartResponse()
         
-        # The exception should be caught and converted to 500 response
+        # The exception should be caught and converted to 500 response.
+        # If the exception propagates instead, it must be the original type;
+        # that is acceptable per WSGI spec for exceptions before start_response.
+        # Only that type is caught, and the status checks sit outside the try,
+        # so their AssertionErrors are never swallowed.
+        propagated_exc: Optional[Exception] = None
         try:
             result = app(environ, start_response)
-            body_chunks = list(result)
-            
+            list(result)
+        except exc_type as exc:
+            propagated_exc = exc
+
+        if propagated_exc is None:
             # Should have called start_response with 500 status
             if start_response.status is None:
                 errmsg = f"Iteration {iteration}: start_response not called after exception"
                 raise AssertionError(errmsg)
-            
+
             if not start_response.status.startswith("500"):
                 errmsg = f"Iteration {iteration}: Expected 500 status for unhandled exception, got '{start_response.status}'"
                 raise AssertionError(errmsg)
-            
-        except Exception as exc:
-            # If exception propagates, it should be the original type
-            # This is acceptable per WSGI spec for exceptions before start_response
-            pass
         
         # Test 2: HTTPException should result in appropriate status code
         http_status_codes = [400, 401, 403, 404, 405, 409, 422, 500, 502, 503]
@@ -952,7 +955,7 @@ def test_property_exception_propagation():
         
         try:
             result2 = app2(environ2, start_response2)
-            body_chunks2 = list(result2)
+            list(result2)
             
             # Should have called start_response with the HTTPException status
             if start_response2.status is None:

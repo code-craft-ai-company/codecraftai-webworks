@@ -13,7 +13,6 @@ import string
 
 from typing import Any, Dict, List, Optional
 
-from ccai.webworks.extensibility.context import ExtensionContext
 from ccai.webworks.extensibility.datastructures import ExtensionState
 from ccai.webworks.extensibility.exceptions import ExtensionAlreadyRegisteredError
 from ccai.webworks.extensibility.exceptions import ExtensionDependencyError

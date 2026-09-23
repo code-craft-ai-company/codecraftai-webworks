@@ -13,11 +13,9 @@ __credits__ = []
 from typing import Any, Callable, Dict, List, Optional, Protocol, Type, TypeVar
 
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
-from ccai.webworks.endpoints.constraints import EndpointConstraints
 from ccai.webworks.endpoints.descriptor import EndpointDescriptor
 from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.ratelimit import RateLimit
-from ccai.webworks.endpoints.registry import EndpointRegistry
 from ccai.webworks.endpoints.restendpoint import RestEndpoint
 
 
@@ -37,7 +35,6 @@ class Router(Protocol):
             
             :param descriptor: The EndpointDescriptor to add.
         """
-        ...
 
 
 class RestBlueprint(RestEndpoint):

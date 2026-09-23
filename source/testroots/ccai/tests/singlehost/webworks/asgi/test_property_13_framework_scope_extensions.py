@@ -14,7 +14,7 @@
 
 import random
 import string
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from ccai.webworks.asgi.scopeparser import (
     ScopeParser,
@@ -25,7 +25,6 @@ from ccai.webworks.asgi.constants import (
     SCOPE_REQUEST,
     SCOPE_ROUTE,
     SCOPE_PATH_PARAMS,
-    SCOPE_STATE,
 )
 from ccai.webworks.routing.request import Request
 

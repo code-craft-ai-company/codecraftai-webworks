@@ -56,7 +56,6 @@ class IdentityProvider(Protocol):
             
             :returns: A Principal if credentials are valid, None otherwise.
         """
-        ...
     
     async def get_principal(self, identifier: str) -> Optional[Principal]:
         """
@@ -66,7 +65,6 @@ class IdentityProvider(Protocol):
             
             :returns: The Principal if found, None otherwise.
         """
-        ...
 
 
 class BasicAuthenticator:

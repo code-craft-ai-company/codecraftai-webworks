@@ -13,7 +13,6 @@ import random
 import string
 
 from ccai.webworks.authentication.blueprints.security import SecurityBlueprint
-from ccai.webworks.endpoints.registry import EndpointRegistry
 
 
 # =============================================================================

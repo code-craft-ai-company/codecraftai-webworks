@@ -15,7 +15,7 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict
 
 import ccai.testbase as testbase
 

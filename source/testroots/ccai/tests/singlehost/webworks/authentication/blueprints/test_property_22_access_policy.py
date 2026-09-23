@@ -12,7 +12,6 @@
 import random
 
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
-from ccai.webworks.authentication.blueprints.security import SecurityBlueprint
 from ccai.webworks.authentication.blueprints.basic import BasicAuthBlueprint
 from ccai.webworks.authentication.blueprints.bearer import BearerAuthBlueprint
 from ccai.webworks.authentication.blueprints.apikey import APIKeyBlueprint

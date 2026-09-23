@@ -10,20 +10,13 @@ import asyncio
 import logging
 import traceback
 
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from ccai.webworks.asgi.scopeparser import ScopeParser
 from ccai.webworks.asgi.bodyreader import BodyReader
 from ccai.webworks.asgi.responsesender import ResponseSender
 from ccai.webworks.asgi.backgroundtasks import BackgroundTasks
-from ccai.webworks.asgi.constants import (
-    SCOPE_REQUEST,
-    SCOPE_ROUTE,
-    SCOPE_PATH_PARAMS,
-    HTTP_STATUS_PHRASES,
-)
 from ccai.webworks.asgi.exceptions import (
-    ASGIError,
     BadRequestBody,
     ClientDisconnected,
     RequestEntityTooLarge,

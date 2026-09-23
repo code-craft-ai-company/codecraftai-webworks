@@ -24,6 +24,7 @@ class ProductivityBlueprint(RestBlueprint):
     methods = ["GET"]
     tags = ["productivity"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/productivity",
         methods=["GET"],
@@ -46,6 +47,7 @@ class ProductivityBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/productivity/{tag}",
         methods=["GET"],

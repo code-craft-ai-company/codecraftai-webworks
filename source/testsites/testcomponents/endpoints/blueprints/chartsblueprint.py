@@ -24,6 +24,7 @@ class ChartsBlueprint(RestBlueprint):
     methods = ["GET"]
     tags = ["charts"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/charts",
         methods=["GET"],
@@ -46,6 +47,7 @@ class ChartsBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/charts/{tag}",
         methods=["GET"],

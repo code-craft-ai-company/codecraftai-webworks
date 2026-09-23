@@ -11,17 +11,12 @@ import hashlib
 import hmac
 import json
 import random
-import secrets
 import string
 import time
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set
+from datetime import datetime
+from typing import Any, Dict, Optional, Set
 
 from ccai.webworks.authentication import (
-    AuthenticationStatus,
-    AuthenticationResult,
-    Principal,
-    AuthenticationContext,
     IDTokenClaims,
     IDTokenValidationError,
     OIDCAuthenticator,
@@ -35,7 +30,7 @@ from ccai.webworks.authentication import (
     generate_nonce,
     validate_id_token_claims,
     validate_nonce,
-    verify_id_token_signature_hmac
+    verify_id_token_signature_hmac,
 )
 
 

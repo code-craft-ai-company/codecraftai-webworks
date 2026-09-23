@@ -5,8 +5,6 @@
     implementation used for ASGI applications in the production server.
 """
 
-import asyncio
-
 from ccai.webworks.prodserver.asyncworker import AsyncWorker
 from ccai.webworks.prodserver.workerstate import WorkerState
 from ccai.webworks.prodserver.serverconfig import ServerConfig

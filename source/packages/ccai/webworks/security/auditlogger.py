@@ -137,7 +137,6 @@ class AuditDestination:
 
             :param entry: The audit entry to write.
         """
-        ...
 
     async def write_async(self, entry: AuditEntry) -> None:
         """
@@ -145,7 +144,6 @@ class AuditDestination:
 
             :param entry: The audit entry to write.
         """
-        ...
 
 
 

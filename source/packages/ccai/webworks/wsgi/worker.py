@@ -6,17 +6,14 @@
     and process HTTP requests by invoking the WSGI application.
 """
 
-import io
 import logging
 import os
 import select
 import socket
-import sys
 import threading
 import time
-import traceback
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 from ccai.webworks.wsgi.serverconfig import ServerConfig
 from ccai.webworks.wsgi.socketlistener import SocketListener
@@ -26,7 +23,6 @@ from ccai.webworks.wsgi.connectionmanager import ConnectionManager
 from ccai.webworks.wsgi.startresponse import StartResponse
 from ccai.webworks.wsgi.exceptions import (
     RequestParseError,
-    RequestTimeout,
     WorkerError,
 )
 

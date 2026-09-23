@@ -28,7 +28,7 @@ import logging
 import time
 
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional, Protocol, Tuple, runtime_checkable
+from typing import Any, Dict, Optional, Protocol, Tuple, runtime_checkable
 
 from ccai.webworks.security.securitycontext import SecurityContext
 
@@ -107,14 +107,12 @@ class AuthenticationProvider(Protocol):
         """
             Return the provider name for logging and identification.
         """
-        ...
 
     @property
     def priority(self) -> int:
         """
             Return the priority for ordering. Lower values indicate higher priority.
         """
-        ...
 
     def authenticate(self, request: Any) -> Optional[SecurityContext]:
         """
@@ -126,7 +124,6 @@ class AuthenticationProvider(Protocol):
 
             :returns: A Security_Context if authentication succeeds, None otherwise.
         """
-        ...
 
     async def authenticate_async(self, request: Any) -> Optional[SecurityContext]:
         """
@@ -136,7 +133,6 @@ class AuthenticationProvider(Protocol):
 
             :returns: A Security_Context if authentication succeeds, None otherwise.
         """
-        ...
 
 
 def _base64url_decode(data: str) -> bytes:

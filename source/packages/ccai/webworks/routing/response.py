@@ -11,7 +11,7 @@
 
 import json
 from http.cookies import SimpleCookie
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 
 # HTTP status phrases for common status codes

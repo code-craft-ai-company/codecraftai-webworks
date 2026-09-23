@@ -952,7 +952,7 @@ def test_format_error_body_returns_valid_json():
     )
     
     try:
-        data = json.loads(body)
+        json.loads(body)
     except json.JSONDecodeError:
         errmsg = f"Expected valid JSON, got {body}"
         raise AssertionError(errmsg)
@@ -1237,14 +1237,14 @@ def test_property_12_unhandled_exception_returns_500():
 
     # Various exception types that are not HTTPException
     exception_factories = [
-        lambda msg: ValueError(msg),
-        lambda msg: TypeError(msg),
-        lambda msg: KeyError(msg),
-        lambda msg: RuntimeError(msg),
-        lambda msg: IOError(msg),
-        lambda msg: AttributeError(msg),
-        lambda msg: IndexError(msg),
-        lambda msg: ZeroDivisionError(msg),
+        ValueError,
+        TypeError,
+        KeyError,
+        RuntimeError,
+        IOError,
+        AttributeError,
+        IndexError,
+        ZeroDivisionError,
     ]
 
     for iteration in range(100):
@@ -1361,9 +1361,9 @@ def test_property_12_production_mode_hides_internal_details():
     handler = ErrorHandler(debug=False)
 
     exception_factories = [
-        lambda msg: ValueError(msg),
-        lambda msg: TypeError(msg),
-        lambda msg: RuntimeError(msg),
+        ValueError,
+        TypeError,
+        RuntimeError,
         lambda msg: HTTPException(status_code=generate_random_error_status_code(), detail=msg),
     ]
 

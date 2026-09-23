@@ -22,7 +22,6 @@ from ccai.webworks.devexp.cli.shell import ShellApplication
 from ccai.webworks.devexp.cli.shell import ShellCommand
 from ccai.webworks.devexp.cli.shell import build_banner
 from ccai.webworks.devexp.cli.shell import build_shell_namespace
-from ccai.webworks.devexp.cli.shell import check_ipython_available
 from ccai.webworks.devexp.cli.shell import load_startup_file
 from ccai.webworks.devexp.cli.shell import resolve_shell_app
 

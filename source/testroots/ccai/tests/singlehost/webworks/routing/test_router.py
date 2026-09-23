@@ -8,7 +8,7 @@
     - Configuration options (strict_slashes, case_sensitive)
 """
 
-from ccai.webworks.routing import Router, RouteMatch, RoutingError, Request
+from ccai.webworks.routing import Router, RoutingError, Request
 from ccai.webworks.endpoints.descriptor import EndpointDescriptor
 
 

@@ -10,14 +10,12 @@ import hashlib
 import secrets
 
 from base64 import urlsafe_b64encode
-from typing import Any, Dict, List, Optional
 
 from ccai.webworks.authentication.blueprints.oauth2 import (
     AuthorizationCodeStore,
     OAuth2Blueprint,
     OAuth2ClientStore,
 )
-from ccai.webworks.authentication.blueprints.responses import AuthError
 
 
 # =============================================================================

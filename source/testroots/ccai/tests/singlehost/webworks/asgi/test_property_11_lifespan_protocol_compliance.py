@@ -13,7 +13,7 @@
 import asyncio
 import random
 import string
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List
 
 
 from ccai.webworks.asgi.lifespanhandler import LifespanHandler

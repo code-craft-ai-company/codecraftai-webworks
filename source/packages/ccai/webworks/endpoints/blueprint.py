@@ -25,7 +25,6 @@ from ccai.webworks.endpoints.endpoint import Endpoint
 from ccai.webworks.endpoints.exceptions import EndpointRegistrationError
 from ccai.webworks.endpoints.merging import ConstraintMerger
 from ccai.webworks.endpoints.ratelimit import RateLimit
-from ccai.webworks.endpoints.registry import EndpointRegistry
 
 
 # Type variable for preserving function signatures in decorators
@@ -69,7 +68,6 @@ class Router(Protocol):
             
             :param descriptor: The EndpointDescriptor to add.
         """
-        ...
 
 
 class Blueprint(Endpoint):

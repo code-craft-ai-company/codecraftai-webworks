@@ -20,7 +20,7 @@ import logging
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ccai.webworks.configuration.core import (
     ConfigSourceType,
@@ -35,7 +35,7 @@ from ccai.webworks.configuration.exceptions import (
     ConfigurationValidationError,
     ConfigurationFrozenError
 )
-from ccai.webworks.configuration.schema import ConfigSchema, coerce_value
+from ccai.webworks.configuration.schema import ConfigSchema
 from ccai.webworks.configuration.sources import (
     ConfigSource,
     ConfigLoader,

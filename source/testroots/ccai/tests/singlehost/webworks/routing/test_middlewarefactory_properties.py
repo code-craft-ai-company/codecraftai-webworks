@@ -20,7 +20,6 @@ import ccai.testbase as testbase
 
 from ccai.testbase.properties import given
 from ccai.testbase.properties import strategies as st
-from ccai.testbase.properties.strategies import composite
 
 from ccai.webworks.routing.middleware import AsyncMiddleware, Middleware
 from ccai.webworks.routing.middlewarefactory import create_middleware

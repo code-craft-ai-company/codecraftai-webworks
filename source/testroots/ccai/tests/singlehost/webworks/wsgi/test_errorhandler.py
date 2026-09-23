@@ -15,7 +15,6 @@ from typing import Any, Dict
 
 from ccai.webworks.wsgi.errorhandler import ErrorHandler
 from ccai.webworks.wsgi.response import Response
-from ccai.webworks.wsgi.constants import HTTP_STATUS_PHRASES
 from ccai.webworks.wsgi.exceptions import (
     HTTPException,
     RequestEntityTooLarge,

@@ -31,22 +31,19 @@ import time
 
 from base64 import urlsafe_b64encode
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 from ccai.webworks.authentication.bearer import (
     TokenStore,
-    decode_jwt,
     encode_jwt,
-    JWTError
 )
 from ccai.webworks.authentication.blueprints.responses import (
     AuthError,
     AuthResponse
 )
 from ccai.webworks.authentication.blueprints.schemas import (
-    OAuth2AuthorizeRequest,
     OAuth2TokenRequest,
-    TokenResponse
+    TokenResponse,
 )
 from ccai.webworks.authentication.blueprints.security import (
     SecurityBlueprint

@@ -18,11 +18,9 @@ import json
 import random
 import string
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from ccai.webworks.endpoints.rest import (
-    Serializer,
-    Deserializer,
     JSONSerializer,
     JSONDeserializer,
     SerializerRegistry,

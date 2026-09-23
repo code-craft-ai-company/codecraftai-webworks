@@ -7,7 +7,7 @@
     configuration errors and unhandled command exceptions.
 """
 
-from argparse import ArgumentParser, Namespace
+from argparse import Namespace
 from typing import Any, Dict
 
 from ccai.webworks.devexp.cli.command import CLICommand
@@ -400,7 +400,6 @@ def test_property_exit_code_consistency_success_returns_zero():
         This test generates 100 random iterations where a command returns
         EXIT_SUCCESS and verifies the CLI always returns 0.
     """
-    rng = random.Random(42)
 
     for iteration in range(100):
         cli = WebworksCLI()

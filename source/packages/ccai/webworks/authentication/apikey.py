@@ -63,7 +63,6 @@ class APIKeyStore(Protocol):
                      - permissions: List of permissions granted to the key
                      - Additional custom attributes
         """
-        ...
 
 
 class APIKeyAuthenticator:

@@ -2,11 +2,9 @@
     Tests for the WorkerManager class in the WSGI layer.
 """
 
-import os
 import signal
 import sys
 import time
-from typing import Any, Callable, Dict, Iterable, List
 
 from ccai.webworks.wsgi.workermanager import WorkerManager, WorkerInfo
 from ccai.webworks.wsgi.serverconfig import ServerConfig

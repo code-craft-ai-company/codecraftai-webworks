@@ -21,19 +21,11 @@ from ccai.webworks.endpoints import (
 
 
 # =============================================================================
-# Test Setup - Clear registry before each test
-# =============================================================================
-
-def _clear_registry():
-    """Helper to clear the registry before tests."""
-    registry = EndpointRegistry()
-# =============================================================================
 # Task 5.1: attach_child() classmethod in Blueprint
 # =============================================================================
 
 def test_blueprint_has_attach_child_method():
     """Test that Blueprint has attach_child() classmethod."""
-    registry = EndpointRegistry()
     
     if not hasattr(Blueprint, "attach_child"):
         raise AssertionError("Blueprint missing 'attach_child' method")
@@ -46,7 +38,6 @@ def test_blueprint_has_attach_child_method():
 
 def test_attach_child_accepts_child_endpoint_class():
     """Test that attach_child accepts a child endpoint class."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api/v1"
@@ -65,7 +56,6 @@ def test_attach_child_accepts_child_endpoint_class():
 
 def test_attach_child_composes_path_from_parent_base_path():
     """Test that attach_child composes path relative to parent base_path."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api/v1"
@@ -83,7 +73,6 @@ def test_attach_child_composes_path_from_parent_base_path():
 
 def test_attach_child_composes_path_from_parent_base_leaf():
     """Test that attach_child composes path relative to parent base_leaf."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_leaf = "api"
@@ -101,7 +90,6 @@ def test_attach_child_composes_path_from_parent_base_leaf():
 
 def test_attach_child_with_leaf_override():
     """Test that attach_child accepts leaf override."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api/v1"
@@ -119,7 +107,6 @@ def test_attach_child_with_leaf_override():
 
 def test_attach_child_with_path_override():
     """Test that attach_child accepts path override."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api/v1"
@@ -137,7 +124,6 @@ def test_attach_child_with_path_override():
 
 def test_attach_child_returns_endpoint_descriptor():
     """Test that attach_child returns an EndpointDescriptor."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -186,7 +172,6 @@ def test_attach_child_registers_descriptor():
 
 def test_attach_child_preserves_child_methods():
     """Test that attach_child preserves child's methods when not overridden."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -206,7 +191,6 @@ def test_attach_child_preserves_child_methods():
 
 def test_attach_child_overrides_methods_when_provided():
     """Test that attach_child overrides methods when explicitly provided."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -225,7 +209,6 @@ def test_attach_child_overrides_methods_when_provided():
 
 def test_attach_child_preserves_child_version():
     """Test that attach_child preserves child's version when not overridden."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -245,7 +228,6 @@ def test_attach_child_preserves_child_version():
 
 def test_attach_child_inherits_parent_version_when_child_has_none():
     """Test that attach_child inherits parent version when child has none."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -265,7 +247,6 @@ def test_attach_child_inherits_parent_version_when_child_has_none():
 
 def test_attach_child_overrides_version_when_provided():
     """Test that attach_child overrides version when explicitly provided."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -285,7 +266,6 @@ def test_attach_child_overrides_version_when_provided():
 
 def test_attach_child_preserves_child_tags():
     """Test that attach_child preserves child's tags when not overridden."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -306,7 +286,6 @@ def test_attach_child_preserves_child_tags():
 
 def test_attach_child_overrides_tags_when_provided():
     """Test that attach_child overrides tags when explicitly provided."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -326,7 +305,6 @@ def test_attach_child_overrides_tags_when_provided():
 
 def test_attach_child_preserves_child_serializers():
     """Test that attach_child preserves child's serializers in extras."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -352,7 +330,6 @@ def test_attach_child_preserves_child_serializers():
 
 def test_attach_child_inherits_parent_access_policy():
     """Test that attach_child inherits parent access_policy when child has none."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -375,7 +352,6 @@ def test_attach_child_inherits_parent_access_policy():
 
 def test_attach_child_merges_access_policies():
     """Test that attach_child merges parent and child access policies."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -397,7 +373,6 @@ def test_attach_child_merges_access_policies():
 
 def test_attach_child_inherits_parent_rate_limit():
     """Test that attach_child inherits parent rate_limit when child has none."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -420,7 +395,6 @@ def test_attach_child_inherits_parent_rate_limit():
 
 def test_attach_child_uses_most_restrictive_rate_limit():
     """Test that attach_child uses most restrictive rate limit."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -441,7 +415,6 @@ def test_attach_child_uses_most_restrictive_rate_limit():
 
 def test_attach_child_merge_tags_true():
     """Test that attach_child merges tags when parent has merge_tags=True."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -469,7 +442,6 @@ def test_attach_child_merge_tags_true():
 
 def test_attach_child_merge_tags_false():
     """Test that attach_child uses child tags when parent has merge_tags=False."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -491,7 +463,6 @@ def test_attach_child_merge_tags_false():
 
 def test_attach_child_inherits_parent_tags_when_child_has_none():
     """Test that attach_child inherits parent tags when child has none."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -512,7 +483,6 @@ def test_attach_child_inherits_parent_tags_when_child_has_none():
 
 def test_attach_child_access_policy_override():
     """Test that attach_child accepts access_policy override."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -535,7 +505,6 @@ def test_attach_child_access_policy_override():
 
 def test_attach_child_rate_limit_override():
     """Test that attach_child accepts rate_limit override."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -557,7 +526,6 @@ def test_attach_child_rate_limit_override():
 
 def test_attach_child_extra_kwargs_preserved():
     """Test that attach_child preserves extra kwargs in descriptor.extras."""
-    registry = EndpointRegistry()
     
     class ParentBlueprint(Blueprint):
         base_path = "/api"
@@ -588,7 +556,6 @@ def test_attach_child_extra_kwargs_preserved():
 
 def test_attach_child_with_doc_kwarg():
     """Test that attach_child accepts doc kwarg."""
-    registry = EndpointRegistry()
     
     from ccai.webworks.endpoints import Doc
     
@@ -644,7 +611,6 @@ def test_attach_child_multiple_children():
 
 def test_attach_child_nested_blueprints():
     """Test that attach_child works with nested blueprints."""
-    registry = EndpointRegistry()
     
     class RootBlueprint(Blueprint):
         base_path = "/api"
@@ -657,8 +623,25 @@ def test_attach_child_nested_blueprints():
     
     # First attach V1Blueprint to Root
     v1_desc = RootBlueprint.attach_child(V1Blueprint)
-    
+
     if v1_desc.path != "/api/v1":
         raise AssertionError(f"Expected path='/api/v1', got {v1_desc.path}")
-    
+
+    # Then attach UsersEndpoint to V1Blueprint. attach_child is relative to
+    # the parent's own base, so on its own V1Blueprint places it under /v1.
+    users_desc = V1Blueprint.attach_child(UsersEndpoint)
+
+    if users_desc.path != "/v1/users":
+        raise AssertionError(f"Expected path='/v1/users', got {users_desc.path}")
+
+    # Nested under Root, the V1 level is based at the path Root composed for
+    # it, and the child composes on top of that.
+    class MountedV1Blueprint(V1Blueprint):
+        base_path = v1_desc.path
+
+    nested_desc = MountedV1Blueprint.attach_child(UsersEndpoint)
+
+    if nested_desc.path != "/api/v1/users":
+        raise AssertionError(f"Expected path='/api/v1/users', got {nested_desc.path}")
+
     return

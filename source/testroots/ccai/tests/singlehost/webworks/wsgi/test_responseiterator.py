@@ -9,10 +9,8 @@
 """
 
 import random
-import string
-import tempfile
 from io import BytesIO
-from typing import Generator, List, Optional
+from typing import Generator, List
 
 from ccai.webworks.wsgi.responseiterator import ResponseIterator
 

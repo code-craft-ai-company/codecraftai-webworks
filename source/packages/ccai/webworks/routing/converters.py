@@ -48,7 +48,6 @@ class Converter(Protocol):
         Raises:
             ValueError: If conversion fails.
         """
-        ...
 
 
 class StringConverter:

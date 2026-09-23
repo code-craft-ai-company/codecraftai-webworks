@@ -12,12 +12,9 @@ from typing import Any, Dict, Optional, Set
 
 from ccai.webworks.authentication import (
     AuthenticationStatus,
-    AuthenticationResult,
-    Principal,
-    AuthenticationContext,
     APIKeyAuthenticator,
     APIKeyLocation,
-    extract_api_key
+    extract_api_key,
 )
 
 
@@ -630,11 +627,6 @@ def test_property_13_api_key_extraction_from_all_locations():
         
         if cookie_extracted != api_key:
             errmsg = f"Iteration {iteration}: Cookie extraction failed. Expected '{api_key}', got '{cookie_extracted}'"
-            raise AssertionError(errmsg)
-        
-        # Property: All three extractions should yield the same key value
-        if not (header_extracted == query_extracted == cookie_extracted == api_key):
-            errmsg = f"Iteration {iteration}: Extraction inconsistency. Header: '{header_extracted}', Query: '{query_extracted}', Cookie: '{cookie_extracted}'"
             raise AssertionError(errmsg)
     
     return

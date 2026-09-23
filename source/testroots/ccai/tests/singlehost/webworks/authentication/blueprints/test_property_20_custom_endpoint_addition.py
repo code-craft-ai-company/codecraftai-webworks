@@ -227,6 +227,4 @@ def test_property_20_custom_endpoint_addition():
             )
             raise AssertionError(errmsg)
 
-    # Final cleanup
-    registry = EndpointRegistry()
     return

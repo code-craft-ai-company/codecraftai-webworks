@@ -24,6 +24,7 @@ class MediaBlueprint(RestBlueprint):
     methods = ["GET"]
     tags = ["media"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/media",
         methods=["GET"],
@@ -46,6 +47,7 @@ class MediaBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/media/{tag}",
         methods=["GET"],

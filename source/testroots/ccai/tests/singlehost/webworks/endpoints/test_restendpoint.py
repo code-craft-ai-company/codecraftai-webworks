@@ -19,7 +19,6 @@ from ccai.webworks.endpoints import (
     EndpointRegistry,
     RateLimit,
     RestEndpoint,
-    SchemaInspectionError,
     EndpointRegistrationError,
 )
 
@@ -64,13 +63,6 @@ class ListFieldSchema:
     count: int
 
 
-# ============================================================================
-# Helper function
-# ============================================================================
-
-def _clear_registry():
-    """Helper to clear the registry before tests."""
-    registry = EndpointRegistry()
 # ============================================================================
 # Test: RestEndpoint class structure
 # ============================================================================
@@ -392,7 +384,6 @@ def test_delete_helper_uses_delete_method():
 
 def test_crud_helpers_preserve_function_identity():
     """CRUD helpers should return the original function unchanged."""
-    registry = EndpointRegistry()
     
     def original_read():
         pass
@@ -473,7 +464,6 @@ def test_crud_helpers_accept_all_parameters():
 
 def test_attach_at_returns_original_function():
     """attach_at should return the original function unchanged."""
-    registry = EndpointRegistry()
     
     def original_handler():
         return "original"
@@ -489,7 +479,6 @@ def test_attach_at_returns_original_function():
 
 def test_attach_at_allows_decorator_stacking():
     """attach_at should allow stacking with other decorators."""
-    registry = EndpointRegistry()
     
     def custom_decorator(func):
         func.custom_attr = "custom"
@@ -513,7 +502,6 @@ def test_attach_at_allows_decorator_stacking():
 
 def test_attach_at_raises_on_missing_leaf_and_path():
     """attach_at should raise EndpointRegistrationError when both leaf and path are missing."""
-    registry = EndpointRegistry()
     
     raised = False
     error_instance = None

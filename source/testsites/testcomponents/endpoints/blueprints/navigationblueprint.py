@@ -24,6 +24,7 @@ class NavigationBlueprint(RestBlueprint):
     methods = ["GET"]
     tags = ["navigation"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/navigation",
         methods=["GET"],
@@ -46,6 +47,7 @@ class NavigationBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/navigation/{tag}",
         methods=["GET"],

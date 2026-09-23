@@ -17,7 +17,7 @@
       variables to every template context.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional
 
 from ccai.webworks.templating.exceptions import UndefinedVariableError
 

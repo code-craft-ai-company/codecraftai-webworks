@@ -16,7 +16,7 @@ __credits__ = []
 
 import random
 import string
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from ccai.webworks.endpoints import (
     Endpoint,
@@ -39,9 +39,6 @@ def generate_random_leaf() -> str:
     return generate_random_string(3, 12)
 
 
-def _clear_registry():
-    """Helper to clear the registry before tests."""
-    registry = EndpointRegistry()
 def _make_handler(iteration: int, suffix: str = ""):
     """Create a unique handler function for a given iteration."""
     def handler():
@@ -93,7 +90,6 @@ def test_property_extra_kwargs_appear_verbatim_in_extras():
         **Feature: endpoint-abstractions, Property 4: Extra Kwargs Preservation**
         **Validates: Requirements 2.7, 5.4**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -140,7 +136,6 @@ def test_property_unknown_keys_preserved_for_downstream():
         **Feature: endpoint-abstractions, Property 4: Extra Kwargs Preservation**
         **Validates: Requirements 2.7, 5.4**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -191,7 +186,6 @@ def test_property_extras_do_not_interfere_with_standard_params():
         **Feature: endpoint-abstractions, Property 4: Extra Kwargs Preservation**
         **Validates: Requirements 2.7, 5.4**
     """
-    registry = EndpointRegistry()
     all_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
 
     for iteration in range(100):
@@ -270,7 +264,6 @@ def test_property_empty_extras_yields_no_spurious_keys():
         **Validates: Requirements 2.7, 5.4**
     """
     # Known framework-managed keys that may appear in extras
-    registry = EndpointRegistry()
     FRAMEWORK_KEYS = {"serializers", "rest"}
 
     for iteration in range(100):
@@ -307,7 +300,6 @@ def test_property_extras_identity_preserved_for_mutable_values():
         **Feature: endpoint-abstractions, Property 4: Extra Kwargs Preservation**
         **Validates: Requirements 2.7, 5.4**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 

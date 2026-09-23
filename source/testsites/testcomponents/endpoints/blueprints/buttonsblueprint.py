@@ -24,6 +24,7 @@ class ButtonsBlueprint(RestBlueprint):
     methods = ["GET"]
     tags = ["buttons"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/buttons",
         methods=["GET"],
@@ -46,6 +47,7 @@ class ButtonsBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/buttons/{tag}",
         methods=["GET"],

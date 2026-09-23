@@ -16,7 +16,6 @@ import re
 from ccai.testbase.mocking import Mock
 
 from ccai.webworks.openapi.configuration import OpenAPIInfo
-from ccai.webworks.openapi.generator import OpenAPIGenerator
 from ccai.webworks.openapi.swaggerui import SwaggerUIBlueprint
 
 

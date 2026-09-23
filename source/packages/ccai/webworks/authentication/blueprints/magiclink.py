@@ -315,12 +315,12 @@ class MagicLinkBlueprint(SecurityBlueprint):
         """
         if cls.token_issuer is None:
             errmsg_lines = [
-                "MagicLinkBlueprint.issue_magic_link called but "
-                "no token_issuer is configured.",
-                "Wire a callable on the subclass before issuing "
-                "tokens, e.g.:",
-                "    SiteMagicLink.token_issuer = staticmethod("
-                "_persist_magic_link_token)",
+                ("MagicLinkBlueprint.issue_magic_link called but "
+                 "no token_issuer is configured."),
+                ("Wire a callable on the subclass before issuing "
+                 "tokens, e.g.:"),
+                ("    SiteMagicLink.token_issuer = staticmethod("
+                 "_persist_magic_link_token)"),
             ]
             errmsg = "\n".join(errmsg_lines)
             raise RuntimeError(errmsg)

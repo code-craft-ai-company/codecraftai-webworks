@@ -16,7 +16,7 @@ __credits__ = []
 
 import random
 import string
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from ccai.webworks.endpoints import (
     AccessPolicy,
@@ -84,9 +84,6 @@ def generate_random_doc() -> Optional[Doc]:
     )
 
 
-def _clear_registry():
-    """Helper to clear the registry before tests."""
-    registry = EndpointRegistry()
 def _make_handler(iteration: int, suffix: str = ""):
     """Create a unique handler function for a given iteration."""
     def handler():
@@ -114,7 +111,6 @@ def test_property_collect_descriptors_have_all_metadata_fields():
         **Feature: endpoint-abstractions, Property 13: Descriptor Metadata Completeness**
         **Validates: Requirements 11.1**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -248,7 +244,6 @@ def test_property_collect_preserves_access_policy_in_constraints():
         **Feature: endpoint-abstractions, Property 13: Descriptor Metadata Completeness**
         **Validates: Requirements 11.1**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -314,7 +309,6 @@ def test_property_collect_preserves_rate_limit_in_constraints():
         **Feature: endpoint-abstractions, Property 13: Descriptor Metadata Completeness**
         **Validates: Requirements 11.1**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -368,7 +362,6 @@ def test_property_collect_multiple_descriptors_all_complete():
         **Feature: endpoint-abstractions, Property 13: Descriptor Metadata Completeness**
         **Validates: Requirements 11.1**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -476,7 +469,6 @@ def test_property_collect_no_policy_yields_empty_scopes_and_roles():
         **Feature: endpoint-abstractions, Property 13: Descriptor Metadata Completeness**
         **Validates: Requirements 11.1**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -527,7 +519,6 @@ def test_property_collect_security_row_has_all_columns():
         **Feature: endpoint-abstractions, Property 13: Descriptor Metadata Completeness**
         **Validates: Requirements 11.1**
     """
-    registry = EndpointRegistry()
     required_columns = [
         "path", "methods", "handler", "access_policy",
         "scopes", "roles", "rate_limit", "summary"

@@ -8,15 +8,11 @@
 import asyncio
 import random
 import string
-import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Set
 
 from ccai.webworks.authentication import (
     AuthenticationStatus,
-    AuthenticationResult,
-    Principal,
-    AuthenticationContext,
     OAuth2Authenticator,
     OAuth2AuthorizationCode,
     OAuth2Error,
@@ -28,7 +24,7 @@ from ccai.webworks.authentication import (
     generate_code_verifier,
     generate_state,
     validate_state,
-    verify_code_challenge
+    verify_code_challenge,
 )
 
 

@@ -16,7 +16,7 @@ __credits__ = []
 
 import random
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ccai.webworks.endpoints.rest import (
     ResourceEndpoint,

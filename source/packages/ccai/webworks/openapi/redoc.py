@@ -6,7 +6,7 @@
 
 .. moduleauthor:: Code Craft AI LLC
 
-This module provides the ReDoc_Blueprint class that extends RestBlueprint
+This module provides the ReDocBlueprint class that extends RestBlueprint
 to serve the ReDoc documentation interface. ReDoc provides a clean,
 responsive, three-panel documentation layout. Unlike the Swagger UI
 blueprint, ReDoc only serves the UI page and points to an existing
@@ -17,12 +17,15 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from ccai.webworks.endpoints.descriptor import EndpointDescriptor
 from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.restblueprint import RestBlueprint, Router
 from ccai.webworks.openapi.assets import AssetResolver
+
+if TYPE_CHECKING:
+    from ccai.webworks.openapi.generator import OpenAPIGenerator
 
 
 REDOC_HTML_TEMPLATE = """<!DOCTYPE html>
@@ -52,12 +55,12 @@ class ReDocBlueprint(RestBlueprint):
         responsive, three-panel documentation layout from an OpenAPI
         specification.
 
-        Unlike the Swagger_UI_Blueprint, ReDoc does not serve the OpenAPI
+        Unlike the SwaggerUIBlueprint, ReDoc does not serve the OpenAPI
         specification itself. Instead, it points to an existing specification
         URL via the spec_url parameter. This allows both Swagger UI and
         ReDoc to share the same specification endpoint.
 
-        :param generator: The OpenAPI_Generator instance used to retrieve
+        :param generator: The OpenAPIGenerator instance used to retrieve
             the API title for the page heading.
         :param ui_path: URL path for the ReDoc page. Defaults to "/redoc".
         :param spec_url: URL of the OpenAPI specification JSON endpoint.
@@ -73,7 +76,7 @@ class ReDocBlueprint(RestBlueprint):
 
     def __init__(
         self,
-        generator: "OpenAPI_Generator",
+        generator: "OpenAPIGenerator",
         ui_path: str = "/redoc",
         spec_url: str = "/openapi.json",
         static_path: str = "/_redoc",
@@ -208,7 +211,7 @@ class ReDocBlueprint(RestBlueprint):
     def register(
         cls,
         router: Optional[Router] = None,
-        instance: Optional["ReDoc_Blueprint"] = None,
+        instance: Optional["ReDocBlueprint"] = None,
     ) -> List[EndpointDescriptor]:
         """
             Register ReDoc routes and return their descriptors.
@@ -219,7 +222,7 @@ class ReDocBlueprint(RestBlueprint):
             be provided since the blueprint is configured at runtime.
 
             :param router: Optional router to add endpoints to.
-            :param instance: The ReDoc_Blueprint instance containing
+            :param instance: The ReDocBlueprint instance containing
                 the runtime configuration. If None, falls back to the
                 parent class register behavior.
 

@@ -9,8 +9,6 @@
     - Edge cases and boundary conditions
 """
 
-import time
-
 from ccai.webworks.templating.cache import CacheEntry, TemplateCache
 
 

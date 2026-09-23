@@ -19,7 +19,6 @@ from ccai.webworks.authentication.bearer import (
     decode_jwt,
     encode_jwt,
 )
-from ccai.webworks.authentication.core import Principal
 
 
 # =============================================================================

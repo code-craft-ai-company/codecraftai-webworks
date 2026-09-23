@@ -15,9 +15,7 @@ __credits__ = []
 
 
 import logging
-import os
 import threading
-import time
 
 from pathlib import Path
 from typing import Callable, Dict, Optional, Set, TYPE_CHECKING
@@ -235,6 +233,8 @@ class ConfigWatcher:
                     try:
                         self._file_mtimes[path] = path.stat().st_mtime
                     except OSError:
+                        # The file vanished or became unreadable after the exists() check; it gets no
+                        # baseline mtime here and the watch loop picks it up on a later poll.
                         pass
         
         # Start the watcher thread
@@ -415,6 +415,8 @@ class ConfigWatcher:
                             self._file_mtimes[path] = current_mtime
                             changed_paths.add(path)
                 except OSError:
+                    # The file vanished or became unreadable after the exists() check; the next poll
+                    # re-examines it, so skipping it for this cycle is safe.
                     pass
         
         # Trigger callbacks for changed files

@@ -7,7 +7,6 @@
 """
 
 import time
-from typing import Dict
 
 from ccai.webworks.wsgi.connectionmanager import ConnectionManager, ConnectionInfo
 from ccai.webworks.wsgi.serverconfig import ServerConfig

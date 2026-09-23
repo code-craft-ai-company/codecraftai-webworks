@@ -147,6 +147,8 @@ def test_property_connection_acceptance_scaling():
                     )
                     connections.append((reader, writer))
                 except Exception:
+                    # A connection that fails to open is simply not counted; the property
+                    # compares active_connections against the connections that did open.
                     pass
 
             # Give the event loop a moment to process all connections.

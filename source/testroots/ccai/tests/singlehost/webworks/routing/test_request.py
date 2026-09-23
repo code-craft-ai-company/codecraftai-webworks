@@ -847,7 +847,7 @@ def test_request_from_asgi_handles_missing_values():
 
 import random
 import string
-from urllib.parse import urlencode, parse_qs
+from urllib.parse import urlencode
 
 
 def _random_string(length: int = 8) -> str:

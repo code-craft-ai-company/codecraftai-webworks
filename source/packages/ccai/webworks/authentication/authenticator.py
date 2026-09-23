@@ -16,7 +16,7 @@ __credits__ = []
 
 
 from abc import abstractmethod
-from typing import Any, Dict, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from ccai.webworks.authentication.core import AuthenticationResult
 
@@ -49,7 +49,6 @@ class Authenticator(Protocol):
             
             :returns: The scheme identifier string.
         """
-        ...
     
     def can_handle(self, request: Any) -> bool:
         """
@@ -65,7 +64,6 @@ class Authenticator(Protocol):
             :returns: True if this authenticator can handle the request,
                      False otherwise.
         """
-        ...
     
     @abstractmethod
     async def authenticate(self, request: Any) -> AuthenticationResult:
@@ -83,5 +81,4 @@ class Authenticator(Protocol):
                      - CHALLENGE with WWW-Authenticate value if challenge needed
                      - SKIP if this authenticator doesn't apply
         """
-        ...
 

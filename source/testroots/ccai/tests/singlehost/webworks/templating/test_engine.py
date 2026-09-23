@@ -146,7 +146,7 @@ def test_templateengine_cannot_be_instantiated():
         Test that TemplateEngine cannot be instantiated directly.
     """
     try:
-        engine = TemplateEngine()
+        TemplateEngine()
         raise AssertionError("TemplateEngine should not be instantiable")
     except TypeError as exc:
         # Expected - abstract class cannot be instantiated

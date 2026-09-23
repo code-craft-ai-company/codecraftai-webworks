@@ -8,11 +8,9 @@
 """
 
 import random
-import string
 
-from typing import Any, List
+from typing import Any
 
-from ccai.webworks.extensibility.datastructures import HookPriority
 from ccai.webworks.extensibility.exceptions import ExtensionPointError
 from ccai.webworks.extensibility.hookmanager import HookManager
 from ccai.webworks.extensibility.componenthooks import (

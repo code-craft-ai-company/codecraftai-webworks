@@ -9,7 +9,7 @@
 import random
 import string
 
-from typing import List, Optional
+from typing import List
 
 from ccai.webworks.extensibility.datastructures import ExtensionState
 from ccai.webworks.extensibility.exceptions import ExtensionNotInitializedError

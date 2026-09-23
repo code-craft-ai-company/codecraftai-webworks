@@ -9,7 +9,7 @@
 import json
 import logging
 import traceback
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Type, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Type
 
 from ccai.webworks.asgi.constants import (
     HTTP_STATUS_PHRASES,

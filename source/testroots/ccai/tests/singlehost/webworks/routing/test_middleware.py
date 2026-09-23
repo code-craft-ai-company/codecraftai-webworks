@@ -8,8 +8,6 @@
 from typing import Callable, Dict
 
 from ccai.webworks.routing.middleware import (
-    Middleware,
-    AsyncMiddleware,
     MiddlewareEntry,
     MiddlewarePipeline,
 )

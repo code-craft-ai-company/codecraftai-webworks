@@ -1309,6 +1309,8 @@ def test_stream_sends_events_before_error():
         try:
             await handler.stream(send, error_generator())
         except ValueError:
+            # Expected: error_generator() raises ValueError after two events; this
+            # test only verifies the messages that were sent before the error.
             pass
         return
     

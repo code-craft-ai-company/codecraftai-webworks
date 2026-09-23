@@ -37,10 +37,7 @@ from typing import Any, Dict, List, Optional
 
 from ccai.webworks.authentication.basic import IdentityProvider
 from ccai.webworks.authentication.core import AuthenticationContext, Principal
-from ccai.webworks.authentication.blueprints.responses import (
-    AuthError,
-    AuthResponse
-)
+from ccai.webworks.authentication.blueprints.responses import AuthError
 from ccai.webworks.authentication.blueprints.schemas import (
     SessionLoginRequest,
     SessionInfo

@@ -8,9 +8,8 @@
 
 import random
 import string
-import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from ccai.webworks.authentication import (
     AccountLockedError,
@@ -953,7 +952,6 @@ def test_property_31_error_response_credential_sanitization():
         
         # Generate a random sensitive dictionary
         sensitive_dict = generate_random_sensitive_dict()
-        original_values = list(sensitive_dict.values())
         
         # Sanitize the dictionary
         sanitized_dict = sanitize_dict(sensitive_dict)

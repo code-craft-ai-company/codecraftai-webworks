@@ -700,7 +700,6 @@ def test_get_converter_raises_keyerror_for_unknown():
     return
 
 import random
-import re
 import string
 from uuid import UUID as UUIDType
 

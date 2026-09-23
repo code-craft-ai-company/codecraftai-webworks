@@ -475,7 +475,7 @@ def test_post_hooks_called_on_denial():
     policy = AccessPolicy(require_auth=True)
     ctx = SecurityContext.guest()
 
-    eval_result = engine.evaluate(policy, ctx)
+    engine.evaluate(policy, ctx)
 
     if len(hook_calls) != 1:
         errmsg = f"Expected 1 post-hook call on denial, got {len(hook_calls)}"

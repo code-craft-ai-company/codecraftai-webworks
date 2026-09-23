@@ -19,10 +19,9 @@ import code
 import os
 import sys
 
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, Optional, Tuple, TYPE_CHECKING
 
 from ccai.webworks.devexp.cli.command import CLICommand
-from ccai.webworks.devexp.cli.exitcodes import EXIT_CONFIG_ERROR
 from ccai.webworks.devexp.cli.exitcodes import EXIT_ERROR
 from ccai.webworks.devexp.cli.exitcodes import EXIT_SUCCESS
 
@@ -133,6 +132,7 @@ def build_shell_namespace(
             app_instance = shell_app.get_instance()
             namespace["app"] = app_instance
         except Exception:
+            # Best-effort: the shell still starts without an 'app' entry when the instance cannot be created.
             pass
 
         try:
@@ -140,6 +140,7 @@ def build_shell_namespace(
             if isinstance(common_imports, dict):
                 namespace.update(common_imports)
         except Exception:
+            # Best-effort: the shell still starts with the default imports when the app's extras fail to load.
             pass
 
     return namespace
@@ -395,6 +396,7 @@ class ShellCommand(CLICommand):
             else:
                 self._standard_launcher(namespace, banner)
         except SystemExit:
+            # The user left the interactive shell with exit()/quit(); that is a normal end of the session.
             pass
         except Exception as err:
             errmsg = "Error starting shell: {}".format(str(err))

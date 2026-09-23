@@ -23,7 +23,7 @@ def test_webapplication_raises_error_without_establish_flag():
     exception_type = None
     
     try:
-        app = WebApplication(
+        WebApplication(
             name="TestApp",
             logger_name="testapp",
             log_basename="testapp",
@@ -55,7 +55,7 @@ def test_webapplication_error_message_mentions_establish_webapp_persona():
     error_message = None
     
     try:
-        app = WebApplication(
+        WebApplication(
             name="TestApp",
             logger_name="testapp",
             log_basename="testapp",

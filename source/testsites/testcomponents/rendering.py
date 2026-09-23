@@ -11,7 +11,6 @@
 
 import html
 
-from testcomponents.catalog import CATALOG
 from testcomponents.catalog import component_for
 from testcomponents.catalog import group_components
 from testcomponents.catalog import total_component_count

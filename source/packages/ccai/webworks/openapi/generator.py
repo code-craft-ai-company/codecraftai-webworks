@@ -5,7 +5,7 @@
 
 .. moduleauthor:: Code Craft AI LLC
 
-This module provides the :class:`OpenAPI_Generator` class which generates
+This module provides the :class:`OpenAPIGenerator` class which generates
 OpenAPI 3.0+ specifications from endpoint descriptors collected by the
 :class:`EndpointRegistry`. It converts endpoint paths, parameters, request
 and response schemas, security requirements, and tags into a complete
@@ -19,7 +19,7 @@ __credits__ = []
 import json
 import re
 
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional
 
 from ccai.webworks.openapi.configuration import (
     ExternalDocs,

@@ -4,17 +4,14 @@
     This module contains unit tests and property tests for the ConfigRegistry class.
 """
 
-import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from ccai.webworks.configuration import (
     ConfigRegistry,
     ConfigSchema,
     ConfigSource,
     ConfigSourceType,
-    ConfigValue,
-    ConfigChangeEvent,
     ConfigurationError,
     ConfigurationValidationError,
     ConfigurationFrozenError,
@@ -3243,6 +3240,7 @@ def test_property_export_secret_masking_all_formats():
         import yaml
         formats_to_test.append("yaml")
     except ImportError:
+        # YAML support is optional; the YAML format is only tested when PyYAML is installed.
         pass
     
     # Run 100 iterations

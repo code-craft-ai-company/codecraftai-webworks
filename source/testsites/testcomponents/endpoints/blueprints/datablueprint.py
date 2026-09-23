@@ -24,6 +24,7 @@ class DataBlueprint(RestBlueprint):
     methods = ["GET"]
     tags = ["data"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/data",
         methods=["GET"],
@@ -46,6 +47,7 @@ class DataBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/data/{tag}",
         methods=["GET"],

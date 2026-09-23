@@ -24,6 +24,7 @@ class FeedbackBlueprint(RestBlueprint):
     methods = ["GET"]
     tags = ["feedback"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/feedback",
         methods=["GET"],
@@ -46,6 +47,7 @@ class FeedbackBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/feedback/{tag}",
         methods=["GET"],

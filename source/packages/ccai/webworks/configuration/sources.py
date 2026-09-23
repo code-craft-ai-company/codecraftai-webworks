@@ -19,6 +19,7 @@ import configparser
 import json
 import logging
 import os
+import re
 
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -933,8 +934,6 @@ class FileSource(ConfigSource):
             :raises ConfigurationFileNotFoundError: If included file not found.
             :raises ConfigurationError: If circular include detected.
         """
-        import re
-        
         if visited is None:
             visited = set()
         
@@ -1464,7 +1463,6 @@ class SecretsProvider(ConfigSource):
 # =============================================================================
 
 import fnmatch
-import re
 
 
 # Default search directories for configuration files

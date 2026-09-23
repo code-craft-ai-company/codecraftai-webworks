@@ -17,20 +17,16 @@ __credits__ = []
 import random
 import string
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, Optional, Type
 
 from ccai.webworks.endpoints.rest import (
     RESTMiddleware,
     create_rest_middleware,
     SerializerRegistry,
     JSONSerializer,
-    JSONDeserializer,
     Validator,
     ErrorHandler,
     ErrorMapping,
-    RESTError,
-    FieldError,
-    ValidationError,
     build_location_header,
     merge_error_maps,
     create_default_registry,

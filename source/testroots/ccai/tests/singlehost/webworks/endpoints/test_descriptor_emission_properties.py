@@ -83,9 +83,6 @@ def generate_random_doc() -> Optional[Doc]:
     )
 
 
-def _clear_registry():
-    """Helper to clear the registry before tests."""
-    registry = EndpointRegistry()
 def _make_handler(iteration: int, suffix: str = ""):
     """Create a unique handler function for a given iteration."""
     def handler():
@@ -118,7 +115,6 @@ def test_property_attach_at_emits_descriptor_to_registry():
         **Feature: endpoint-abstractions, Property 3: Descriptor Emission**
         **Validates: Requirements 4.1, 6.1**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -207,7 +203,6 @@ def test_property_attach_at_emits_descriptor_with_merged_class_attrs():
         **Feature: endpoint-abstractions, Property 3: Descriptor Emission**
         **Validates: Requirements 4.1, 6.1**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -303,7 +298,6 @@ def test_property_attach_at_with_path_emits_descriptor():
         **Feature: endpoint-abstractions, Property 3: Descriptor Emission**
         **Validates: Requirements 4.1, 6.1**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -355,7 +349,6 @@ def test_property_each_attach_at_call_adds_one_descriptor():
         **Feature: endpoint-abstractions, Property 3: Descriptor Emission**
         **Validates: Requirements 4.1, 6.1**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -400,7 +393,6 @@ def test_property_descriptor_has_constraints_object():
         **Feature: endpoint-abstractions, Property 3: Descriptor Emission**
         **Validates: Requirements 4.1, 6.1**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -479,8 +471,6 @@ def test_property_attach_child_emits_descriptor():
         **Validates: Requirements 4.1, 6.1**
     """
     for iteration in range(100):
-        registry = EndpointRegistry()
-
         # Create parent with base_path
         parent_base_path = f"/api/v{random.randint(1, 5)}"
         parent_tags = generate_random_tags()
@@ -540,7 +530,6 @@ def test_property_descriptor_module_matches_handler():
         **Feature: endpoint-abstractions, Property 3: Descriptor Emission**
         **Validates: Requirements 4.1, 6.1**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 

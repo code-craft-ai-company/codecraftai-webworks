@@ -10,13 +10,11 @@ import asyncio
 import random
 import string
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Set
 
 from ccai.webworks.authentication import (
     AuthenticationStatus,
-    AuthenticationResult,
     Principal,
-    AuthenticationContext
 )
 from ccai.webworks.authentication.session import (
     CookieAttributes,

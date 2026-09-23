@@ -15,7 +15,7 @@ __credits__ = []
 import dataclasses
 import logging
 
-from typing import Any, Dict, List, Optional, Type, get_type_hints, get_origin, get_args, Union
+from typing import Any, Dict, List, Type, get_type_hints, get_origin, get_args, Union
 
 from ccai.webworks.endpoints.rest.exceptions import ValidationError
 from ccai.webworks.endpoints.rest.models import FieldError

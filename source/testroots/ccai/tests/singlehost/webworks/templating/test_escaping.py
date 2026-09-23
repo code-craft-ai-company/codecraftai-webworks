@@ -1731,7 +1731,6 @@ def test_property_auto_escaping_all_chars_at_once():
 
     for iteration in range(iterations):
         # Generate base content
-        base_length = random.randint(10, 30)
         base_chars = string.ascii_letters + string.digits + " "
         parts = ["".join(random.choice(base_chars) for _ in range(random.randint(1, 5)))
                  for _ in range(6)]
@@ -2231,7 +2230,6 @@ def test_property_safe_string_bypass_all_html_special_chars():
 
     for iteration in range(iterations):
         # Generate base content
-        base_length = random.randint(5, 20)
         base_chars = string.ascii_letters + string.digits + " "
         parts = ["".join(random.choice(base_chars) for _ in range(random.randint(1, 5)))
                  for _ in range(6)]

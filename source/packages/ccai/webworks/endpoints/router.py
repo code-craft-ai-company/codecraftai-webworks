@@ -52,4 +52,3 @@ class Router(Protocol):
             :param descriptor: The EndpointDescriptor containing handler
                               reference and merged metadata for routing.
         """
-        ...

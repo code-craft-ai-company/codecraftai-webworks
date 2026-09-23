@@ -75,7 +75,7 @@ def test_property_default_presence_dir(app_name, suffix):
     try:
         reset_webapp_persona()
 
-        app = establish_webapp_persona(
+        establish_webapp_persona(
             name=app_name,
             logger_name=logger_name,
             log_basename=log_basename,
@@ -139,7 +139,7 @@ def test_property_default_log_directory(app_name, suffix, use_explicit_presence,
         if presence_dir is not None:
             kwargs["presence_dir"] = presence_dir
 
-        app = establish_webapp_persona(**kwargs)
+        establish_webapp_persona(**kwargs)
 
         actual_log_directory = AppPersona.AM_LOG_DIRECTORY
 
@@ -200,7 +200,7 @@ def test_property_default_settings_file(app_name, suffix, use_explicit_presence,
         if presence_dir is not None:
             kwargs["presence_dir"] = presence_dir
 
-        app = establish_webapp_persona(**kwargs)
+        establish_webapp_persona(**kwargs)
 
         actual_settings_file = AppPersona.AM_SETTINGS_FILENAME
 
@@ -245,7 +245,7 @@ def test_property_all_defaults_consistent(app_name, suffix):
     try:
         reset_webapp_persona()
 
-        app = establish_webapp_persona(
+        establish_webapp_persona(
             name=app_name,
             logger_name=logger_name,
             log_basename=log_basename,

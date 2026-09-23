@@ -5,7 +5,7 @@
 
 .. moduleauthor:: Code Craft AI LLC
 
-This module provides the :class:`Schema_Converter` class which converts Python types
+This module provides the :class:`SchemaConverter` class which converts Python types
 including dataclasses, Pydantic models, and primitive types into JSON Schema
 representations suitable for inclusion in OpenAPI specifications. It handles
 complex type constructs such as ``List[T]``, ``Dict[K, V]``, ``Optional[T]``,
@@ -21,7 +21,7 @@ import dataclasses
 
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Any, Dict, List, Set, Tuple, Type, Union
 from uuid import UUID
 
 try:

@@ -25,7 +25,6 @@ from ccai.webworks.endpoints.descriptor import (
 from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.exceptions import EndpointRegistrationError
 from ccai.webworks.endpoints.ratelimit import RateLimit
-from ccai.webworks.endpoints.registry import EndpointConflictError, EndpointRegistry
 from ccai.webworks.security.decorators import HANDLER_POLICY_ATTR
 
 

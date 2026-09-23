@@ -47,7 +47,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from email.parser import BytesParser
 from email.policy import default as _default_email_policy
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 
 # Module-level logger. ``parse_multipart`` returns an empty result

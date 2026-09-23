@@ -15,13 +15,12 @@ __credits__ = []
 
 import random
 import string
-from typing import Dict, List, Optional, Type
+from typing import Dict, Type
 
 from ccai.webworks.endpoints.rest import (
     ErrorHandler,
     ErrorMapping,
     FieldError,
-    RESTError,
     ValidationError,
     merge_error_maps,
 )

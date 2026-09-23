@@ -22,10 +22,9 @@
 import os
 import tempfile
 
-from typing import Dict, List, Optional, Tuple
+from typing import List, Tuple
 
 from ccai.webworks.routing.multipart import (
-    MultipartResult,
     UploadedFile,
     parse_multipart,
     parse_options_header,

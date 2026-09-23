@@ -29,10 +29,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from ccai.webworks.authentication.blueprints.responses import (
-    AuthError,
-    AuthResponse
-)
+from ccai.webworks.authentication.blueprints.responses import AuthError
 from ccai.webworks.authentication.blueprints.schemas import (
     APIKeyCreateRequest,
     APIKeyResponse

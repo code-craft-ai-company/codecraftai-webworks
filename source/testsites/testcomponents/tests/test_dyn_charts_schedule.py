@@ -535,15 +535,6 @@ _CAL_DATA_B = {
     ],
 }
 
-# Large data set in July 2026 for the initial render test, navigated to
-# independently, to avoid any month-navigation interference.
-_CAL_DATA_JULY = {
-    "events": [
-        {"id": "j1", "name": "July release",  "type": "release",   "startDate": "2026-07-15"},
-        {"id": "j2", "name": "July freeze",   "type": "freeze",    "startDate": "2026-07-10"},
-    ],
-}
-
 
 def _navigate_to_may_2026(frame) -> None:
     """

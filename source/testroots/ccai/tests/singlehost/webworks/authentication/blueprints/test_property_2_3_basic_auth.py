@@ -20,9 +20,6 @@ import string
 from ccai.webworks.authentication.blueprints.basic import (
     BasicAuthBlueprint,
 )
-from ccai.webworks.authentication.blueprints.security import (
-    SecurityBlueprint,
-)
 from ccai.webworks.authentication.core import Principal
 
 

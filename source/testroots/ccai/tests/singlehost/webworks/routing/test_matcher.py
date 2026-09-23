@@ -8,7 +8,7 @@
 
 from uuid import UUID
 
-from ccai.webworks.routing.matcher import Matcher, Segment, SegmentType
+from ccai.webworks.routing.matcher import Matcher, SegmentType
 
 
 # =============================================================================

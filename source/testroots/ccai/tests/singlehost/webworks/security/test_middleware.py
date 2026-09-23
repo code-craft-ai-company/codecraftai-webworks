@@ -6,26 +6,16 @@
     and a property-based test for default-deny enforcement.
 """
 
-import logging
 import random
-import string
 
 from ccai.webworks.security.accesspolicy import AccessPolicy
-from ccai.webworks.security.authenticationmanager import AuthenticationManager
-from ccai.webworks.security.authorizationengine import (
-    AuthorizationEngine,
-    AuthorizationResult,
-)
-from ccai.webworks.security.auditlogger import AuditLogger, AuditLevel
+from ccai.webworks.security.authorizationengine import AuthorizationResult
 from ccai.webworks.security.errors import SecurityCompletenessError
 from ccai.webworks.security.middleware import (
     SecurityMiddleware,
     validate_security_completeness,
 )
-from ccai.webworks.security.policyattachment import (
-    attach_policy,
-    POLICY_CONSTRAINTS_KEY,
-)
+from ccai.webworks.security.policyattachment import attach_policy
 from ccai.webworks.security.securitycontext import SecurityContext
 from ccai.testbase.mocking import Mock
 

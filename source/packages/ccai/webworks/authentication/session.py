@@ -194,7 +194,6 @@ class SessionStore(Protocol):
             
             :returns: The created SessionData.
         """
-        ...
     
     async def get_session(self, session_id: str) -> Optional[SessionData]:
         """
@@ -204,7 +203,6 @@ class SessionStore(Protocol):
             
             :returns: The SessionData if found and valid, None otherwise.
         """
-        ...
     
     async def update_session(
         self,
@@ -221,7 +219,6 @@ class SessionStore(Protocol):
             
             :returns: The updated SessionData if found, None otherwise.
         """
-        ...
     
     async def delete_session(self, session_id: str) -> bool:
         """
@@ -231,7 +228,6 @@ class SessionStore(Protocol):
             
             :returns: True if the session was deleted, False if not found.
         """
-        ...
     
     async def delete_sessions_for_principal(self, principal_id: str) -> int:
         """
@@ -241,7 +237,6 @@ class SessionStore(Protocol):
             
             :returns: The number of sessions deleted.
         """
-        ...
 
 
 class InMemorySessionStore:

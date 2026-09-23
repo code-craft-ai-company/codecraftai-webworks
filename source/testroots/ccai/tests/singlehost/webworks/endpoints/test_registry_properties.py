@@ -18,7 +18,6 @@ import random
 import string
 from typing import List, Optional
 
-from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.constraints import EndpointConstraints
 from ccai.webworks.endpoints.descriptor import EndpointDescriptor
 from ccai.webworks.endpoints.endpoint import Endpoint
@@ -230,7 +229,6 @@ def test_property_conflict_raises_error_for_same_path_method():
             )
             raise AssertionError(errmsg)
 
-    registry = EndpointRegistry()
     return
 
 
@@ -317,7 +315,6 @@ def test_property_on_conflict_replace_allows_override():
             )
             raise AssertionError(errmsg)
 
-    registry = EndpointRegistry()
     return
 
 
@@ -382,7 +379,6 @@ def test_property_no_conflict_for_different_methods_same_path():
             )
             raise AssertionError(errmsg)
 
-    registry = EndpointRegistry()
     return
 
 
@@ -398,7 +394,6 @@ def test_property_attach_at_with_leaf_or_path_succeeds():
         **Validates: Requirements 2.4**
     """
     for iteration in range(100):
-        registry = EndpointRegistry()
         handler = make_handler()
 
         # Randomly choose to provide leaf, path, or both
@@ -431,5 +426,4 @@ def test_property_attach_at_with_leaf_or_path_succeeds():
             )
             raise AssertionError(errmsg)
 
-    registry = EndpointRegistry()
     return

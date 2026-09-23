@@ -12,10 +12,7 @@
 import random
 import string
 
-from ccai.webworks.authentication.blueprints.session import (
-    SessionAuthBlueprint,
-    SessionStore,
-)
+from ccai.webworks.authentication.blueprints.session import SessionAuthBlueprint
 from ccai.webworks.authentication.core import Principal
 
 

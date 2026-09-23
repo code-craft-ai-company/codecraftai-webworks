@@ -21,7 +21,6 @@ from ccai.webworks.configuration.core import (
     ConfigValue,
     ConfigValueMetadata,
     ConfigSourceType,
-    SecretValue
 )
 from ccai.webworks.configuration.exceptions import (
     ConfigurationError,

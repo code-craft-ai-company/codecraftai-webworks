@@ -92,10 +92,10 @@ __all__ = [
     "OAuthFlow",
 
     # Schema Converter
-    "Schema_Converter",
+    "SchemaConverter",
 
     # Generator
-    "OpenAPI_Generator",
+    "OpenAPIGenerator",
 
     # Validation
     "OpenAPIValidator",
@@ -103,10 +103,10 @@ __all__ = [
     "SpecificationValidationError",
 
     # Swagger UI
-    "Swagger_UI_Blueprint",
+    "SwaggerUIBlueprint",
 
     # ReDoc
-    "ReDoc_Blueprint",
+    "ReDocBlueprint",
 
     # Caching
     "SpecificationCache",

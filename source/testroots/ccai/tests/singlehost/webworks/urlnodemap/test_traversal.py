@@ -142,8 +142,8 @@ def test_urlnode_descendants_depth_first_order():
     root = URLNode(segment="", path="/", parent=None)
     api = root.add_child("api")
     v1 = api.add_child("v1")
-    users = v1.add_child("users")
-    docs = root.add_child("docs")
+    v1.add_child("users")
+    root.add_child("docs")
 
     descendants = list(root.descendants())
 
@@ -167,9 +167,9 @@ def test_urlnode_descendants_wide_tree():
         Test that descendants() covers all children in a wide tree.
     """
     root = URLNode(segment="", path="/", parent=None)
-    a = root.add_child("a")
-    b = root.add_child("b")
-    c = root.add_child("c")
+    root.add_child("a")
+    root.add_child("b")
+    root.add_child("c")
 
     descendants = list(root.descendants())
 

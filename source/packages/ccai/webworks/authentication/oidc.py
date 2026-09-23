@@ -24,8 +24,7 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Protocol, Set, Tuple, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, Set, Tuple, runtime_checkable
 from urllib.parse import urlencode
 
 from ccai.webworks.authentication.core import (
@@ -36,16 +35,10 @@ from ccai.webworks.authentication.core import (
 )
 from ccai.webworks.authentication.oauth2 import (
     OAuth2Authenticator,
-    OAuth2AuthorizationCode,
     OAuth2AuthorizationCodeStore,
     OAuth2ClientStore,
-    OAuth2Error,
-    OAuth2GrantType,
-    OAuth2Token,
     OAuth2TokenStore,
     OAuth2UserAuthenticator,
-    generate_state,
-    validate_state
 )
 
 
@@ -491,7 +484,6 @@ class OIDCProviderDiscovery(Protocol):
             
             :returns: Provider metadata if available, None otherwise.
         """
-        ...
 
 
 @runtime_checkable
@@ -517,7 +509,6 @@ class OIDCKeyProvider(Protocol):
             
             :returns: The public key data if found, None otherwise.
         """
-        ...
 
 
 @runtime_checkable
@@ -542,7 +533,6 @@ class OIDCUserInfoProvider(Protocol):
             
             :returns: UserInfo if successful, None otherwise.
         """
-        ...
 
 
 # =============================================================================

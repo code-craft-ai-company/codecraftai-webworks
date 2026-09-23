@@ -657,7 +657,7 @@ def test_strict_mode_passes_with_description():
 
     # The spec has no schemas section, so no example warnings either.
     # It should pass.
-    issues = validator.validate(spec)
+    validator.validate(spec)
 
     # No issues expected since there are no schemas to check for examples
     return
@@ -716,7 +716,7 @@ def test_non_strict_mode_ignores_warnings():
     spec = _create_spec_with_operation(description=None)
 
     validator = OpenAPIValidator(strict=False)
-    issues = validator.validate(spec)
+    validator.validate(spec)
 
     # Non-strict mode should not raise, even if there are no descriptions
     # (missing descriptions are only checked in strict mode)

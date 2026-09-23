@@ -20,17 +20,11 @@ from ccai.webworks.endpoints.rest.validation import Validator
 from ccai.webworks.endpoints.rest.errors import ErrorHandler, merge_error_maps
 from ccai.webworks.endpoints.rest.negotiation import ContentNegotiator, DEFAULT_CONTENT_TYPE
 from ccai.webworks.endpoints.rest.models import (
-    RESTError,
     ErrorMapping,
     select_status_code,
     build_location_header,
 )
-from ccai.webworks.endpoints.rest.exceptions import (
-    HTTPException,
-    NotAcceptable,
-    UnsupportedMediaType,
-    ValidationError,
-)
+from ccai.webworks.endpoints.rest.exceptions import UnsupportedMediaType
 
 
 # Module-level logger. The REST middleware translates every

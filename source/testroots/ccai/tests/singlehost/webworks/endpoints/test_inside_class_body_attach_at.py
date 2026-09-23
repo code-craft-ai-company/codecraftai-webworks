@@ -49,15 +49,6 @@ from ccai.webworks.endpoints.registry import EndpointRegistry
 from ccai.webworks.endpoints.restblueprint import RestBlueprint
 
 
-def _setup_function(function):
-    """
-        Reset the global :class:`EndpointRegistry` before each test
-        so cases don't interfere via descriptor accumulation.
-    """
-    registry = EndpointRegistry()
-    return
-
-
 # =============================================================================
 # RestBlueprint — the subclass that the original bug report targeted.
 # =============================================================================

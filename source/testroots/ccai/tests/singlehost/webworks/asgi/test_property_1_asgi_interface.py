@@ -14,7 +14,7 @@ import asyncio
 import inspect
 import random
 import string
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Tuple
 
 from ccai.webworks.asgi.application import ASGIApplication, UnknownScopeTypeError
 from ccai.webworks.asgi.constants import (
@@ -23,9 +23,7 @@ from ccai.webworks.asgi.constants import (
     SCOPE_TYPE_LIFESPAN,
     MESSAGE_HTTP_REQUEST,
     MESSAGE_HTTP_RESPONSE_START,
-    MESSAGE_HTTP_RESPONSE_BODY,
     MESSAGE_WEBSOCKET_CONNECT,
-    MESSAGE_WEBSOCKET_CLOSE,
     MESSAGE_LIFESPAN_STARTUP,
     MESSAGE_LIFESPAN_STARTUP_COMPLETE,
     MESSAGE_LIFESPAN_SHUTDOWN,

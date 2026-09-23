@@ -20,14 +20,10 @@ import logging
 import signal
 import socket
 
-from typing import Any, Callable, List, Optional, TYPE_CHECKING
+from typing import Any, List, Optional
 
-from ccai.webworks.devexp.cli.exitcodes import EXIT_ERROR
 from ccai.webworks.devexp.server.asyncservercore import AsyncServerCore
 from ccai.webworks.devexp.server.lifespanmanager import LifespanManager
-
-if TYPE_CHECKING:
-    from ccai.webworks.asgi.application import ASGIApplication
 
 
 logger = logging.getLogger(__name__)

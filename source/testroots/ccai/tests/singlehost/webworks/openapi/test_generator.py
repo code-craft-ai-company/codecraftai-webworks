@@ -7,15 +7,12 @@
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
 
 from ccai.testbase.mocking import Mock
 
 from ccai.webworks.openapi.configuration import OpenAPIInfo, ServerObject
 from ccai.webworks.openapi.generator import (
     OpenAPIGenerator,
-    REST_ERROR_SCHEMA,
-    STANDARD_ERROR_RESPONSES,
     extract_path_parameters,
     strip_path_type_annotations,
 )
@@ -25,7 +22,6 @@ from ccai.webworks.openapi.securityschemes import (
     OAuth2SecurityScheme,
     OAuthFlow,
     OAuthFlows,
-    SecurityScheme,
 )
 
 

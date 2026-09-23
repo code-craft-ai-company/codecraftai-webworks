@@ -12,7 +12,6 @@
 """
 
 import argparse
-import sys
 
 from typing import Any, Dict, List, Optional
 
@@ -20,7 +19,6 @@ from ccai.webworks.devexp.cli.command import CLICommand
 from ccai.webworks.devexp.cli.config import load_config
 from ccai.webworks.devexp.cli.exitcodes import EXIT_CONFIG_ERROR
 from ccai.webworks.devexp.cli.exitcodes import EXIT_ERROR
-from ccai.webworks.devexp.cli.exitcodes import EXIT_SUCCESS
 from ccai.webworks.devexp.cli.exitcodes import EXIT_USAGE_ERROR
 from ccai.webworks.devexp.cli.group import CLIGroup
 

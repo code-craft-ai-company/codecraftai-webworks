@@ -24,8 +24,6 @@
     installed.
 """
 
-from ccai.testbase.mocking import create_module_patch
-
 import builtins
 import importlib
 import sys

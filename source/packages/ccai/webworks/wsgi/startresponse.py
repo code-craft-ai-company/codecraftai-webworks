@@ -7,12 +7,10 @@
 """
 
 import socket
-import sys
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Tuple
 
 from ccai.webworks.wsgi.httpwriter import HTTPWriter
 from ccai.webworks.wsgi.serverconfig import ServerConfig
-from ccai.webworks.wsgi.constants import HTTP_STATUS_PHRASES
 
 
 class StartResponse:
@@ -144,8 +142,8 @@ class StartResponse:
                     # Use raise ... from None to avoid chaining
                     raise exc_info[1].with_traceback(exc_info[2])
             finally:
-                # Avoid circular reference
-                exc_info = None
+                # Drop the exc_info reference to avoid a circular reference
+                del exc_info
         elif self._status is not None:
             # start_response called again without exc_info
             # This is an error per PEP 3333

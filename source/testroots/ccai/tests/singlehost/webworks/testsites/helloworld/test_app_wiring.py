@@ -28,7 +28,6 @@ if _testsites_dir not in sys.path:
 from ccai.webworks.asgi.application import ASGIApplication
 from ccai.webworks.routing.request import Request
 from ccai.webworks.routing.response import HTMLResponse
-from ccai.webworks.routing.response import JSONResponse
 
 from helloworld.app import app
 from helloworld.app import router

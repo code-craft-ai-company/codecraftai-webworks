@@ -488,10 +488,17 @@ def test_property_constraints_merge_list_field_union():
             raise AssertionError(errmsg)
 
         # Parent items should appear first (order preservation)
-        for item in parent_list:
+        for expected_idx, item in enumerate(parent_list):
             parent_idx = merged.index(item)
             # Items unique to child should appear after all parent items
             # (but shared items keep their parent position)
+            if parent_idx != expected_idx:
+                errmsg = (
+                    f"Iteration {iteration}: Parent item did not keep its parent position. "
+                    f"item={item}, expected_idx={expected_idx}, got_idx={parent_idx}, "
+                    f"parent={parent_list}, merged={merged}"
+                )
+                raise AssertionError(errmsg)
 
     return
 
@@ -550,7 +557,7 @@ def test_property_constraints_merge_list_field_immutability():
 
         replace = random.choice([True, False])
 
-        merged = EndpointConstraints._merge_list_field(
+        EndpointConstraints._merge_list_field(
             parent_list, child_list, replace=replace
         )
 

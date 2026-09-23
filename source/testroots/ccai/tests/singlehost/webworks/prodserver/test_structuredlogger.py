@@ -29,7 +29,7 @@ def test_log_json_format_returns_valid_json():
     result = logger.log("INFO", "test message")
 
     try:
-        parsed = json.loads(result)
+        json.loads(result)
     except json.JSONDecodeError:
         errmsg = f"Expected valid JSON, got: {result}"
         raise AssertionError(errmsg)

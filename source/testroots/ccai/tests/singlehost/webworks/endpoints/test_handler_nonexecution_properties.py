@@ -82,9 +82,6 @@ def generate_random_doc() -> Optional[Doc]:
     )
 
 
-def _clear_registry():
-    """Helper to clear the registry before tests."""
-    registry = EndpointRegistry()
 def _create_subclass(iteration: int, attrs: Dict[str, Any]) -> type:
     """Create a unique Endpoint subclass with the given class attributes."""
     return type(f"NonExecEndpoint_{iteration}", (Endpoint,), dict(attrs))
@@ -108,8 +105,6 @@ def test_property_handler_not_called_during_attach_at():
         **Validates: Requirements 6.2**
     """
     for iteration in range(100):
-        registry = EndpointRegistry()
-
         call_count = [0]
 
         def handler():
@@ -126,7 +121,7 @@ def test_property_handler_not_called_during_attach_at():
         rate_limit = generate_random_rate_limit()
         doc = generate_random_doc()
 
-        decorated = Endpoint.attach_at(
+        Endpoint.attach_at(
             leaf=leaf,
             methods=methods,
             tags=tags,
@@ -204,7 +199,6 @@ def test_property_handler_not_called_during_registry_collect():
         **Feature: endpoint-abstractions, Property 11: Handler Non-Execution During Import**
         **Validates: Requirements 6.2**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -264,8 +258,6 @@ def test_property_handler_callable_preserved_after_attach_at():
         **Validates: Requirements 6.2**
     """
     for iteration in range(100):
-        registry = EndpointRegistry()
-
         call_count = [0]
         expected_return = random.randint(0, 10000)
 

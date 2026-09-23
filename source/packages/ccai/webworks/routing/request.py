@@ -10,7 +10,7 @@ import json
 import logging
 from http.cookies import SimpleCookie
 from typing import Any, Dict, Optional
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs
 
 from ccai.webworks.authentication.core import AuthenticationContext
 from ccai.webworks.routing.headers import Headers

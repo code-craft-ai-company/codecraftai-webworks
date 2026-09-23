@@ -24,6 +24,7 @@ class SelectionBlueprint(RestBlueprint):
     methods = ["GET"]
     tags = ["selection"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/selection",
         methods=["GET"],
@@ -46,6 +47,7 @@ class SelectionBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/selection/{tag}",
         methods=["GET"],

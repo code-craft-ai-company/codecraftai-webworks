@@ -17,7 +17,6 @@ from ccai.webworks.extensibility.decorators import clear_registered_extension_po
 from ccai.webworks.extensibility.decorators import extension_point
 from ccai.webworks.extensibility.decorators import get_registered_extension_points
 from ccai.webworks.extensibility.exceptions import ExtensionPointError
-from ccai.webworks.extensibility.extension import Extension
 from ccai.webworks.extensibility.registry import ExtensionRegistry
 
 

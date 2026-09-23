@@ -24,6 +24,7 @@ class TextBlueprint(RestBlueprint):
     methods = ["GET"]
     tags = ["text"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/text",
         methods=["GET"],
@@ -46,6 +47,7 @@ class TextBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/text/{tag}",
         methods=["GET"],

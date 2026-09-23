@@ -10,7 +10,6 @@
 """
 
 import random
-import string
 
 from ccai.webworks.prodserver.metricscollector import MetricsCollector
 from ccai.webworks.prodserver.serverconfig import ServerConfig

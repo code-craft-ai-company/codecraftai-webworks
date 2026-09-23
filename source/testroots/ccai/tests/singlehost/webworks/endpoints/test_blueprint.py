@@ -13,7 +13,6 @@ __credits__ = []
 from ccai.webworks.endpoints import (
     AccessPolicy,
     Blueprint,
-    Doc,
     Endpoint,
     EndpointDescriptor,
     EndpointRegistry,
@@ -36,7 +35,6 @@ def _clear_registry():
 
 def test_blueprint_extends_endpoint():
     """Test that Blueprint class extends Endpoint."""
-    registry = EndpointRegistry()
     
     if not issubclass(Blueprint, Endpoint):
         raise AssertionError("Blueprint should be a subclass of Endpoint")
@@ -46,7 +44,6 @@ def test_blueprint_extends_endpoint():
 
 def test_blueprint_has_base_path_attribute():
     """Test that Blueprint has base_path class attribute."""
-    registry = EndpointRegistry()
     
     if not hasattr(Blueprint, "base_path"):
         raise AssertionError("Blueprint missing 'base_path' attribute")
@@ -59,7 +56,6 @@ def test_blueprint_has_base_path_attribute():
 
 def test_blueprint_has_base_leaf_attribute():
     """Test that Blueprint has base_leaf class attribute."""
-    registry = EndpointRegistry()
     
     if not hasattr(Blueprint, "base_leaf"):
         raise AssertionError("Blueprint missing 'base_leaf' attribute")
@@ -72,7 +68,6 @@ def test_blueprint_has_base_leaf_attribute():
 
 def test_blueprint_has_merge_tags_attribute():
     """Test that Blueprint has merge_tags class attribute."""
-    registry = EndpointRegistry()
     
     if not hasattr(Blueprint, "merge_tags"):
         raise AssertionError("Blueprint missing 'merge_tags' attribute")
@@ -85,7 +80,6 @@ def test_blueprint_has_merge_tags_attribute():
 
 def test_blueprint_subclass_can_set_base_path():
     """Test that Blueprint subclass can set base_path."""
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         base_path = "/api/v1"
@@ -102,7 +96,6 @@ def test_blueprint_subclass_can_set_base_path():
 
 def test_blueprint_subclass_can_set_base_leaf():
     """Test that Blueprint subclass can set base_leaf."""
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         base_leaf = "api"
@@ -115,7 +108,6 @@ def test_blueprint_subclass_can_set_base_leaf():
 
 def test_blueprint_subclass_can_set_merge_tags():
     """Test that Blueprint subclass can set merge_tags."""
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         merge_tags = True
@@ -128,7 +120,6 @@ def test_blueprint_subclass_can_set_merge_tags():
 
 def test_blueprint_inherits_endpoint_attributes():
     """Test that Blueprint inherits all Endpoint class attributes."""
-    registry = EndpointRegistry()
     
     # Verify inherited attributes exist
     if not hasattr(Blueprint, "access_policy"):
@@ -154,7 +145,6 @@ def test_blueprint_inherits_endpoint_attributes():
 
 def test_blueprint_subclass_can_set_constraints():
     """Test that Blueprint subclass can set access_policy and rate_limit."""
-    registry = EndpointRegistry()
     
     class SecureBlueprint(Blueprint):
         base_path = "/api/secure"
@@ -176,7 +166,6 @@ def test_blueprint_subclass_can_set_constraints():
 
 def test_blueprint_attach_at_computes_path_from_base_path():
     """Test that Blueprint.attach_at computes path relative to base_path."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
@@ -203,7 +192,6 @@ def test_blueprint_attach_at_computes_path_from_base_path():
 def test_blueprint_attach_at_computes_path_from_base_leaf():
     """Test that Blueprint.attach_at computes path relative to base_leaf."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         base_leaf = "api"
@@ -225,7 +213,6 @@ def test_blueprint_attach_at_computes_path_from_base_leaf():
 def test_blueprint_attach_at_with_nested_path():
     """Test that Blueprint.attach_at handles nested paths correctly."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         base_path = "/api/v1"
@@ -246,7 +233,6 @@ def test_blueprint_attach_at_with_nested_path():
 
 def test_blueprint_attach_at_inherits_constraints():
     """Test that Blueprint.attach_at inherits blueprint constraints."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     class SecureBlueprint(Blueprint):
@@ -274,7 +260,6 @@ def test_blueprint_attach_at_inherits_constraints():
 def test_blueprint_attach_at_merge_tags_false():
     """Test that Blueprint.attach_at with merge_tags=False uses child tags."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         base_path = "/api"
@@ -298,7 +283,6 @@ def test_blueprint_attach_at_merge_tags_false():
 
 def test_blueprint_attach_at_merge_tags_true():
     """Test that Blueprint.attach_at with merge_tags=True merges tags."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
@@ -330,7 +314,6 @@ def test_blueprint_attach_at_merge_tags_true():
 def test_blueprint_attach_at_no_child_tags_uses_parent():
     """Test that Blueprint.attach_at uses parent tags when child has none."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         base_path = "/api"
@@ -356,7 +339,6 @@ def test_blueprint_attach_at_no_child_tags_uses_parent():
 
 def test_blueprint_has_register_method():
     """Test that Blueprint has register() classmethod."""
-    registry = EndpointRegistry()
     
     if not hasattr(Blueprint, "register"):
         raise AssertionError("Blueprint missing 'register' method")
@@ -369,7 +351,6 @@ def test_blueprint_has_register_method():
 
 def test_blueprint_register_returns_list():
     """Test that Blueprint.register() returns a list."""
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         base_path = "/api"
@@ -384,7 +365,6 @@ def test_blueprint_register_returns_list():
 
 def test_blueprint_register_returns_descriptors():
     """Test that Blueprint.register() returns EndpointDescriptor objects."""
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         base_path = "/api"
@@ -411,7 +391,6 @@ def test_blueprint_register_returns_descriptors():
 
 def test_blueprint_register_without_router():
     """Test that Blueprint.register() works without router parameter."""
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         base_path = "/api"
@@ -431,7 +410,6 @@ def test_blueprint_register_without_router():
 
 def test_blueprint_register_with_router():
     """Test that Blueprint.register() calls router.add_endpoint for each descriptor."""
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         base_path = "/api"
@@ -467,7 +445,6 @@ def test_blueprint_register_with_router():
 
 def test_blueprint_register_filters_by_base_path():
     """Test that Blueprint.register() only returns descriptors under its base path."""
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         base_path = "/api"
@@ -498,7 +475,6 @@ def test_blueprint_register_filters_by_base_path():
 
 def test_blueprint_register_returns_empty_list_when_no_endpoints():
     """Test that Blueprint.register() returns empty list when no endpoints registered."""
-    registry = EndpointRegistry()
     
     class EmptyBlueprint(Blueprint):
         base_path = "/empty"
@@ -513,7 +489,6 @@ def test_blueprint_register_returns_empty_list_when_no_endpoints():
 
 def test_blueprint_multiple_methods_single_endpoint():
     """Test that Blueprint handles endpoints with multiple HTTP methods."""
-    registry = EndpointRegistry()
     
     class ApiBlueprint(Blueprint):
         base_path = "/api"
@@ -536,7 +511,6 @@ def test_blueprint_multiple_methods_single_endpoint():
 def test_blueprint_inherits_version():
     """Test that Blueprint endpoints inherit version from blueprint."""
     registry = EndpointRegistry()
-    registry = EndpointRegistry()
     
     class VersionedBlueprint(Blueprint):
         base_path = "/api"
@@ -558,7 +532,6 @@ def test_blueprint_inherits_version():
 
 def test_blueprint_endpoint_can_override_version():
     """Test that endpoint can override blueprint version."""
-    registry = EndpointRegistry()
     registry = EndpointRegistry()
     
     class VersionedBlueprint(Blueprint):

@@ -9,15 +9,11 @@
 """
 
 import random
-import time
 
 from ccai.webworks.authentication.blueprints.bearer import (
     BearerAuthBlueprint,
 )
-from ccai.webworks.authentication.bearer import (
-    decode_jwt,
-    encode_jwt,
-)
+from ccai.webworks.authentication.bearer import decode_jwt
 from ccai.webworks.authentication.core import Principal
 
 

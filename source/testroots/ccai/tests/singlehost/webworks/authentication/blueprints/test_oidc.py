@@ -5,10 +5,9 @@
     jwks_endpoint, as well as the id_token inclusion in token responses.
 """
 
-import json
 import time
 
-from ccai.webworks.authentication.bearer import decode_jwt, encode_jwt
+from ccai.webworks.authentication.bearer import decode_jwt
 from ccai.webworks.authentication.blueprints.oidc import OIDCBlueprint
 
 

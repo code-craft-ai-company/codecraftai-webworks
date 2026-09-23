@@ -42,16 +42,12 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 
-import logging
 import secrets
 
 from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
 import requests as http_requests
-
-
-logger = logging.getLogger(__name__)
 
 
 class OAuthError(Exception):

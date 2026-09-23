@@ -14,7 +14,7 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
-from typing import Callable, Dict, List
+from typing import Callable, Dict
 
 import ccai.testbase as testbase
 
@@ -641,6 +641,8 @@ def test_property_exception_propagation_no_after_markers_for_preceding_middlewar
     try:
         pipeline.execute(request, handler)
     except RuntimeError:
+        # Expected: ExceptionMiddleware raises RuntimeError; the trace recorded before
+        # it propagated is what this property checks.
         pass
 
     actual_order = request.path_params.get("order", [])
@@ -693,6 +695,8 @@ def test_property_exception_propagation_trace_length(markers, exception_index):
     try:
         pipeline.execute(request, handler)
     except RuntimeError:
+        # Expected: ExceptionMiddleware raises RuntimeError; the trace recorded before
+        # it propagated is what this property checks.
         pass
 
     actual_order = request.path_params.get("order", [])

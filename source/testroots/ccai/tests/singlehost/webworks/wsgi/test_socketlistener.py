@@ -10,7 +10,6 @@ import os
 import socket as socket_module
 import tempfile
 import threading
-import time
 from typing import Optional
 
 from ccai.errors.exceptions import SkipError
@@ -621,6 +620,8 @@ def test_bind_raises_for_port_in_use():
         try:
             blocking_socket.setsockopt(socket_module.SOL_SOCKET, socket_module.SO_REUSEPORT, 0)
         except OSError:
+            # Best-effort: SO_REUSEPORT is off by default, so a platform that rejects
+            # explicitly clearing it still leaves the holder socket exclusive.
             pass
     
     try:

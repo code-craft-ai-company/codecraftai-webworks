@@ -10,8 +10,6 @@
 import random
 import string
 
-from typing import Any, List, Optional
-
 from ccai.webworks.extensibility.datastructures import HookPriority
 from ccai.webworks.extensibility.hookmanager import HookManager
 from ccai.webworks.extensibility.requestlifecyclehooks import (
@@ -297,7 +295,7 @@ def test_fire_on_request_error_calls_all_callbacks():
     call_log = []
     manager.register(ON_REQUEST_ERROR, _make_logging_callback("error-a"), extension_name="ext-a")
 
-    results = lifecycle.fire_on_request_error(call_log)
+    lifecycle.fire_on_request_error(call_log)
 
     if len(call_log) != 1:
         errmsg = "Expected 1 call, got {}".format(len(call_log))
@@ -317,7 +315,7 @@ def test_fire_teardown_request_calls_all_callbacks():
     manager.register(TEARDOWN_REQUEST, _make_logging_callback("teardown-a"), extension_name="ext-a")
     manager.register(TEARDOWN_REQUEST, _make_logging_callback("teardown-b"), extension_name="ext-b")
 
-    results = lifecycle.fire_teardown_request(call_log)
+    lifecycle.fire_teardown_request(call_log)
 
     if len(call_log) != 2:
         errmsg = "Expected 2 calls, got {}".format(len(call_log))

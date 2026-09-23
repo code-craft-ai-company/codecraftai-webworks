@@ -17,11 +17,10 @@ __credits__ = []
 
 import random
 import string
-from typing import List, Optional
+from typing import List
 
 from ccai.webworks.endpoints.blueprint import Blueprint
 from ccai.webworks.endpoints.endpoint import Endpoint
-from ccai.webworks.endpoints.registry import EndpointRegistry
 from ccai.webworks.endpoints.restblueprint import RestBlueprint
 
 
@@ -486,14 +485,38 @@ def test_property_restblueprint_absolute_overrides_prefix():
             }
         )
 
-        # When absolute=True, _compute_full_path is bypassed and path is used directly
-        # Simulate the attach_at logic: if absolute, computed_path = path
-        computed_path = child_path  # absolute=True means path is used as-is
+        def handler() -> None:
+            return
 
-        if computed_path != child_path:
+        bp_cls.attach_at(path=child_path, methods=["GET"], absolute=True)(handler)
+
+        descriptors = bp_cls.marked_descriptors()
+
+        if len(descriptors) != 1:
+            errmsg = (
+                f"Iteration {iteration}: Expected exactly 1 descriptor declared "
+                f"on the blueprint but got {len(descriptors)}"
+            )
+            raise AssertionError(errmsg)
+
+        descriptor = descriptors[0]
+
+        if descriptor.path != child_path:
             errmsg = (
                 f"Iteration {iteration}: Expected absolute path '{child_path}' "
-                f"but got '{computed_path}' for base_path='{base_path}'"
+                f"but got '{descriptor.path}' for base_path='{base_path}'"
+            )
+            raise AssertionError(errmsg)
+
+        # The same path without absolute=True is composed under the prefix,
+        # so a match above means the prefix was overridden, not just absent.
+        prefixed_path = bp_cls._compute_full_path(leaf=None, path=child_path)
+
+        if descriptor.path == prefixed_path:
+            errmsg = (
+                f"Iteration {iteration}: absolute=True path '{descriptor.path}' "
+                f"should not equal the prefixed path '{prefixed_path}' for "
+                f"base_path='{base_path}'"
             )
             raise AssertionError(errmsg)
 

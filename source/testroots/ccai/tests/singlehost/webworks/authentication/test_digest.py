@@ -9,23 +9,19 @@ import asyncio
 import hashlib
 import random
 import re
-import secrets
 import string
 import time
-from typing import Any, Dict, Optional, Set
+from typing import Dict, Optional, Set
 
 from ccai.webworks.authentication import (
     AuthenticationStatus,
-    AuthenticationResult,
     Principal,
-    AuthenticationContext,
     DigestAlgorithm,
     DigestAuthenticator,
-    DigestCredentials,
     NonceStore,
     compute_digest_response,
     compute_ha1,
-    create_digest_auth_header
+    create_digest_auth_header,
 )
 
 

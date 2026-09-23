@@ -11,7 +11,7 @@
 
 import asyncio
 import random
-from typing import Any, Dict, List, Optional
+from typing import List
 
 from ccai.webworks.asgi.backgroundtasks import BackgroundTasks
 

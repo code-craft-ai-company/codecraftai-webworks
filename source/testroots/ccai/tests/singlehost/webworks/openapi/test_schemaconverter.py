@@ -6,8 +6,6 @@
     for nested dataclasses, circular reference handling, and schema name generation.
 """
 
-import dataclasses
-
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from decimal import Decimal

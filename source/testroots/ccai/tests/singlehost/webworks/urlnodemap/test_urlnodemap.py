@@ -7,10 +7,8 @@
 """
 
 from ccai.webworks.urlnodemap.urlnodemap import URLNodeMap
-from ccai.webworks.urlnodemap.urlnode import URLNode
 from ccai.webworks.urlnodemap.exceptions import (
     NodeNotFoundError,
-    FrozenTreeError,
     NodeHasChildrenError,
 )
 
@@ -1026,7 +1024,7 @@ def test_property_3_intermediate_node_creation_all_intermediates_exist():
         segments = split_path(path)
 
         # Create the target node
-        target_node = node_map.get_or_create_node(path)
+        node_map.get_or_create_node(path)
 
         # Verify every intermediate prefix path exists
         for i in range(1, len(segments) + 1):

@@ -158,6 +158,8 @@ def test_property_original_singleton_preserved_after_second_call(first_name, fir
                 log_basename=second_logbase,
             )
         except PersonaAlreadyEstablishedError:
+            # Expected: the second establishment is rejected; this test only checks
+            # that the rejected attempt left the original singletons in place.
             pass
 
         testbase.assert_true(

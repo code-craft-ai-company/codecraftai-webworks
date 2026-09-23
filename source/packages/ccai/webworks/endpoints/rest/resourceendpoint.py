@@ -231,6 +231,7 @@ class ResourceEndpoint(RestEndpoint):
                     if resource_id is not None:
                         break
                 except (KeyError, TypeError):
+                    # Probing: the resource has no such key (or is not keyed by strings); try the next candidate.
                     pass
         
         if resource_id is None:

@@ -10,8 +10,6 @@
     **Validates: Requirements 4.1, 4.2, 4.3**
 """
 
-from typing import Any, Dict, List, Optional
-
 from ccai.testbase.mocking import Mock
 
 from ccai.webworks.openapi.configuration import OpenAPIInfo

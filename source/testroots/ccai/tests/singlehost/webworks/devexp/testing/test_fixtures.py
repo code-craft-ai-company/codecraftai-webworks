@@ -73,7 +73,7 @@ def test_mock_request_custom_values():
         raise AssertionError(errmsg)
 
     if request.body != b'{"name": "test"}':
-        errmsg = "Expected body b'{\"name\": \"test\"}', got {!r}".format(request.body)
+        errmsg = "Expected body b'{{\"name\": \"test\"}}', got {!r}".format(request.body)
         raise AssertionError(errmsg)
 
     return

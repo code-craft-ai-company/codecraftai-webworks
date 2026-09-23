@@ -8,7 +8,7 @@
 
 import os
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from ccai.webworks.configuration import (
@@ -1025,18 +1025,12 @@ def test_configuration_error_can_be_raised():
     """
         Test that ConfigurationError can be raised and caught.
     """
-    caught = False
     try:
         raise ConfigurationError("Test error", key="test.key")
     except ConfigurationError as e:
-        caught = True
         if e.key != "test.key":
             errmsg = f"Expected key 'test.key', got {e.key}"
             raise AssertionError(errmsg)
-    
-    if not caught:
-        errmsg = "ConfigurationError was not caught"
-        raise AssertionError(errmsg)
     
     return
 
@@ -1132,18 +1126,12 @@ def test_configuration_validation_error_can_be_raised():
         ValidationError(key="test.key", message="Test error")
     ]
     
-    caught = False
     try:
         raise ConfigurationValidationError(errors)
     except ConfigurationValidationError as e:
-        caught = True
         if len(e.errors) != 1:
             errmsg = f"Expected 1 error, got {len(e.errors)}"
             raise AssertionError(errmsg)
-    
-    if not caught:
-        errmsg = "ConfigurationValidationError was not caught"
-        raise AssertionError(errmsg)
     
     return
 
@@ -1256,18 +1244,12 @@ def test_configuration_file_not_found_error_can_be_raised():
     """
     path = Path("/etc/myapp/missing.yaml")
     
-    caught = False
     try:
         raise ConfigurationFileNotFoundError(path)
     except ConfigurationFileNotFoundError as e:
-        caught = True
         if e.path != path:
             errmsg = f"Expected path {path}, got {e.path}"
             raise AssertionError(errmsg)
-    
-    if not caught:
-        errmsg = "ConfigurationFileNotFoundError was not caught"
-        raise AssertionError(errmsg)
     
     return
 
@@ -1320,18 +1302,12 @@ def test_configuration_frozen_error_can_be_raised():
     """
         Test that ConfigurationFrozenError can be raised and caught.
     """
-    caught = False
     try:
         raise ConfigurationFrozenError("api.secret")
     except ConfigurationFrozenError as e:
-        caught = True
         if e.key != "api.secret":
             errmsg = f"Expected key 'api.secret', got {e.key}"
             raise AssertionError(errmsg)
-    
-    if not caught:
-        errmsg = "ConfigurationFrozenError was not caught"
-        raise AssertionError(errmsg)
     
     return
 
@@ -1417,21 +1393,15 @@ def test_configuration_type_error_can_be_raised():
     """
         Test that ConfigurationTypeError can be raised and caught.
     """
-    caught = False
     try:
         raise ConfigurationTypeError("timeout.seconds", int, "forever")
     except ConfigurationTypeError as e:
-        caught = True
         if e.expected_type is not int:
             errmsg = f"Expected expected_type int, got {e.expected_type}"
             raise AssertionError(errmsg)
         if e.actual_value != "forever":
             errmsg = f"Expected actual_value 'forever', got {e.actual_value}"
             raise AssertionError(errmsg)
-    
-    if not caught:
-        errmsg = "ConfigurationTypeError was not caught"
-        raise AssertionError(errmsg)
     
     return
 

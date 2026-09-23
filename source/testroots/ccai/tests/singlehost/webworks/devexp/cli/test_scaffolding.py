@@ -14,12 +14,9 @@ import shutil
 import tempfile
 
 from argparse import ArgumentParser, Namespace
-from typing import Any, Dict
 
 from ccai.webworks.devexp.cli.exitcodes import EXIT_ERROR
 from ccai.webworks.devexp.cli.exitcodes import EXIT_SUCCESS
-from ccai.webworks.devexp.cli.scaffolding import APP_TEMPLATES
-from ccai.webworks.devexp.cli.scaffolding import CONFIG_TEMPLATE
 from ccai.webworks.devexp.cli.scaffolding import NewProjectCommand
 from ccai.webworks.devexp.cli.scaffolding import PROJECT_TEMPLATES
 from ccai.webworks.devexp.cli.scaffolding import create_project_structure
@@ -256,7 +253,7 @@ def test_create_project_structure_api():
 
     try:
         project_path = os.path.join(temp_dir, "api-project")
-        created_files = create_project_structure(project_path, "api")
+        create_project_structure(project_path, "api")
 
         blueprints_dir = os.path.join(project_path, "blueprints")
         if os.path.isdir(blueprints_dir) is not True:
@@ -292,7 +289,7 @@ def test_create_project_structure_webapp():
 
     try:
         project_path = os.path.join(temp_dir, "webapp-project")
-        created_files = create_project_structure(project_path, "webapp")
+        create_project_structure(project_path, "webapp")
 
         templates_dir = os.path.join(project_path, "templates")
         if os.path.isdir(templates_dir) is not True:

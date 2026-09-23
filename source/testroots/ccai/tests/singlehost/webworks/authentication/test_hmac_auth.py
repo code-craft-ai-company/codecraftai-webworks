@@ -6,23 +6,18 @@
 """
 
 import asyncio
-import hashlib
-import hmac
 import random
 import string
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Dict, Optional, Set
 
 from ccai.webworks.authentication import (
     AuthenticationStatus,
-    AuthenticationResult,
     Principal,
-    AuthenticationContext,
     HMACAlgorithm,
     HMACAuthenticator,
-    HMACCredentials,
     compute_hmac_signature,
-    create_hmac_auth_header
+    create_hmac_auth_header,
 )
 
 

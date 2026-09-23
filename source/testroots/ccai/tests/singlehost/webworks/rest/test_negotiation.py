@@ -16,15 +16,12 @@ __credits__ = []
 
 import random
 import string
-from typing import List, Optional
 
 from ccai.webworks.endpoints.rest import (
     ContentNegotiator,
     NotAcceptable,
     UnsupportedMediaType,
     SerializerRegistry,
-    JSONSerializer,
-    JSONDeserializer,
     create_default_registry,
     DEFAULT_CONTENT_TYPE,
 )

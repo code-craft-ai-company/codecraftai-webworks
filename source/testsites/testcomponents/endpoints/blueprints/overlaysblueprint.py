@@ -24,6 +24,7 @@ class OverlaysBlueprint(RestBlueprint):
     methods = ["GET"]
     tags = ["overlays"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/overlays",
         methods=["GET"],
@@ -46,6 +47,7 @@ class OverlaysBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/overlays/{tag}",
         methods=["GET"],

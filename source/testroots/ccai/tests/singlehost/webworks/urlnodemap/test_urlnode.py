@@ -462,9 +462,9 @@ def test_urlnode_add_child_allows_multiple_literals():
     """
     parent = URLNode(segment="", path="/", parent=None)
     
-    child1 = parent.add_child("api")
-    child2 = parent.add_child("docs")
-    child3 = parent.add_child("static")
+    parent.add_child("api")
+    parent.add_child("docs")
+    parent.add_child("static")
     
     if len(parent.children) != 3:
         errmsg = f"Expected 3 children, got {len(parent.children)}"

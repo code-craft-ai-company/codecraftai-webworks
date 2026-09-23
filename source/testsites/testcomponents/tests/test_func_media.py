@@ -135,7 +135,7 @@ def test_mj_image_eager_loading_sets_src(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-image")
+    _open_preview(page, base_url, "media", "mj-image")
 
     html = (
         '<mj-image '
@@ -171,7 +171,7 @@ def test_mj_image_caption_attribute_renders_figcaption(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-image")
+    _open_preview(page, base_url, "media", "mj-image")
 
     html = (
         '<mj-image '
@@ -238,7 +238,7 @@ def test_mj_avatar_shows_initials_from_name(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-avatar")
+    _open_preview(page, base_url, "media", "mj-avatar")
 
     html = '<mj-avatar name="Alice Martin" size="lg"></mj-avatar>'
     frame = _fill_and_run(page, html)
@@ -268,7 +268,7 @@ def test_mj_avatar_explicit_initials_override_name(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-avatar")
+    _open_preview(page, base_url, "media", "mj-avatar")
 
     html = '<mj-avatar initials="XY" size="lg" shape="square"></mj-avatar>'
     frame = _fill_and_run(page, html)
@@ -298,7 +298,7 @@ def test_mj_avatar_presence_dot_is_shown(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-avatar")
+    _open_preview(page, base_url, "media", "mj-avatar")
 
     html = '<mj-avatar name="Bob Chen" size="lg" presence="online"></mj-avatar>'
     frame = _fill_and_run(page, html)
@@ -328,7 +328,7 @@ def test_mj_avatar_no_src_shows_icon_fallback(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-avatar")
+    _open_preview(page, base_url, "media", "mj-avatar")
 
     html = '<mj-avatar size="md"></mj-avatar>'
     frame = _fill_and_run(page, html)
@@ -357,7 +357,7 @@ def test_mj_avatar_container_has_aria_label(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-avatar")
+    _open_preview(page, base_url, "media", "mj-avatar")
 
     html = '<mj-avatar name="Carol Davis" size="md"></mj-avatar>'
     frame = _fill_and_run(page, html)
@@ -448,7 +448,7 @@ def test_mj_media_player_audio_type_renders_audio_element(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-media-player")
+    _open_preview(page, base_url, "media", "mj-media-player")
 
     html = (
         '<mj-media-player '
@@ -483,7 +483,7 @@ def test_mj_media_player_accessible_label(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-media-player")
+    _open_preview(page, base_url, "media", "mj-media-player")
 
     html = (
         '<mj-media-player '
@@ -846,7 +846,7 @@ def test_mj_gauge_value_label_reflects_value(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-gauge")
+    _open_preview(page, base_url, "media", "mj-gauge")
 
     html = (
         '<mj-gauge id="g1" value="72" min="0" max="100" '
@@ -880,7 +880,7 @@ def test_mj_gauge_linear_shape_renders_fill_bar(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-gauge")
+    _open_preview(page, base_url, "media", "mj-gauge")
 
     html = (
         '<mj-gauge value="45" min="0" max="100" '
@@ -914,7 +914,7 @@ def test_mj_gauge_native_meter_provides_semantics(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-gauge")
+    _open_preview(page, base_url, "media", "mj-gauge")
 
     html = (
         '<mj-gauge value="60" min="0" max="100" title="Test Gauge"></mj-gauge>'
@@ -953,7 +953,7 @@ def test_mj_gauge_title_attribute_renders_label(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-gauge")
+    _open_preview(page, base_url, "media", "mj-gauge")
 
     html = '<mj-gauge value="50" title="My Gauge Label"></mj-gauge>'
     frame = _fill_and_run(page, html)
@@ -1012,7 +1012,7 @@ def test_mj_sparkline_line_type_draws_path(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-sparkline")
+    _open_preview(page, base_url, "media", "mj-sparkline")
 
     html = (
         '<mj-sparkline values="10,20,15,25,18,30" '
@@ -1045,7 +1045,7 @@ def test_mj_sparkline_area_type_draws_area_path(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-sparkline")
+    _open_preview(page, base_url, "media", "mj-sparkline")
 
     html = (
         '<mj-sparkline values="12,18,15,22,19,28,25,32" '
@@ -1079,7 +1079,7 @@ def test_mj_sparkline_bar_type_draws_rect_elements(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-sparkline")
+    _open_preview(page, base_url, "media", "mj-sparkline")
 
     html = (
         '<mj-sparkline values="5,10,8,12,7,15" '
@@ -1113,7 +1113,7 @@ def test_mj_sparkline_label_sets_accessible_role(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-sparkline")
+    _open_preview(page, base_url, "media", "mj-sparkline")
 
     html = (
         '<mj-sparkline values="1,-1,1,1,-1,1,-1,1,1,1" '
@@ -1154,7 +1154,7 @@ def test_mj_sparkline_svg_dimensions_match_attributes(page, base_url):
         :param base_url: The base URL of the running testcomponents site.
     """
 
-    frame = _open_preview(page, base_url, "media", "mj-sparkline")
+    _open_preview(page, base_url, "media", "mj-sparkline")
 
     html = (
         '<mj-sparkline values="10,20,30" '

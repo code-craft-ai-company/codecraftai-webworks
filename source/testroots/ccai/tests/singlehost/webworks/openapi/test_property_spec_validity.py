@@ -9,8 +9,6 @@
     **Validates: Requirements 9.1, 9.5**
 """
 
-from typing import Any, Dict, List, Optional
-
 from ccai.testbase.mocking import Mock
 
 from ccai.webworks.openapi.configuration import OpenAPIInfo, ServerObject
@@ -550,7 +548,7 @@ def test_property_specification_validity():
         # -----------------------------------------------------------------
         validator = OpenAPIValidator(strict=False)
         try:
-            issues = validator.validate(spec)
+            validator.validate(spec)
         except SpecificationValidationError as err:
             issue_details = []
             for issue in err.issues:

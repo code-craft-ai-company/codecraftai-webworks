@@ -16,7 +16,6 @@ from ccai.webworks.authentication.blueprints.magiclink import (
     DEFAULT_TOKEN_PATTERN,
     ERROR_CODE_CONSUMED,
     ERROR_CODE_EXPIRED,
-    ERROR_CODE_INTERNAL,
     ERROR_CODE_INVALID,
     MagicLinkBlueprint,
     MagicLinkConsumeResult,

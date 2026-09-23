@@ -24,6 +24,7 @@ class LayoutBlueprint(RestBlueprint):
     methods = ["GET"]
     tags = ["layout"]
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/layout",
         methods=["GET"],
@@ -46,6 +47,7 @@ class LayoutBlueprint(RestBlueprint):
 
         return response
 
+    @staticmethod
     @RestBlueprint.attach_at(
         path="/components/layout/{tag}",
         methods=["GET"],

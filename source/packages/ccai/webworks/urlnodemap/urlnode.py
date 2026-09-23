@@ -16,7 +16,6 @@ from ccai.webworks.urlnodemap.exceptions import (
     NodeNotFoundError,
     NodeConflictError,
     PathConflictError,
-    FrozenTreeError,
     HandlerConflictError,
 )
 

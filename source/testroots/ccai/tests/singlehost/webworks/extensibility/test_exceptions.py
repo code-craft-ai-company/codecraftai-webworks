@@ -612,9 +612,6 @@ def test_extension_error_can_be_raised_and_caught():
         if not isinstance(exc, ExtensionError):
             errmsg = "Expected caught exception to be ExtensionError"
             raise AssertionError(errmsg)
-    else:
-        errmsg = "Expected ExtensionError to be raised"
-        raise AssertionError(errmsg)
 
     return
 
@@ -639,8 +636,9 @@ def test_subclass_exceptions_caught_by_base():
         try:
             raise exc
         except ExtensionError:
+            # Expected: every extension exception derives from ExtensionError.
             pass
-        else:
+        except Exception:
             exc_type = type(exc).__name__
             errmsg = f"Expected {exc_type} to be caught by ExtensionError handler"
             raise AssertionError(errmsg)

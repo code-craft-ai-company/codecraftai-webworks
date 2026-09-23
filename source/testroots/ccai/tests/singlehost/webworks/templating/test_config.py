@@ -8,10 +8,7 @@
     - Error handling for invalid configuration
 """
 
-from ccai.webworks.templating.config import (
-    TemplateConfig,
-    VALID_UNDEFINED_BEHAVIORS,
-)
+from ccai.webworks.templating.config import TemplateConfig
 from ccai.webworks.templating.exceptions import TemplateConfigurationError
 
 

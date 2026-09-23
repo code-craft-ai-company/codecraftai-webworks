@@ -33,7 +33,6 @@ from ccai.webworks.routing.dispatcher import Dispatcher
 from ccai.webworks.routing.request import Request
 from ccai.webworks.authentication.system import AuthenticationSystem
 from ccai.webworks.asgi.application import ASGIApplication
-from ccai.webworks.configuration.lifecycle import ManagedConfigRegistry
 from ccai.webworks.endpoints.registry import EndpointRegistry
 
 

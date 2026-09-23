@@ -13,11 +13,10 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
-import dataclasses
 import random
 import string
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import List
 
 from ccai.webworks.endpoints import (
     EndpointRegistry,
@@ -40,9 +39,6 @@ def generate_random_leaf() -> str:
     return generate_random_string(3, 12)
 
 
-def _clear_registry():
-    """Helper to clear the registry before tests."""
-    registry = EndpointRegistry()
 def _make_handler(iteration: int, suffix: str = ""):
     """Create a unique handler function for a given iteration."""
     def handler():
@@ -84,7 +80,6 @@ def _build_dataclass(name: str, field_specs: List[tuple]) -> type:
 
         :returns: A new dataclass type.
     """
-    dc_fields = []
     # Put required fields first, then optional fields (dataclass ordering rule)
     required = [(n, t) for n, t, has_default in field_specs if not has_default]
     optional = [(n, t) for n, t, has_default in field_specs if has_default]
@@ -174,7 +169,6 @@ def test_property_dataclass_request_schema_captured_in_extras():
         **Feature: endpoint-abstractions, Property 12: Schema Inspection**
         **Validates: Requirements 8.7**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -245,7 +239,6 @@ def test_property_dataclass_response_schema_captured_in_extras():
         **Feature: endpoint-abstractions, Property 12: Schema Inspection**
         **Validates: Requirements 8.7**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -302,7 +295,6 @@ def test_property_pydantic_model_schema_captured_via_model_json_schema():
         **Feature: endpoint-abstractions, Property 12: Schema Inspection**
         **Validates: Requirements 8.7**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -352,7 +344,6 @@ def test_property_both_request_and_response_schemas_captured():
         **Feature: endpoint-abstractions, Property 12: Schema Inspection**
         **Validates: Requirements 8.7**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 
@@ -419,7 +410,6 @@ def test_property_dataclass_required_fields_marked_in_schema():
         **Feature: endpoint-abstractions, Property 12: Schema Inspection**
         **Validates: Requirements 8.7**
     """
-    registry = EndpointRegistry()
     for iteration in range(100):
         registry = EndpointRegistry()
 

@@ -86,7 +86,6 @@ class HMACKeyStore(Protocol):
             
             :returns: The secret key if found, None otherwise.
         """
-        ...
     
     async def get_principal(self, key_id: str) -> Optional[Principal]:
         """
@@ -96,7 +95,6 @@ class HMACKeyStore(Protocol):
             
             :returns: The Principal if found, None otherwise.
         """
-        ...
 
 
 class HMACAuthenticator:

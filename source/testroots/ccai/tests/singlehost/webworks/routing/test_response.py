@@ -13,7 +13,6 @@ from ccai.webworks.routing.response import (
     HTMLResponse,
     RedirectResponse,
     StreamingResponse,
-    HTTP_STATUS_PHRASES,
 )
 
 

@@ -15,12 +15,12 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from ccai.webworks.wsgi.serverconfig import ServerConfig
 from ccai.webworks.wsgi.socketlistener import SocketListener
 from ccai.webworks.wsgi.workermanager import WorkerManager
-from ccai.webworks.wsgi.exceptions import ServerError, BindError
+from ccai.webworks.wsgi.exceptions import ServerError
 
 
 # Default logger for WSGI server

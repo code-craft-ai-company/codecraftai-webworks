@@ -9,7 +9,7 @@
     - Error handling for unregistered engines
 """
 
-from typing import Any, Callable, Dict, Iterator
+from typing import Any, Callable, Dict
 
 from ccai.webworks.templating.engine import TemplateEngine
 from ccai.webworks.templating.exceptions import TemplateEngineNotFoundError

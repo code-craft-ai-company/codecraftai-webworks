@@ -12,7 +12,6 @@ import os
 from typing import Any, Optional, TYPE_CHECKING
 
 from ccai.webworks.prodserver.worker import Worker
-from ccai.webworks.prodserver.workerstate import WorkerState
 
 if TYPE_CHECKING:
     from ccai.webworks.prodserver.serverconfig import ServerConfig
@@ -32,6 +31,7 @@ try:
     import gevent.pool
     _GEVENT_AVAILABLE = True
 except ImportError:
+    # gevent is an optional dependency; _GEVENT_AVAILABLE stays False and GeventWorker reports it when constructed.
     pass
 
 

@@ -77,7 +77,6 @@ class AuthorizationRule:
             :returns: An AuthorizationResult if this rule applies, or None
                 to continue evaluation with the next rule.
         """
-        ...
 
 
 class AuthorizationEngine:

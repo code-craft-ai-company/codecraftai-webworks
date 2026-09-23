@@ -20,7 +20,7 @@ __credits__ = []
 import json
 import logging
 
-from typing import Callable, Dict
+from typing import Callable
 
 import ccai.testbase as testbase
 

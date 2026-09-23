@@ -13,11 +13,8 @@ __credits__ = []
 
 import logging
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from ccai.webworks.endpoints.rest.exceptions import ValidationError
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 
 # Module-level logger. ``build_location_header`` falls back to ID
@@ -138,6 +135,7 @@ class ErrorMapping:
                         try:
                             attrs[attr_name] = getattr(exception, attr_name)
                         except Exception:
+                            # Best-effort: an attribute whose getter raises is simply left out of the template values.
                             pass
                 
                 # Also add the string representation as a default
@@ -532,6 +530,7 @@ def build_location_header(
                 if resource_id is not None:
                     break
             except (KeyError, TypeError):
+                # Probing: the resource has no such key (or is not keyed by strings); try the next candidate.
                 pass
     
     if resource_id is None:
@@ -540,10 +539,6 @@ def build_location_header(
     # Return just the ID - the full URL construction depends on context
     # The caller should prepend the base path
     return str(resource_id)
-
-
-# Sentinel value to indicate a field should be removed
-_REMOVE_FIELD = object()
 
 
 def apply_json_merge_patch(

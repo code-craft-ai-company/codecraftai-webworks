@@ -480,12 +480,6 @@ _COMMON_EXCLUDE_EXTENSIONS = [
     "*.egg", "*.whl", "*.log", "*.tmp", "*.bak",
 ]
 
-# Common watch patterns
-_COMMON_WATCH_PATTERNS = [
-    "**/*.py", "**/*.html", "**/*.css", "**/*.js",
-    "**/*.yaml", "**/*.yml", "**/*.json", "**/*.toml",
-]
-
 
 def _random_filename(extension=None):
     """

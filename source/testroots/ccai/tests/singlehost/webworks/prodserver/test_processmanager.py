@@ -7,14 +7,12 @@
 """
 
 import os
-import signal
 import sys
 import tempfile
 
 from ccai.errors.exceptions import SkipError
 from ccai.webworks.prodserver.serverconfig import ServerConfig
 from ccai.webworks.prodserver.processmanager import (
-    DaemonError,
     PidFileError,
     PrivilegeError,
     ProcessManager,

@@ -9,10 +9,8 @@ import os
 import time
 
 from ccai.webworks.devexp.cli.output import (
-    ANSI_CYAN,
     ANSI_GREEN,
     ANSI_RED,
-    ANSI_RESET,
     ANSI_YELLOW,
 )
 from ccai.webworks.devexp.server.requestlogger import (

@@ -13,7 +13,6 @@ import string
 from ccai.webworks.devexp.debug.errorhandler import (
     DebugErrorHandler,
     FrameInfo,
-    STATUS_CODE_MESSAGES,
 )
 
 

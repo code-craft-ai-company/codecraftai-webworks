@@ -15,7 +15,7 @@ import json
 import random
 import string
 from io import BytesIO
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from ccai.webworks.wsgi.bodyparser import RequestBodyParser, UploadedFile
 from ccai.webworks.wsgi.exceptions import BadRequestBody, RequestEntityTooLarge

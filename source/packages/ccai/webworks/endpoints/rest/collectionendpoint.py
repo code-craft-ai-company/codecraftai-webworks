@@ -13,14 +13,13 @@ __credits__ = []
 
 import logging
 
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ccai.webworks.endpoints.rest.resourceendpoint import ResourceEndpoint
 from ccai.webworks.endpoints.rest.models import (
     BulkItemError,
     BulkOperationResult,
     PaginatedResponse,
-    PaginationInfo,
     RESTError,
 )
 
@@ -31,10 +30,6 @@ from ccai.webworks.endpoints.rest.models import (
 # (database error, validation gap, etc.) without re-running the
 # bulk job.
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from ccai.webworks.endpoints.descriptor import EndpointDescriptor
-    from ccai.webworks.endpoints.router import Router
 
 
 class CollectionEndpoint(ResourceEndpoint):

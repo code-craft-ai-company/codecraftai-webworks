@@ -19,11 +19,10 @@ __credits__ = []
 import hashlib
 import hmac
 import logging
-import os
 import re
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, Optional, Protocol, runtime_checkable
 
@@ -124,7 +123,6 @@ class DigestIdentityProvider(Protocol):
             
             :returns: The HA1 hash if user exists, None otherwise.
         """
-        ...
     
     async def get_principal(
         self,
@@ -139,7 +137,6 @@ class DigestIdentityProvider(Protocol):
             
             :returns: The Principal if found, None otherwise.
         """
-        ...
 
 
 class NonceStore:

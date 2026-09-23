@@ -57,7 +57,6 @@ class TokenStore(Protocol):
             
             :returns: A dictionary of claims if the token is valid, None otherwise.
         """
-        ...
     
     async def store_token(
         self,
@@ -72,7 +71,6 @@ class TokenStore(Protocol):
             :param claims: The claims associated with the token.
             :param expires_in: Time in seconds until the token expires.
         """
-        ...
     
     async def revoke_token(self, token: str) -> bool:
         """
@@ -82,7 +80,6 @@ class TokenStore(Protocol):
             
             :returns: True if the token was revoked, False if not found.
         """
-        ...
 
 
 class JWTError(Exception):

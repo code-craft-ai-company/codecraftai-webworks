@@ -20,7 +20,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, List, Optional
 
 from ccai.webworks.configuration.core import ConfigSourceType
 from ccai.webworks.configuration.exceptions import (
@@ -30,19 +30,12 @@ from ccai.webworks.configuration.exceptions import (
 from ccai.webworks.configuration.registry import ConfigRegistry
 from ccai.webworks.configuration.schema import ConfigSchema
 from ccai.webworks.configuration.sources import (
-    ConfigFileDiscovery,
     EnvironmentSource,
-    FileSource,
     ProfileConfigSource,
     SecretsProvider,
-    DEFAULT_FILE_PATTERNS
+    DEFAULT_FILE_PATTERNS,
 )
 from ccai.webworks.configuration.watcher import ConfigWatcher
-from ccai.webworks.configuration.model import ConfigurationModel
-
-
-if TYPE_CHECKING:
-    from ccai.webworks.webapplication import WebApplication
 
 
 # Module-level registry for cleanup tracking

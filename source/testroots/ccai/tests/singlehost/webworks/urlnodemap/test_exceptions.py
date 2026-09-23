@@ -74,19 +74,13 @@ def test_node_not_found_error_can_be_raised():
         Test that NodeNotFoundError can be raised and caught.
     """
     path = "/api/v1/missing"
-    caught = False
     
     try:
         raise NodeNotFoundError(path)
     except NodeNotFoundError as e:
-        caught = True
         if e.path != path:
             errmsg = f"Expected path '{path}', got '{e.path}'"
             raise AssertionError(errmsg)
-    
-    if not caught:
-        errmsg = "NodeNotFoundError was not caught"
-        raise AssertionError(errmsg)
     
     return
 
@@ -167,22 +161,16 @@ def test_node_conflict_error_can_be_raised():
     """
     path = "/api/v1/existing"
     existing_node = object()
-    caught = False
     
     try:
         raise NodeConflictError(path, existing_node)
     except NodeConflictError as e:
-        caught = True
         if e.path != path:
             errmsg = f"Expected path '{path}', got '{e.path}'"
             raise AssertionError(errmsg)
         if e.existing_node is not existing_node:
             errmsg = "Expected existing_node to be preserved"
             raise AssertionError(errmsg)
-    
-    if not caught:
-        errmsg = "NodeConflictError was not caught"
-        raise AssertionError(errmsg)
     
     return
 
@@ -292,12 +280,10 @@ def test_path_conflict_error_can_be_raised():
     path = "/api/v1"
     parameter_segment = "{id}"
     literal_segment = "users"
-    caught = False
     
     try:
         raise PathConflictError(path, parameter_segment, literal_segment)
     except PathConflictError as e:
-        caught = True
         if e.path != path:
             errmsg = f"Expected path '{path}', got '{e.path}'"
             raise AssertionError(errmsg)
@@ -307,10 +293,6 @@ def test_path_conflict_error_can_be_raised():
         if e.literal_segment != literal_segment:
             errmsg = f"Expected literal_segment '{literal_segment}', got '{e.literal_segment}'"
             raise AssertionError(errmsg)
-    
-    if not caught:
-        errmsg = "PathConflictError was not caught"
-        raise AssertionError(errmsg)
     
     return
 
@@ -360,16 +342,13 @@ def test_frozen_tree_error_can_be_raised():
         
         Validates: Requirements 8.4
     """
-    caught = False
     
     try:
         raise FrozenTreeError()
     except FrozenTreeError:
-        caught = True
-    
-    if not caught:
-        errmsg = "FrozenTreeError was not caught"
-        raise AssertionError(errmsg)
+        # Expected: the exception raised in the try block is caught here;
+        # catching it is what this test exercises.
+        pass
     
     return
 
@@ -483,12 +462,10 @@ def test_handler_conflict_error_can_be_raised():
     path = "/api/v1/users"
     method = "DELETE"
     existing_handler = lambda: None
-    caught = False
     
     try:
         raise HandlerConflictError(path, method, existing_handler)
     except HandlerConflictError as e:
-        caught = True
         if e.path != path:
             errmsg = f"Expected path '{path}', got '{e.path}'"
             raise AssertionError(errmsg)
@@ -498,10 +475,6 @@ def test_handler_conflict_error_can_be_raised():
         if e.existing_handler is not existing_handler:
             errmsg = "Expected existing_handler to be preserved"
             raise AssertionError(errmsg)
-    
-    if not caught:
-        errmsg = "HandlerConflictError was not caught"
-        raise AssertionError(errmsg)
     
     return
 
@@ -595,22 +568,16 @@ def test_node_has_children_error_can_be_raised():
     """
     path = "/api/v1/users"
     child_count = 4
-    caught = False
     
     try:
         raise NodeHasChildrenError(path, child_count)
     except NodeHasChildrenError as e:
-        caught = True
         if e.path != path:
             errmsg = f"Expected path '{path}', got '{e.path}'"
             raise AssertionError(errmsg)
         if e.child_count != child_count:
             errmsg = f"Expected child_count {child_count}, got {e.child_count}"
             raise AssertionError(errmsg)
-    
-    if not caught:
-        errmsg = "NodeHasChildrenError was not caught"
-        raise AssertionError(errmsg)
     
     return
 
@@ -648,20 +615,17 @@ def test_exceptions_can_be_caught_as_exception():
         lambda: NodeNotFoundError("/test"),
         lambda: NodeConflictError("/test", object()),
         lambda: PathConflictError("/test", "{id}", "users"),
-        lambda: FrozenTreeError(),
+        FrozenTreeError,
         lambda: HandlerConflictError("/test", "GET", lambda: None),
         lambda: NodeHasChildrenError("/test", 1),
     ]
     
     for exc_factory in exceptions_to_raise:
-        caught = False
         try:
             raise exc_factory()
         except Exception:
-            caught = True
-        
-        if not caught:
-            errmsg = f"Exception from {exc_factory} was not caught as Exception"
-            raise AssertionError(errmsg)
+            # Expected: the exception raised in the try block is caught here;
+            # catching it is what this test exercises.
+            pass
     
     return

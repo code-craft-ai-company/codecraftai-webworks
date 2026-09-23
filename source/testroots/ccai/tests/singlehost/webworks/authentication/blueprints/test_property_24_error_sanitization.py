@@ -11,7 +11,6 @@
 
 import random
 import string
-import traceback
 
 from ccai.webworks.authentication.blueprints.security import SecurityBlueprint
 from ccai.webworks.authentication.blueprints.responses import AuthError
@@ -20,13 +19,6 @@ from ccai.webworks.authentication.blueprints.responses import AuthError
 # =============================================================================
 # Test Helpers
 # =============================================================================
-
-# Sensitive key-value patterns that must never appear in error responses
-_SENSITIVE_KEYS = [
-    "password", "passwd", "pwd", "secret", "token", "access_token",
-    "refresh_token", "id_token", "api_key", "apikey", "client_secret",
-    "credentials", "session_id", "nonce",
-]
 
 # Keys that are only caught by sanitize_dict (dict-level redaction) but
 # not by sanitize_credentials (string-level regex).  These are used in

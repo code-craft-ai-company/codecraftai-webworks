@@ -8,7 +8,6 @@
 
 import logging
 import os
-import signal
 import sys
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
@@ -221,6 +220,7 @@ class ProcessManager:
             if content:
                 rtnval = int(content)
         except FileNotFoundError:
+            # No PID file means no recorded process; return None as documented.
             pass
         except (ValueError, OSError):
             _logger.warning("Invalid PID file content at '%s'", pid_path)

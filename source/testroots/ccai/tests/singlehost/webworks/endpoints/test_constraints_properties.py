@@ -15,7 +15,7 @@ __credits__ = []
 
 import random
 import string
-from typing import List, Optional
+from typing import List
 
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.constraints import EndpointConstraints

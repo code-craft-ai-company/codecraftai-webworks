@@ -28,10 +28,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ccai.webworks.authentication.bearer import encode_jwt
 from ccai.webworks.authentication.blueprints.oauth2 import OAuth2Blueprint
-from ccai.webworks.authentication.blueprints.responses import (
-    AuthError,
-    AuthResponse
-)
+from ccai.webworks.authentication.blueprints.responses import AuthError
 from ccai.webworks.authentication.blueprints.schemas import (
     OIDCDiscovery,
     UserInfo

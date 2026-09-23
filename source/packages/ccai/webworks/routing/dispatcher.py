@@ -21,7 +21,7 @@
 
 import logging
 import traceback
-from typing import Awaitable, Callable, Optional, TYPE_CHECKING
+from typing import Optional
 
 from ccai.webworks.routing.request import Request
 from ccai.webworks.routing.response import (
@@ -29,7 +29,7 @@ from ccai.webworks.routing.response import (
     JSONResponse,
     HTMLResponse,
 )
-from ccai.webworks.routing.router import Router, RouteMatch
+from ccai.webworks.routing.router import Router
 from ccai.webworks.routing.middleware import MiddlewarePipeline
 from ccai.webworks.routing.exceptions import HTTPException, MethodNotAllowed, NotFound
 from ccai.webworks.templating.response import (

@@ -5,10 +5,7 @@
     singleton access to the WebApplication instance.
 """
 
-from ccai.webworks.wellknown import (
-    THISWEBAPPLICATION_SINGLETON,
-    ThisWebApplicationSingleton
-)
+from ccai.webworks.wellknown import ThisWebApplicationSingleton
 from ccai.errors.exceptions import SemanticError
 
 

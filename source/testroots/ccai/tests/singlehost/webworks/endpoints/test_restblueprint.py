@@ -7,10 +7,8 @@
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
 
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
-from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.ratelimit import RateLimit
 from ccai.webworks.endpoints.registry import EndpointRegistry
 from ccai.webworks.endpoints.restblueprint import RestBlueprint
@@ -184,7 +182,6 @@ def test_restblueprint_version_override():
 
 def test_restblueprint_register_returns_descriptors():
     """Test that register() returns list of descriptors."""
-    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -202,7 +199,6 @@ def test_restblueprint_register_returns_descriptors():
 
 def test_restblueprint_register_with_router():
     """Test that register() calls router.add_endpoint for each descriptor."""
-    registry = EndpointRegistry()
     class MockRouter:
         def __init__(self):
             self.endpoints = []
@@ -218,7 +214,7 @@ def test_restblueprint_register_with_router():
         pass
     
     router = MockRouter()
-    descriptors = ApiBlueprint.register(router=router)
+    ApiBlueprint.register(router=router)
     
     assert len(router.endpoints) == 1
     assert router.endpoints[0].path == "/api/users"
@@ -226,7 +222,6 @@ def test_restblueprint_register_with_router():
 
 def test_restblueprint_add_crud_registers_list_endpoint():
     """Test that add_crud registers list endpoint."""
-    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -247,7 +242,6 @@ def test_restblueprint_add_crud_registers_list_endpoint():
 
 def test_restblueprint_add_crud_registers_create_endpoint():
     """Test that add_crud registers create endpoint."""
-    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -268,7 +262,6 @@ def test_restblueprint_add_crud_registers_create_endpoint():
 
 def test_restblueprint_add_crud_registers_read_endpoint():
     """Test that add_crud registers read endpoint."""
-    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -289,7 +282,6 @@ def test_restblueprint_add_crud_registers_read_endpoint():
 
 def test_restblueprint_add_crud_registers_update_endpoint():
     """Test that add_crud registers update endpoint."""
-    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -311,7 +303,6 @@ def test_restblueprint_add_crud_registers_update_endpoint():
 
 def test_restblueprint_add_crud_registers_delete_endpoint():
     """Test that add_crud registers delete endpoint."""
-    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     
@@ -332,7 +323,6 @@ def test_restblueprint_add_crud_registers_delete_endpoint():
 
 def test_restblueprint_add_crud_registers_all_endpoints():
     """Test that add_crud registers all CRUD endpoints when all handlers provided."""
-    registry = EndpointRegistry()
     class ApiBlueprint(RestBlueprint):
         base_path = "/api"
     

@@ -9,12 +9,11 @@
 """
 
 import logging
-import sys
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 from ccai.webworks.prodserver.applicationloader import ApplicationLoader, ApplicationLoadError
 from ccai.webworks.prodserver.connectionmanager import ConnectionManager
-from ccai.webworks.prodserver.exceptions import ConfigurationError, ProductionServerError
+from ccai.webworks.prodserver.exceptions import ConfigurationError
 from ccai.webworks.prodserver.healthchecker import HealthChecker
 from ccai.webworks.prodserver.metricscollector import MetricsCollector
 from ccai.webworks.prodserver.processmanager import ProcessManager, PidFileError

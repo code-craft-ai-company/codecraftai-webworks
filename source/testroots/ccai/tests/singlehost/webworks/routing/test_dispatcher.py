@@ -10,7 +10,6 @@ from ccai.webworks.routing import (
     Router,
     Request,
     Response,
-    JSONResponse,
     MiddlewarePipeline,
     HTTPException,
     NotFound,
@@ -236,7 +235,7 @@ def test_dispatch_executes_middleware_pipeline():
     dispatcher = Dispatcher(router, pipeline)
     request = Request(method="GET", path="/test")
     
-    response = dispatcher.dispatch(request)
+    dispatcher.dispatch(request)
     
     assert middleware_called == ["before", "handler", "after"]
     return

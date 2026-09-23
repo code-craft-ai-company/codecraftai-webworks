@@ -8,13 +8,11 @@
 import json
 import random
 import string
-from typing import Any, List
+from typing import Any
 
 from ccai.webworks.configuration import (
     ConfigSchema,
-    ConfigKeyDefinition,
-    ValidationError,
-    coerce_value
+    coerce_value,
 )
 
 

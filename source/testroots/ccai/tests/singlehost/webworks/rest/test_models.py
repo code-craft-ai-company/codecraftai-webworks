@@ -429,16 +429,11 @@ def test_validation_error_is_exception():
         raise AssertionError("ValidationError should be an Exception")
     
     # Should be raisable
-    raised = False
     try:
         raise exc
     except ValidationError as caught:
-        raised = True
         if caught.message != "Test error":
             raise AssertionError(f"Caught exception has wrong message: {caught.message}")
-    
-    if not raised:
-        raise AssertionError("ValidationError should be raisable")
 
 
 # =============================================================================
@@ -800,7 +795,6 @@ def test_paginated_response_to_dict():
 
 def test_paginated_response_to_dict_json_serializable():
     """PaginatedResponse.to_dict() should be JSON serializable."""
-    import json
     from ccai.webworks.endpoints.rest import PaginationInfo, PaginatedResponse
     
     pagination = PaginationInfo.create(total=20, page=1, page_size=10, base_url="/items")
@@ -811,7 +805,7 @@ def test_paginated_response_to_dict_json_serializable():
     
     try:
         json_str = json.dumps(result)
-        parsed = json.loads(json_str)
+        json.loads(json_str)
     except (TypeError, ValueError) as e:
         raise AssertionError(f"to_dict() result should be JSON serializable: {e}")
 

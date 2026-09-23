@@ -490,10 +490,11 @@ def _create_test_context(
     expires_at = None
     if expired:
         expires_at = datetime.utcnow() - timedelta(hours=1)
-    
+
     return AuthenticationContext(
         principal=principal,
-        scheme="Test"
+        scheme="Test",
+        expires_at=expires_at
     )
 
 

@@ -28,7 +28,6 @@ from ccai.webworks.webapplication import (
     establish_webapp_persona,
     reset_webapp_persona,
 )
-from ccai.webworks.persona.lifecycle import LifecyclePhase
 
 
 # =============================================================================

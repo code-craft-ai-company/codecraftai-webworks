@@ -15,7 +15,7 @@
 import io
 import logging
 
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Tuple
 
 from ccai.webworks.routing.request import Request
 from ccai.webworks.routing.response import Response

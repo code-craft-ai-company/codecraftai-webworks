@@ -13,8 +13,6 @@ import json
 import os
 import tempfile
 
-from typing import Any, Dict, List, Optional
-
 from ccai.testbase.mocking import Mock
 
 from ccai.webworks.openapi.configuration import OpenAPIInfo, ServerObject

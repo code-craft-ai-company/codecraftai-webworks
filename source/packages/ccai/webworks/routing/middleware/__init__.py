@@ -38,17 +38,14 @@ class Response(Protocol):
     @property
     def status_code(self) -> int:
         """HTTP status code."""
-        ...
     
     @property
     def headers(self) -> Dict[str, str]:
         """Response headers."""
-        ...
     
     @property
     def body(self) -> bytes:
         """Response body."""
-        ...
 
 
 # Import Request for type hints
@@ -85,7 +82,6 @@ class Middleware(Protocol):
             
             :returns: Response from handler or short-circuit response.
         """
-        ...
 
 
 @runtime_checkable
@@ -112,7 +108,6 @@ class AsyncMiddleware(Protocol):
             
             :returns: Response from handler or short-circuit response.
         """
-        ...
 
 
 class MiddlewareEntry:
@@ -465,10 +460,8 @@ class MiddlewarePipeline:
                             # to handle this more carefully
                             loop = asyncio.get_event_loop()
                             if loop.is_running():
-                                # Create a new task and wait for it
-                                import concurrent.futures
-                                future = asyncio.ensure_future(next_fn(r))
-                                # We need to await this, but we're in sync context
+                                # A sync callable cannot wait on the async downstream chain
+                                # from inside the running loop, so do not schedule it at all.
                                 # This is a limitation - sync middleware in async
                                 # pipeline should ideally be avoided
                                 raise RuntimeError(

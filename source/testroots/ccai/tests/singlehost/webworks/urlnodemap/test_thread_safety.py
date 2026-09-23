@@ -423,7 +423,6 @@ def test_modifications_before_freeze_succeed():
 
 import random
 import string
-import copy
 
 
 def _generate_random_segment(min_length=1, max_length=12):

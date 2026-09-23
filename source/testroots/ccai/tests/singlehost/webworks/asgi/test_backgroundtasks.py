@@ -5,8 +5,7 @@
 """
 
 import asyncio
-import logging
-from typing import Any, List
+from typing import List
 
 from ccai.webworks.asgi.backgroundtasks import BackgroundTasks
 

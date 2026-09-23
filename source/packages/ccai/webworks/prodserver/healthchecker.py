@@ -6,7 +6,6 @@
     configurable health check paths that bypass normal application routing.
 """
 
-import json
 import logging
 import time
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
