@@ -3,12 +3,23 @@
  *
  * <mj-select> — single-choice dropdown with rich option content, keyboard
  * navigation, and full form participation via ElementInternals.
+ *
+ * Options are the <mj-option> descendants of the host. A MutationObserver
+ * keeps the listbox in step with them, so options added, removed, or
+ * relabelled after the first render (for example once an async fetch
+ * resolves) show up without the consumer re-creating the element.
+ *
+ * The combobox trigger takes its accessible name from the host `label`
+ * attribute, the host `aria-label` / `aria-labelledby`, or an associated
+ * <label> element, in that order, through `aria-labelledby` on a label
+ * element inside the shadow root.
  */
 
 import { MjElement, nextId } from "../core/mjelement.js";
 import { FormControlMixin } from "../core/forminternals.js";
 import { autoPosition } from "../core/overlay.js";
 import { announce } from "../core/announcer.js";
+import { t } from "../core/intl.js";
 
 const STYLES = `
 :host {
@@ -107,10 +118,48 @@ const STYLES = `
 .option[aria-selected="true"] .check { opacity: 1; }
 `;
 
+const CHECK_ICON_MARKUP =
+  '<svg class="check" aria-hidden="true" viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 3.5 6 11 2.5 7.5l1-1L6 9 12.5 2.5z"/></svg>'
+
+/*
+ * Option attributes whose changes alter what the listbox shows. Changes to
+ * other attributes (and to the host's own attributes, which the component
+ * observes through attributeChangedCallback) do not trigger a rebuild.
+ */
+const OPTION_ATTRIBUTES = ["value", "disabled", "label"]
+
+/*
+ * Text content of `node` with the subtree of `skip` left out, whitespace
+ * collapsed. Used to read a wrapping <label> without the select's own
+ * option text.
+ */
+function textExcluding(node, skip) {
+  const parts = []
+  const visit = (current) => {
+    if (current === skip) {
+      return
+    }
+    if (current.nodeType === Node.TEXT_NODE) {
+      parts.push(current.textContent)
+      return
+    }
+    const children = current.childNodes
+    for (let index = 0; index < children.length; index = index + 1) {
+      visit(children[index])
+    }
+  }
+  visit(node)
+  const rtnval = parts.join(" ").replace(/\s+/g, " ").trim()
+  return rtnval
+}
+
 export class MjSelect extends FormControlMixin(MjElement) {
   static tagName = "mj-select";
   static styles = STYLES;
-  static watched = ["value", "open", "disabled", "readonly", "invalid", "placeholder", "size"];
+  static watched = [
+    "value", "open", "disabled", "readonly", "invalid", "placeholder", "size",
+    "label", "aria-label", "aria-labelledby"
+  ];
 
   constructor() {
     super()
@@ -119,12 +168,15 @@ export class MjSelect extends FormControlMixin(MjElement) {
     this._typeahead = ""
     this._typeaheadTimer = null
     this._disposePosition = null
+    this._optionData = []
     this._listboxId = nextId("mj-select-lb")
     this._triggerId = nextId("mj-select-tr")
+    this._labelId = nextId("mj-select-lbl")
   }
 
   render() {
     const markup = `
+      <span class="mj-visually-hidden" id="${this._labelId}" hidden></span>
       <button
         class="trigger"
         part="trigger"
@@ -157,21 +209,21 @@ export class MjSelect extends FormControlMixin(MjElement) {
     this._trigger = this.$(".trigger")
     this._popup = this.$(".popup")
     this._listbox = this.$(".listbox")
+    this._nameEl = this.$(`#${this._labelId}`)
 
     this.listen(this._trigger, "click", this._onTriggerClick.bind(this))
     this.listen(this._trigger, "keydown", this._onKeydown.bind(this))
+    this.listen(this._trigger, "focus", this._syncAccessibleName.bind(this))
+    this.listen(this._listbox, "click", this._onOptionClick.bind(this))
+    this.listen(this._listbox, "mouseover", this._onOptionHover.bind(this))
+    this.listen(this, "click", this._onHostClick.bind(this))
     this.listen(document, "click", this._onDocClick.bind(this))
 
+    this._observeOptions()
     this._buildOptions()
     this._syncTriggerLabel()
-
-    const slotEl = this.shadowRoot.querySelector("slot")
-    if (slotEl !== null) {
-      this.listen(slotEl, "slotchange", () => {
-        this._buildOptions()
-        this._syncTriggerLabel()
-      })
-    }
+    this._syncAccessibleName()
+    this._syncAccessibility()
     return
   }
 
@@ -181,11 +233,17 @@ export class MjSelect extends FormControlMixin(MjElement) {
       this._syncTriggerLabel()
       this._updateOptionSelected()
     }
-    if (name === "open") {
+    if (name === "open" && this._trigger !== undefined) {
       this._syncOpen()
     }
-    if (name === "disabled" || name === "readonly") {
+    if (name === "disabled" || name === "readonly" || name === "invalid") {
       this._syncAccessibility()
+    }
+    if (name === "placeholder") {
+      this._syncTriggerLabel()
+    }
+    if (name === "label" || name === "aria-label" || name === "aria-labelledby") {
+      this._syncAccessibleName()
     }
     return
   }
@@ -197,47 +255,95 @@ export class MjSelect extends FormControlMixin(MjElement) {
     return els
   }
 
+  /*
+   * Rebuild the listbox whenever the <mj-option> children change. Mutation
+   * records are delivered once per microtask checkpoint, so a consumer that
+   * appends many options in a loop causes a single rebuild.
+   */
+  _observeOptions() {
+    if (typeof MutationObserver !== "function") {
+      return
+    }
+    const observer = new MutationObserver((records) => {
+      this._onOptionsMutated(records)
+    })
+    observer.observe(this, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: OPTION_ATTRIBUTES
+    })
+    this.onTeardown(() => {
+      observer.disconnect()
+    })
+    return
+  }
+
+  _onOptionsMutated(records) {
+    const relevant = records.some((record) => {
+      return record.type !== "attributes" || record.target !== this
+    })
+    if (relevant === false || this._listbox === undefined) {
+      return
+    }
+    this._buildOptions()
+    this._syncTriggerLabel()
+    if (this.hasAttribute("open") === true) {
+      const current = this._currentOptionIndex()
+      this._moveFocus(current >= 0 ? current : 0)
+    }
+    return
+  }
+
   _buildOptions() {
     const optionEls = this._getOptionEls()
+    this._listbox.replaceChildren()
+    this._optionData = []
+
     if (optionEls.length === 0) {
-      this._listbox.innerHTML = `<div class="no-results" part="no-results"><slot name="no-results">No options</slot></div>`
+      const empty = document.createElement("div")
+      empty.className = "no-results"
+      empty.setAttribute("part", "no-results")
+      const slot = document.createElement("slot")
+      slot.name = "no-results"
+      slot.textContent = t("mj.select.noOptions")
+      empty.appendChild(slot)
+      this._listbox.appendChild(empty)
       return
     }
 
-    const items = []
     optionEls.forEach((opt, idx) => {
-      const value = opt.getAttribute("value") || ""
-      const label = opt.textContent.trim()
-      const disabled = opt.hasAttribute("disabled")
-      const id = nextId("mj-opt")
-      opt._mjId = id
-      items.push({ id, value, label, disabled, index: idx })
-    })
+      const item = {
+        id: nextId("mj-opt"),
+        value: opt.getAttribute("value") || "",
+        label: opt.getAttribute("label") || opt.textContent.trim(),
+        disabled: opt.hasAttribute("disabled"),
+        index: idx
+      }
+      opt._mjId = item.id
+      this._optionData.push(item)
 
-    this._optionData = items
-    let html = ""
-    items.forEach((item) => {
-      const disabledAttr = item.disabled === true ? ' aria-disabled="true"' : ""
-      const selectedAttr = item.value === this._value ? ' aria-selected="true"' : ' aria-selected="false"'
-      html += `<div
-        class="option"
-        part="option"
-        role="option"
-        id="${item.id}"
-        data-value="${item.value}"
-        data-index="${item.index}"
-        ${selectedAttr}${disabledAttr}
-      >
-        <svg class="check" aria-hidden="true" viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 3.5 6 11 2.5 7.5l1-1L6 9 12.5 2.5z"/></svg>
-        <span class="option-label" part="option-label">${item.label}</span>
-      </div>`
-    })
-    this._listbox.innerHTML = html
-
-    const optionNodes = this._listbox.querySelectorAll(".option")
-    optionNodes.forEach((node) => {
-      this.listen(node, "click", this._onOptionClick.bind(this))
-      this.listen(node, "mouseover", this._onOptionHover.bind(this))
+      // Built with DOM APIs, never markup: option labels are often
+      // user-supplied data (project names, integration names).
+      const node = document.createElement("div")
+      node.className = "option"
+      node.setAttribute("part", "option")
+      node.setAttribute("role", "option")
+      node.id = item.id
+      node.dataset.value = item.value
+      node.dataset.index = String(item.index)
+      node.setAttribute("aria-selected", item.value === this._value ? "true" : "false")
+      if (item.disabled === true) {
+        node.setAttribute("aria-disabled", "true")
+      }
+      node.innerHTML = CHECK_ICON_MARKUP
+      const labelEl = document.createElement("span")
+      labelEl.className = "option-label"
+      labelEl.setAttribute("part", "option-label")
+      labelEl.textContent = item.label
+      node.appendChild(labelEl)
+      this._listbox.appendChild(node)
     })
     return
   }
@@ -273,6 +379,67 @@ export class MjSelect extends FormControlMixin(MjElement) {
       const selected = opt.dataset.value === this._value
       opt.setAttribute("aria-selected", selected === true ? "true" : "false")
     })
+    return
+  }
+
+  /* ----- accessible name ----- */
+
+  /*
+   * The text that names the combobox: the `label` attribute, then the host's
+   * `aria-label`, then the elements named by the host's `aria-labelledby`,
+   * then any <label> associated with the host (wrapping or `for`).
+   */
+  _computeAccessibleName() {
+    const labelAttr = (this.getAttribute("label") || "").trim()
+    if (labelAttr.length > 0) {
+      return labelAttr
+    }
+    const ariaLabel = (this.getAttribute("aria-label") || "").trim()
+    if (ariaLabel.length > 0) {
+      return ariaLabel
+    }
+    const labelledBy = (this.getAttribute("aria-labelledby") || "").trim()
+    if (labelledBy.length > 0) {
+      const root = this.getRootNode()
+      const texts = []
+      labelledBy.split(/\s+/).forEach((id) => {
+        const target = typeof root.getElementById === "function" ? root.getElementById(id) : null
+        if (target !== null) {
+          texts.push(textExcluding(target, this))
+        }
+      })
+      const joined = texts.filter((text) => text.length > 0).join(" ")
+      if (joined.length > 0) {
+        return joined
+      }
+    }
+    let labels = []
+    try {
+      labels = this._internals !== null && this._internals.labels ? Array.from(this._internals.labels) : []
+    } catch (error) {
+      labels = []
+    }
+    const rtnval = labels
+      .map((labelEl) => textExcluding(labelEl, this))
+      .filter((text) => text.length > 0)
+      .join(" ")
+    return rtnval
+  }
+
+  _syncAccessibleName() {
+    if (this._trigger === undefined || this._nameEl === null) {
+      return
+    }
+    const name = this._computeAccessibleName()
+    if (name.length > 0) {
+      this._nameEl.textContent = name
+      this._trigger.setAttribute("aria-labelledby", this._labelId)
+      this._listbox.setAttribute("aria-labelledby", this._labelId)
+    } else {
+      this._nameEl.textContent = ""
+      this._trigger.removeAttribute("aria-labelledby")
+      this._listbox.removeAttribute("aria-labelledby")
+    }
     return
   }
 
@@ -331,6 +498,8 @@ export class MjSelect extends FormControlMixin(MjElement) {
     const opts = this._listbox.querySelectorAll(".option")
     opts.forEach((el) => el.classList.remove("focused"))
     if (index < 0 || index >= opts.length) {
+      this._trigger.removeAttribute("aria-activedescendant")
+      this._focusedIndex = -1
       return
     }
     this._focusedIndex = index
@@ -360,9 +529,27 @@ export class MjSelect extends FormControlMixin(MjElement) {
     return
   }
 
+  /*
+   * A click aimed at the host itself (not at the trigger inside it) is what
+   * an associated <label> dispatches when it is clicked: move focus to the
+   * combobox the way a native control would.
+   */
+  _onHostClick(event) {
+    const origin = event.composedPath()[0]
+    if (origin === this && this._trigger !== undefined) {
+      this._trigger.focus()
+    }
+    return
+  }
+
+  _optionNodeFor(event) {
+    const target = event.target instanceof Element ? event.target.closest(".option") : null
+    return target
+  }
+
   _onOptionClick(event) {
-    const node = event.currentTarget
-    if (node.getAttribute("aria-disabled") === "true") {
+    const node = this._optionNodeFor(event)
+    if (node === null || node.getAttribute("aria-disabled") === "true") {
       return
     }
     this._selectValue(node.dataset.value)
@@ -370,9 +557,14 @@ export class MjSelect extends FormControlMixin(MjElement) {
   }
 
   _onOptionHover(event) {
-    const node = event.currentTarget
+    const node = this._optionNodeFor(event)
+    if (node === null) {
+      return
+    }
     const index = parseInt(node.dataset.index, 10)
-    this._moveFocus(index)
+    if (index !== this._focusedIndex) {
+      this._moveFocus(index)
+    }
     return
   }
 
@@ -389,8 +581,6 @@ export class MjSelect extends FormControlMixin(MjElement) {
 
   _onKeydown(event) {
     const isOpen = this.hasAttribute("open")
-    const data = this._optionData || []
-    const enabled = data.filter((d) => d.disabled !== true)
 
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault()
@@ -403,8 +593,10 @@ export class MjSelect extends FormControlMixin(MjElement) {
         }
       }
     } else if (event.key === "Escape") {
-      event.preventDefault()
-      this._close()
+      if (isOpen === true) {
+        event.preventDefault()
+        this._close()
+      }
     } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault()
       if (isOpen === false) {
@@ -506,6 +698,23 @@ export class MjSelect extends FormControlMixin(MjElement) {
   }
 
   /* ----- scriptable API ----- */
+
+  /*
+   * Assigning `value` updates the trigger text and the selected option, not
+   * only the submitted form value -- including when the matching option only
+   * arrives later.
+   */
+  get value() {
+    return this._value
+  }
+
+  set value(next) {
+    const normalized = next === null || next === undefined ? "" : String(next)
+    this._setFormValue(normalized)
+    this._syncTriggerLabel()
+    this._updateOptionSelected()
+    return
+  }
 
   get open() {
     return this.hasAttribute("open")

@@ -64,6 +64,7 @@
 ## 6. Properties
 | Property | Type | Description |
 |----------|------|-------------|
+| `value` | `string` | Current value; assigning it updates the trigger label and the selected option, including when the matching option is added later |
 | `options` | `MjOption[]` | Live array of all `<mj-option>` descendants |
 | `selectedOption` | `MjOption \| null` | Reference to the currently selected option element |
 | `validity` | `ValidityState` | Delegated from `ElementInternals` |
@@ -115,6 +116,8 @@
 - Clicking an option selects it, closes the popup, and returns focus to the trigger.
 - Clicking outside the popup (light-dismiss) closes it without changing the value.
 - If `<mj-select>` wraps a native `<select>` in light DOM, it reads the native options on upgrade and keeps them in sync for SSR fallback.
+- `<mj-option>` children added, removed, or relabelled after the first render (for example once an async fetch resolves) are picked up by a MutationObserver; the listbox and the trigger label follow them without the consumer re-creating the element.
+- Option labels are rendered as text (never parsed as markup): they are often user-supplied names.
 - The popup uses `aria-activedescendant` on the listbox to track the focused option without moving DOM focus out of the trigger.
 
 ## 12. Keyboard interaction
@@ -131,6 +134,7 @@
 
 ## 13. Accessibility
 - Trigger uses `role="combobox"` with `aria-haspopup="listbox"`, `aria-expanded`, and `aria-controls` pointing to the listbox `id`.
+- The combobox is named through `aria-labelledby` on a label element inside the shadow root, whose text comes from (first match wins): the host `label` attribute, the host `aria-label`, the elements named by the host `aria-labelledby`, or an associated `<label>` (wrapping or `for`, read without the select's own option text). Clicking an associated `<label>` focuses the trigger.
 - Listbox uses `role="listbox"` with `aria-labelledby` pointing to the trigger's label.
 - Each option uses `role="option"` with `aria-selected`.
 - Disabled options have `aria-disabled="true"` and are skipped by keyboard navigation.

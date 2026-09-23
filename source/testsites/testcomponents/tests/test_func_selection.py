@@ -18,6 +18,7 @@ import ccai.testbase as testbase
 
 from testcomponents.harness.browsers import expect
 from testcomponents.harness.factories import create_page
+from testcomponents.harness.fixtures import load_fixture
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +178,179 @@ def test_select_preselected_value_shown(base_url: str, page) -> None:
         "() => document.querySelector('mj-select').shadowRoot.querySelector('.label').textContent.trim()"
     )
     assert trigger_text == "Banana", f"Expected trigger label 'Banana', got '{trigger_text}'"
+    return
+
+
+# ---------------------------------------------------------------------------
+# mj-select: options that arrive after the first render, accessible name
+# ---------------------------------------------------------------------------
+
+# Appends <mj-option> children the way a view does once a fetch resolves.
+_APPEND_OPTIONS_JS = """
+([selector, options]) => {
+    const select = document.querySelector(selector);
+    for (const [value, label] of options) {
+        const option = document.createElement('mj-option');
+        option.setAttribute('value', value);
+        option.textContent = label;
+        select.appendChild(option);
+    }
+}
+"""
+
+_RENDERED_OPTION_LABELS_JS = """
+(selector) => Array.from(
+    document.querySelector(selector).shadowRoot.querySelectorAll('.option .option-label')
+).map((node) => node.textContent)
+"""
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_select_renders_options_added_after_first_render(base_url: str, page) -> None:
+    """
+    Options appended to an mj-select that is already rendered appear in its
+    listbox (a project picker fills in after its fetch resolves).
+
+    :param base_url: The running site URL fixture.
+    :param page: Playwright page fixture.
+    """
+    load_fixture(page, base_url, '<mj-select id="picker" label="Project"></mj-select>', ["mj-select"])
+    page.evaluate(_APPEND_OPTIONS_JS, ["#picker", [["a", "Alpha"], ["b", "Bravo"]]])
+    page.wait_for_function(
+        "() => document.querySelector('#picker').shadowRoot.querySelectorAll('.option').length === 2",
+        timeout=_INTERACTION_TIMEOUT,
+    )
+    labels = page.evaluate(_RENDERED_OPTION_LABELS_JS, "#picker")
+    assert labels == ["Alpha", "Bravo"], f"Expected the appended options, got {labels}"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_select_value_set_before_options_arrive_shows_option_label(base_url: str, page) -> None:
+    """
+    Assigning ``value`` in the same task that replaces the options shows the
+    matching option's label in the trigger.
+
+    :param base_url: The running site URL fixture.
+    :param page: Playwright page fixture.
+    """
+    load_fixture(page, base_url, '<mj-select id="picker" label="Project"></mj-select>', ["mj-select"])
+    page.evaluate(
+        """() => {
+            const select = document.querySelector('#picker');
+            select.replaceChildren();
+            for (const [value, label] of [['a', 'Alpha'], ['b', 'Bravo']]) {
+                const option = document.createElement('mj-option');
+                option.setAttribute('value', value);
+                option.textContent = label;
+                select.appendChild(option);
+            }
+            select.value = 'b';
+        }"""
+    )
+    page.wait_for_function(
+        "() => document.querySelector('#picker').shadowRoot.querySelector('.trigger .label').textContent === 'Bravo'",
+        timeout=_INTERACTION_TIMEOUT,
+    )
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_select_removed_option_leaves_the_listbox(base_url: str, page) -> None:
+    """
+    Removing an <mj-option> removes it from the rendered listbox.
+
+    :param base_url: The running site URL fixture.
+    :param page: Playwright page fixture.
+    """
+    markup = (
+        '<mj-select id="picker" label="State">'
+        '<mj-option value="a">Alpha</mj-option><mj-option value="b">Bravo</mj-option>'
+        '</mj-select>'
+    )
+    load_fixture(page, base_url, markup, ["mj-select"])
+    page.evaluate("() => document.querySelector('#picker mj-option[value=\"a\"]').remove()")
+    page.wait_for_function(
+        "() => document.querySelector('#picker').shadowRoot.querySelectorAll('.option').length === 1",
+        timeout=_INTERACTION_TIMEOUT,
+    )
+    labels = page.evaluate(_RENDERED_OPTION_LABELS_JS, "#picker")
+    assert labels == ["Bravo"], f"Expected only Bravo to remain, got {labels}"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_select_option_label_is_rendered_as_text(base_url: str, page) -> None:
+    """
+    An option label containing markup is shown as text, never parsed into
+    elements (labels are often user-supplied names).
+
+    :param base_url: The running site URL fixture.
+    :param page: Playwright page fixture.
+    """
+    load_fixture(page, base_url, '<mj-select id="picker" label="Project"></mj-select>', ["mj-select"])
+    page.evaluate(_APPEND_OPTIONS_JS, ["#picker", [["x", "<img src=x onerror=\"window.__injected=1\">Bravo"]]])
+    page.wait_for_function(
+        "() => document.querySelector('#picker').shadowRoot.querySelectorAll('.option').length === 1",
+        timeout=_INTERACTION_TIMEOUT,
+    )
+    injected = page.evaluate(
+        "() => document.querySelector('#picker').shadowRoot.querySelector('.option-label img') !== null"
+    )
+    assert injected is False, "The option label markup must not be parsed into elements"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_select_combobox_is_named_by_label_attribute(base_url: str, page) -> None:
+    """
+    The combobox inside mj-select takes its accessible name from the host's
+    ``label`` attribute.
+
+    :param base_url: The running site URL fixture.
+    :param page: Playwright page fixture.
+    """
+    markup = '<mj-select label="Project"><mj-option value="a">Alpha</mj-option></mj-select>'
+    load_fixture(page, base_url, markup, ["mj-select"])
+    expect(page.get_by_role("combobox", name="Project", exact=True)).to_have_count(1)
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_select_combobox_is_named_by_wrapping_label(base_url: str, page) -> None:
+    """
+    An mj-select wrapped in a <label> element is named by the label's text
+    (without the select's own option text).
+
+    :param base_url: The running site URL fixture.
+    :param page: Playwright page fixture.
+    """
+    markup = (
+        '<label>Metric <mj-select><mj-option value="cpu">cpu.usage</mj-option></mj-select></label>'
+    )
+    load_fixture(page, base_url, markup, ["mj-select"])
+    expect(page.get_by_role("combobox", name="Metric", exact=True)).to_have_count(1)
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_select_combobox_is_named_by_aria_label(base_url: str, page) -> None:
+    """
+    An aria-label on the mj-select host names its combobox.
+
+    :param base_url: The running site URL fixture.
+    :param page: Playwright page fixture.
+    """
+    markup = '<mj-select aria-label="Provider"><mj-option value="gh">GitHub</mj-option></mj-select>'
+    load_fixture(page, base_url, markup, ["mj-select"])
+    expect(page.get_by_role("combobox", name="Provider", exact=True)).to_have_count(1)
     return
 
 

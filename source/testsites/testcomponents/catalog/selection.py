@@ -31,7 +31,10 @@ COMPONENTS = [
             "and <code>placeholder</code> for the empty-state label. Use "
             "<code>disabled</code> to block interaction or <code>readonly</code> "
             "to prevent changes. Listen for <code>mj-change</code> to react "
-            "to user selections.</p>"
+            "to user selections. Options may be added or replaced at any "
+            "time (the listbox follows them), and the combobox is named by "
+            "<code>label</code>, <code>aria-label</code> or a wrapping "
+            "<code>&lt;label&gt;</code>.</p>"
         ),
         example=(
             '<mj-select placeholder="Choose a fruit">\n'
@@ -43,6 +46,7 @@ COMPONENTS = [
         ),
         attributes=[
             ("value", "Currently selected option value."),
+            ("label", "Accessible name of the combobox (alternative to a <label> element)."),
             ("placeholder", "Label shown when no option is selected."),
             ("open", "Boolean; controls popup visibility."),
             ("disabled", "Boolean; blocks all interaction."),
