@@ -9,6 +9,13 @@
 
 let currentLocale = (typeof navigator !== "undefined" && navigator.language) || "en";
 
+/*
+ * The default (English) string table. Every key a component passes to `t()`
+ * must be registered here: `t()` returns the key itself on a miss, so an
+ * unregistered key renders as raw text such as "mj.pagination.next" and the
+ * `t(key) || "fallback"` pattern some components use never reaches its
+ * fallback. `{name}` tokens are filled from the `params` argument of `t()`.
+ */
 const STRINGS = {
   "core.clear": "Clear",
   "core.close": "Close",
@@ -21,7 +28,34 @@ const STRINGS = {
   "core.expand": "Expand",
   "core.collapse": "Collapse",
   "core.remove": "Remove",
-  "core.search": "Search"
+  "core.search": "Search",
+
+  "mj.appBar.navLabel": "Main",
+  "mj.appBar.openNav": "Open navigation",
+  "mj.appBar.closeNav": "Close navigation",
+  "mj.appShell.navLabel": "Primary navigation",
+  "mj.appShell.inspectorLabel": "Inspector",
+  "mj.breadcrumb.navLabel": "Breadcrumb",
+  "mj.breadcrumb.expand": "Show {count} hidden breadcrumbs",
+  "mj.link.externalLabel": "opens in a new tab",
+  "mj.pagination.navLabel": "Pagination",
+  "mj.pagination.previous": "Previous",
+  "mj.pagination.next": "Next",
+  "mj.pagination.pageLabel": "Page {page}",
+  "mj.pagination.currentPageLabel": "Page {page}, current",
+  "mj.pagination.pageOf": "Page {page} of {total}",
+  "mj.pagination.summary": "Showing {from}–{to} of {total}",
+  "mj.select.noOptions": "No options",
+  "mj.sideNav.navLabel": "Navigation",
+  "mj.sideNav.collapse": "Collapse navigation",
+  "mj.skipLink.label": "Skip to main content",
+  "mj.toc.navLabel": "On this page",
+  "mj.toc.empty": "No sections found",
+  "mj.treeNav.navLabel": "Navigation",
+  "mj.wizard.label": "Wizard",
+  "mj.wizard.next": "Next",
+  "mj.wizard.back": "Back",
+  "mj.wizard.submit": "Submit"
 };
 
 const overrides = {};

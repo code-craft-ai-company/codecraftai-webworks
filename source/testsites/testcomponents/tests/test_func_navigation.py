@@ -17,6 +17,7 @@ import ccai.testbase as testbase
 
 from testcomponents.harness.browsers import expect
 from testcomponents.harness.factories import create_page
+from testcomponents.harness.fixtures import load_fixture
 
 
 # ---------------------------------------------------------------------------
@@ -1072,6 +1073,66 @@ def test_pagination_page_button_navigates(page, base_url):
         "function() { return document.querySelector('mj-pagination').getAttribute('page'); }"
     )
     assert page_val == "4", "page attribute should update to 4 after clicking page 4 button"
+    return
+
+
+# ---------------------------------------------------------------------------
+# Catalog strings: no component shows a raw "mj.*" key
+# ---------------------------------------------------------------------------
+
+_RAW_KEY_SCAN_JS = """
+() => {
+    const found = [];
+    const pattern = /\\bmj\\.[a-zA-Z]+\\.[a-zA-Z]+/;
+    const visit = (root) => {
+        for (const el of root.querySelectorAll('*')) {
+            for (const attr of ['aria-label', 'title']) {
+                const value = el.getAttribute(attr);
+                if (value !== null && pattern.test(value)) {
+                    found.push(el.tagName.toLowerCase() + '[' + attr + ']=' + value);
+                }
+            }
+            if (el.shadowRoot) {
+                if (pattern.test(el.shadowRoot.textContent)) {
+                    found.push(el.tagName.toLowerCase() + ' text');
+                }
+                visit(el.shadowRoot);
+            }
+        }
+    };
+    visit(document);
+    return found;
+}
+"""
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_navigation_components_show_no_raw_catalog_keys(page, base_url):
+    """
+        Every component that reads a "mj.*" string renders the registered
+        English text rather than the key itself.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-app-bar><span slot="brand">App</span><a slot="navigation" href="#">Home</a></mj-app-bar>'
+        '<mj-side-nav><a href="#">One</a></mj-side-nav>'
+        '<mj-side-nav mode="collapsible"><a href="#">Two</a></mj-side-nav>'
+        '<mj-pagination page="1" total-pages="4"></mj-pagination>'
+        '<mj-breadcrumb><a href="#">A</a><a href="#">B</a></mj-breadcrumb>'
+        '<mj-toc></mj-toc>'
+        '<mj-skip-link></mj-skip-link>'
+        '<mj-tree-nav></mj-tree-nav>'
+        '<mj-wizard></mj-wizard>'
+    )
+    tags = ["mj-app-bar", "mj-side-nav", "mj-pagination", "mj-breadcrumb", "mj-toc",
+            "mj-skip-link", "mj-tree-nav", "mj-wizard"]
+    load_fixture(page, base_url, markup, tags)
+    found = page.evaluate(_RAW_KEY_SCAN_JS)
+    assert found == [], "Raw catalog keys rendered: {}".format(found)
     return
 
 

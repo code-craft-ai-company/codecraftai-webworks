@@ -185,11 +185,11 @@ export class MjBreadcrumb extends MjElement {
     li.className = "ellipsis-item";
     li.setAttribute("part", "ellipsis");
 
-    const expandLabel = t("mj.breadcrumb.expand") || `Show ${count} hidden breadcrumbs`;
+    const expandLabel = t("mj.breadcrumb.expand", { count: count }) || `Show ${count} hidden breadcrumbs`;
     const btn = document.createElement("button");
     btn.className = "expand-btn";
     btn.setAttribute("part", "expand-btn");
-    btn.setAttribute("aria-label", expandLabel.replace("{count}", String(count)));
+    btn.setAttribute("aria-label", expandLabel);
     btn.textContent = "…";
 
     this.listen(btn, "click", this._onExpand.bind(this));
