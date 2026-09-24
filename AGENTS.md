@@ -40,30 +40,24 @@ AI based testing should run only the 'singlehost' tests tests with:
     testbase testing run --root source/testroots/ccai --includes=ccai.tests.singlehost --output=./.output/
 ```
 
-## Known Limitation: the testsites share process-global state
+## Known Limitation: the testsites share the process-global persona
 
 The three sample applications under `source/testsites` — `helloworld`,
-`testcomponents` and `blueprintdemo` — each establish a webapp persona and
-register endpoints at module import scope, which is what a real application does.
-A test run imports all three into one process, and both the persona and
-`EndpointRegistry` are process-global, so the sites contend for them.
+`testcomponents` and `blueprintdemo` — each establish a webapp persona at module
+import scope, which is what a real application does. A test run imports all
+three into one process, and the persona is process-global, so each site's
+`app.py` calls `reset_webapp_persona()` before it establishes its own.
 
-Each site's `app.py` therefore calls `reset_webapp_persona()` before it
-establishes. That placement is a deliberate compromise and it has a known cost:
+Endpoint registration does not contend: `Endpoint.attach_at` only marks a
+handler, and each site claims its own endpoints with
+`webapp.registry.collect_from(...)` after it establishes its persona. Every
+site's router is complete and the `test_app_wiring` tests pass; no failures are
+expected from this.
 
-* The reset sits AFTER the site's own endpoint imports, because moving it before
-  them lets a site's endpoints register ahead of its own reset — import order
-  across test modules is not controllable from inside `app.py` — and the run
-  fails at collection with
-  `EndpointConflictError: Conflict at GET /: existing=helloworld...`.
-* Because of that, the reset discards the registrations the site just made, so
-  each testsite's router comes up empty and the 22 `test_app_wiring` router
-  assertions fail. Both placements were measured: this one runs the suite
-  (6535 passed of 6597), the other one cannot be collected at all.
-
-Fixing this properly means scoping endpoint registration to the application
-being built rather than to a module-level registry. Until then, treat those 22
-failures as known.
+What remains shared is the persona itself: the site imported last is the active
+one. The testcomponents wiring tests import that site in a child process so it
+does not replace the persona the helloworld and blueprintdemo wiring tests use.
+Follow the same pattern in a new test that needs a particular site's persona.
 
 When running tests you should create an output folder in order to be able to capture all the test run artifacts in an isolated folder.
 
