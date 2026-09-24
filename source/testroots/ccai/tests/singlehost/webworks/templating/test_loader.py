@@ -1063,3 +1063,215 @@ def test_load_template_with_newlines():
         _cleanup_temp_dir(temp_dir)
     
     return
+
+
+# =============================================================================
+# resolve_name() and Recognized Extension Tests
+# =============================================================================
+
+def test_resolve_name_returns_exact_name_when_file_exists():
+    """
+        Test that resolve_name() returns the name unchanged when a file has
+        exactly that name.
+    """
+    temp_dir = _create_temp_template_dir({
+        "index.html": "<h1>Index</h1>"
+    })
+    
+    try:
+        loader = TemplateLoader(directories=[temp_dir])
+        
+        resolved = loader.resolve_name("index.html")
+        
+        if resolved != "index.html":
+            raise AssertionError(f"Expected 'index.html', got {resolved!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_resolve_name_appends_configured_extension():
+    """
+        Test that a name given without an extension resolves to the file that
+        has one of the configured extensions.
+    """
+    temp_dir = _create_temp_template_dir({
+        "page.j2": "Page"
+    })
+    
+    try:
+        loader = TemplateLoader(directories=[temp_dir], extensions=[".j2"])
+        
+        resolved = loader.resolve_name("page")
+        
+        if resolved != "page.j2":
+            raise AssertionError(f"Expected 'page.j2', got {resolved!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_resolve_name_tries_extensions_in_configured_order():
+    """
+        Test that the configured extensions are tried in order, so the first
+        extension with a matching file wins.
+    """
+    temp_dir = _create_temp_template_dir({
+        "page.txt": "Text",
+        "page.html": "HTML"
+    })
+    
+    try:
+        loader = TemplateLoader(directories=[temp_dir], extensions=[".txt", ".html"])
+        
+        resolved = loader.resolve_name("page")
+        
+        if resolved != "page.txt":
+            raise AssertionError(f"Expected 'page.txt' (first configured extension), got {resolved!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_resolve_name_prefers_exact_name_over_extension():
+    """
+        Test that a file named exactly as requested wins over one found by
+        appending an extension.
+    """
+    temp_dir = _create_temp_template_dir({
+        "page": "Exact",
+        "page.html": "With extension"
+    })
+    
+    try:
+        loader = TemplateLoader(directories=[temp_dir])
+        
+        resolved = loader.resolve_name("page")
+        
+        if resolved != "page":
+            raise AssertionError(f"Expected 'page', got {resolved!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_resolve_name_ignores_unconfigured_extension():
+    """
+        Test that only the configured extensions are appended: a file whose
+        extension is not configured is not found by its bare name.
+    """
+    temp_dir = _create_temp_template_dir({
+        "page.html": "HTML"
+    })
+    
+    try:
+        loader = TemplateLoader(directories=[temp_dir], extensions=[".j2"])
+        
+        resolved = loader.resolve_name("page")
+        
+        if resolved is not None:
+            raise AssertionError(f"Expected None for an unconfigured extension, got {resolved!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_resolve_name_does_not_double_a_recognized_extension():
+    """
+        Test that a name already ending with a recognized extension is not
+        retried with a second extension appended.
+    """
+    temp_dir = _create_temp_template_dir({
+        "page.html.html": "Doubled"
+    })
+    
+    try:
+        loader = TemplateLoader(directories=[temp_dir])
+        
+        resolved = loader.resolve_name("page.html")
+        
+        if resolved is not None:
+            raise AssertionError(f"Expected None, got {resolved!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_resolve_name_returns_none_for_missing_template():
+    """
+        Test that resolve_name() returns None when no candidate exists.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        loader = TemplateLoader(directories=[temp_dir])
+        
+        resolved = loader.resolve_name("missing")
+        
+        if resolved is not None:
+            raise AssertionError(f"Expected None, got {resolved!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_load_and_get_path_apply_configured_extension():
+    """
+        Test that load(), exists() and get_path() accept a name without its
+        extension.
+    """
+    temp_dir = _create_temp_template_dir({
+        "about.html": "<p>About</p>"
+    })
+    
+    try:
+        loader = TemplateLoader(directories=[temp_dir])
+        
+        content = loader.load("about")
+        if content != "<p>About</p>":
+            raise AssertionError(f"Expected the about.html content, got {content!r}")
+        
+        if loader.exists("about") is not True:
+            raise AssertionError("exists('about') should find about.html")
+        
+        path = loader.get_path("about")
+        expected_path = os.path.join(temp_dir, "about.html")
+        if path != expected_path:
+            raise AssertionError(f"Expected {expected_path!r}, got {path!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_resolve_name_respects_directory_priority():
+    """
+        Test that, for a name without an extension, the highest-priority
+        directory holding the resolved file is used.
+    """
+    temp_dir1 = _create_temp_template_dir({
+        "index.html": "First"
+    })
+    temp_dir2 = _create_temp_template_dir({
+        "index.html": "Second"
+    })
+    
+    try:
+        loader = TemplateLoader(directories=[temp_dir1, temp_dir2])
+        
+        content = loader.load("index")
+        
+        if content != "First":
+            raise AssertionError(f"Expected 'First' from the highest-priority directory, got {content!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir1)
+        _cleanup_temp_dir(temp_dir2)
+    
+    return

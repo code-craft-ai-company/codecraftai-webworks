@@ -15,10 +15,18 @@
     Default implementations are provided for:
     - render_async(): Asynchronous rendering (falls back to sync)
     - render_stream(): Streaming rendering (yields single chunk)
+    - compile_template(): Compile loaded template source (keeps the source)
+    - render_compiled(), render_compiled_async(), render_compiled_stream():
+      Render a compiled template (fall back to render_string())
+    
+    The compile/render-compiled pair is how a TemplateRenderer that owns a
+    TemplateLoader and a TemplateCache drives an engine: the loader locates
+    and reads the template, the engine compiles the source once, the cache
+    keeps the compiled template, and later renders reuse it.
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Iterator
+from typing import Any, Callable, Dict, Iterator, Optional
 
 
 class TemplateEngine(ABC):
@@ -159,6 +167,101 @@ class TemplateEngine(ABC):
         """
         # Default implementation yields entire output as single chunk
         yield self.render(template_name, context)
+    
+    def compile_template(
+        self,
+        template_source: str,
+        template_name: str,
+        filename: Optional[str] = None
+    ) -> Any:
+        """
+            Compile template source that was loaded by a TemplateLoader.
+            
+            The returned object is what a TemplateCache stores and what the
+            ``render_compiled*`` methods accept. The default implementation
+            keeps the source string itself, so an engine that does not
+            override this still works with a loader and a cache: each render
+            then goes through :meth:`render_string`. Engines that can compile
+            ahead of rendering override this and the ``render_compiled*``
+            methods together.
+            
+            :param template_source: Template source code read by the loader.
+            :param template_name: Resolved template name, used for error
+                messages and for per-extension behavior such as auto-escaping.
+            :param filename: Full filesystem path of the template, if known.
+            
+            :returns: The compiled template object.
+            
+            :raises TemplateError: If the template contains syntax errors.
+            
+            Example:
+                compiled = engine.compile_template(source, "index.html")
+                output = engine.render_compiled(compiled, {"title": "Home"})
+        """
+        compiled_template = template_source
+        return compiled_template
+    
+    def render_compiled(
+        self,
+        compiled_template: Any,
+        context: Dict[str, Any]
+    ) -> str:
+        """
+            Render a template returned by :meth:`compile_template`.
+            
+            The default implementation matches the default
+            :meth:`compile_template`, which keeps the source, and renders it
+            with :meth:`render_string`.
+            
+            :param compiled_template: Object returned by :meth:`compile_template`.
+            :param context: Dictionary of variables to pass to the template.
+            
+            :returns: Rendered template as a string.
+            
+            :raises TemplateError: If rendering fails.
+        """
+        rendered = self.render_string(compiled_template, context)
+        return rendered
+    
+    async def render_compiled_async(
+        self,
+        compiled_template: Any,
+        context: Dict[str, Any]
+    ) -> str:
+        """
+            Render a template returned by :meth:`compile_template` asynchronously.
+            
+            The default implementation falls back to :meth:`render_compiled`.
+            
+            :param compiled_template: Object returned by :meth:`compile_template`.
+            :param context: Dictionary of variables to pass to the template.
+            
+            :returns: Rendered template as a string.
+            
+            :raises TemplateError: If rendering fails.
+        """
+        rendered = self.render_compiled(compiled_template, context)
+        return rendered
+    
+    def render_compiled_stream(
+        self,
+        compiled_template: Any,
+        context: Dict[str, Any]
+    ) -> Iterator[str]:
+        """
+            Render a template returned by :meth:`compile_template` as chunks.
+            
+            The default implementation yields the output of
+            :meth:`render_compiled` as a single chunk.
+            
+            :param compiled_template: Object returned by :meth:`compile_template`.
+            :param context: Dictionary of variables to pass to the template.
+            
+            :yields: Chunks of rendered template output.
+            
+            :raises TemplateError: If rendering fails.
+        """
+        yield self.render_compiled(compiled_template, context)
     
     @abstractmethod
     def add_filter(

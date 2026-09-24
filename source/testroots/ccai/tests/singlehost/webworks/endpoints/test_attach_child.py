@@ -15,6 +15,7 @@ from ccai.webworks.endpoints import (
     Blueprint,
     Endpoint,
     EndpointDescriptor,
+    EndpointRegistrationError,
     EndpointRegistry,
     RateLimit,
 )
@@ -610,7 +611,7 @@ def test_attach_child_multiple_children():
 
 
 def test_attach_child_nested_blueprints():
-    """Test that attach_child works with nested blueprints."""
+    """Test that a nested blueprint attaches its children under its parent's prefix."""
     
     class RootBlueprint(Blueprint):
         base_path = "/api"
@@ -627,21 +628,173 @@ def test_attach_child_nested_blueprints():
     if v1_desc.path != "/api/v1":
         raise AssertionError(f"Expected path='/api/v1', got {v1_desc.path}")
 
-    # Then attach UsersEndpoint to V1Blueprint. attach_child is relative to
-    # the parent's own base, so on its own V1Blueprint places it under /v1.
+    # Then V1Blueprint attaches its own child under the placement Root gave
+    # it; the product composes Root's prefix, V1's base and the child leaf.
+    nested_desc = V1Blueprint.attach_child(UsersEndpoint, parent_placement=v1_desc)
+    
+    if nested_desc.path != "/api/v1/users":
+        raise AssertionError(f"Expected path='/api/v1/users', got {nested_desc.path}")
+    
+    # Without a placement, attach_child stays relative to V1's own base
+    # (single-level behavior is unchanged).
     users_desc = V1Blueprint.attach_child(UsersEndpoint)
 
     if users_desc.path != "/v1/users":
         raise AssertionError(f"Expected path='/v1/users', got {users_desc.path}")
 
-    # Nested under Root, the V1 level is based at the path Root composed for
-    # it, and the child composes on top of that.
-    class MountedV1Blueprint(V1Blueprint):
-        base_path = v1_desc.path
+    return
 
-    nested_desc = MountedV1Blueprint.attach_child(UsersEndpoint)
+
+def test_attach_child_nested_blueprints_three_levels():
+    """Test that prefixes compose through every level of nesting, from the root down."""
+    
+    class RootBlueprint(Blueprint):
+        base_path = "/api"
+    
+    class V1Blueprint(Blueprint):
+        base_path = "/v1"
+    
+    class AdminBlueprint(Blueprint):
+        base_leaf = "admin"
+    
+    class UsersEndpoint(Endpoint):
+        base_leaf = "users"
+    
+    v1_desc = RootBlueprint.attach_child(V1Blueprint)
+    admin_desc = V1Blueprint.attach_child(AdminBlueprint, parent_placement=v1_desc)
+    users_desc = AdminBlueprint.attach_child(UsersEndpoint, parent_placement=admin_desc)
+    
+    if admin_desc.path != "/api/v1/admin":
+        raise AssertionError(f"Expected path='/api/v1/admin', got {admin_desc.path}")
+    
+    if users_desc.path != "/api/v1/admin/users":
+        raise AssertionError(f"Expected path='/api/v1/admin/users', got {users_desc.path}")
+    
+    return
+
+
+def test_attach_child_nested_blueprint_path_override():
+    """Test that a leaf/path override on a nested attach is composed under the placement."""
+    
+    class RootBlueprint(Blueprint):
+        base_path = "/api"
+    
+    class V1Blueprint(Blueprint):
+        base_path = "/v1"
+    
+    class UsersEndpoint(Endpoint):
+        base_leaf = "users"
+    
+    v1_desc = RootBlueprint.attach_child(V1Blueprint)
+    
+    leaf_desc = V1Blueprint.attach_child(UsersEndpoint, leaf="people", parent_placement=v1_desc)
+    path_desc = V1Blueprint.attach_child(UsersEndpoint, path="/people/list", parent_placement=v1_desc)
+    
+    if leaf_desc.path != "/api/v1/people":
+        raise AssertionError(f"Expected path='/api/v1/people', got {leaf_desc.path}")
+    
+    if path_desc.path != "/api/v1/people/list":
+        raise AssertionError(f"Expected path='/api/v1/people/list', got {path_desc.path}")
+    
+    return
+
+
+def test_attach_child_nested_blueprint_inherits_placement_constraints():
+    """Test that a nested child inherits the constraints of every level above it."""
+    
+    class RootBlueprint(Blueprint):
+        base_path = "/api"
+        access_policy = AccessPolicy(roles=["user"])
+        rate_limit = RateLimit(requests=100, window=60)
+        tags = ["api"]
+        version = "v1"
+    
+    class AdminBlueprint(Blueprint):
+        base_leaf = "admin"
+        access_policy = AccessPolicy(roles=["admin"])
+    
+    class UsersEndpoint(Endpoint):
+        base_leaf = "users"
+    
+    admin_desc = RootBlueprint.attach_child(AdminBlueprint)
+    users_desc = AdminBlueprint.attach_child(UsersEndpoint, parent_placement=admin_desc)
+    
+    roles = users_desc.constraints.access_policy.roles
+    if "user" not in roles or "admin" not in roles:
+        raise AssertionError(f"Expected roles from Root and Admin ('user', 'admin'), got {roles}")
+    
+    if users_desc.constraints.rate_limit is None or users_desc.constraints.rate_limit.requests != 100:
+        raise AssertionError(f"Expected Root's rate limit to cascade, got {users_desc.constraints.rate_limit}")
+    
+    if users_desc.tags != ["api"]:
+        raise AssertionError(f"Expected Root's tags to cascade, got {users_desc.tags}")
+    
+    if users_desc.version != "v1":
+        raise AssertionError(f"Expected Root's version to cascade, got {users_desc.version}")
+    
+    # Single-level, AdminBlueprint only contributes its own policy
+    standalone_desc = AdminBlueprint.attach_child(UsersEndpoint)
+    standalone_roles = standalone_desc.constraints.access_policy.roles
+    if standalone_roles != ("admin",):
+        raise AssertionError(f"Expected roles=('admin',) without a placement, got {standalone_roles}")
+    
+    return
+
+
+def test_attach_child_nested_blueprint_register_includes_nested_child():
+    """Test that register() on the nested blueprint returns the child it attached under its placement."""
+    
+    class RootBlueprint(Blueprint):
+        base_path = "/api"
+    
+    class V1Blueprint(Blueprint):
+        base_path = "/v1"
+    
+    class UsersEndpoint(Endpoint):
+        base_leaf = "users"
+    
+    v1_desc = RootBlueprint.attach_child(V1Blueprint)
+    nested_desc = V1Blueprint.attach_child(UsersEndpoint, parent_placement=v1_desc)
 
     if nested_desc.path != "/api/v1/users":
         raise AssertionError(f"Expected path='/api/v1/users', got {nested_desc.path}")
 
+    registered = V1Blueprint.register()
+    
+    found = False
+    for descriptor in registered:
+        if descriptor is nested_desc:
+            found = True
+            break
+    
+    if found is not True:
+        registered_paths = [descriptor.path for descriptor in registered]
+        raise AssertionError(f"Expected V1Blueprint.register() to include /api/v1/users, got {registered_paths}")
+    
+    return
+
+
+def test_attach_child_parent_placement_without_path_raises():
+    """Test that a placement with neither path nor leaf is rejected."""
+    
+    class V1Blueprint(Blueprint):
+        base_path = "/v1"
+    
+    class UsersEndpoint(Endpoint):
+        base_leaf = "users"
+    
+    def handler():
+        return
+    
+    empty_placement = EndpointDescriptor(handler=handler, module=__name__)
+    
+    raised = None
+    try:
+        V1Blueprint.attach_child(UsersEndpoint, parent_placement=empty_placement)
+    except EndpointRegistrationError as exc:
+        raised = exc
+    
+    if raised is None:
+        raise AssertionError("Expected EndpointRegistrationError for a placement without path or leaf")
+    
     return

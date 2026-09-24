@@ -9,9 +9,15 @@
     The loader provides methods for:
     - Loading template source code from files
     - Checking if templates exist
+    - Resolving a template name, applying the recognized extensions
     - Getting full filesystem paths to templates
     - Getting modification times for cache invalidation
     - Adding directories with priority ordering
+    
+    A template name is looked up as given first. When no file has that
+    exact name and the name does not already end with one of the
+    recognized extensions, each recognized extension is appended in
+    order, so ``"index"`` finds ``"index.html"``.
     
     Example:
         loader = TemplateLoader(
@@ -44,6 +50,12 @@ class TemplateLoader:
         indicate higher priority (searched first). Directories added without
         a priority are appended to the end of the search order.
         
+        The recognized extensions let callers name a template without its
+        extension: a name that matches no file exactly, and that does not
+        already end with a recognized extension, is retried with each
+        recognized extension appended, in the configured order. The exact
+        name is always tried first, so explicit names behave as before.
+        
         :ivar _directories: List of (priority, directory) tuples sorted by priority.
         :ivar _extensions: List of recognized template file extensions.
         :ivar _encoding: File encoding for reading templates.
@@ -74,7 +86,8 @@ class TemplateLoader:
             
             :param directories: List of directories to search (in priority order).
                                The first directory has highest priority.
-            :param extensions: Recognized template file extensions.
+            :param extensions: Recognized template file extensions, tried in
+                              order when a template is named without one.
                               Defaults to [".html", ".htm", ".xml", ".txt"].
             :param encoding: File encoding for reading templates. Defaults to "utf-8".
             
@@ -148,12 +161,39 @@ class TemplateLoader:
         """
         return self.get_path(template_name) is not None
     
+    def resolve_name(self, template_name: str) -> Optional[str]:
+        """
+            Resolve a template name to the name of an existing template file.
+            
+            The name is tried as given first. When no configured directory
+            holds a file with that exact name, and the name does not already
+            end with a recognized extension, each recognized extension is
+            appended in order and tried. For every candidate name the
+            directories are searched in priority order.
+            
+            :param template_name: Name/path of the template, with or without
+                                  a recognized extension.
+            
+            :returns: The name of the matching template relative to its
+                      directory (for example ``"index.html"`` for
+                      ``"index"``), or None if no template matches.
+            
+            Example:
+                resolved = loader.resolve_name("index")
+                if resolved is not None:
+                    source = loader.load(resolved)
+        """
+        resolved_name, _ = self._find_template(template_name)
+        return resolved_name
+    
     def get_path(self, template_name: str) -> Optional[str]:
         """
             Get the full filesystem path to a template.
             
             Searches configured directories in priority order and returns
-            the full path to the first matching template found.
+            the full path to the first matching template found. The name is
+            resolved as described in :meth:`resolve_name`, so a name given
+            without a recognized extension also finds the file that has one.
             
             :param template_name: Name/path of the template.
             
@@ -164,13 +204,65 @@ class TemplateLoader:
                 if path:
                     print(f"Template found at: {path}")
         """
-        for _, directory in self._directories:
-            full_path = os.path.join(directory, template_name)
+        _, full_path = self._find_template(template_name)
+        return full_path
             
-            if os.path.isfile(full_path):
-                return full_path
+    def _candidate_names(self, template_name: str) -> List[str]:
+        """
+            Build the ordered list of file names to try for a template name.
         
-        return None
+            The name as given always comes first. The recognized extensions
+            are appended to it only when it does not already end with one of
+            them, so ``"index.html"`` is never retried as ``"index.html.html"``.
+            
+            :param template_name: Name/path of the template.
+            
+            :returns: The candidate file names, in lookup order.
+        """
+        candidate_names = [template_name]
+        
+        has_recognized_extension = False
+        for extension in self._extensions:
+            if template_name.endswith(extension):
+                has_recognized_extension = True
+                break
+        
+        if has_recognized_extension is False:
+            for extension in self._extensions:
+                candidate_names.append(f"{template_name}{extension}")
+        
+        return candidate_names
+    
+    def _find_template(self, template_name: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+            Find the first existing template file for a template name.
+            
+            Candidate names are tried in the order given by
+            :meth:`_candidate_names`; for each candidate the directories are
+            searched in priority order.
+            
+            :param template_name: Name/path of the template.
+            
+            :returns: A ``(resolved_name, full_path)`` tuple, or
+                      ``(None, None)`` when no template matches.
+        """
+        resolved_name: Optional[str] = None
+        full_path: Optional[str] = None
+        
+        candidate_names = self._candidate_names(template_name)
+        for candidate_name in candidate_names:
+            for _, directory in self._directories:
+                candidate_path = os.path.join(directory, candidate_name)
+                
+                if os.path.isfile(candidate_path):
+                    resolved_name = candidate_name
+                    full_path = candidate_path
+                    break
+            
+            if full_path is not None:
+                break
+        
+        return resolved_name, full_path
     
     def get_mtime(self, template_name: str) -> Optional[float]:
         """

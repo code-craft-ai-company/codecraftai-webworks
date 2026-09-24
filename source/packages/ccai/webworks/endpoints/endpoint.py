@@ -11,6 +11,8 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 import dataclasses
+import os
+
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
@@ -18,6 +20,7 @@ from ccai.webworks.endpoints.constraints import EndpointConstraints
 from ccai.webworks.endpoints.descriptor import (
     ENDPOINT_DECLARED_ATTR,
     ENDPOINT_DESCRIPTORS_ATTR,
+    ENDPOINT_PARENT_PLACEMENT_EXTRA,
     declare_on_class,
     EndpointDescriptor,
     mark_handler
@@ -502,6 +505,7 @@ class Endpoint:
         replace_scopes: bool = False,
         replace_roles: bool = False,
         merge_tags: bool = False,
+        parent_placement: Optional[EndpointDescriptor] = None,
         **kwargs
     ) -> EndpointDescriptor:
         """
@@ -510,6 +514,15 @@ class Endpoint:
             This method creates a descriptor for the child endpoint with
             paths computed relative to the parent's base_path/base_leaf.
             Constraints are merged following inheritance rules.
+            
+            Nested attachment: when this endpoint was itself attached to a
+            parent, pass the descriptor that attachment returned as
+            ``parent_placement``. The child is then composed under that
+            placement's path -- which already carries every prefix from the
+            root down -- instead of under this endpoint's own base, and it
+            inherits the placement's merged constraints, tags and version
+            instead of this class's own. Without ``parent_placement`` the
+            behavior is the single-level one described above.
             
             :param child_endpoint: The child endpoint class to attach.
             :param leaf: Override for child's leaf (relative to parent base).
@@ -522,16 +535,50 @@ class Endpoint:
             :param replace_scopes: If True, child scopes replace parent scopes.
             :param replace_roles: If True, child roles replace parent roles.
             :param merge_tags: If True, parent tags are appended to child tags.
+            :param parent_placement: The descriptor this endpoint received
+                when it was attached to its own parent. When given, the
+                child is placed under that descriptor's path and inherits
+                its constraints, tags and version.
             :param kwargs: Additional overrides for child descriptor.
             
             :returns: The merged EndpointDescriptor for the child.
+            
+            :raises EndpointRegistrationError: If ``parent_placement`` has
+                neither a path nor a leaf to compose under.
         """
         # Determine child's leaf/path
         child_leaf = leaf if leaf is not None else child_endpoint.base_leaf
         child_path = path if path is not None else child_endpoint.base_path
         
+        # Determine what the child inherits from its parent: this class's
+        # own attributes, or -- when this endpoint is nested under another
+        # parent -- the placement that parent gave it, which already has the
+        # prefixes and constraints of every level above.
+        placement_base: Optional[str] = None
+        if parent_placement is None:
+            parent_version = cls.version
+            parent_tags = list(cls.tags)
+            parent_constraints = EndpointConstraints(
+                access_policy=cls.access_policy,
+                rate_limit=cls.rate_limit,
+                scopes=cls.access_policy.scopes if cls.access_policy else [],
+                roles=cls.access_policy.roles if cls.access_policy else []
+            )
+        else:
+            placement_base = cls._placement_base_path(parent_placement)
+            parent_version = parent_placement.version
+            parent_tags = list(parent_placement.tags)
+            parent_constraints = parent_placement.constraints
+        
         # Compute the final path relative to parent's base
-        final_path = cls._compute_child_path(child_leaf, child_path)
+        if parent_placement is None:
+            final_path = cls._compute_child_path(child_leaf, child_path)
+        else:
+            final_path = cls._compute_child_path_from_base(
+                parent_base=placement_base,
+                child_leaf=child_leaf,
+                child_path=child_path
+            )
         
         # Determine final leaf (None if we computed a full path)
         final_leaf = None
@@ -545,27 +592,19 @@ class Endpoint:
         # Merge version (child overrides parent)
         merged_version = version if version is not None else child_endpoint.version
         if merged_version is None:
-            merged_version = cls.version
+            merged_version = parent_version
         
         # Merge tags
         child_tags = tags if tags is not None else list(child_endpoint.tags)
         if merge_tags:
             # Parent tags appended to child tags
             merged_tags = list(child_tags)
-            for tag in cls.tags:
+            for tag in parent_tags:
                 if tag not in merged_tags:
                     merged_tags.append(tag)
         else:
             # Child tags win (default behavior)
-            merged_tags = child_tags if child_tags else list(cls.tags)
-        
-        # Build parent constraints
-        parent_constraints = EndpointConstraints(
-            access_policy=cls.access_policy,
-            rate_limit=cls.rate_limit,
-            scopes=cls.access_policy.scopes if cls.access_policy else [],
-            roles=cls.access_policy.roles if cls.access_policy else []
-        )
+            merged_tags = child_tags if child_tags else list(parent_tags)
         
         # Build child constraints
         child_access_policy = access_policy if access_policy is not None else child_endpoint.access_policy
@@ -592,6 +631,10 @@ class Endpoint:
         if child_endpoint.serializers:
             extras_dict["serializers"] = dict(child_endpoint.serializers)
         
+        # Record the base a nested child was composed under
+        if parent_placement is not None:
+            extras_dict[ENDPOINT_PARENT_PLACEMENT_EXTRA] = placement_base
+        
         # Create a placeholder handler for the child descriptor
         # The actual handler will be set when the child is decorated
         def placeholder_handler() -> None:
@@ -617,6 +660,45 @@ class Endpoint:
         return descriptor
     
     @classmethod
+    def _placement_base_path(cls, parent_placement: EndpointDescriptor) -> str:
+        """
+            Get the base path a nested child is composed under.
+            
+            The base is the path of ``parent_placement`` -- the descriptor
+            this endpoint received when it was attached to its own parent --
+            or ``/<leaf>`` when that descriptor carries only a leaf. A
+            trailing slash is removed, as it is from ``base_path``.
+            
+            :param parent_placement: The descriptor this endpoint received
+                                     when it was attached to its parent.
+            
+            :returns: The base path for the nested child.
+            
+            :raises EndpointRegistrationError: If the placement has neither
+                a path nor a leaf.
+        """
+        if parent_placement.path is not None:
+            placement_path = parent_placement.path
+        elif parent_placement.leaf is not None:
+            placement_path = f"/{parent_placement.leaf}"
+        else:
+            errmsg_lines = [
+                f"Cannot attach a child to '{cls.__name__}' under its parent placement:",
+                "the 'parent_placement' descriptor has neither a 'path' nor a 'leaf'.",
+                "Pass the descriptor that attach_child() returned when "
+                f"'{cls.__name__}' was attached to its parent.",
+            ]
+            errmsg = os.linesep.join(errmsg_lines)
+            raise EndpointRegistrationError(
+                message=errmsg,
+                endpoint=cls,
+                missing_fields=["path", "leaf"]
+            )
+        
+        base_path = placement_path.rstrip("/")
+        return base_path
+    
+    @classmethod
     def _compute_child_path(
         cls,
         child_leaf: Optional[str],
@@ -638,6 +720,30 @@ class Endpoint:
         if parent_base is None and cls.base_leaf is not None:
             parent_base = f"/{cls.base_leaf}"
         
+        rtnval = cls._compute_child_path_from_base(
+            parent_base=parent_base,
+            child_leaf=child_leaf,
+            child_path=child_path
+        )
+        return rtnval
+    
+    @classmethod
+    def _compute_child_path_from_base(
+        cls,
+        parent_base: Optional[str],
+        child_leaf: Optional[str],
+        child_path: Optional[str]
+    ) -> Optional[str]:
+        """
+            Compute the final path for a child endpoint under a given base.
+            
+            :param parent_base: The parent's base path, or None when the
+                                parent has no base.
+            :param child_leaf: The child's leaf segment.
+            :param child_path: The child's path.
+            
+            :returns: The computed path, or None if no path can be computed.
+        """
         if parent_base is None:
             # No parent base, return child path as-is
             if child_path is not None:

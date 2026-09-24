@@ -10,6 +10,12 @@
     The adapter creates and manages a Jinja2 Environment with configurable
     options for template directories, auto-escaping, caching, undefined
     variable behavior, and extensions.
+    
+    Templates located by a TemplateLoader are compiled with
+    :meth:`Jinja2Adapter.compile_template` into a
+    :class:`Jinja2CompiledTemplate`, which a TemplateCache can hold and
+    :meth:`Jinja2Adapter.render_compiled` (and its async and streaming
+    variants) can render any number of times.
 """
 
 from typing import Any, Callable, Dict, Iterator, Optional
@@ -21,6 +27,48 @@ from ccai.webworks.templating.exceptions import (
     TemplateError,
     TemplateNotFoundError,
 )
+
+
+class Jinja2CompiledTemplate:
+    """
+        A template compiled by a :class:`Jinja2Adapter` from loaded source.
+        
+        Holds the compiled Jinja2 template for synchronous and streaming
+        rendering, plus the source so an async-enabled variant can be
+        compiled the first time the template is rendered asynchronously
+        (Jinja2 compiles async templates differently). The async variant
+        is kept on this object, so a cached compiled template is reused
+        for async renders as well.
+        
+        :ivar template_name: The resolved template name.
+        :ivar filename: The template's filesystem path, if known.
+        :ivar source: The template source code.
+        :ivar template: The compiled synchronous Jinja2 template.
+        :ivar async_template: The compiled async Jinja2 template, or None
+            until the template is first rendered asynchronously.
+    """
+    
+    def __init__(
+        self,
+        template_name: str,
+        filename: Optional[str],
+        source: str,
+        template: jinja2.Template
+    ) -> None:
+        """
+            Construct a Jinja2CompiledTemplate.
+            
+            :param template_name: The resolved template name.
+            :param filename: The template's filesystem path, if known.
+            :param source: The template source code.
+            :param template: The compiled synchronous Jinja2 template.
+        """
+        self.template_name = template_name
+        self.filename = filename
+        self.source = source
+        self.template = template
+        self.async_template: Optional[jinja2.Template] = None
+        return
 
 
 class Jinja2Adapter(TemplateEngine):
@@ -251,6 +299,179 @@ class Jinja2Adapter(TemplateEngine):
                 f"Render error in '{template_name}': {exc}"
             ) from exc
     
+    def compile_template(
+        self,
+        template_source: str,
+        template_name: str,
+        filename: Optional[str] = None
+    ) -> Jinja2CompiledTemplate:
+        """
+            Compile template source that was loaded by a TemplateLoader.
+            
+            The source is compiled under ``template_name`` so the result
+            behaves like a template Jinja2 loaded by name itself: the
+            per-extension auto-escaping applies (an ``.html`` template is
+            escaped, a ``.txt`` template is not), error messages name the
+            template, and ``extends`` / ``include`` references resolve
+            through this adapter's environment.
+            
+            :param template_source: Template source code read by the loader.
+            :param template_name: Resolved template name.
+            :param filename: Full filesystem path of the template, if known.
+            
+            :returns: The compiled template.
+            
+            :raises TemplateError: If the template contains syntax errors.
+        """
+        try:
+            template = self._compile_in_environment(
+                environment=self._environment,
+                template_source=template_source,
+                template_name=template_name,
+                filename=filename
+            )
+        except jinja2.TemplateSyntaxError as exc:
+            raise TemplateError(
+                f"Syntax error in '{exc.name or template_name}' "
+                f"at line {exc.lineno}: {exc.message}"
+            ) from exc
+        
+        compiled_template = Jinja2CompiledTemplate(
+            template_name=template_name,
+            filename=filename,
+            source=template_source,
+            template=template
+        )
+        
+        return compiled_template
+    
+    def render_compiled(
+        self,
+        compiled_template: Jinja2CompiledTemplate,
+        context: Dict[str, Any]
+    ) -> str:
+        """
+            Render a template returned by :meth:`compile_template`.
+            
+            :param compiled_template: The compiled template.
+            :param context: Dictionary of variables to pass to the template.
+            
+            :returns: Rendered template as a string.
+            
+            :raises TemplateNotFoundError: If a template it extends or
+                includes does not exist.
+            :raises TemplateError: If rendering fails.
+        """
+        template_name = compiled_template.template_name
+        
+        try:
+            rendered = compiled_template.template.render(**context)
+        except jinja2.TemplateNotFound as exc:
+            raise TemplateNotFoundError(
+                template_name=exc.name or template_name,
+                searched_paths=self._template_dirs
+            ) from exc
+        except jinja2.TemplateSyntaxError as exc:
+            raise TemplateError(
+                f"Syntax error in '{exc.name or template_name}' "
+                f"at line {exc.lineno}: {exc.message}"
+            ) from exc
+        except jinja2.TemplateError as exc:
+            raise TemplateError(
+                f"Render error in '{template_name}': {exc}"
+            ) from exc
+        
+        return rendered
+    
+    async def render_compiled_async(
+        self,
+        compiled_template: Jinja2CompiledTemplate,
+        context: Dict[str, Any]
+    ) -> str:
+        """
+            Render a template returned by :meth:`compile_template` asynchronously.
+            
+            The first async render compiles an async-enabled variant of the
+            template in the async environment (the same one
+            :meth:`render_async` uses) and keeps it on ``compiled_template``
+            for later async renders.
+            
+            :param compiled_template: The compiled template.
+            :param context: Dictionary of variables to pass to the template.
+            
+            :returns: Rendered template as a string.
+            
+            :raises TemplateNotFoundError: If a template it extends or
+                includes does not exist.
+            :raises TemplateError: If compiling or rendering fails.
+        """
+        template_name = compiled_template.template_name
+        
+        try:
+            if compiled_template.async_template is None:
+                compiled_template.async_template = self._compile_in_environment(
+                    environment=self._async_env,
+                    template_source=compiled_template.source,
+                    template_name=template_name,
+                    filename=compiled_template.filename
+                )
+            rendered = await compiled_template.async_template.render_async(**context)
+        except jinja2.TemplateNotFound as exc:
+            raise TemplateNotFoundError(
+                template_name=exc.name or template_name,
+                searched_paths=self._template_dirs
+            ) from exc
+        except jinja2.TemplateSyntaxError as exc:
+            raise TemplateError(
+                f"Syntax error in '{exc.name or template_name}' "
+                f"at line {exc.lineno}: {exc.message}"
+            ) from exc
+        except jinja2.TemplateError as exc:
+            raise TemplateError(
+                f"Render error in '{template_name}': {exc}"
+            ) from exc
+        
+        return rendered
+    
+    def render_compiled_stream(
+        self,
+        compiled_template: Jinja2CompiledTemplate,
+        context: Dict[str, Any]
+    ) -> Iterator[str]:
+        """
+            Render a template returned by :meth:`compile_template` as chunks.
+            
+            Uses Jinja2's generate() so output is produced incrementally.
+            
+            :param compiled_template: The compiled template.
+            :param context: Dictionary of variables to pass to the template.
+            
+            :yields: Chunks of rendered template output.
+            
+            :raises TemplateNotFoundError: If a template it extends or
+                includes does not exist.
+            :raises TemplateError: If rendering fails.
+        """
+        template_name = compiled_template.template_name
+        
+        try:
+            for chunk in compiled_template.template.generate(**context):
+                yield chunk
+        except jinja2.TemplateNotFound as exc:
+            raise TemplateNotFoundError(
+                template_name=exc.name or template_name,
+                searched_paths=self._template_dirs
+            ) from exc
+        except jinja2.TemplateSyntaxError as exc:
+            raise TemplateError(
+                f"Syntax error in '{exc.name or template_name}' "
+                f"at line {exc.lineno}: {exc.message}"
+            ) from exc
+        except jinja2.TemplateError as exc:
+            raise TemplateError(
+                f"Render error in '{template_name}': {exc}"
+            ) from exc
+    
     def add_filter(
         self,
         name: str,
@@ -340,9 +561,13 @@ class Jinja2Adapter(TemplateEngine):
         
         undefined_class = self._get_undefined_class(self._undefined_behavior)
         
+        # cache_size is Jinja2's own compiled-template cache for templates it
+        # loads by name (including extends/include targets); 0 disables it,
+        # which is what a disabled TemplateConfig cache asks for.
         environment = jinja2.Environment(
             loader=loader,
             autoescape=autoescape_func,
+            cache_size=self._cache_size,
             auto_reload=self._auto_reload,
             undefined=undefined_class,
             extensions=self._extensions,
@@ -350,6 +575,43 @@ class Jinja2Adapter(TemplateEngine):
         )
         
         return environment
+    
+    def _compile_in_environment(
+        self,
+        environment: jinja2.Environment,
+        template_source: str,
+        template_name: str,
+        filename: Optional[str]
+    ) -> jinja2.Template:
+        """
+            Compile template source into a template bound to an environment.
+            
+            This is what a Jinja2 loader does for a template it reads itself,
+            so the result is named, auto-escaped per its extension, and
+            resolves ``extends`` / ``include`` through ``environment``.
+            
+            :param environment: The environment to compile in (sync or async).
+            :param template_source: Template source code.
+            :param template_name: Resolved template name.
+            :param filename: Full filesystem path of the template, if known.
+            
+            :returns: The compiled Jinja2 template.
+            
+            :raises jinja2.TemplateSyntaxError: If the source has syntax errors.
+        """
+        code = environment.compile(
+            template_source,
+            name=template_name,
+            filename=filename
+        )
+        template_globals = environment.make_globals(None)
+        template = environment.template_class.from_code(
+            environment,
+            code,
+            template_globals,
+            uptodate=None
+        )
+        return template
     
     def _get_undefined_class(self, behavior: str) -> type:
         """

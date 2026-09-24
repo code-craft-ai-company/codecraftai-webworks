@@ -57,7 +57,9 @@ class TemplateConfig:
         
         :ivar engine: The template engine name (e.g., "jinja2", "mako").
         :ivar directories: List of directories to search for templates.
-        :ivar extensions: List of recognized template file extensions.
+        :ivar extensions: List of recognized template file extensions. A
+            template named without one of them is looked up with each
+            appended in order (``"index"`` finds ``"index.html"``).
         :ivar auto_escape: Whether to enable auto-escaping by default.
         :ivar cache_enabled: Whether to enable template caching.
         :ivar cache_size: Maximum number of cached templates.

@@ -13,9 +13,11 @@
 import os
 import tempfile
 
+from ccai.webworks.templating.cache import TemplateCache
 from ccai.webworks.templating.config import TemplateConfig
 from ccai.webworks.templating.filters import BUILTIN_FILTERS
 from ccai.webworks.templating.jinja2_adapter import Jinja2Adapter
+from ccai.webworks.templating.loader import TemplateLoader
 from ccai.webworks.templating.mako_adapter import MakoAdapter
 from ccai.webworks.templating.registry import TemplateEngineRegistry
 from ccai.webworks.templating.renderer import TemplateRenderer
@@ -32,6 +34,36 @@ def _clean_state():
     """
     TemplateEngineRegistry.clear()
     TemplateEngineRegistry._default_engine = "jinja2"
+    return
+
+
+def _write_template(directory: str, name: str, content: str) -> str:
+    """
+        Write a template file.
+
+        :param directory: Directory to write into.
+        :param name: Template file name.
+        :param content: Template source.
+
+        :returns: The path of the written file.
+    """
+    template_path = os.path.join(directory, name)
+    with open(template_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return template_path
+
+
+def _bump_mtime(path: str) -> None:
+    """
+        Move a file's modification time forward, so a change is visible to
+        modification-time checks even within the file system's timestamp
+        resolution.
+
+        :param path: Path of the file to touch.
+    """
+    stat_result = os.stat(path)
+    new_mtime = stat_result.st_mtime + 10
+    os.utime(path, (new_mtime, new_mtime))
     return
 
 
@@ -318,6 +350,17 @@ def test_setup_with_cache_enabled():
                 f"Expected cache_size 200, got {engine._cache_size}"
             )
 
+    # The renderer owns the TemplateCache built from the config
+    cache = renderer.cache
+    if not isinstance(cache, TemplateCache):
+        raise AssertionError(f"Expected a TemplateCache on the renderer, got {cache!r}")
+
+    if cache.max_size != 200 or cache.auto_reload is not False:
+        raise AssertionError(
+            f"Expected max_size=200, auto_reload=False, got "
+            f"max_size={cache.max_size}, auto_reload={cache.auto_reload}"
+        )
+
     _clean_state()
     return
 
@@ -339,6 +382,14 @@ def test_setup_with_cache_disabled():
             raise AssertionError(
                 f"Expected cache_size 0 for disabled cache, got {engine._cache_size}"
             )
+
+    # A disabled cache stores nothing
+    cache = renderer.cache
+    if not isinstance(cache, TemplateCache):
+        raise AssertionError(f"Expected a TemplateCache on the renderer, got {cache!r}")
+
+    if cache.max_size != 0:
+        raise AssertionError(f"Expected max_size 0 for a disabled cache, got {cache.max_size}")
 
     _clean_state()
     return
@@ -379,6 +430,202 @@ def test_setup_with_auto_reload_disabled():
             raise AssertionError(
                 "Expected auto_reload to be False on the Jinja2 environment"
             )
+
+    _clean_state()
+    return
+
+
+# =============================================================================
+# Loader and cache reach the renderer (docstring steps 5-7)
+# =============================================================================
+
+def test_setup_wires_loader_into_renderer():
+    """
+        Test that the TemplateLoader built from the config is the renderer's
+        loader, with the configured directories, extensions and encoding.
+    """
+    _clean_state()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config = TemplateConfig(
+            directories=[tmpdir],
+            extensions=[".j2", ".html"],
+            encoding="utf-8",
+        )
+        renderer = setup_templating(config)
+
+        loader = renderer.loader
+        if not isinstance(loader, TemplateLoader):
+            raise AssertionError(f"Expected a TemplateLoader on the renderer, got {loader!r}")
+
+        if loader.directories != [tmpdir]:
+            raise AssertionError(f"Expected directories {[tmpdir]!r}, got {loader.directories!r}")
+
+        if loader.extensions != [".j2", ".html"]:
+            raise AssertionError(f"Expected extensions ['.j2', '.html'], got {loader.extensions!r}")
+
+        if loader.encoding != "utf-8":
+            raise AssertionError(f"Expected encoding 'utf-8', got {loader.encoding!r}")
+
+    _clean_state()
+    return
+
+
+def test_setup_applies_configured_extension():
+    """
+        Test that config.extensions takes effect: a template named without its
+        extension is found through a configured extension.
+    """
+    _clean_state()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _write_template(tmpdir, "greeting.j2", "Hello {{ name }}!")
+
+        config = TemplateConfig(directories=[tmpdir], extensions=[".j2"])
+        renderer = setup_templating(config)
+
+        result = renderer.render("greeting", {"name": "World"})
+
+        if result != "Hello World!":
+            raise AssertionError(f"Expected 'Hello World!', got {result!r}")
+
+    _clean_state()
+    return
+
+
+def test_setup_applies_configured_extension_with_mako():
+    """
+        Test that config.extensions takes effect for the Mako engine too.
+    """
+    _clean_state()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _write_template(tmpdir, "greeting.mako", "Hello ${name}!")
+
+        config = TemplateConfig(engine="mako", directories=[tmpdir], extensions=[".mako"])
+        renderer = setup_templating(config)
+
+        result = renderer.render("greeting", {"name": "World"})
+
+        if result != "Hello World!":
+            raise AssertionError(f"Expected 'Hello World!', got {result!r}")
+
+    _clean_state()
+    return
+
+
+def test_setup_reuses_cached_template():
+    """
+        Test that with caching enabled (and auto_reload off) the compiled
+        template is cached on the first render and reused afterwards: the
+        cache keeps the same object and a later change to the file is not
+        reloaded.
+    """
+    _clean_state()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        template_path = _write_template(tmpdir, "page.html", "first {{ n }}")
+
+        config = TemplateConfig(directories=[tmpdir], cache_enabled=True, auto_reload=False)
+        renderer = setup_templating(config)
+
+        first = renderer.render("page.html", {"n": 1})
+        cached = renderer.cache.get("page.html")
+
+        _write_template(tmpdir, "page.html", "second {{ n }}")
+        _bump_mtime(template_path)
+
+        again = renderer.render("page", {"n": 2})
+
+        if first != "first 1" or again != "first 2":
+            raise AssertionError(f"Expected 'first 1' then 'first 2', got {first!r} then {again!r}")
+
+        if cached is None or renderer.cache.get("page.html") is not cached:
+            raise AssertionError("Expected the compiled template to be cached and reused")
+
+        if renderer.cache.size != 1:
+            raise AssertionError(f"Expected 1 cached template, got {renderer.cache.size}")
+
+    _clean_state()
+    return
+
+
+def test_setup_reuses_cached_template_with_mako():
+    """
+        Test that the Mako engine's templates are cached and reused as well.
+    """
+    _clean_state()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        template_path = _write_template(tmpdir, "page.html", "first ${n}")
+
+        config = TemplateConfig(engine="mako", directories=[tmpdir], cache_enabled=True, auto_reload=False)
+        renderer = setup_templating(config)
+
+        first = renderer.render("page.html", {"n": 1})
+
+        _write_template(tmpdir, "page.html", "second ${n}")
+        _bump_mtime(template_path)
+
+        again = renderer.render("page.html", {"n": 2})
+
+        if first != "first 1" or again != "first 2":
+            raise AssertionError(f"Expected 'first 1' then 'first 2', got {first!r} then {again!r}")
+
+    _clean_state()
+    return
+
+
+def test_setup_auto_reload_reloads_modified_template():
+    """
+        Test that with auto_reload a modified template is recompiled.
+    """
+    _clean_state()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        template_path = _write_template(tmpdir, "page.html", "first")
+
+        config = TemplateConfig(directories=[tmpdir], cache_enabled=True, auto_reload=True)
+        renderer = setup_templating(config)
+
+        first = renderer.render("page.html")
+
+        _write_template(tmpdir, "page.html", "second")
+        _bump_mtime(template_path)
+
+        second = renderer.render("page.html")
+
+        if first != "first" or second != "second":
+            raise AssertionError(f"Expected 'first' then 'second', got {first!r} then {second!r}")
+
+    _clean_state()
+    return
+
+
+def test_setup_cache_disabled_reloads_modified_template():
+    """
+        Test that with caching disabled every render reloads the template, so
+        a modified file is picked up even without auto_reload.
+    """
+    _clean_state()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _write_template(tmpdir, "page.html", "first")
+
+        config = TemplateConfig(directories=[tmpdir], cache_enabled=False, auto_reload=False)
+        renderer = setup_templating(config)
+
+        first = renderer.render("page.html")
+
+        _write_template(tmpdir, "page.html", "second")
+
+        second = renderer.render("page.html")
+
+        if first != "first" or second != "second":
+            raise AssertionError(f"Expected 'first' then 'second', got {first!r} then {second!r}")
+
+        if renderer.cache.size != 0:
+            raise AssertionError(f"Expected nothing cached when caching is disabled, got {renderer.cache.size}")
 
     _clean_state()
     return

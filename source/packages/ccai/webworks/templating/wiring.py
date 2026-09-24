@@ -5,7 +5,8 @@
     convenience functions for setting up and tearing down the template
     system. The setup function registers built-in engine adapters,
     registers built-in filters, configures the template loader and
-    cache, and returns a ready-to-use TemplateRenderer.
+    cache, and returns a ready-to-use TemplateRenderer that renders
+    named templates through that loader and cache.
 
     The teardown function cleans up the registry state, which is
     primarily useful for testing.
@@ -59,9 +60,15 @@ def setup_templating(config: Optional[TemplateConfig] = None) -> TemplateRendere
         2. Sets Jinja2 as the default engine.
         3. Creates an engine instance from the configuration.
         4. Registers all BUILTIN_FILTERS with the engine.
-        5. Configures a TemplateLoader from the config directories.
-        6. Configures a TemplateCache from the config settings.
-        7. Returns a configured TemplateRenderer.
+        5. Configures a TemplateLoader from the config directories,
+           extensions and encoding.
+        6. Configures a TemplateCache from the config settings. When
+           ``cache_enabled`` is False the cache has a size of 0, so every
+           render reloads and recompiles the template.
+        7. Returns a TemplateRenderer wired to the engine, the loader and
+           the cache: a named template is resolved by the loader (a name
+           without an extension is tried with each configured extension),
+           compiled by the engine, and reused from the cache.
 
         If no config is provided, a default TemplateConfig is used.
 
@@ -112,8 +119,9 @@ def setup_templating(config: Optional[TemplateConfig] = None) -> TemplateRendere
         engine_kwargs["auto_reload"] = config.auto_reload
         engine_kwargs["undefined_behavior"] = config.undefined_behavior
         # Note: config.extensions contains file extensions (e.g. ".html"),
-        # NOT Jinja2 extension modules.  Jinja2 extensions should be
-        # passed via engine_options if needed.
+        # NOT Jinja2 extension modules; they go to the TemplateLoader
+        # below.  Jinja2 extensions should be passed via engine_options
+        # if needed.
 
     # Merge any extra engine_options from config
     engine_kwargs.update(config.engine_options)
@@ -139,15 +147,19 @@ def setup_templating(config: Optional[TemplateConfig] = None) -> TemplateRendere
             auto_reload=config.auto_reload,
         )
     else:
-        # Disabled cache: use a minimal cache with auto_reload so
-        # templates are always reloaded (development mode).
+        # Disabled cache (development mode): a TemplateCache with a
+        # max_size of 0 stores nothing, so every render reloads and
+        # recompiles the template.
         cache = TemplateCache(
-            max_size=1,
+            max_size=0,
             auto_reload=True,
         )
 
-    # Build and return the renderer
-    renderer = TemplateRenderer(engine=engine)
+    # Build and return the renderer. The loader and cache are what make
+    # config.extensions and the cache settings take effect: the renderer
+    # resolves names through the loader and keeps compiled templates in
+    # the cache (template_name -> Loader -> Cache -> Engine).
+    renderer = TemplateRenderer(engine=engine, loader=loader, cache=cache)
 
     return renderer
 

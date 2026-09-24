@@ -76,6 +76,21 @@ def mark_handler(handler: Any, descriptor: "EndpointDescriptor") -> None:
 ENDPOINT_DECLARED_ATTR = "__webworks_declared_descriptors__"
 
 
+#: Key in :attr:`EndpointDescriptor.extras` recording the base path a child
+#: was composed under when ``attach_child`` was given a ``parent_placement``
+#: -- the descriptor the parent itself received when it was attached to its
+#: own parent. Nested blueprints use it to place their children under the
+#: whole chain of prefixes, from the root down::
+#:
+#:     v1_placement = RootBlueprint.attach_child(V1Blueprint)      # /api/v1
+#:     V1Blueprint.attach_child(UsersEndpoint,
+#:                              parent_placement=v1_placement)     # /api/v1/users
+#:
+#: The value is a plain string, so descriptors stay serializable for
+#: documentation exports.
+ENDPOINT_PARENT_PLACEMENT_EXTRA = "parent_placement_path"
+
+
 def declare_on_class(owner: Any, descriptor: "EndpointDescriptor") -> None:
     """
         Record a descriptor on the class it was declared through.

@@ -637,3 +637,88 @@ def test_clear_cache_can_be_called_multiple_times():
         raise AssertionError("Cache should be cleared")
     
     return
+
+
+# =============================================================================
+# compile_template() / render_compiled*() Default Implementation Tests
+# =============================================================================
+
+def test_compile_template_methods_are_not_abstract():
+    """
+        Test that the compile/render-compiled hooks have default
+        implementations, so existing engines need not implement them.
+    """
+    hook_names = [
+        "compile_template",
+        "render_compiled",
+        "render_compiled_async",
+        "render_compiled_stream",
+    ]
+    
+    for hook_name in hook_names:
+        if hook_name in TemplateEngine.__abstractmethods__:
+            raise AssertionError(f"{hook_name} should not be an abstract method")
+    
+    return
+
+
+def test_compile_template_default_keeps_source():
+    """
+        Test that the default compile_template() returns the source itself.
+    """
+    engine = MockTemplateEngine()
+    
+    compiled = engine.compile_template("Hello {{ name }}!", template_name="hello.html")
+    
+    if compiled != "Hello {{ name }}!":
+        raise AssertionError(f"Expected the template source, got {compiled!r}")
+    
+    return
+
+
+def test_render_compiled_default_uses_render_string():
+    """
+        Test that the default render_compiled() renders the kept source with
+        render_string().
+    """
+    engine = MockTemplateEngine()
+    
+    compiled = engine.compile_template("Hello {{ name }}!", template_name="hello.html")
+    result = engine.render_compiled(compiled, {"name": "World"})
+    
+    if result != "Hello World!":
+        raise AssertionError(f"Expected 'Hello World!', got {result!r}")
+    
+    return
+
+
+def test_render_compiled_async_default_falls_back_to_sync():
+    """
+        Test that the default render_compiled_async() renders like
+        render_compiled().
+    """
+    engine = MockTemplateEngine()
+    
+    compiled = engine.compile_template("Hello {{ name }}!", template_name="hello.html")
+    result = asyncio.run(engine.render_compiled_async(compiled, {"name": "Async"}))
+    
+    if result != "Hello Async!":
+        raise AssertionError(f"Expected 'Hello Async!', got {result!r}")
+    
+    return
+
+
+def test_render_compiled_stream_default_yields_single_chunk():
+    """
+        Test that the default render_compiled_stream() yields the rendered
+        output as one chunk.
+    """
+    engine = MockTemplateEngine()
+    
+    compiled = engine.compile_template("Hello {{ name }}!", template_name="hello.html")
+    chunks = list(engine.render_compiled_stream(compiled, {"name": "Stream"}))
+    
+    if chunks != ["Hello Stream!"]:
+        raise AssertionError(f"Expected ['Hello Stream!'], got {chunks!r}")
+    
+    return

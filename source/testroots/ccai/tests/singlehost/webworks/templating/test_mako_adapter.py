@@ -840,6 +840,114 @@ def test_render_works_after_clear_cache():
 
 
 # =============================================================================
+# compile_template() / render_compiled() Tests
+# =============================================================================
+
+def test_compile_template_and_render_compiled():
+    """
+        Test that a template compiled from source renders with the context
+        and the registered globals, escaping by default.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        adapter.add_global("site", "Portal")
+        
+        compiled = adapter.compile_template("${site}: ${value}", template_name="page.html")
+        result = adapter.render_compiled(compiled, {"value": "<b>"})
+        
+        if result != "Portal: &lt;b&gt;":
+            raise AssertionError(f"Expected 'Portal: &lt;b&gt;', got {result!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_compile_template_uses_name_as_uri_for_inherit():
+    """
+        Test that a compiled template inherits a parent the lookup resolves
+        relative to the template name.
+    """
+    temp_dir = _create_temp_template_dir({
+        "pages/base.html": "<main>${self.body()}</main>"
+    })
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        
+        compiled = adapter.compile_template(
+            '<%inherit file="base.html"/>${title}',
+            template_name="pages/child.html"
+        )
+        result = adapter.render_compiled(compiled, {"title": "Home"})
+        
+        if result != "<main>Home</main>":
+            raise AssertionError(f"Expected '<main>Home</main>', got {result!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_compiled_reports_missing_parent():
+    """
+        Test that a missing inherit target raises TemplateError naming the
+        missing template, as render() reports it.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        
+        compiled = adapter.compile_template('<%inherit file="missing.html"/>', template_name="child.html")
+        
+        raised = None
+        try:
+            adapter.render_compiled(compiled, {})
+        except TemplateError as exc:
+            raised = exc
+        
+        if raised is None:
+            raise AssertionError("Expected TemplateError for a missing parent template")
+        
+        if "missing.html" not in str(raised):
+            raise AssertionError(f"Expected the missing template's name in the error, got {raised}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_compile_template_syntax_error_names_template():
+    """
+        Test that a syntax error while compiling raises TemplateError naming
+        the template.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        
+        raised = None
+        try:
+            adapter.compile_template("% if x:\nunterminated", template_name="broken.html")
+        except TemplateError as exc:
+            raised = exc
+        
+        if raised is None:
+            raise AssertionError("Expected TemplateError for a syntax error")
+        
+        if "broken.html" not in str(raised):
+            raise AssertionError(f"Expected the template name in the error, got {raised}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+# =============================================================================
 # Export Tests
 # =============================================================================
 

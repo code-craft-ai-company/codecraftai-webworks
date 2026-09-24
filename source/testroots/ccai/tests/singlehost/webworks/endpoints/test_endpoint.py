@@ -664,6 +664,92 @@ def test_attach_child_default_tags_behavior():
     return
 
 
+def test_attach_child_parent_placement_composes_nested_prefix():
+    """Test that Endpoint.attach_child composes a nested child under the parent's placement."""
+    
+    class RootEndpoint(Endpoint):
+        base_path = "/api"
+        access_policy = AccessPolicy(roles=["user"])
+        tags = ["api"]
+    
+    class V1Endpoint(Endpoint):
+        base_path = "/v1"
+    
+    class UsersEndpoint(Endpoint):
+        base_leaf = "users"
+    
+    v1_desc = RootEndpoint.attach_child(V1Endpoint)
+    users_desc = V1Endpoint.attach_child(UsersEndpoint, parent_placement=v1_desc)
+    
+    if v1_desc.path != "/api/v1":
+        raise AssertionError(f"Expected path='/api/v1', got {v1_desc.path}")
+    
+    if users_desc.path != "/api/v1/users":
+        raise AssertionError(f"Expected path='/api/v1/users', got {users_desc.path}")
+    
+    if users_desc.constraints.access_policy is None or users_desc.constraints.access_policy.roles != ("user",):
+        raise AssertionError(f"Expected Root's policy to cascade, got {users_desc.constraints.access_policy}")
+    
+    if users_desc.tags != ["api"]:
+        raise AssertionError(f"Expected Root's tags to cascade, got {users_desc.tags}")
+    
+    # Single-level behavior is unchanged without a placement
+    standalone_desc = V1Endpoint.attach_child(UsersEndpoint)
+    if standalone_desc.path != "/v1/users":
+        raise AssertionError(f"Expected path='/v1/users', got {standalone_desc.path}")
+    
+    return
+
+
+def test_attach_child_parent_placement_with_rest_blueprint():
+    """Test that RestBlueprint (which uses Endpoint.attach_child) composes nested prefixes."""
+    
+    from ccai.webworks.endpoints.restblueprint import RestBlueprint
+    
+    class ApiBlueprint(RestBlueprint):
+        base_path = "/api"
+    
+    class PortalBlueprint(RestBlueprint):
+        base_leaf = "magic"
+    
+    class PortalEndpoint(Endpoint):
+        base_leaf = "portals"
+    
+    portal_placement = ApiBlueprint.attach_child(PortalBlueprint)
+    portals_desc = PortalBlueprint.attach_child(PortalEndpoint, parent_placement=portal_placement)
+    
+    if portals_desc.path != "/api/magic/portals":
+        raise AssertionError(f"Expected path='/api/magic/portals', got {portals_desc.path}")
+    
+    return
+
+
+def test_attach_child_parent_placement_with_leaf_only():
+    """Test that a placement carrying only a leaf (parent without a base) is composed as /<leaf>."""
+    
+    class RootEndpoint(Endpoint):
+        pass
+    
+    class V1Endpoint(Endpoint):
+        base_leaf = "v1"
+    
+    class UsersEndpoint(Endpoint):
+        base_leaf = "users"
+    
+    # Root has no base, so attaching V1 under a leaf override yields a
+    # placement that carries only that leaf.
+    v1_desc = RootEndpoint.attach_child(V1Endpoint, leaf="version1")
+    users_desc = V1Endpoint.attach_child(UsersEndpoint, parent_placement=v1_desc)
+    
+    if v1_desc.path is not None or v1_desc.leaf != "version1":
+        raise AssertionError(f"Expected a leaf-only placement, got path={v1_desc.path}, leaf={v1_desc.leaf}")
+    
+    if users_desc.path != "/version1/users":
+        raise AssertionError(f"Expected path='/version1/users', got {users_desc.path}")
+    
+    return
+
+
 # =============================================================================
 # BUG-1 Regression: _dataclass_to_schema required-field detection
 # =============================================================================

@@ -18,7 +18,7 @@ from ccai.webworks.templating.exceptions import (
     TemplateError,
     TemplateNotFoundError,
 )
-from ccai.webworks.templating.jinja2_adapter import Jinja2Adapter
+from ccai.webworks.templating.jinja2_adapter import Jinja2Adapter, Jinja2CompiledTemplate
 
 
 # =============================================================================
@@ -1067,6 +1067,269 @@ def test_strict_undefined_raises_error():
             raise AssertionError("Should raise TemplateError for undefined variable")
         except TemplateError:
             pass  # Expected
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+# =============================================================================
+# Environment Cache Size Tests
+# =============================================================================
+
+def test_cache_size_zero_disables_environment_cache():
+    """
+        Test that cache_size=0 reaches the Jinja2 Environment, which then keeps
+        no compiled-template cache (what a disabled TemplateConfig cache asks for).
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir], cache_size=0)
+        
+        if adapter._environment.cache is not None:
+            raise AssertionError(
+                f"Expected no Jinja2 environment cache for cache_size=0, got {adapter._environment.cache!r}"
+            )
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_cache_size_sets_environment_cache_capacity():
+    """
+        Test that a positive cache_size becomes the Jinja2 Environment's cache
+        capacity.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir], cache_size=7)
+        
+        capacity = adapter._environment.cache.capacity
+        if capacity != 7:
+            raise AssertionError(f"Expected environment cache capacity 7, got {capacity}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_cache_size_zero_reloads_modified_template():
+    """
+        Test that with cache_size=0 a modified template is picked up on the
+        next render.
+    """
+    temp_dir = _create_temp_template_dir({
+        "page.html": "first"
+    })
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir], cache_size=0)
+        
+        first = adapter.render("page.html", {})
+        
+        with open(os.path.join(temp_dir, "page.html"), "w", encoding="utf-8") as f:
+            f.write("second")
+        
+        second = adapter.render("page.html", {})
+        
+        if first != "first" or second != "second":
+            raise AssertionError(f"Expected 'first' then 'second', got {first!r} then {second!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+# =============================================================================
+# compile_template() / render_compiled*() Tests
+# =============================================================================
+
+def test_compile_template_returns_compiled_template():
+    """
+        Test that compile_template() returns a Jinja2CompiledTemplate that
+        carries the name, filename and source.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        compiled = adapter.compile_template(
+            "Hello {{ name }}!",
+            template_name="hello.html",
+            filename="/templates/hello.html"
+        )
+        
+        if not isinstance(compiled, Jinja2CompiledTemplate):
+            raise AssertionError(f"Expected Jinja2CompiledTemplate, got {type(compiled)}")
+        
+        if compiled.template_name != "hello.html":
+            raise AssertionError(f"Expected template_name 'hello.html', got {compiled.template_name!r}")
+        
+        if compiled.filename != "/templates/hello.html":
+            raise AssertionError(f"Expected the filename to be kept, got {compiled.filename!r}")
+        
+        if compiled.source != "Hello {{ name }}!":
+            raise AssertionError(f"Expected the source to be kept, got {compiled.source!r}")
+        
+        if compiled.async_template is not None:
+            raise AssertionError("The async variant should not be compiled until it is needed")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_compiled_renders_and_escapes():
+    """
+        Test that render_compiled() renders a compiled .html template with
+        auto-escaping, like render() does for the same template.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        compiled = adapter.compile_template("<p>{{ value }}</p>", template_name="page.html")
+        result = adapter.render_compiled(compiled, {"value": "<b>"})
+        
+        if result != "<p>&lt;b&gt;</p>":
+            raise AssertionError(f"Expected '<p>&lt;b&gt;</p>', got {result!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_compiled_resolves_extends_through_environment():
+    """
+        Test that a compiled template extends a parent the environment loads
+        from the template directories.
+    """
+    temp_dir = _create_temp_template_dir({
+        "base.html": "<main>{% block content %}{% endblock %}</main>"
+    })
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        source = '{% extends "base.html" %}{% block content %}{{ title }}{% endblock %}'
+        compiled = adapter.compile_template(source, template_name="child.html")
+        result = adapter.render_compiled(compiled, {"title": "Home"})
+        
+        if result != "<main>Home</main>":
+            raise AssertionError(f"Expected '<main>Home</main>', got {result!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_compiled_raises_template_not_found_for_missing_parent():
+    """
+        Test that a missing extends target raises TemplateNotFoundError.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        compiled = adapter.compile_template('{% extends "missing.html" %}', template_name="child.html")
+        
+        raised = None
+        try:
+            adapter.render_compiled(compiled, {})
+        except TemplateNotFoundError as exc:
+            raised = exc
+        
+        if raised is None:
+            raise AssertionError("Expected TemplateNotFoundError for a missing parent template")
+        
+        if raised.template_name != "missing.html":
+            raise AssertionError(f"Expected the missing template's name, got {raised.template_name!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_compile_template_syntax_error_names_template():
+    """
+        Test that a syntax error while compiling raises TemplateError naming
+        the template.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        raised = None
+        try:
+            adapter.compile_template("{% if %}", template_name="broken.html")
+        except TemplateError as exc:
+            raised = exc
+        
+        if raised is None:
+            raise AssertionError("Expected TemplateError for a syntax error")
+        
+        if "broken.html" not in str(raised):
+            raise AssertionError(f"Expected the template name in the error, got {raised}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_compiled_async_uses_async_environment():
+    """
+        Test that render_compiled_async() renders with the async environment
+        (an async filter is awaited) and keeps the async variant for reuse.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        async def shout(value):
+            return str(value).upper()
+        
+        adapter.add_filter("shout", shout)
+        
+        compiled = adapter.compile_template("{{ name|shout }}", template_name="async.html")
+        
+        first = asyncio.run(adapter.render_compiled_async(compiled, {"name": "one"}))
+        async_template = compiled.async_template
+        second = asyncio.run(adapter.render_compiled_async(compiled, {"name": "two"}))
+        
+        if first != "ONE" or second != "TWO":
+            raise AssertionError(f"Expected 'ONE' and 'TWO', got {first!r} and {second!r}")
+        
+        if async_template is None or compiled.async_template is not async_template:
+            raise AssertionError("The async variant should be compiled once and reused")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_compiled_stream_yields_chunks():
+    """
+        Test that render_compiled_stream() yields the rendered output.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        compiled = adapter.compile_template("{% for i in items %}{{ i }},{% endfor %}", template_name="list.html")
+        chunks = list(adapter.render_compiled_stream(compiled, {"items": [1, 2, 3]}))
+        result = "".join(chunks)
+        
+        if result != "1,2,3,":
+            raise AssertionError(f"Expected '1,2,3,', got {result!r}")
     finally:
         _cleanup_temp_dir(temp_dir)
     

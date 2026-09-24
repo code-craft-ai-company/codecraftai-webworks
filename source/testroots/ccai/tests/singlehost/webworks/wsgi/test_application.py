@@ -953,22 +953,29 @@ def test_property_exception_propagation():
         environ2 = generate_random_environ()
         start_response2 = MockStartResponse()
         
+        # The HTTPException must be handled, not propagated. Only that type is
+        # caught, and the status checks sit outside the try, so a wrong status
+        # is reported as a wrong status (not as a propagated exception) and any
+        # other exception surfaces as itself.
+        propagated_http_exc: Optional[HTTPException] = None
         try:
             result2 = app2(environ2, start_response2)
             list(result2)
+        except HTTPException as exc:
+            propagated_http_exc = exc
             
-            # Should have called start_response with the HTTPException status
-            if start_response2.status is None:
-                errmsg = f"Iteration {iteration}: start_response not called after HTTPException"
-                raise AssertionError(errmsg)
+        if propagated_http_exc is not None:
+            errmsg = f"Iteration {iteration}: HTTPException should be handled, not propagated: {propagated_http_exc}"
+            raise AssertionError(errmsg) from propagated_http_exc
             
-            expected_status_prefix = str(http_status)
-            if not start_response2.status.startswith(expected_status_prefix):
-                errmsg = f"Iteration {iteration}: Expected {http_status} status for HTTPException, got '{start_response2.status}'"
-                raise AssertionError(errmsg)
+        # Should have called start_response with the HTTPException status
+        if start_response2.status is None:
+            errmsg = f"Iteration {iteration}: start_response not called after HTTPException"
+            raise AssertionError(errmsg)
             
-        except Exception as exc:
-            errmsg = f"Iteration {iteration}: HTTPException should be handled, not propagated: {exc}"
+        expected_status_prefix = str(http_status)
+        if not start_response2.status.startswith(expected_status_prefix):
+            errmsg = f"Iteration {iteration}: Expected {http_status} status for HTTPException, got '{start_response2.status}'"
             raise AssertionError(errmsg)
     
     return

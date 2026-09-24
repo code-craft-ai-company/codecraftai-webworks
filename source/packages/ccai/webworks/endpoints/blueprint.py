@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Type, TypeVar
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.constraints import EndpointConstraints
 from ccai.webworks.endpoints.descriptor import (
+    ENDPOINT_PARENT_PLACEMENT_EXTRA,
     declare_on_class,
     EndpointDescriptor,
     mark_handler
@@ -202,6 +203,15 @@ class Blueprint(Endpoint):
         base = cls._get_base_path()
         
         for descriptor in all_descriptors:
+            # A child this blueprint attached under one of its own parent
+            # placements (nested attach_child) lives below that placement,
+            # not below this class's own base, so the base-path check below
+            # would drop it. It was declared on this class by attach_child,
+            # so it belongs to this blueprint.
+            if ENDPOINT_PARENT_PLACEMENT_EXTRA in descriptor.extras:
+                blueprint_descriptors.append(descriptor)
+                continue
+            
             # Check if descriptor's path starts with our base path
             desc_path = descriptor.path
             if desc_path is None and descriptor.leaf is not None:
@@ -250,6 +260,30 @@ class Blueprint(Endpoint):
         """
         base = cls._get_base_path()
         
+        rtnval = cls._compose_path_from_base(base=base, leaf=leaf, path=path)
+        return rtnval
+    
+    @classmethod
+    def _compose_path_from_base(
+        cls,
+        base: Optional[str],
+        leaf: Optional[str],
+        path: Optional[str]
+    ) -> str:
+        """
+            Compose the full path from a given base and a child leaf/path.
+            
+            Applies the composition rules of :meth:`_compose_path` to an
+            explicit base, so a nested blueprint can compose its children
+            under the path its own parent placed it at.
+            
+            :param base: The base path (already stripped of a trailing
+                         slash), or None when there is no base.
+            :param leaf: Child leaf segment.
+            :param path: Child full path (if provided, may override composition).
+            
+            :returns: Composed full path string.
+        """
         # Handle case where child provides an absolute path that should override
         # If path starts with / and we have no base, use it directly
         if path is not None:
@@ -549,6 +583,7 @@ class Blueprint(Endpoint):
         tags: Optional[List[str]] = None,
         access_policy: Optional[AccessPolicy] = None,
         rate_limit: Optional[RateLimit] = None,
+        parent_placement: Optional[EndpointDescriptor] = None,
         **kwargs
     ) -> EndpointDescriptor:
         """
@@ -562,6 +597,22 @@ class Blueprint(Endpoint):
             The method preserves child class attributes when overrides are
             not provided, and applies overrides only to specified attributes.
             
+            Nested blueprints: attaching a blueprint to a parent returns the
+            descriptor that places it (for example ``/api/v1`` for a
+            ``/v1`` blueprint under an ``/api`` root). Passing that
+            descriptor back as ``parent_placement`` lets the nested
+            blueprint attach its own children under the parent's prefix::
+            
+                v1_placement = RootBlueprint.attach_child(V1Blueprint)
+                V1Blueprint.attach_child(UsersEndpoint, parent_placement=v1_placement)
+                # -> /api/v1/users
+            
+            The child then inherits the placement's merged access policy,
+            rate limit, tags and version (every level from the root down)
+            rather than only this class's own; this blueprint's merge flags
+            still apply. Without ``parent_placement`` the behavior is the
+            single-level one: relative to this blueprint's own base.
+            
             :param child_endpoint: The child endpoint class to attach.
             :param leaf: Override for child's leaf (relative to parent base).
             :param path: Override for child's path (relative to parent base).
@@ -570,9 +621,16 @@ class Blueprint(Endpoint):
             :param tags: Override for child's tags.
             :param access_policy: Override for child's access policy.
             :param rate_limit: Override for child's rate limit.
+            :param parent_placement: The descriptor this blueprint received
+                when it was attached to its own parent. When given, the
+                child is placed under that descriptor's path and inherits
+                its constraints, tags and version.
             :param kwargs: Additional overrides for child descriptor.
             
             :returns: The merged EndpointDescriptor for the child.
+            
+            :raises EndpointRegistrationError: If ``parent_placement`` has
+                neither a path nor a leaf to compose under.
             
             Requirements: 4.2, 4.3, 4.5, 4.6, 6.5, 6.6
         """
@@ -586,9 +644,33 @@ class Blueprint(Endpoint):
         if child_path is None:
             child_path = getattr(child_endpoint, "path", None)
         
+        # Step 1b: Determine what the child inherits from its parent: this
+        # blueprint's own attributes, or -- when this blueprint is nested
+        # under another parent -- the placement that parent gave it, which
+        # already carries the prefixes and constraints of every level above.
+        placement_base: Optional[str] = None
+        if parent_placement is None:
+            parent_version = cls.version
+            parent_tags_list = list(cls.tags) if cls.tags else []
+            parent_access_policy = cls.access_policy
+            parent_rate_limit = cls.rate_limit
+        else:
+            placement_base = cls._placement_base_path(parent_placement)
+            parent_version = parent_placement.version
+            parent_tags_list = list(parent_placement.tags) if parent_placement.tags else []
+            parent_access_policy = parent_placement.constraints.access_policy
+            parent_rate_limit = parent_placement.constraints.rate_limit
+        
         # Step 2: Compose path relative to parent base_path/base_leaf
         # This handles the path composition per Requirements 4.3, 4.4
-        composed_path = cls._compose_path(leaf=child_leaf, path=child_path)
+        if parent_placement is None:
+            composed_path = cls._compose_path(leaf=child_leaf, path=child_path)
+        else:
+            composed_path = cls._compose_path_from_base(
+                base=placement_base,
+                leaf=child_leaf,
+                path=child_path
+            )
         
         # Step 3: Determine child's methods
         # Use override if provided, otherwise use child's class attribute
@@ -601,12 +683,11 @@ class Blueprint(Endpoint):
         if child_version is None:
             child_version = getattr(child_endpoint, "version", None)
         if child_version is None:
-            child_version = cls.version
+            child_version = parent_version
         
         # Step 5: Merge tags using ConstraintMerger
         # Use override if provided, otherwise use child's class attribute
         child_tags_list = tags if tags is not None else list(child_endpoint.tags)
-        parent_tags_list = list(cls.tags) if cls.tags else []
         
         merged_tags = ConstraintMerger.merge_tags(
             parent=parent_tags_list,
@@ -620,7 +701,7 @@ class Blueprint(Endpoint):
         child_access_policy = access_policy if access_policy is not None else child_endpoint.access_policy
         
         merged_access_policy = ConstraintMerger.merge_access_policies(
-            parent=cls.access_policy,
+            parent=parent_access_policy,
             child=child_access_policy,
             replace_roles=cls.replace_roles,
             replace_scopes=cls.replace_scopes
@@ -631,7 +712,7 @@ class Blueprint(Endpoint):
         child_rate_limit = rate_limit if rate_limit is not None else child_endpoint.rate_limit
         
         merged_rate_limit = ConstraintMerger.merge_rate_limits(
-            parent=cls.rate_limit,
+            parent=parent_rate_limit,
             child=child_rate_limit
         )
         
@@ -649,6 +730,11 @@ class Blueprint(Endpoint):
         # Store serializers if child has them
         if child_endpoint.serializers:
             extras_dict["serializers"] = dict(child_endpoint.serializers)
+        
+        # Record the base a nested child was composed under; register()
+        # uses it to keep the child with this blueprint.
+        if parent_placement is not None:
+            extras_dict[ENDPOINT_PARENT_PLACEMENT_EXTRA] = placement_base
         
         # Step 10: Create a placeholder handler for the child descriptor
         # The actual handler will be set when the child is decorated

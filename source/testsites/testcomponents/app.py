@@ -17,13 +17,15 @@ from ccai.webworks.webapplication import establish_webapp_persona
 from ccai.webworks.webapplication import reset_webapp_persona
 from ccai.webworks.wellknown import ThisWebApplicationSingleton
 
-# Importing the handlers module triggers Endpoint.attach_at registration
-# for the landing page and the static asset route.
-from testcomponents.endpoints import handlers  # noqa: F401
+# Import the endpoint handlers for the landing page and the static asset
+# route. The import only declares them -- the application claims them
+# below via registry.collect_from.
+from testcomponents.endpoints import handlers
 
-# Importing the blueprints package triggers RestBlueprint.attach_at
-# registration for every component group blueprint.
-from testcomponents.endpoints import blueprints  # noqa: F401
+# Import the component group blueprints. Like the handlers, the import only
+# declares their routes; the application claims every group blueprint module
+# (blueprints.BLUEPRINT_MODULES) below via registry.collect_from.
+from testcomponents.endpoints import blueprints
 
 
 # Establish the persona with a presence directory under .output/testsites.
@@ -46,8 +48,12 @@ webapp = establish_webapp_persona(
 
 # Declare which endpoints belong to this application. Registration is
 # explicit and per-application, so the three testsites in this process
-# no longer contend for one endpoint map -- each collects its own.
-webapp.registry.collect_from(handlers)
+# no longer contend for one endpoint map -- each collects its own. The
+# landing page and static routes come from the handlers module, and the
+# group index and component test pages from each group blueprint module
+# (collect_from does not follow a package's submodules, so the blueprint
+# modules are passed individually).
+webapp.registry.collect_from(handlers, *blueprints.BLUEPRINT_MODULES)
 
 webapp.startup()
 

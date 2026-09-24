@@ -629,8 +629,23 @@ def test_property_graceful_shutdown():
         server.shutdown(graceful=True)
         shutdown_duration = time.time() - start_shutdown
         
+        # Graceful shutdown waits at most graceful_timeout for the workers to
+        # exit and then force-kills the rest, so it must return within that
+        # timeout plus a margin for signalling, reaping and scheduling. The
+        # margin matches the immediate-shutdown bound and the join below.
+        shutdown_margin = 5.0
+        max_shutdown_duration = graceful_timeout + shutdown_margin
+        
         # Wait for server thread to finish
-        server_thread.join(timeout=graceful_timeout + 5.0)
+        server_thread.join(timeout=graceful_timeout + shutdown_margin)
+        
+        # Verify shutdown respected the graceful timeout
+        if shutdown_duration > max_shutdown_duration:
+            errmsg = (
+                f"Iteration {iteration}: Graceful shutdown took {shutdown_duration:.2f}s, "
+                f"longer than graceful_timeout={graceful_timeout}s plus a {shutdown_margin:.1f}s margin"
+            )
+            raise AssertionError(errmsg)
         
         # Verify server stopped
         if server.is_running is True:

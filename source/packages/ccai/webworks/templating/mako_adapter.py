@@ -10,6 +10,11 @@
     The adapter creates and manages a Mako TemplateLookup with configurable
     options for template directories, auto-escaping, module directory for
     compiled templates, encoding, and default filters.
+    
+    Templates located by a TemplateLoader are compiled with
+    :meth:`MakoAdapter.compile_template`; the compiled Mako template can be
+    held in a TemplateCache and rendered repeatedly with
+    :meth:`MakoAdapter.render_compiled`.
 """
 
 from typing import Any, Callable, Dict, Optional
@@ -17,6 +22,8 @@ from typing import Any, Callable, Dict, Optional
 from mako import exceptions as mako_exceptions
 from mako.lookup import TemplateLookup
 from mako.template import Template
+
+from ccai.errors.exceptions import ConfigurationError, SemanticError
 
 from ccai.webworks.templating.engine import TemplateEngine
 from ccai.webworks.templating.exceptions import (
@@ -180,6 +187,78 @@ class MakoAdapter(TemplateEngine):
                 f"Render error in template string: {exc}"
             ) from exc
 
+    def compile_template(
+        self,
+        template_source: str,
+        template_name: str,
+        filename: Optional[str] = None
+    ) -> Template:
+        """
+            Compile template source that was loaded by a TemplateLoader.
+            
+            The source is compiled with ``template_name`` as its URI and with
+            this adapter's lookup, default filters and encoding, so the result
+            behaves like a template the lookup loaded by name: ``inherit`` /
+            ``include`` / ``namespace`` references resolve relative to it.
+            
+            :param template_source: Template source code read by the loader.
+            :param template_name: Resolved template name, used as the URI.
+            :param filename: Full filesystem path of the template, if known.
+            
+            :returns: The compiled Mako template.
+            
+            :raises TemplateError: If the template contains syntax errors.
+        """
+        try:
+            template = Template(
+                text=template_source,
+                uri=template_name,
+                filename=filename,
+                default_filters=self._default_filters,
+                input_encoding=self._encoding,
+                lookup=self._lookup,
+            )
+        except (mako_exceptions.SyntaxException, mako_exceptions.CompileException) as exc:
+            raise TemplateError(
+                f"Syntax error in '{template_name}': {exc}"
+            ) from exc
+        
+        return template
+    
+    def render_compiled(
+        self,
+        compiled_template: Template,
+        context: Dict[str, Any]
+    ) -> str:
+        """
+            Render a template returned by :meth:`compile_template`.
+            
+            Global variables are merged into the context before rendering,
+            as :meth:`render` does.
+            
+            :param compiled_template: The compiled Mako template.
+            :param context: Dictionary of variables to pass to the template.
+            
+            :returns: Rendered template as a string.
+            
+            :raises TemplateError: If rendering fails, including when a
+                template it inherits or includes cannot be located (the
+                message names the missing URI), as :meth:`render` reports it.
+        """
+        merged_context = dict(self._globals)
+        merged_context.update(context)
+        
+        try:
+            rendered = compiled_template.render(**merged_context)
+        except (TemplateError, SemanticError, ConfigurationError):
+            raise
+        except Exception as exc:
+            raise TemplateError(
+                f"Render error in '{compiled_template.uri}': {exc}"
+            ) from exc
+        
+        return rendered
+    
     def add_filter(
         self,
         name: str,

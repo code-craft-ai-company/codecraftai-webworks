@@ -16,7 +16,12 @@ import shutil
 import string
 import tempfile
 
+from typing import Any, Optional
+
+from ccai.webworks.templating.cache import TemplateCache
+from ccai.webworks.templating.exceptions import TemplateNotFoundError
 from ccai.webworks.templating.jinja2_adapter import Jinja2Adapter
+from ccai.webworks.templating.loader import TemplateLoader
 from ccai.webworks.templating.renderer import TemplateRenderer
 
 
@@ -45,6 +50,60 @@ def _create_temp_template_dir(templates: dict) -> str:
             f.write(content)
     
     return temp_dir
+
+
+class _CountingJinja2Adapter(Jinja2Adapter):
+    """
+        Jinja2Adapter that counts compile_template() calls, so a test can see
+        whether a render compiled the template or reused a cached one.
+    """
+    
+    def __init__(self, template_dirs: list) -> None:
+        """
+            Construct the adapter.
+            
+            :param template_dirs: Directories to search for templates.
+        """
+        super().__init__(template_dirs=template_dirs)
+        self.compile_count = 0
+        return
+    
+    def compile_template(
+        self,
+        template_source: str,
+        template_name: str,
+        filename: Optional[str] = None
+    ) -> Any:
+        """
+            Count the call and compile as Jinja2Adapter does.
+            
+            :param template_source: Template source code.
+            :param template_name: Resolved template name.
+            :param filename: Template file path.
+            
+            :returns: The compiled template.
+        """
+        self.compile_count += 1
+        compiled = super().compile_template(
+            template_source,
+            template_name=template_name,
+            filename=filename
+        )
+        return compiled
+
+
+def _bump_mtime(path: str) -> None:
+    """
+        Move a file's modification time forward so an auto-reload cache sees
+        it as changed even when the file was rewritten within the file
+        system's timestamp resolution.
+        
+        :param path: Path of the file to touch.
+    """
+    stat_result = os.stat(path)
+    new_mtime = stat_result.st_mtime + 10
+    os.utime(path, (new_mtime, new_mtime))
+    return
 
 
 def _cleanup_temp_dir(temp_dir: str) -> None:
@@ -627,6 +686,277 @@ def test_render_stream_with_context_processor():
         
         if output != "Copyright 2024":
             raise AssertionError(f"Expected 'Copyright 2024', got '{output}'")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+# =============================================================================
+# Loader and Cache Integration Tests
+# =============================================================================
+
+def test_init_without_loader_or_cache():
+    """
+        Test that a renderer built from an engine alone has no loader or cache,
+        so template names go straight to the engine as before.
+    """
+    temp_dir = _create_temp_template_dir({
+        "hello.html": "Hello {{ name }}!"
+    })
+    
+    try:
+        engine = Jinja2Adapter(template_dirs=[temp_dir])
+        renderer = TemplateRenderer(engine)
+        
+        if renderer.loader is not None or renderer.cache is not None:
+            raise AssertionError("Expected no loader and no cache by default")
+        
+        result = renderer.render("hello.html", {"name": "World"})
+        if result != "Hello World!":
+            raise AssertionError(f"Expected 'Hello World!', got {result!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_init_cache_without_loader_raises():
+    """
+        Test that a cache without a loader is rejected: the cache holds what
+        the engine compiled from the loader's source.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        engine = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        raised = None
+        try:
+            TemplateRenderer(engine, cache=TemplateCache())
+        except ValueError as exc:
+            raised = exc
+        
+        if raised is None:
+            raise AssertionError("Expected ValueError for a cache without a loader")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_with_loader_applies_extension():
+    """
+        Test that a renderer with a loader resolves a name without its
+        extension using the loader's configured extensions.
+    """
+    temp_dir = _create_temp_template_dir({
+        "greeting.j2": "Hi {{ name }}"
+    })
+    
+    try:
+        engine = Jinja2Adapter(template_dirs=[temp_dir])
+        loader = TemplateLoader(directories=[temp_dir], extensions=[".j2"])
+        renderer = TemplateRenderer(engine, loader=loader)
+        
+        result = renderer.render("greeting", {"name": "Ada"})
+        
+        if result != "Hi Ada":
+            raise AssertionError(f"Expected 'Hi Ada', got {result!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_with_cache_reuses_compiled_template():
+    """
+        Test that the first render compiles and caches the template and later
+        renders reuse the cached compiled template.
+    """
+    temp_dir = _create_temp_template_dir({
+        "hello.html": "Hello {{ name }}!"
+    })
+    
+    try:
+        engine = _CountingJinja2Adapter(template_dirs=[temp_dir])
+        loader = TemplateLoader(directories=[temp_dir])
+        cache = TemplateCache(max_size=10)
+        renderer = TemplateRenderer(engine, loader=loader, cache=cache)
+        
+        first = renderer.render("hello.html", {"name": "One"})
+        cached = cache.get("hello.html")
+        second = renderer.render("hello", {"name": "Two"})
+        
+        if first != "Hello One!" or second != "Hello Two!":
+            raise AssertionError(f"Unexpected output: {first!r}, {second!r}")
+        
+        if engine.compile_count != 1:
+            raise AssertionError(f"Expected 1 compile, got {engine.compile_count}")
+        
+        if cached is None or cache.get("hello.html") is not cached:
+            raise AssertionError("Expected the same compiled template to stay cached under 'hello.html'")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_with_loader_without_cache_compiles_each_time():
+    """
+        Test that without a cache every render loads and compiles the
+        template, so a modified file is picked up immediately.
+    """
+    temp_dir = _create_temp_template_dir({
+        "page.html": "first"
+    })
+    
+    try:
+        engine = _CountingJinja2Adapter(template_dirs=[temp_dir])
+        loader = TemplateLoader(directories=[temp_dir])
+        renderer = TemplateRenderer(engine, loader=loader)
+        
+        first = renderer.render("page.html")
+        with open(os.path.join(temp_dir, "page.html"), "w", encoding="utf-8") as f:
+            f.write("second")
+        second = renderer.render("page.html")
+        
+        if first != "first" or second != "second":
+            raise AssertionError(f"Expected 'first' then 'second', got {first!r} then {second!r}")
+        
+        if engine.compile_count != 2:
+            raise AssertionError(f"Expected 2 compiles, got {engine.compile_count}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_with_auto_reload_cache_recompiles_modified_template():
+    """
+        Test that an auto-reload cache drops the compiled template when its
+        file changes, and the next render uses the new content.
+    """
+    temp_dir = _create_temp_template_dir({
+        "page.html": "first"
+    })
+    
+    try:
+        engine = _CountingJinja2Adapter(template_dirs=[temp_dir])
+        loader = TemplateLoader(directories=[temp_dir])
+        cache = TemplateCache(max_size=10, auto_reload=True)
+        renderer = TemplateRenderer(engine, loader=loader, cache=cache)
+        
+        first = renderer.render("page.html")
+        unchanged = renderer.render("page.html")
+        
+        template_path = os.path.join(temp_dir, "page.html")
+        with open(template_path, "w", encoding="utf-8") as f:
+            f.write("second")
+        _bump_mtime(template_path)
+        
+        second = renderer.render("page.html")
+        
+        if (first, unchanged, second) != ("first", "first", "second"):
+            raise AssertionError(f"Unexpected outputs: {(first, unchanged, second)!r}")
+        
+        if engine.compile_count != 2:
+            raise AssertionError(f"Expected 2 compiles (initial + after change), got {engine.compile_count}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_with_loader_raises_template_not_found():
+    """
+        Test that a name the loader cannot resolve raises TemplateNotFoundError
+        listing the loader's directories.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        engine = Jinja2Adapter(template_dirs=[temp_dir])
+        loader = TemplateLoader(directories=[temp_dir])
+        renderer = TemplateRenderer(engine, loader=loader, cache=TemplateCache())
+        
+        raised = None
+        try:
+            renderer.render("missing")
+        except TemplateNotFoundError as exc:
+            raised = exc
+        
+        if raised is None:
+            raise AssertionError("Expected TemplateNotFoundError")
+        
+        if raised.searched_paths != [temp_dir]:
+            raise AssertionError(f"Expected searched_paths {[temp_dir]!r}, got {raised.searched_paths!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_async_with_loader_and_cache():
+    """
+        Test that render_async() goes through the loader and cache.
+    """
+    temp_dir = _create_temp_template_dir({
+        "hello.html": "Hello {{ name }}!"
+    })
+    
+    try:
+        engine = _CountingJinja2Adapter(template_dirs=[temp_dir])
+        loader = TemplateLoader(directories=[temp_dir])
+        cache = TemplateCache(max_size=10)
+        renderer = TemplateRenderer(engine, loader=loader, cache=cache)
+        
+        first = asyncio.run(renderer.render_async("hello", {"name": "One"}))
+        second = asyncio.run(renderer.render_async("hello", {"name": "Two"}))
+        
+        if first != "Hello One!" or second != "Hello Two!":
+            raise AssertionError(f"Unexpected output: {first!r}, {second!r}")
+        
+        if engine.compile_count != 1:
+            raise AssertionError(f"Expected 1 compile, got {engine.compile_count}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_stream_with_loader_and_cache():
+    """
+        Test that render_stream() goes through the loader and cache, and looks
+        the template up when iteration starts.
+    """
+    temp_dir = _create_temp_template_dir({
+        "list.html": "{% for i in items %}{{ i }};{% endfor %}"
+    })
+    
+    try:
+        engine = _CountingJinja2Adapter(template_dirs=[temp_dir])
+        loader = TemplateLoader(directories=[temp_dir])
+        cache = TemplateCache(max_size=10)
+        renderer = TemplateRenderer(engine, loader=loader, cache=cache)
+        
+        missing_stream = renderer.render_stream("missing")
+        
+        result = "".join(renderer.render_stream("list", {"items": [1, 2]}))
+        if result != "1;2;":
+            raise AssertionError(f"Expected '1;2;', got {result!r}")
+        
+        if cache.get("list.html") is None:
+            raise AssertionError("Expected the streamed template to be cached")
+        
+        raised = None
+        try:
+            list(missing_stream)
+        except TemplateNotFoundError as exc:
+            raised = exc
+        
+        if raised is None:
+            raise AssertionError("Expected TemplateNotFoundError when the missing stream is iterated")
     finally:
         _cleanup_temp_dir(temp_dir)
     

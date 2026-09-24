@@ -184,6 +184,7 @@ The defaults make it easy to replicate collection behavior, while per-attachment
 - Parents expose `attach_child(child_endpoint, *, leaf=None, path=None, **kwargs)` that copies the child descriptor, optionally overriding placement attributes (`leaf`, `path`) at the moment of attachment. `attach_child` is always relative to the parent’s base leaf/path (e.g., `PortalBlueprint` with `base_path="/api/v1"` plus `attach_child(..., leaf="portals")` yields `/api/v1/portals`).
 - Permitted overrides include `leaf`, `path`, `methods`, `version`, `tags`, `access_policy`, `rate_limit`, and REST-specific schema/doc fields. Attributes not supplied remain as defined on the child endpoint, preserving its self-contained metadata.
 - The application root object (e.g., `App` or `SiteMap`) exposes the same `attach_child` API so you can build the entire tree hierarchically: instantiate the root, attach top-level blueprints/endpoints, then let each child attach its own descendants. This keeps the whole site map declarative and consistent from the root down.
+- A nested child attaches its descendants under the prefix its parent gave it by passing the descriptor it received as `parent_placement`: `v1 = RootBlueprint.attach_child(V1Blueprint)` (`/api/v1`), then `V1Blueprint.attach_child(UsersEndpoint, parent_placement=v1)` yields `/api/v1/users` and inherits the placement's merged policies, rate limits, tags and version. Without `parent_placement`, `attach_child` stays relative to the class's own base.
 - Example workflow:
 
 ```python
