@@ -308,3 +308,33 @@ context_processors.register(make_csrf_context_processor(token_manager))
 
 - Validation results: `csrf_missing_session` when the resolver returns no session, `csrf_token_missing` when the token is absent, `csrf_token_invalid` when it does not match. All three short-circuit with HTTP 403.
 - The context processor returns an empty mapping when the rendering context has no `session_id`, so anonymous renders succeed without a token. Forms protected by CSRF must therefore only be rendered for authenticated users (or use a separate anti-CSRF mechanism such as captcha for purely public submissions).
+
+## Markdown Books
+
+### `ccai.webworks.markdown.MarkdownRenderer`
+- Renders markdown as HTML with no third-party library: CommonMark blocks and inlines (ATX and setext headings, paragraphs, emphasis by the delimiter-run rules, code spans, fenced and indented code, block quotes with lazy continuation, tight and loose lists, inline and reference links and images, autolinks, entities, escapes, hard breaks) plus the GitHub extensions documentation uses: tables with column alignment, `~~strikethrough~~` and links made from bare `http://`, `https://` and `www.` addresses.
+- Output is safe to put in a page: raw HTML in the markdown is escaped, and a link or image whose scheme is not `http`, `https`, `mailto` or `ftp` is written as its text (or description) alone. Table alignment is written as `align-*` classes, not inline styles.
+- `render(text, link_rewriter=None)` returns a `MarkdownDocument`: the HTML, the title (first level-one heading, else first heading), every heading with a GitHub-compatible anchor, and every link with its destination and text in document order. `link_rewriter` replaces each link and image destination as it is written.
+
+### `ccai.webworks.books.BookLibrary`
+- A folder of markdown books. Navigation comes from the links in index documents, never from the folder layout: the library index (`README.md` at the root by default) links to the books; each book's index links to its documents; the order of the links (lists, tables or paragraphs) is the reading order and the link text is the title shown. A folder link means the folder's `README.md` or `index.md`.
+- A book's entries skip the link back to the library index, repeated links and links to images.
+- Only files inside the root folder are handed out: `..`, hidden files and folders, backslashes, NULs and symbolic links that lead out of the root are refused. Besides markdown documents, images (`png`, `jpg`, `gif`, `svg`, `webp`) are served.
+- The navigation is cached and rebuilt when an index document it was read from changes on disk.
+- A missing root folder or index document raises `ConfigurationError`.
+
+### `ccai.webworks.books.BooksBlueprint`
+- Serves a `BookLibrary` under a mount path (`/books` by default): the library page at the mount path, every document and image at `<mount>/<location>`, and the pages' stylesheet at `<mount>/_books/books.css`.
+- A document page has breadcrumbs (library, book, document), the book's reading order with the current document marked, previous and next links, and an outline of its second- and third-level headings. The library page lists the books.
+- Links between markdown files are rewritten to the URLs the documents are served at, keeping fragments; links that leave the library are left as written.
+- A folder, the library index's own location and any non-canonical location (`a//b`, `./`) redirect to the canonical URL; anything not in the library is a 404 page.
+- Pages hold no script and carry `Content-Security-Policy: default-src 'none'; style-src 'self'; ...`; images carry a sandboxing policy so an SVG cannot run a script.
+- Routes are registered from the configured instance: `books.attach_to_webapp(webapp)` or `BooksBlueprint.register(router=router, instance=books)`. Registering the class alone raises `SemanticError`.
+
+```python
+from ccai.webworks.books import BookLibrary, BooksBlueprint
+
+library = BookLibrary("~/repos/codecraftai-books")
+books = BooksBlueprint(library, mount_path="/books")
+books.attach_to_webapp(webapp)
+```
