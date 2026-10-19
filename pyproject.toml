@@ -45,6 +45,10 @@ jinja2 = ["jinja2>=3.1.0,<4.0.0"]
 mako = ["mako>=1.3.0,<2.0.0"]
 templating = ["jinja2>=3.1.0,<4.0.0", "mako>=1.3.0,<2.0.0"]
 
+[project.urls]
+Repository = "https://github.com/code-craft-ai-company/codecraftai-webworks"
+Issues = "https://github.com/code-craft-ai-company/codecraftai-webworks/issues"
+
 [dependency-groups]
 # Both engines are installed for development so the adapter tests run.
 dev = [
