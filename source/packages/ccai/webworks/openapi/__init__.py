@@ -55,7 +55,22 @@ from ccai.webworks.openapi.validation import (
 )
 
 # Swagger UI blueprint
-from ccai.webworks.openapi.swaggerui import SwaggerUIBlueprint
+from ccai.webworks.openapi.swaggerui import (
+    SWAGGER_UI_ASSET_NAMES,
+    SWAGGER_UI_INITIALIZER_NAME,
+    SwaggerUIBlueprint,
+    SwaggerUIOptions,
+    build_swagger_ui_config,
+    read_swagger_ui_asset,
+    render_swagger_ui_initializer,
+    render_swagger_ui_page,
+)
+
+# Grouping an API reference by path
+from ccai.webworks.openapi.grouping import (
+    group_operations_by_path,
+    path_group,
+)
 
 # ReDoc blueprint
 from ccai.webworks.openapi.redoc import ReDocBlueprint
@@ -103,7 +118,18 @@ __all__ = [
     "SpecificationValidationError",
 
     # Swagger UI
+    "SWAGGER_UI_ASSET_NAMES",
+    "SWAGGER_UI_INITIALIZER_NAME",
     "SwaggerUIBlueprint",
+    "SwaggerUIOptions",
+    "build_swagger_ui_config",
+    "read_swagger_ui_asset",
+    "render_swagger_ui_initializer",
+    "render_swagger_ui_page",
+
+    # Grouping
+    "group_operations_by_path",
+    "path_group",
 
     # ReDoc
     "ReDocBlueprint",

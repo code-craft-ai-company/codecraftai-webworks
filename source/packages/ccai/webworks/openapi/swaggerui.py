@@ -17,7 +17,11 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+import html
+import json
+
+from dataclasses import dataclass
+from typing import Any, Dict, List, Mapping, Optional, Tuple, TYPE_CHECKING
 
 from ccai.webworks.endpoints.descriptor import EndpointDescriptor
 from ccai.webworks.endpoints.doc import Doc
@@ -26,6 +30,15 @@ from ccai.webworks.openapi.assets import AssetResolver
 
 if TYPE_CHECKING:
     from ccai.webworks.openapi.generator import OpenAPIGenerator
+
+#: The files of the vendored Swagger UI that a page needs, and the only ones :func:`read_swagger_ui_asset` will hand out.
+SWAGGER_UI_ASSET_NAMES: Tuple[str, ...] = ("swagger-ui-bundle.js", "swagger-ui.css", "favicon-32x32.png")
+
+#: The name the starter script is served under next to the assets (see :func:`render_swagger_ui_initializer`).
+SWAGGER_UI_INITIALIZER_NAME: str = "swagger-initializer.js"
+
+#: The values Swagger UI accepts for ``docExpansion``.
+SWAGGER_UI_DOC_EXPANSIONS: Tuple[str, ...] = ("none", "list", "full")
 
 
 SWAGGER_UI_HTML_TEMPLATE = """<!DOCTYPE html>
@@ -295,3 +308,166 @@ class SwaggerUIBlueprint(RestBlueprint):
                 router.add_endpoint(descriptor)
 
         return descriptors
+
+
+@dataclass(frozen=True)
+class SwaggerUIOptions:
+    """
+        How a Swagger UI page behaves.
+
+        :param try_it_out_enabled: Open every operation already in "Try it out" mode. Off, a person clicks **Try it out** and then
+                                   **Execute**: two deliberate steps before a request is sent.
+        :param doc_expansion: ``none`` (everything folded; the person opens what they want), ``list`` (groups open, operations folded)
+                              or ``full`` (everything open).
+        :param filter: Show the filter box (it matches group names).
+        :param deep_linking: Keep the open group or operation in the page address, so a link opens it.
+        :param default_models_expand_depth: How far the Schemas block at the bottom is opened; ``-1`` hides it.
+        :param operations_sorter: ``alpha`` (by path), ``method`` or ``""`` for the document's own order.
+        :param tags_sorter: ``alpha`` or ``""`` for the document's own order.
+        :param supported_submit_methods: The HTTP methods Try it out may send (lower case). ``None`` allows every method; an empty
+                                         tuple removes Try it out altogether; ``("get",)`` makes the page safe to leave open on a
+                                         production system.
+    """
+    try_it_out_enabled: bool = False
+    doc_expansion: str = "none"
+    filter: bool = True
+    deep_linking: bool = True
+    default_models_expand_depth: int = -1
+    operations_sorter: str = "alpha"
+    tags_sorter: str = "alpha"
+    supported_submit_methods: Optional[Tuple[str, ...]] = None
+
+
+def build_swagger_ui_config(
+        *,
+        spec_url: str,
+        options: Optional[SwaggerUIOptions] = None,
+        extra: Optional[Mapping[str, Any]] = None
+    ) -> Dict[str, Any]:
+    """
+        The configuration object a page passes to ``SwaggerUIBundle``.
+
+        :param spec_url: Where the page loads the OpenAPI document from.
+        :param options: The page's behaviour; the defaults of :class:`SwaggerUIOptions` when ``None``.
+        :param extra: More Swagger UI settings, which win over the ones above.
+
+        :returns: The configuration as a JSON-serialisable dict (the ``presets`` are added by the starter script, since they are code).
+
+        :raises: ValueError when ``doc_expansion`` is not one of :data:`SWAGGER_UI_DOC_EXPANSIONS`.
+    """
+    chosen = options if options is not None else SwaggerUIOptions()
+
+    if chosen.doc_expansion not in SWAGGER_UI_DOC_EXPANSIONS:
+        raise ValueError(
+            "doc_expansion must be one of {}, not '{}'".format(", ".join(SWAGGER_UI_DOC_EXPANSIONS), chosen.doc_expansion)
+        )
+
+    rtnval: Dict[str, Any] = {
+        "url": spec_url,
+        "dom_id": "#swagger-ui",
+        "tryItOutEnabled": chosen.try_it_out_enabled,
+        "docExpansion": chosen.doc_expansion,
+        "filter": chosen.filter,
+        "deepLinking": chosen.deep_linking,
+        "defaultModelsExpandDepth": chosen.default_models_expand_depth,
+    }
+    if len(chosen.operations_sorter) > 0:
+        rtnval["operationsSorter"] = chosen.operations_sorter
+    if len(chosen.tags_sorter) > 0:
+        rtnval["tagsSorter"] = chosen.tags_sorter
+    if chosen.supported_submit_methods is not None:
+        rtnval["supportedSubmitMethods"] = [method.lower() for method in chosen.supported_submit_methods]
+    if extra is not None:
+        rtnval.update(dict(extra))
+
+    return rtnval
+
+
+def render_swagger_ui_initializer(
+        *,
+        spec_url: str,
+        options: Optional[SwaggerUIOptions] = None,
+        extra: Optional[Mapping[str, Any]] = None
+    ) -> str:
+    """
+        The script that starts Swagger UI on a page made by :func:`render_swagger_ui_page`. It is a file of its own, served beside the
+        library, because a page whose Content-Security-Policy allows scripts from its own origin only cannot hold an inline starter.
+
+        :param spec_url: Where the page loads the OpenAPI document from.
+        :param options: The page's behaviour.
+        :param extra: More Swagger UI settings.
+
+        :returns: JavaScript text.
+    """
+    config = build_swagger_ui_config(spec_url=spec_url, options=options, extra=extra)
+    config_text = json.dumps(config, indent=4, sort_keys=True).replace("\n", "\n    ")
+
+    lines = [
+        "window.onload = function () {",
+        "    var config = {};".format(config_text),
+        "    config.presets = [SwaggerUIBundle.presets.apis];",
+        "    window.ui = SwaggerUIBundle(config);",
+        "};",
+        "",
+    ]
+    rtnval = "\n".join(lines)
+    return rtnval
+
+
+def render_swagger_ui_page(
+        *,
+        title: str,
+        static_path: str,
+        initializer_name: str = SWAGGER_UI_INITIALIZER_NAME
+    ) -> str:
+    """
+        The Swagger UI page: a container, the library's style and script, and the starter script, all loaded from ``static_path``. The
+        page holds no script of its own and names no other host.
+
+        :param title: The page title (the API's name).
+        :param static_path: The URL path the assets and the starter are served under (no trailing slash).
+        :param initializer_name: The starter script's file name under ``static_path``.
+
+        :returns: HTML text.
+    """
+    lines = [
+        "<!DOCTYPE html>",
+        '<html lang="en">',
+        "<head>",
+        '    <meta charset="UTF-8">',
+        '    <meta name="viewport" content="width=device-width, initial-scale=1.0">',
+        "    <title>{} - Swagger UI</title>".format(html.escape(title)),
+        '    <link rel="stylesheet" href="{}/swagger-ui.css">'.format(html.escape(static_path)),
+        '    <link rel="icon" type="image/png" href="{}/favicon-32x32.png" sizes="32x32">'.format(html.escape(static_path)),
+        "</head>",
+        "<body>",
+        '    <div id="swagger-ui"></div>',
+        '    <script src="{}/swagger-ui-bundle.js"></script>'.format(html.escape(static_path)),
+        '    <script src="{}/{}"></script>'.format(html.escape(static_path), html.escape(initializer_name)),
+        "</body>",
+        "</html>",
+        "",
+    ]
+    rtnval = "\n".join(lines)
+    return rtnval
+
+
+def read_swagger_ui_asset(filename: str) -> Optional[Tuple[bytes, str]]:
+    """
+        One of the vendored Swagger UI files, by name. Only the names in :data:`SWAGGER_UI_ASSET_NAMES` are served: any other name,
+        including one that climbs out of the asset directory, is refused, so a route that serves these files never serves anything else.
+
+        :param filename: The requested file name.
+
+        :returns: ``(content, content type)``, or ``None`` when the name is not one of the Swagger UI files or the file is missing.
+    """
+    if filename not in SWAGGER_UI_ASSET_NAMES:
+        return None
+
+    resolver = AssetResolver()
+    content = resolver.resolve("swagger-ui", filename)
+    if content is None:
+        return None
+
+    rtnval = (content, resolver.content_type(filename))
+    return rtnval
