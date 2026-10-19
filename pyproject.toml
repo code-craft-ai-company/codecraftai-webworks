@@ -3,7 +3,7 @@ name = "codecraftai-webworks"
 version = "1.4.0"
 description = "Code Craft AI - WebWorks"
 readme = "README.rst"
-license = "LicenseRef-CodeCraftAI-Dual-License"
+license = "LicenseRef-CodeCraftAI-Source-Available"
 authors = []
 keywords = [
     "python"
