@@ -65,6 +65,8 @@ exclude = ["source/packages/ccai/README.md"]
 include = [
     # Vendored Swagger UI / OpenAPI assets served by SwaggerUIBlueprint.
     { path = "source/packages/ccai/webworks/openapi/static/**/*", format = ["sdist", "wheel"] },
+    # The stylesheet of the book pages served by BooksBlueprint.
+    { path = "source/packages/ccai/webworks/books/static/**/*", format = ["sdist", "wheel"] },
     # mj-* web component library shipped with the package: design tokens
     # and base stylesheet (static/styles/), the JavaScript foundation,
     # all component modules, the comprehensive chart library, the

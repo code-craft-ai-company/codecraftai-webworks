@@ -1,0 +1,366 @@
+/*
+ * Stylesheet of the pages served by ccai.webworks.books.BooksBlueprint.
+ *
+ * The colours follow the webworks design tokens (static/styles/tokens.css). The page holds no script and no inline
+ * style; table alignment comes from the align-* classes the markdown renderer writes.
+ */
+
+:root {
+  --books-bg: #ffffff;
+  --books-bg-subtle: #f7f8fa;
+  --books-bg-code: #eef0f3;
+  --books-border: #e0e3e9;
+  --books-text: #14181f;
+  --books-text-muted: #4b5563;
+  --books-accent: #2563eb;
+  --books-accent-hover: #173e9c;
+  --books-accent-surface: #eef4ff;
+  --books-font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --books-font-mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  --books-sidebar-width: 16rem;
+  --books-outline-width: 14rem;
+  --books-article-width: 48rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --books-bg: #14181f;
+    --books-bg-subtle: #1b2029;
+    --books-bg-code: #232934;
+    --books-border: #353c49;
+    --books-text: #e0e3e9;
+    --books-text-muted: #9aa1b1;
+    --books-accent: #80a8ff;
+    --books-accent-hover: #b3ccff;
+    --books-accent-surface: #16243f;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body.books {
+  margin: 0;
+  background: var(--books-bg);
+  color: var(--books-text);
+  font-family: var(--books-font-sans);
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.books a {
+  color: var(--books-accent);
+  text-decoration: none;
+}
+
+.books a:hover {
+  color: var(--books-accent-hover);
+  text-decoration: underline;
+}
+
+/* Header and breadcrumbs */
+
+.books-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1.5rem;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--books-border);
+  background: var(--books-bg-subtle);
+}
+
+.books-library {
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.books-breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9rem;
+  color: var(--books-text-muted);
+}
+
+.books-breadcrumbs li + li::before {
+  content: "\203A";
+  padding: 0 0.5rem;
+}
+
+/* Layout: contents | article | outline */
+
+.books-layout {
+  display: grid;
+  grid-template-columns: var(--books-sidebar-width) minmax(0, 1fr) var(--books-outline-width);
+  grid-template-areas: "contents main outline";
+  align-items: start;
+}
+
+.books-contents {
+  grid-area: contents;
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 1.5rem 1rem 1.5rem 1.5rem;
+  border-right: 1px solid var(--books-border);
+  font-size: 0.9rem;
+}
+
+.books-main {
+  grid-area: main;
+  min-width: 0;
+  padding: 1.5rem 2.5rem 3rem;
+}
+
+.books-outline {
+  grid-area: outline;
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 1.5rem 1.5rem 1.5rem 1rem;
+  font-size: 0.85rem;
+}
+
+.books-contents-title,
+.books-outline-title {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+  color: var(--books-text);
+}
+
+.books-contents ol,
+.books-outline ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.books-contents li,
+.books-outline li {
+  margin: 0.15rem 0;
+}
+
+.books-contents a {
+  display: block;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.35rem;
+  color: var(--books-text-muted);
+}
+
+.books-contents a[aria-current="page"] {
+  background: var(--books-accent-surface);
+  color: var(--books-accent);
+  font-weight: 600;
+}
+
+.books-outline a {
+  color: var(--books-text-muted);
+}
+
+.books-outline-level-3 {
+  padding-left: 0.9rem;
+}
+
+/* Previous and next */
+
+.books-pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  max-width: var(--books-article-width);
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--books-border);
+}
+
+.books-pager a {
+  display: flex;
+  flex-direction: column;
+  max-width: 48%;
+}
+
+.books-pager span {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--books-text-muted);
+}
+
+.books-pager-next {
+  margin-left: auto;
+  text-align: right;
+}
+
+/* The rendered document */
+
+.books-article {
+  max-width: var(--books-article-width);
+}
+
+.books-article h1,
+.books-article h2,
+.books-article h3,
+.books-article h4,
+.books-article h5,
+.books-article h6 {
+  line-height: 1.3;
+  margin: 2rem 0 0.75rem;
+  scroll-margin-top: 1rem;
+}
+
+.books-article h1 {
+  margin-top: 0;
+  font-size: 2rem;
+}
+
+.books-article h2 {
+  font-size: 1.5rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--books-border);
+}
+
+.books-article h3 {
+  font-size: 1.2rem;
+}
+
+.books-article p,
+.books-article ul,
+.books-article ol,
+.books-article blockquote,
+.books-article pre,
+.books-article table {
+  margin: 0 0 1rem;
+}
+
+.books-article ul,
+.books-article ol {
+  padding-left: 1.75rem;
+}
+
+.books-article li + li {
+  margin-top: 0.25rem;
+}
+
+.books-article blockquote {
+  padding: 0.25rem 1rem;
+  border-left: 4px solid var(--books-border);
+  color: var(--books-text-muted);
+}
+
+.books-article code {
+  font-family: var(--books-font-mono);
+  font-size: 0.875em;
+  padding: 0.1em 0.35em;
+  border-radius: 0.3rem;
+  background: var(--books-bg-code);
+}
+
+.books-article pre {
+  overflow-x: auto;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--books-border);
+  border-radius: 0.5rem;
+  background: var(--books-bg-subtle);
+  line-height: 1.5;
+}
+
+.books-article pre code {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.85rem;
+}
+
+.books-article table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.925rem;
+}
+
+.books-article th,
+.books-article td {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--books-border);
+  vertical-align: top;
+}
+
+.books-article th {
+  background: var(--books-bg-subtle);
+  text-align: left;
+}
+
+.books-article .align-left {
+  text-align: left;
+}
+
+.books-article .align-center {
+  text-align: center;
+}
+
+.books-article .align-right {
+  text-align: right;
+}
+
+.books-article hr {
+  margin: 2rem 0;
+  border: 0;
+  border-top: 1px solid var(--books-border);
+}
+
+.books-article img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Narrow screens: the outline goes, then the contents move above the article */
+
+@media (max-width: 1200px) {
+  .books-layout {
+    grid-template-columns: var(--books-sidebar-width) minmax(0, 1fr);
+    grid-template-areas: "contents main";
+  }
+
+  .books-outline {
+    display: none;
+  }
+}
+
+@media (max-width: 800px) {
+  .books-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "contents" "main";
+  }
+
+  .books-contents {
+    position: static;
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--books-border);
+  }
+
+  .books-main {
+    padding: 1.25rem 1rem 2.5rem;
+  }
+}
+
+@media print {
+  .books-header,
+  .books-contents,
+  .books-outline,
+  .books-pager {
+    display: none;
+  }
+
+  .books-layout {
+    display: block;
+  }
+}
