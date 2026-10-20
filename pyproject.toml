@@ -30,11 +30,11 @@ dependencies = [
     # compact-serialization, claims-registry, and HMAC paths are pure
     # standard library.
     "cryptography>=42.0.0,<51.0.0",
-    "codecraftai-this-app<2.0.0",
-    "codecraftai-testbase<2.0.0",
-    "codecraftai-configuration<2.0.0",
-    "codecraftai-credentials<2.0.0",
-    "codecraftai-dataprofiles<2.0.0",
+    "codecraftai-this-app>=1.0.0,<2.0.0",
+    "codecraftai-testbase>=1.0.0,<2.0.0",
+    "codecraftai-configuration>=1.0.0,<2.0.0",
+    "codecraftai-credentials>=1.0.0,<2.0.0",
+    "codecraftai-dataprofiles>=1.0.0,<2.0.0",
 
     ]
 
@@ -75,26 +75,6 @@ include = [
     # handler.
     { path = "source/packages/ccai/webworks/static/**/*", format = ["sdist", "wheel"] },
 ]
-
-[tool.poetry.dependencies]
-codecraftai-this-app = {source = "codecraftai"}
-codecraftai-testbase = {source = "codecraftai"}
-codecraftai-configuration = {source = "codecraftai"}
-codecraftai-credentials = {source = "codecraftai"}
-codecraftai-dataprofiles = {source = "codecraftai"}
-
-[[tool.poetry.source]]
-name = "codecraftai"
-url = "https://code-craft.ai/licensed-repository/simple/"
-priority = "supplemental"
-
-[[tool.uv.index]]
-# Same licensed index as [[tool.poetry.source]]. Listed before PyPI so that
-# codecraftai-* packages (direct and transitive) resolve from it; everything
-# else falls through to PyPI. Credentials: UV_INDEX_CODECRAFTAI_USERNAME /
-# UV_INDEX_CODECRAFTAI_PASSWORD, or `uv auth login`.
-name = "codecraftai"
-url = "https://code-craft.ai/licensed-repository/simple/"
 
 [tool.ruff.lint]
 # Deliberately narrow.  This gate exists for one reason: a bare `except:`
