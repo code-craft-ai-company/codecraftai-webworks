@@ -1,6 +1,6 @@
 [project]
 name = "codecraftai-webworks"
-version = "1.5.1"
+version = "1.5.2"
 description = "Code Craft AI - WebWorks"
 readme = "README.rst"
 license = "LicenseRef-CodeCraftAI-Source-Available"
@@ -15,6 +15,7 @@ classifiers = [
 requires-python = ">=3.10,<4.0"
 dependencies = [
     "requests>=2.32.5,<3.0.0",
+    "pyyaml>=6.0.2,<7.0.0",
     # The OAuth client, OIDC id_token validation, and the signed
     # pre-auth state cookie are implemented in-house — see
     # ``ccai.webworks.authentication.oauth``,
@@ -30,6 +31,7 @@ dependencies = [
     # compact-serialization, claims-registry, and HMAC paths are pure
     # standard library.
     "cryptography>=42.0.0,<51.0.0",
+    "codecraftai-foundations>=1.0.0,<2.0.0",
     "codecraftai-this-app>=1.0.0,<2.0.0",
     "codecraftai-testbase>=1.0.0,<2.0.0",
     "codecraftai-configuration>=1.0.0,<2.0.0",
