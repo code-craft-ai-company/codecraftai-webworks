@@ -1,0 +1,328 @@
+/*
+ * explorer.css
+ *
+ * The API explorer page. Layout: a bar, then two columns that scroll on their own, a tree of APIs on the left and the pinned panes on the right;
+ * below 860px the tree sits above the panes.
+ * Color: cool graphite neutrals with a blue bias, one blue accent for selection. The method and status colors are semantic and stay apart from it.
+ * Type: the system sans for reading, the system monospace for paths. Swagger UI's own stylesheet is light, so the page is light too.
+ */
+:root {
+    color-scheme: light;
+    --paper: #F3F5F9;
+    --surface: #FFFFFF;
+    --surface-2: #F7F9FC;
+    --ink: #172033;
+    --muted: #586277;
+    --line: #D9DFEA;
+    --line-strong: #BFC8D8;
+    --accent: #2D5BD0;
+    --accent-ink: #FFFFFF;
+    --accent-soft: #E6EDFB;
+    --get: #146C43;
+    --post: #0B6E8A;
+    --put: #8A5A00;
+    --patch: #5E47B0;
+    --delete: #B0271B;
+    --other: #586277;
+    --get-bg: #E3F4EA;
+    --post-bg: #E1F1F6;
+    --put-bg: #FBF0D9;
+    --patch-bg: #ECE8F8;
+    --delete-bg: #FBE6E3;
+    --other-bg: #ECEFF4;
+    --bad: #B0271B;
+    --bad-bg: #FBE6E3;
+    --shadow: 0 1px 2px rgba(23, 32, 51, 0.06), 0 6px 20px rgba(23, 32, 51, 0.06);
+    --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
+    --size-xs: 0.75rem;
+    --size-sm: 0.8125rem;
+    --size-md: 0.9375rem;
+    --size-lg: 1.125rem;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: var(--size-md);
+    line-height: 1.5;
+}
+
+h1, h2 { margin: 0; line-height: 1.25; text-wrap: balance; }
+h1 { font-size: var(--size-lg); font-weight: 600; }
+h2 { font-size: var(--size-lg); font-weight: 600; }
+p { margin: 0; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+[hidden] { display: none !important; }
+
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.label { font-size: var(--size-xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.param { color: var(--accent); }
+
+#explorer { display: flex; flex-direction: column; height: 100%; }
+
+.status { margin: 24px 16px; color: var(--muted); }
+.status-error { color: var(--bad); display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+
+.btn {
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: var(--size-sm);
+    cursor: pointer;
+}
+.btn:hover { background: var(--accent-soft); }
+
+/* Bar */
+.bar {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 16px;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+}
+.bar-stat { color: var(--muted); font-size: var(--size-sm); font-variant-numeric: tabular-nums; }
+.bar-link { margin-left: auto; font-size: var(--size-sm); color: var(--accent); }
+
+/* Two columns */
+.bench {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+}
+.side {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--surface-2);
+    border-right: 1px solid var(--line);
+}
+.main {
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* Search */
+.search { padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.search input {
+    width: 100%;
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: var(--size-sm);
+}
+.search small { color: var(--muted); font-size: var(--size-xs); font-variant-numeric: tabular-nums; }
+
+/* Tree */
+.tree { flex: 1; min-height: 0; overflow: auto; padding: 6px 6px 16px; }
+.tree ul { list-style: none; margin: 0; padding: 0; }
+.tree ul ul { margin-left: 14px; border-left: 1px solid var(--line); padding-left: 4px; }
+.tree .none { padding: 12px 8px; color: var(--muted); font-size: var(--size-sm); }
+
+.group {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    padding: 4px 6px;
+    cursor: pointer;
+    font-size: var(--size-sm);
+}
+.group:hover, .row:hover { background: var(--accent-soft); }
+.group-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.count { font-size: var(--size-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.chev {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    display: inline-block;
+    position: relative;
+    transition: transform 0.12s;
+}
+.chev::before {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 3px;
+    width: 5px;
+    height: 5px;
+    border: solid var(--muted);
+    border-width: 0 2px 2px 0;
+    transform: rotate(-45deg);
+}
+[aria-expanded="true"] > .chev { transform: rotate(90deg); }
+
+.row {
+    width: 100%;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 1px 8px;
+    align-items: baseline;
+    text-align: left;
+    padding: 5px 6px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+}
+.row[aria-pressed="true"] { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.row-first { display: flex; align-items: center; gap: 6px; }
+.row-summary { font-size: var(--size-sm); line-height: 1.3; overflow-wrap: anywhere; }
+.row-rest { grid-column: 2; font-family: var(--font-mono); font-size: 0.7rem; color: var(--muted); overflow-wrap: anywhere; }
+
+.pin {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    border: 1.5px solid var(--line-strong);
+    border-radius: 4px;
+    background: var(--surface);
+    position: relative;
+}
+.row[aria-pressed="true"] .pin { background: var(--accent); border-color: var(--accent); }
+.row[aria-pressed="true"] .pin::after {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 0;
+    width: 4px;
+    height: 8px;
+    border: solid var(--accent-ink);
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+/* Method chips */
+.m {
+    display: inline-block;
+    min-width: 50px;
+    text-align: center;
+    padding: 1px 6px;
+    border-radius: 5px;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background: var(--other-bg);
+    color: var(--other);
+}
+.m-GET { background: var(--get-bg); color: var(--get); }
+.m-POST { background: var(--post-bg); color: var(--post); }
+.m-PUT { background: var(--put-bg); color: var(--put); }
+.m-PATCH { background: var(--patch-bg); color: var(--patch); }
+.m-DELETE { background: var(--delete-bg); color: var(--delete); }
+
+.tag-deprecated {
+    font-size: var(--size-xs);
+    padding: 0 6px;
+    border-radius: 5px;
+    background: var(--put-bg);
+    color: var(--put);
+}
+
+/* Toolbar, notice and empty state */
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.toolbar-count { margin-right: auto; font-size: var(--size-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
+.notice { padding: 8px 12px; border-radius: 6px; background: var(--put-bg); color: var(--put); font-size: var(--size-sm); overflow-wrap: anywhere; }
+.empty {
+    max-width: 62ch;
+    padding: 24px;
+    border: 1px dashed var(--line-strong);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.empty p { color: var(--muted); }
+
+/* Panes */
+.panes { display: flex; flex-direction: column; gap: 12px; }
+.pane {
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    min-width: 0;
+}
+.pane-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    min-width: 0;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--surface);
+    border-radius: 10px 10px 0 0;
+}
+.pane.is-folded .pane-head { border-radius: 10px; }
+.pane:not(.is-folded) .pane-head { border-bottom: 1px solid var(--line); }
+.pane-fold, .pane-unpin {
+    flex: none;
+    border: 0;
+    background: transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    padding: 2px 4px;
+    line-height: 1;
+}
+.pane-fold:hover, .pane-unpin:hover { background: var(--accent-soft); }
+.pane-unpin { margin-left: auto; font-size: 1.25rem; color: var(--muted); }
+.pane-title { min-width: 0; display: flex; flex-direction: column; }
+.pane-path { font-family: var(--font-mono); font-size: var(--size-sm); overflow-wrap: anywhere; }
+.pane-summary { font-size: var(--size-xs); color: var(--muted); overflow-wrap: anywhere; }
+.pane-body { padding: 4px 12px 12px; overflow-x: auto; }
+
+/* Swagger UI inside a pane: the pane head already names the operation, so the document title, the server and sign-in bar, the group heading and
+ * the operation's own summary row are not repeated. What stays is the description, the parameters, Try it out, the request body and the responses. */
+.pane .swagger-ui .information-container,
+.pane .swagger-ui .scheme-container,
+.pane .swagger-ui .opblock-tag,
+.pane .swagger-ui .opblock .opblock-summary { display: none; }
+.pane .swagger-ui .wrapper { padding: 0; max-width: none; }
+.pane .swagger-ui .opblock-tag-section { margin: 0; }
+.pane .swagger-ui .opblock {
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+}
+.pane .swagger-ui .opblock .opblock-section-header { background: var(--surface-2); box-shadow: none; }
+
+/* Narrow screens: the tree above the panes */
+@media (max-width: 860px) {
+    .bench { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 42%) minmax(0, 1fr); }
+    .side { border-right: 0; border-bottom: 1px solid var(--line-strong); }
+    .main { padding: 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .chev { transition: none; }
+}

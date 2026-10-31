@@ -10,7 +10,7 @@ This package provides OpenAPI specification generation and documentation hosting
 
 - Automatic OpenAPI 3.0+ specification generation from endpoint descriptors
 - Schema conversion from Python types (dataclasses, Pydantic models) to JSON Schema
-- Interactive API documentation via Swagger UI and ReDoc
+- Interactive API documentation via Swagger UI and ReDoc, and an explorer (tree of APIs by path, pinned panes) that runs Swagger UI per pane
 - Specification validation against the OpenAPI 3.0 schema
 - Specification caching for production and development modes
 - Export to JSON and YAML formats
@@ -64,6 +64,17 @@ from ccai.webworks.openapi.swaggerui import (
     read_swagger_ui_asset,
     render_swagger_ui_initializer,
     render_swagger_ui_page,
+)
+
+# API explorer (tree and pinned panes)
+from ccai.webworks.openapi.explorer import (
+    EXPLORER_ASSET_NAMES,
+    EXPLORER_INITIALIZER_NAME,
+    ExplorerOptions,
+    build_explorer_config,
+    read_explorer_asset,
+    render_explorer_initializer,
+    render_explorer_page,
 )
 
 # Grouping an API reference by path
@@ -126,6 +137,15 @@ __all__ = [
     "read_swagger_ui_asset",
     "render_swagger_ui_initializer",
     "render_swagger_ui_page",
+
+    # API explorer
+    "EXPLORER_ASSET_NAMES",
+    "EXPLORER_INITIALIZER_NAME",
+    "ExplorerOptions",
+    "build_explorer_config",
+    "read_explorer_asset",
+    "render_explorer_initializer",
+    "render_explorer_page",
 
     # Grouping
     "group_operations_by_path",
