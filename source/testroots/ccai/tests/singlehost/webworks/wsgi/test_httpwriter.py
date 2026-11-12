@@ -16,6 +16,7 @@ from typing import List, Tuple
 from ccai.webworks.wsgi.httpwriter import HTTPWriter, SERVER_NAME
 from ccai.webworks.wsgi.serverconfig import ServerConfig
 from ccai.webworks.wsgi.constants import HTTP_STATUS_PHRASES
+from ccai.webworks.wsgi.exceptions import InvalidResponseHeader
 
 
 # =============================================================================
@@ -893,5 +894,235 @@ def test_property_status_line_format():
         if data != expected_line:
             errmsg = f"Unknown status code {status_code}: Expected '{expected_line}', got '{data}'"
             raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Tests for header validation, send failures and body framing
+# =============================================================================
+
+class ZeroSendSocket:
+    """
+        Mock socket whose send reports that nothing was sent, as a socket does
+        when the peer has closed the connection.
+    """
+    
+    def send(self, data: bytes) -> int:
+        """
+            Report that no byte was sent.
+        """
+        return 0
+
+
+def test_write_headers_refuses_value_with_line_break():
+    """
+        Test that write_headers refuses a header value that contains CRLF.
+    """
+    mock_sock = MockSocket()
+    writer = HTTPWriter(mock_sock)
+    
+    raised = False
+    try:
+        writer.write_headers([("Location", "/x\r\nSet-Cookie: sid=evil")])
+    except InvalidResponseHeader:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected InvalidResponseHeader for a header value containing CRLF"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_write_headers_writes_nothing_when_a_header_is_refused():
+    """
+        Test that no header of a refused header block reaches the socket.
+    """
+    mock_sock = MockSocket()
+    writer = HTTPWriter(mock_sock)
+    
+    try:
+        writer.write_headers([("X-Good", "fine"), ("X-Bad", "a\r\nb")])
+    except InvalidResponseHeader:
+        pass
+    
+    writer.flush()
+    
+    if len(mock_sock.data) != 0:
+        errmsg = f"Expected nothing to be written, got {mock_sock.data!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_write_status_line_refuses_reason_with_line_break():
+    """
+        Test that write_status_line refuses a reason phrase that contains CRLF.
+    """
+    mock_sock = MockSocket()
+    writer = HTTPWriter(mock_sock)
+    
+    raised = False
+    try:
+        writer.write_status_line(200, "OK\r\nSet-Cookie: sid=evil")
+    except InvalidResponseHeader:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected InvalidResponseHeader for a reason phrase containing CRLF"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_flush_raises_when_socket_send_fails():
+    """
+        Test that a failed send is raised to the caller and not swallowed.
+    """
+    mock_sock = MockSocket()
+    writer = HTTPWriter(mock_sock)
+    writer.write_body(b"data")
+    mock_sock.close()
+    
+    raised = False
+    try:
+        writer.flush()
+    except OSError:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected the socket error of the send to be raised"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_flush_raises_broken_pipe_when_nothing_can_be_sent():
+    """
+        Test that a send that sends nothing is reported as a closed connection.
+    """
+    writer = HTTPWriter(ZeroSendSocket())
+    writer.write_body(b"data")
+    
+    raised = False
+    try:
+        writer.flush()
+    except BrokenPipeError:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected BrokenPipeError when the socket sends nothing"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_write_body_frames_chunks_when_chunked():
+    """
+        Test that write_body frames the body as chunks when chunked encoding is chosen.
+    """
+    mock_sock = MockSocket()
+    writer = HTTPWriter(mock_sock)
+    writer.set_chunked(True)
+    
+    writer.write_body(b"hello")
+    writer.flush()
+    
+    if mock_sock.data != b"5\r\nhello\r\n":
+        errmsg = f"Expected one framed chunk, got {mock_sock.data!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_finish_writes_terminating_chunk_when_chunked():
+    """
+        Test that finish ends a chunked body with the zero-length chunk.
+    """
+    mock_sock = MockSocket()
+    writer = HTTPWriter(mock_sock)
+    writer.set_chunked(True)
+    
+    writer.write_body(b"hello")
+    writer.finish()
+    
+    if not mock_sock.data.endswith(b"0\r\n\r\n"):
+        errmsg = f"Expected the body to end with the terminating chunk, got {mock_sock.data!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_finish_writes_no_terminating_chunk_when_not_chunked():
+    """
+        Test that finish adds nothing to a body that is not chunked.
+    """
+    mock_sock = MockSocket()
+    writer = HTTPWriter(mock_sock)
+    
+    writer.write_body(b"hello")
+    writer.finish()
+    
+    if mock_sock.data != b"hello":
+        errmsg = f"Expected only the body, got {mock_sock.data!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_write_body_drops_bytes_when_body_is_discarded():
+    """
+        Test that no body byte is written for a response that must not carry a body.
+    """
+    mock_sock = MockSocket()
+    writer = HTTPWriter(mock_sock)
+    writer.set_body_discarded(True)
+    
+    writer.write_body(b"hello")
+    writer.finish()
+    
+    if len(mock_sock.data) != 0:
+        errmsg = f"Expected no body bytes, got {mock_sock.data!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_write_body_cuts_body_at_declared_length():
+    """
+        Test that bytes beyond the declared Content-Length are not written.
+    """
+    mock_sock = MockSocket()
+    writer = HTTPWriter(mock_sock)
+    writer.set_body_limit(5)
+    
+    writer.write_body(b"hello world")
+    writer.finish()
+    
+    if mock_sock.data != b"hello":
+        errmsg = f"Expected the body cut at 5 bytes, got {mock_sock.data!r}"
+        raise AssertionError(errmsg)
+    
+    if writer.body_truncated is not True:
+        errmsg = "Expected body_truncated to be True"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_body_complete_false_when_less_than_declared_was_written():
+    """
+        Test that a body shorter than the declared Content-Length is reported incomplete.
+    """
+    mock_sock = MockSocket()
+    writer = HTTPWriter(mock_sock)
+    writer.set_body_limit(100)
+    
+    writer.write_body(b"partial")
+    
+    if writer.body_complete is not False:
+        errmsg = "Expected body_complete to be False for a short body"
+        raise AssertionError(errmsg)
     
     return

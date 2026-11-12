@@ -8,6 +8,8 @@
     within a request lifecycle.
 """
 
+import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -22,6 +24,12 @@ W3C_TRACEPARENT_HEADER = "traceparent"
 
 # Default trace header name
 DEFAULT_TRACE_HEADER = "X-Request-ID"
+
+# A request ID a client sends is used only when it looks like one: it is
+# echoed in a response header and written to every log entry of the request,
+# so anything else is replaced by a generated ID.
+MAX_REQUEST_ID_LENGTH = 128
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:/+=@-]{1,%d}$" % MAX_REQUEST_ID_LENGTH)
 
 
 @dataclass
@@ -114,6 +122,8 @@ class RequestTracer:
         self._enable_tracing: bool = config.enable_tracing
         self._spans: List[Span] = []
         self._export_backends: List[Callable[[List[Dict[str, Any]]], None]] = []
+        # The handler threads of a worker create and export spans concurrently
+        self._spans_lock = threading.Lock()
 
         return
 
@@ -142,7 +152,9 @@ class RequestTracer:
 
             :returns: List of Span objects.
         """
-        return list(self._spans)
+        with self._spans_lock:
+            rtnval = list(self._spans)
+        return rtnval
 
     def generate_request_id(self) -> str:
         """
@@ -161,8 +173,11 @@ class RequestTracer:
             Get request ID from headers or generate a new one.
 
             Checks the configured trace header (and common variations)
-            in the provided headers dictionary. If a request ID is found,
-            it is returned as-is. Otherwise, a new unique ID is generated.
+            in the provided headers dictionary. A request ID that was sent
+            and is a plain token of at most MAX_REQUEST_ID_LENGTH characters
+            (letters, digits and ``._:/+=@-``) is returned as it is. Otherwise
+            a new unique ID is generated: the ID is echoed in the response
+            and written to the logs, so arbitrary client text is not used.
 
             :param headers: Dictionary of request headers.
 
@@ -173,8 +188,9 @@ class RequestTracer:
 
         for header_name, header_value in headers.items():
             if header_name.lower() == trace_header_lower:
-                if header_value.strip():
-                    return header_value.strip()
+                candidate = header_value.strip()
+                if REQUEST_ID_PATTERN.match(candidate) is not None:
+                    return candidate
 
         # No existing request ID found, generate a new one
         rtnval = self.generate_request_id()
@@ -231,7 +247,8 @@ class RequestTracer:
         )
 
         if self._enable_tracing:
-            self._spans.append(span)
+            with self._spans_lock:
+                self._spans.append(span)
 
         return span
 
@@ -343,13 +360,15 @@ class RequestTracer:
         """
         exported: List[Dict[str, Any]] = []
 
-        for span in self._spans:
+        with self._spans_lock:
+            spans = list(self._spans)
+            self._spans.clear()
+
+        for span in spans:
             exported.append(span.as_dict())
 
         for backend in self._export_backends:
             backend(exported)
-
-        self._spans.clear()
 
         return exported
 
@@ -357,6 +376,7 @@ class RequestTracer:
         """
             Clear all collected spans without exporting.
         """
-        self._spans.clear()
+        with self._spans_lock:
+            self._spans.clear()
 
         return

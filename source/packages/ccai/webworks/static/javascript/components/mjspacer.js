@@ -48,30 +48,49 @@ export class MjSpacer extends MjElement {
     return
   }
 
+  /*
+   * Set a custom property on the host, or remove it when `value` is null so
+   * the stylesheet (the component default or an author rule) applies.
+   */
+  _setCustomProperty(name, value) {
+    if (value === null) {
+      this.style.removeProperty(name)
+    } else {
+      this.style.setProperty(name, value)
+    }
+    return
+  }
+
+  /*
+   * A custom property is written on the host only while `size` is present;
+   * without it the stylesheet defaults (a flexible spacer) apply and an
+   * author rule such as `mj-spacer { --mj-spacer-flex: 2 1 0 }` is honored.
+   */
   _syncStyles() {
     const sizeAttr = this.getAttribute("size") || ""
     const axis = this.getAttribute("axis") || "both"
 
-    if (sizeAttr.length === 0) {
-      this.style.setProperty("--mj-spacer-flex", "1 1 0")
-      this.style.setProperty("--mj-spacer-inline-size", "auto")
-      this.style.setProperty("--mj-spacer-block-size", "auto")
-      return
+    let flex = null
+    let inlineSize = null
+    let blockSize = null
+
+    if (sizeAttr.length > 0) {
+      const sizeVal = SIZE_MAP[sizeAttr] || sizeAttr
+      flex = "0 0 auto"
+
+      if (axis === "horizontal") {
+        inlineSize = sizeVal
+      } else if (axis === "vertical") {
+        blockSize = sizeVal
+      } else {
+        inlineSize = sizeVal
+        blockSize = sizeVal
+      }
     }
 
-    const sizeVal = SIZE_MAP[sizeAttr] || sizeAttr
-    this.style.setProperty("--mj-spacer-flex", "0 0 auto")
-
-    if (axis === "horizontal") {
-      this.style.setProperty("--mj-spacer-inline-size", sizeVal)
-      this.style.setProperty("--mj-spacer-block-size", "auto")
-    } else if (axis === "vertical") {
-      this.style.setProperty("--mj-spacer-inline-size", "auto")
-      this.style.setProperty("--mj-spacer-block-size", sizeVal)
-    } else {
-      this.style.setProperty("--mj-spacer-inline-size", sizeVal)
-      this.style.setProperty("--mj-spacer-block-size", sizeVal)
-    }
+    this._setCustomProperty("--mj-spacer-flex", flex)
+    this._setCustomProperty("--mj-spacer-inline-size", inlineSize)
+    this._setCustomProperty("--mj-spacer-block-size", blockSize)
     return
   }
 

@@ -92,7 +92,7 @@ Nearest alternative: `<mj-pipeline-chart>` for a single pipeline drill-down.
 | `(default)` | Fallback `<table>` rendered before upgrade |
 | `bulk-actions` | Custom bulk-action bar content; receives `selectedRows` via property |
 | `row-actions` | Custom per-row action cell content |
-| `empty` | Shown when `filteredRows` is empty |
+| `empty` | Shown when the board has no rows (no data) |
 | `loading` | Shown during adapter fetch |
 | `error` | Shown on adapter failure |
 
@@ -140,7 +140,10 @@ Nearest alternative: `<mj-pipeline-chart>` for a single pipeline drill-down.
 ## 10. States
 
 - **loading** — `aria-busy="true"`; loading slot shown.
-- **empty** — empty slot shown; filter bar still accessible.
+- **empty** — no rows: empty slot shown; filter bar still accessible.
+- **no-match** — rows exist but the filters exclude all of them: the message
+  `mj.buildStatusBoard.noMatch` ("No pipelines match the current filters.") is shown
+  instead of the empty slot.
 - **error** — error slot shown.
 - **row-selected** — row checkbox checked; bulk-action bar appears;
   `aria-selected="true"` on `<tr>`.
@@ -232,7 +235,7 @@ updating, sorting, and filtering without layout shift.
 
 ## 18. Edge cases & error handling
 
-- **Empty filter result** — empty slot shown; "Clear filters" button present and
+- **Empty filter result** — the no-match message shown (not the empty slot); "Clear filters" button present and
   resets filters.
 - **All rows failing** — all rows show failed state; board header shows "All
   pipelines failed" alert banner using the Alert component.

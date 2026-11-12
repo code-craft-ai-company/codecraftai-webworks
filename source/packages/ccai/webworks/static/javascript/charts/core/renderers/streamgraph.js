@@ -8,159 +8,138 @@
  *
  * ctx.attrs recognised:
  *   baseline   "wiggle" | "silhouette" | "zero" (default "wiggle")
- *              wiggle    — ThemeRiver: minimises weighted slope of stream
+ *              wiggle     — ThemeRiver / Byron & Wattenberg: the baseline
+ *                           moves so the weighted slope of the streams is
+ *                           as small as possible
  *              silhouette — centred stack (symmetric around y=0)
- *              zero      — bottom-aligned (equivalent to stacked area)
+ *              zero       — bottom-aligned (equivalent to stacked area)
+ *   curve      "monotone" (default) | "linear" | "step"
+ *   x-scale    see line.js
  *
- * The y-axis is hidden because y positions are layout artefacts.
+ * The y-axis is hidden because y positions are layout artefacts. Each
+ * stream is labelled at its thickest point when it is tall enough; the
+ * streams that cannot hold a label are listed in a key below the axis.
+ * Every value has a focusable target reading the value and its share of
+ * the total at that x. Values are stacked as given; a stream cannot be
+ * negative, so a negative value is drawn as zero and mj-chart-error
+ * reports it. A null value is a gap in that stream.
+ *
  * Series data: series[].points [{x, y}] or series[].values [].
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber, smoothPath, linePath } from "../svgdraw.js";
-import { linearScale, pointScale, niceTicks } from "../scales.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
+import { LABEL_FONT_SIZE, textWidth, truncateText, inlineLegend } from "./bar.js";
+import {
+  trendSeries, trendFrame, resolveXAxis, curveMode, bandPath, pointTargets
+} from "./line.js";
+
+const LABEL_MIN_THICKNESS = 14;
 
 
-function _getXY(ser, categories) {
+function _valueGrid(list, axis) {
   /*
-   * Flatten a series to [{x, y}].
-   */
-  const xy = []
-  if (ser.points !== undefined && ser.points !== null && ser.points.length > 0) {
-    for (let p = 0; p < ser.points.length; p = p + 1) {
-      const pt = ser.points[p]
-      xy.push({ x: String(pt.x), y: typeof pt.y === "number" ? pt.y : 0 })
-    }
-  } else if (ser.values !== undefined && ser.values !== null) {
-    for (let v = 0; v < ser.values.length; v = v + 1) {
-      const cat = categories[v] !== undefined ? String(categories[v]) : String(v)
-      xy.push({ x: cat, y: typeof ser.values[v] === "number" ? ser.values[v] : 0 })
-    }
-  }
-  return xy
-}
-
-
-function _computeBaselines(normSeries, xLabels, baseline) {
-  /*
-   * Compute stacked y0/y1 pairs for every series at every x label.
+   * values[s][k]: the value of series s at x key k (null when missing), with
+   * negative values raised to zero.
    *
-   * :param normSeries: [{name, xy:[{x,y}]}] — must all share the same xLabels.
-   * :param xLabels: Ordered x labels array.
-   * :param baseline: "wiggle" | "silhouette" | "zero".
-   * :returns: [{name, bands:[{x, y0, y1}]}]
+   * :returns: { values, points, negatives } -- points[s][k] is the data point.
    */
-  const n = normSeries.length
-  const m = xLabels.length
-
-  /* Build a 2-D array values[seriesIdx][xIdx]. */
+  const keyIndex = new Map()
+  for (let index = 0; index < axis.keys.length; index = index + 1) {
+    keyIndex.set(axis.keys[index].key, index)
+  }
+  let negatives = 0
   const values = []
-  for (let s = 0; s < n; s = s + 1) {
-    const row = []
-    const xyMap = {}
-    for (let p = 0; p < normSeries[s].xy.length; p = p + 1) {
-      xyMap[normSeries[s].xy[p].x] = normSeries[s].xy[p].y
-    }
-    for (let i = 0; i < m; i = i + 1) {
-      const val = xyMap[xLabels[i]]
-      row.push(val !== undefined ? val : 0)
+  const points = []
+  for (let s = 0; s < list.length; s = s + 1) {
+    const row = new Array(axis.keys.length).fill(null)
+    const pointRow = new Array(axis.keys.length).fill(null)
+    for (let p = 0; p < list[s].points.length; p = p + 1) {
+      const point = list[s].points[p]
+      const key = axis.keyOf(point)
+      if (key === null || keyIndex.has(key) === false || point.y === null) {
+        continue
+      }
+      let value = point.y
+      if (value < 0) {
+        negatives = negatives + 1
+        value = 0
+      }
+      row[keyIndex.get(key)] = value
+      pointRow[keyIndex.get(key)] = point
     }
     values.push(row)
+    points.push(pointRow)
   }
-
-  /* Totals per x position. */
-  const totals = []
-  for (let i = 0; i < m; i = i + 1) {
-    let sum = 0
-    for (let s = 0; s < n; s = s + 1) {
-      sum = sum + values[s][i]
-    }
-    totals.push(sum)
-  }
-
-  /* Compute raw (zero-baseline) stacks first. */
-  const stacksY0 = []
-  const stacksY1 = []
-  for (let s = 0; s < n; s = s + 1) {
-    stacksY0.push(new Array(m).fill(0))
-    stacksY1.push(new Array(m).fill(0))
-  }
-  for (let i = 0; i < m; i = i + 1) {
-    let acc = 0
-    for (let s = 0; s < n; s = s + 1) {
-      stacksY0[s][i] = acc
-      acc = acc + values[s][i]
-      stacksY1[s][i] = acc
-    }
-  }
-
-  /* Compute displacement for the chosen baseline. */
-  const displacement = new Array(m).fill(0)
-  if (baseline === "silhouette") {
-    for (let i = 0; i < m; i = i + 1) {
-      displacement[i] = -totals[i] / 2
-    }
-  } else if (baseline === "wiggle") {
-    /* Weighted slope minimisation (Lee & Favre 2010 simplified). */
-    for (let i = 0; i < m; i = i + 1) {
-      let sum = 0
-      for (let s = 0; s < n; s = s + 1) {
-        sum = sum + (n - s - 0.5) * values[s][i]
-      }
-      displacement[i] = totals[i] > 0 ? -sum / totals[i] : 0
-    }
-  }
-
-  /* Apply displacement and build result. */
-  const result = []
-  for (let s = 0; s < n; s = s + 1) {
-    const bands = []
-    for (let i = 0; i < m; i = i + 1) {
-      bands.push({
-        x: xLabels[i],
-        y0: stacksY0[s][i] + displacement[i],
-        y1: stacksY1[s][i] + displacement[i]
-      })
-    }
-    result.push({ name: normSeries[s].name, bands: bands })
-  }
-  return result
+  return { values: values, points: points, negatives: negatives }
 }
 
 
-function _streamPath(bands, xScale, yScale, curveMode) {
+export function streamBaseline(values, baseline) {
   /*
-   * Build a closed path for a single stream band.
+   * The lower edge of the stack at every x.
    *
-   * :param bands: Array of {x, y0, y1}.
-   * :param xScale: Pixel x scale.
-   * :param yScale: Pixel y scale.
-   * :param curveMode: "monotone" | "linear".
-   * :returns: Path data string.
+   * :param values: values[s][k] (null counts as 0).
+   * :param baseline: "wiggle" | "silhouette" | "zero".
+   * :returns: An array g[k] of the baseline at each x.
    */
-  const topPts = []
-  const botPts = []
-  for (let i = 0; i < bands.length; i = i + 1) {
-    topPts.push({ x: xScale(bands[i].x), y: yScale(bands[i].y1) })
-    botPts.push({ x: xScale(bands[i].x), y: yScale(bands[i].y0) })
+  const n = values.length
+  const m = n > 0 ? values[0].length : 0
+  const at = (s, k) => {
+    const value = values[s][k]
+    return value === null || value === undefined ? 0 : value
   }
+  const offsets = new Array(m).fill(0)
 
-  const topPath = curveMode === "monotone" ? smoothPath(topPts) : linePath(topPts)
-  if (topPath === "") {
-    return ""
+  if (baseline === "silhouette") {
+    for (let k = 0; k < m; k = k + 1) {
+      let total = 0
+      for (let s = 0; s < n; s = s + 1) {
+        total = total + at(s, k)
+      }
+      offsets[k] = -total / 2
+    }
+  } else if (baseline === "wiggle") {
+    /*
+     * Minimised weighted wiggle (Byron & Wattenberg 2008, as in d3's
+     * stackOffsetWiggle): the baseline moves from x to x by
+     *   -sum_i f_i * (f_i' / 2 + sum_{j<i} f_j') / sum_i f_i
+     * where f' is the change of a stream since the previous x.
+     */
+    let level = 0
+    for (let k = 1; k < m; k = k + 1) {
+      let total = 0
+      let weighted = 0
+      for (let s = 0; s < n; s = s + 1) {
+        const current = at(s, k)
+        let below = 0
+        for (let j = 0; j < s; j = j + 1) {
+          below = below + (at(j, k) - at(j, k - 1))
+        }
+        const slope = (current - at(s, k - 1)) / 2 + below
+        total = total + current
+        weighted = weighted + slope * current
+      }
+      if (total > 0) {
+        level = level - weighted / total
+      }
+      offsets[k] = level
+    }
+    /* Centre the stream on y = 0 (the y position itself carries no meaning). */
+    let middle = 0
+    for (let k = 0; k < m; k = k + 1) {
+      let total = 0
+      for (let s = 0; s < n; s = s + 1) {
+        total = total + at(s, k)
+      }
+      middle = middle + offsets[k] + total / 2
+    }
+    middle = m > 0 ? middle / m : 0
+    for (let k = 0; k < m; k = k + 1) {
+      offsets[k] = offsets[k] - middle
+    }
   }
-
-  /* Build the bottom edge as a CONTINUATION of the top path, not a new
-   * subpath: replace the leading M command with L so fill produces a
-   * filled band, not two thin edges. */
-  const botReversed = botPts.slice().reverse()
-  const botRaw = curveMode === "monotone"
-    ? smoothPath(botReversed)
-    : linePath(botReversed)
-  const botPath = botRaw.replace(/^M/, "L")
-
-  const data = `${topPath} ${botPath} Z`
-  return data
+  return offsets
 }
 
 
@@ -174,147 +153,186 @@ export function render(ctx) {
   const model = ctx.model
   const root = svgEl("g", { part: "plot" }, [])
 
-  if (model.series.length === 0) {
+  const list = trendSeries(model)
+  if (list.length === 0) {
     return root
   }
 
-  const baselineMode = ctx.attrs("baseline", "wiggle")
-  const curveMode = ctx.attrs("curve", "monotone")
+  const baselineAttr = String(ctx.attrs("baseline", "wiggle")).trim().toLowerCase()
+  const baselineMode = baselineAttr === "silhouette" || baselineAttr === "zero" ? baselineAttr : "wiggle"
+  const mode = curveMode(ctx, "monotone")
 
-  /* Normalise series. */
-  const normSeries = []
-  for (let s = 0; s < model.series.length; s = s + 1) {
-    normSeries.push({
-      name: model.series[s].name,
-      xy: _getXY(model.series[s], model.categories)
+  const grid = _valueGrid(list, resolveXAxis(ctx, list, model, [0, 1], null))
+  if (grid.negatives > 0) {
+    ctx.emit("mj-chart-error", {
+      message: `streamgraph: ${grid.negatives} negative value(s) drawn as 0; a stream cannot be negative`
     })
   }
+  const values = grid.values
+  const offsets = streamBaseline(values, baselineMode)
+  const keyCount = offsets.length
+  if (keyCount === 0) {
+    return root
+  }
 
-  /* Collect ordered x labels. */
-  const xLabelSet = []
-  const xLabelSeen = {}
-  for (let s = 0; s < normSeries.length; s = s + 1) {
-    for (let p = 0; p < normSeries[s].xy.length; p = p + 1) {
-      const label = normSeries[s].xy[p].x
-      if (xLabelSeen[label] !== true) {
-        xLabelSet.push(label)
-        xLabelSeen[label] = true
+  /* y0 / y1 of every stream at every x. */
+  const layers = []
+  for (let k = 0; k < keyCount; k = k + 1) {
+    let level = offsets[k]
+    for (let s = 0; s < values.length; s = s + 1) {
+      if (k === 0) {
+        layers.push([])
       }
+      const value = values[s][k]
+      const size = value === null ? 0 : value
+      layers[s].push({ y0: level, y1: level + size, value: value, point: grid.points[s][k] })
+      level = level + size
     }
   }
 
-  if (xLabelSet.length === 0) {
-    return root
-  }
-
-  /* Compute stacked bands. */
-  const stackedBands = _computeBaselines(normSeries, xLabelSet, baselineMode)
-
-  /* Find the y domain of all band y0/y1 values. */
   let yMin = Infinity
   let yMax = -Infinity
-  for (let s = 0; s < stackedBands.length; s = s + 1) {
-    const bands = stackedBands[s].bands
-    for (let b = 0; b < bands.length; b = b + 1) {
-      if (bands[b].y0 < yMin) {
-        yMin = bands[b].y0
-      }
-      if (bands[b].y1 > yMax) {
-        yMax = bands[b].y1
-      }
+  for (let s = 0; s < layers.length; s = s + 1) {
+    for (let k = 0; k < keyCount; k = k + 1) {
+      yMin = Math.min(yMin, layers[s][k].y0)
+      yMax = Math.max(yMax, layers[s][k].y1)
     }
   }
-  if (yMin === Infinity) {
-    yMin = 0
-  }
-  if (yMax === -Infinity) {
-    yMax = 1
-  }
-  if (yMin === yMax) {
+  if (yMax - yMin <= 0) {
     yMax = yMin + 1
   }
-
-  /* Layout. */
-  const margin = { top: 16, right: 16, bottom: 32, left: 16 }
-  const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
-  const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
-
-  const xScale = pointScale(xLabelSet, [0, plotW])
-  const yScale = linearScale([yMin, yMax], [plotH, 0])
-
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
-  root.appendChild(plot)
-
-  /* Draw streams. */
-  for (let s = 0; s < stackedBands.length; s = s + 1) {
-    const ser = stackedBands[s]
-    const color = ctx.colorFor(normSeries[s].name)
-    const pathData = _streamPath(ser.bands, xScale, yScale, curveMode)
-
-    if (pathData === "") {
-      continue
+  const totals = []
+  for (let k = 0; k < keyCount; k = k + 1) {
+    let total = 0
+    for (let s = 0; s < values.length; s = s + 1) {
+      total = total + (values[s][k] === null ? 0 : values[s][k])
     }
+    totals.push(total)
+  }
 
-    const streamEl = svgEl("path", {
-      d: pathData,
-      fill: color,
-      "fill-opacity": "0.82",
-      stroke: "var(--mj-surface, #fff)",
-      "stroke-width": 0.5,
-      part: "stream",
-      tabindex: "0",
-      role: "img",
-      "aria-label": escapeHtml(normSeries[s].name)
-    }, [])
-    streamEl.appendChild(svgEl("title", null, normSeries[s].name))
-    const capturedName = normSeries[s].name
-    const handler = () => {
-      ctx.emit("mj-chart-stream-click", { series: capturedName })
-    }
-    streamEl.addEventListener("click", handler)
-    streamEl.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault()
-        handler()
-      }
+  /*
+   * Lay out twice when needed: first find which streams can hold a label,
+   * then reserve room for a key of the others below the axis.
+   */
+  let legendHeight = 0
+  let frame = null
+  let unlabelled = []
+  let placements = []
+  for (let pass = 0; pass < 2; pass = pass + 1) {
+    frame = trendFrame(ctx, list, model, {
+      yDomain: [yMin, yMax], nice: false, showYAxis: false, bottomExtra: legendHeight
     })
-    plot.appendChild(streamEl)
-
-    /* Inline label: place at the x midpoint, y midpoint of middle band. */
-    const mid = Math.floor(ser.bands.length / 2)
-    if (mid < ser.bands.length) {
-      const midBand = ser.bands[mid]
-      const labelX = xScale(midBand.x)
-      const labelY = yScale((midBand.y0 + midBand.y1) / 2) + 4
-      const bandHeight = Math.abs(yScale(midBand.y0) - yScale(midBand.y1))
-      if (bandHeight > 14) {
-        plot.appendChild(svgEl("text", {
-          x: labelX, y: labelY, "text-anchor": "middle",
-          "font-size": 11, fill: "var(--mj-text, #14181f)",
-          "pointer-events": "none"
-        }, escapeHtml(normSeries[s].name)))
+    placements = []
+    unlabelled = []
+    for (let s = 0; s < layers.length; s = s + 1) {
+      /* Prefer positions where the whole label fits inside the plot. */
+      const half = textWidth(truncateText(list[s].name, frame.plotW * 0.4)) / 2 + 2
+      const inside = (k) => frame.x.keys[k].px >= half && frame.x.keys[k].px <= frame.plotW - half
+      const anyInside = frame.x.keys.some((key, k) => inside(k))
+      let best = -1
+      let bestThickness = 0
+      for (let k = 0; k < keyCount; k = k + 1) {
+        if (layers[s][k].value === null || (anyInside === true && inside(k) === false)) {
+          continue
+        }
+        const thickness = Math.abs(frame.y(layers[s][k].y0) - frame.y(layers[s][k].y1))
+        if (thickness > bestThickness) {
+          bestThickness = thickness
+          best = k
+        }
+      }
+      if (best >= 0 && bestThickness >= LABEL_MIN_THICKNESS) {
+        placements.push({ series: s, key: best })
+      } else {
+        unlabelled.push(s)
       }
     }
+    /* A bound <mj-chart-legend> lists every series: no inline key then. */
+    if (unlabelled.length === 0 || legendHeight > 0 || ctx.hasLegendPart === true) {
+      break
+    }
+    const probe = inlineLegend(unlabelled.map((s) => ({ label: list[s].name, color: ctx.colorFor(list[s].name) })),
+      0, 0, Math.max(ctx.width - 32, 40))
+    legendHeight = probe.height + 6
+  }
+  root.appendChild(frame.plot)
+
+  const streams = svgEl("g", { part: "streams" }, [])
+  const labels = svgEl("g", { part: "labels", "aria-hidden": "true", "pointer-events": "none" }, [])
+  const targetsGroup = svgEl("g", { part: "targets" }, [])
+  frame.marks.appendChild(streams)
+  frame.marks.appendChild(labels)
+  frame.marks.appendChild(targetsGroup)
+
+  for (let s = 0; s < layers.length; s = s + 1) {
+    const name = list[s].name
+    const color = ctx.colorFor(name)
+    const top = []
+    const bottom = []
+    const targets = []
+    for (let k = 0; k < keyCount; k = k + 1) {
+      const cell = layers[s][k]
+      const px = frame.x.keys[k].px
+      top.push({ x: px, y: cell.value === null ? null : frame.y(cell.y1) })
+      bottom.push({ x: px, y: cell.value === null ? null : frame.y(cell.y0) })
+      if (cell.value !== null && cell.point !== null) {
+        const xLabel = frame.x.labelOf(cell.point)
+        const share = totals[k] > 0 ? (cell.value / totals[k]) * 100 : 0
+        const shareText = formatNumber(share, { maximumFractionDigits: 1 })
+        targets.push({
+          x: px, y: frame.y((cell.y0 + cell.y1) / 2),
+          label: `${name}, ${xLabel}: ${formatNumber(cell.point.y)} (${shareText}% of total)`,
+          detail: { series: name, x: cell.point.raw !== null ? cell.point.raw : xLabel, y: cell.point.y, share: share }
+        })
+      }
+    }
+
+    const data = bandPath(top, bottom, mode)
+    if (data !== "") {
+      const stream = svgEl("path", {
+        d: data,
+        fill: color,
+        "fill-opacity": "0.85",
+        stroke: "var(--mj-surface, #fff)",
+        "stroke-width": 0.5,
+        part: "stream",
+        "data-series": name
+      }, [svgEl("title", null, name)])
+      stream.addEventListener("click", () => {
+        ctx.emit("mj-chart-stream-click", { series: name })
+      })
+      streams.appendChild(stream)
+    }
+    pointTargets(targetsGroup, targets, { ctx: ctx, eventName: "mj-chart-stream-click", width: frame.plotW, radius: 5 })
   }
 
-  /* X-axis labels. */
-  const labelStep = Math.max(1, Math.ceil(xLabelSet.length / 10))
-  for (let i = 0; i < xLabelSet.length; i = i + labelStep) {
-    const label = xLabelSet[i]
-    const x = xScale(label)
-    plot.appendChild(svgEl("text", {
-      x: x, y: plotH + 14, "text-anchor": "middle",
-      "font-size": 10, fill: "var(--mj-text-muted, #6b7280)"
-    }, escapeHtml(label)))
+  /* Labels at each stream's thickest point, with a halo for contrast. */
+  for (let index = 0; index < placements.length; index = index + 1) {
+    const placement = placements[index]
+    const cell = layers[placement.series][placement.key]
+    const name = list[placement.series].name
+    const text = truncateText(name, frame.plotW * 0.4)
+    const half = textWidth(text) / 2
+    const px = Math.min(Math.max(frame.x.keys[placement.key].px, half + 2), frame.plotW - half - 2)
+    labels.appendChild(svgEl("text", {
+      x: px.toFixed(2), y: (frame.y((cell.y0 + cell.y1) / 2) + 4).toFixed(2),
+      "text-anchor": "middle",
+      "font-size": LABEL_FONT_SIZE,
+      fill: "var(--mj-text, #14181f)",
+      stroke: "var(--mj-surface, #ffffff)",
+      "stroke-width": 3,
+      "stroke-opacity": 0.85,
+      "stroke-linejoin": "round",
+      "paint-order": "stroke"
+    }, text))
   }
 
-  /* Axis baseline. */
-  plot.appendChild(svgEl("line", {
-    x1: 0, y1: plotH, x2: plotW, y2: plotH,
-    stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1
-  }, []))
+  /* Key for the streams too thin to label. */
+  if (unlabelled.length > 0 && ctx.hasLegendPart !== true) {
+    const key = inlineLegend(unlabelled.map((s) => ({ label: list[s].name, color: ctx.colorFor(list[s].name) })),
+      0, frame.plotH + 24, Math.max(ctx.width - frame.margin.left - 16, 40))
+    frame.plot.appendChild(key.group)
+  }
 
   return root
 }

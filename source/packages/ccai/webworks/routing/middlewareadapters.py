@@ -14,17 +14,144 @@
 
 import io
 import logging
+import sys
 
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Tuple
 
 from ccai.webworks.routing.request import Request
-from ccai.webworks.routing.response import Response
+from ccai.webworks.routing.response import Response, StreamingResponse
 
 
 # Module-level logger. The WSGI bridge falls back to a 500 status
 # code when the start_response status string is malformed; without
 # the breadcrumb the operator sees a 500 with no upstream context.
 logger = logging.getLogger(__name__)
+
+
+#: Key under which :class:`WSGIMiddlewareAdapter` carries the framework
+#: Request through the WSGI environ it synthesises.
+ENVIRON_REQUEST_KEY = "webworks.request"
+
+# Environ keys that describe the request itself. When a WSGI middleware
+# changes one of them the inner request is rebuilt; every other key it
+# adds is extra state that is copied onto the request scope.
+_REQUEST_ENVIRON_KEYS: Tuple[str, ...] = (
+    "REQUEST_METHOD",
+    "PATH_INFO",
+    "QUERY_STRING",
+    "CONTENT_TYPE",
+    "CONTENT_LENGTH",
+)
+
+
+def _build_response(
+    status_code: int,
+    header_pairs: Iterable[Tuple[str, str]],
+    body: bytes
+) -> Response:
+    """
+        Build a Response from a status, a list of header pairs and a body
+        without losing headers that occur more than once.
+
+        A response may carry the same header several times. ``Set-Cookie``
+        is the common case and can not be joined into one value, so each
+        one is kept as its own header line. Any other repeated header is
+        combined into one comma-separated value, which HTTP defines as
+        equivalent.
+
+        :param status_code: HTTP status code.
+        :param header_pairs: ``(name, value)`` pairs in the order received.
+        :param body: Response body.
+
+        :returns: The Response.
+    """
+    rtnval = Response(status_code=status_code, body=body)
+
+    names_by_lower: Dict[str, str] = {}
+
+    for h_name, h_value in header_pairs:
+        lower_name = h_name.lower()
+
+        if lower_name == "set-cookie":
+            rtnval.add_raw_set_cookie(h_value)
+        elif lower_name in names_by_lower:
+            stored_name = names_by_lower[lower_name]
+            combined = f"{rtnval.headers[stored_name]}, {h_value}"
+            rtnval.set_header(stored_name, combined)
+        else:
+            names_by_lower[lower_name] = h_name
+            rtnval.set_header(h_name, h_value)
+
+    return rtnval
+
+
+def _decode_asgi_headers(raw_headers: Iterable[Any]) -> List[Tuple[str, str]]:
+    """
+        Decode the header list of an ASGI ``http.response.start`` event.
+
+        :param raw_headers: Iterable of ``(name, value)`` byte pairs.
+
+        :returns: List of ``(name, value)`` string pairs.
+    """
+    rtnval: List[Tuple[str, str]] = []
+
+    for header_pair in raw_headers:
+        if len(header_pair) >= 2:
+            h_name = header_pair[0]
+            h_value = header_pair[1]
+            if isinstance(h_name, bytes):
+                h_name = h_name.decode("latin-1")
+            if isinstance(h_value, bytes):
+                h_value = h_value.decode("latin-1")
+            rtnval.append((h_name, h_value))
+
+    return rtnval
+
+
+async def _send_response_events(response: Response, send: Callable) -> None:
+    """
+        Send a Response as ASGI events.
+
+        A streaming response is sent chunk by chunk as the chunks are
+        produced; any other response is sent as one body event.
+
+        :param response: The Response to send.
+        :param send: ASGI send callable.
+    """
+    if isinstance(response, StreamingResponse):
+        asgi_data = response.to_asgi_start()
+        await send(asgi_data)
+
+        content = response.iter_content()
+
+        if hasattr(content, "__aiter__"):
+            async for chunk in content:
+                if chunk:
+                    await send({
+                        "type": "http.response.body",
+                        "body": chunk,
+                        "more_body": True,
+                    })
+        else:
+            for chunk in content:
+                if chunk:
+                    await send({
+                        "type": "http.response.body",
+                        "body": chunk,
+                        "more_body": True,
+                    })
+
+        await send({
+            "type": "http.response.body",
+            "body": b"",
+            "more_body": False,
+        })
+    else:
+        asgi_data = response.to_asgi()
+        await send(asgi_data["start"])
+        await send(asgi_data["body"])
+
+    return
 
 
 # =============================================================================
@@ -112,16 +239,7 @@ class ASGIMiddlewareAdapter:
             if event_type == "http.response.start":
                 response_started[0] = True
                 response_status[0] = event.get("status", 200)
-                raw_headers = event.get("headers", [])
-                for header_pair in raw_headers:
-                    if len(header_pair) >= 2:
-                        h_name = header_pair[0]
-                        h_value = header_pair[1]
-                        if isinstance(h_name, bytes):
-                            h_name = h_name.decode("latin-1")
-                        if isinstance(h_value, bytes):
-                            h_value = h_value.decode("latin-1")
-                        response_headers.append((h_name, h_value))
+                response_headers.extend(_decode_asgi_headers(event.get("headers", [])))
 
             elif event_type == "http.response.body":
                 body_chunk = event.get("body", b"")
@@ -137,9 +255,7 @@ class ASGIMiddlewareAdapter:
             captured_response[0] = resp
 
             # Convert the Response back to ASGI events for the outer middleware
-            asgi_data = resp.to_asgi()
-            await inner_send(asgi_data["start"])
-            await inner_send(asgi_data["body"])
+            await _send_response_events(resp, inner_send)
             return
 
         # Invoke the ASGI middleware, passing our inner app
@@ -147,16 +263,8 @@ class ASGIMiddlewareAdapter:
 
         # If the ASGI middleware sent its own response (short-circuit)
         if response_started[0]:
-            headers_dict: Dict[str, str] = {}
-            for h_name, h_value in response_headers:
-                headers_dict[h_name] = h_value
-
             body = b"".join(response_body_parts)
-            response = Response(
-                status_code=response_status[0],
-                headers=headers_dict,
-                body=body,
-            )
+            response = _build_response(response_status[0], response_headers, body)
             return response
 
         # If the inner app was called but no response was sent via send,
@@ -254,16 +362,7 @@ class AsyncMiddlewareToASGI:
                 event_type = event.get("type", "")
                 if event_type == "http.response.start":
                     captured_status[0] = event.get("status", 200)
-                    raw_headers = event.get("headers", [])
-                    for header_pair in raw_headers:
-                        if len(header_pair) >= 2:
-                            h_name = header_pair[0]
-                            h_value = header_pair[1]
-                            if isinstance(h_name, bytes):
-                                h_name = h_name.decode("latin-1")
-                            if isinstance(h_value, bytes):
-                                h_value = h_value.decode("latin-1")
-                            captured_headers.append((h_name, h_value))
+                    captured_headers.extend(_decode_asgi_headers(event.get("headers", [])))
                 elif event_type == "http.response.body":
                     body_chunk = event.get("body", b"")
                     if body_chunk:
@@ -281,18 +380,19 @@ class AsyncMiddlewareToASGI:
                         "body": req.body,
                         "more_body": False,
                     }
-                return {"type": "http.disconnect"}
+
+                # The body has been replayed. What follows on the channel
+                # is the client's real state, so the inner app is told
+                # about a disconnect when one happens and not before.
+                event = await receive()
+                return event
 
             await self._app(scope, inner_receive, capture_send)
 
-            headers_dict: Dict[str, str] = {}
-            for h_name, h_value in captured_headers:
-                headers_dict[h_name] = h_value
-
-            response = Response(
-                status_code=captured_status[0],
-                headers=headers_dict,
-                body=b"".join(captured_body_parts),
+            response = _build_response(
+                captured_status[0],
+                captured_headers,
+                b"".join(captured_body_parts),
             )
             return response
 
@@ -300,9 +400,7 @@ class AsyncMiddlewareToASGI:
         response = await self._middleware(request, call_next)
 
         # Send the response back via ASGI
-        asgi_data = response.to_asgi()
-        await send(asgi_data["start"])
-        await send(asgi_data["body"])
+        await _send_response_events(response, send)
         return
 
     async def _read_body(self, receive: Callable) -> bytes:
@@ -394,13 +492,20 @@ class WSGIMiddlewareAdapter:
         # Build WSGI environ from the request
         environ = self._build_environ(request)
 
+        # What the environ looked like before the WSGI middleware saw it,
+        # to tell afterwards what the middleware changed.
+        baseline_environ = dict(environ)
+
         # Create an inner WSGI app that delegates to call_next
         def inner_app(
             inner_environ: Dict[str, Any],
             inner_start_response: Callable
         ) -> Iterable[bytes]:
-            # Reconstruct a Request from the (possibly modified) environ
-            inner_request = Request.from_wsgi(inner_environ)
+            # Continue with the request the pipeline was processing,
+            # carrying over only what the WSGI middleware changed.
+            inner_request = self._resolve_inner_request(
+                request, baseline_environ, inner_environ
+            )
             resp = call_next(inner_request)
 
             # Convert Response to WSGI format
@@ -455,17 +560,87 @@ class WSGIMiddlewareAdapter:
                 )
                 status_code = 500
 
-        # Build headers dict
-        headers_dict: Dict[str, str] = {}
-        for h_name, h_value in captured_headers:
-            headers_dict[h_name] = h_value
-
-        response = Response(
-            status_code=status_code,
-            headers=headers_dict,
-            body=b"".join(body_parts),
-        )
+        response = _build_response(status_code, captured_headers, b"".join(body_parts))
         return response
+
+    def _resolve_inner_request(
+        self,
+        request: Request,
+        baseline_environ: Dict[str, Any],
+        inner_environ: Dict[str, Any]
+    ) -> Request:
+        """
+            Get the Request to continue the pipeline with after the WSGI
+            middleware has run.
+
+            The request the pipeline was processing carries state the
+            environ can not express: the path parameters set by the
+            dispatcher, the authentication context on its scope, its
+            middleware context and its background tasks. That request is
+            therefore kept. When the WSGI middleware changed the request
+            line, a header or the input stream, a request with those values
+            is built around the same scope and the same state. Any other
+            key the middleware added to the environ is copied onto the
+            request scope so later middleware and the handler can read it.
+
+            :param request: The request the pipeline was processing.
+            :param baseline_environ: The environ as it was handed to the
+                WSGI middleware.
+            :param inner_environ: The environ the WSGI middleware passed on.
+
+            :returns: The Request for the rest of the pipeline.
+        """
+        request_changed = False
+
+        for key in _REQUEST_ENVIRON_KEYS:
+            if inner_environ.get(key) != baseline_environ.get(key):
+                request_changed = True
+
+        header_keys = set()
+        for key in list(baseline_environ.keys()) + list(inner_environ.keys()):
+            if key.startswith("HTTP_"):
+                header_keys.add(key)
+
+        for key in header_keys:
+            if inner_environ.get(key) != baseline_environ.get(key):
+                request_changed = True
+
+        if inner_environ.get("wsgi.input") is not baseline_environ.get("wsgi.input"):
+            request_changed = True
+
+        rtnval = request
+
+        if request_changed:
+            parsed = Request.from_wsgi(inner_environ)
+
+            rtnval = Request(
+                method=parsed.method,
+                path=parsed.path,
+                query_string=parsed.raw_query_string,
+                headers={name: value for name, value in parsed.headers.items()},
+                body=parsed.body,
+                scheme=request.scheme,
+                host=request.host,
+                port=request.port,
+                scope=request.scope,
+            )
+            rtnval.path_params = request.path_params
+            rtnval.middleware_context = request.middleware_context
+            rtnval.background_tasks = request.background_tasks
+
+        # State the WSGI middleware attached to the environ
+        for key, value in inner_environ.items():
+            is_request_key = (
+                key in _REQUEST_ENVIRON_KEYS
+                or key.startswith("HTTP_")
+                or key == ENVIRON_REQUEST_KEY
+            )
+
+            if not is_request_key:
+                if key not in baseline_environ or baseline_environ[key] is not value:
+                    rtnval.scope[key] = value
+
+        return rtnval
 
     def _build_environ(self, request: Request) -> Dict[str, Any]:
         """
@@ -477,16 +652,20 @@ class WSGIMiddlewareAdapter:
         """
         environ: Dict[str, Any] = {
             "REQUEST_METHOD": request.method,
+            "SCRIPT_NAME": "",
             "PATH_INFO": request.path,
             "QUERY_STRING": request._query_string.decode("utf-8", errors="replace") if request._query_string else "",
             "SERVER_NAME": request._host,
             "SERVER_PORT": str(request._port),
+            "SERVER_PROTOCOL": "HTTP/1.1",
+            "wsgi.version": (1, 0),
             "wsgi.url_scheme": request._scheme,
             "wsgi.input": io.BytesIO(request.body),
-            "wsgi.errors": io.BytesIO(),
+            "wsgi.errors": sys.stderr,
             "wsgi.multithread": False,
             "wsgi.multiprocess": False,
             "wsgi.run_once": False,
+            ENVIRON_REQUEST_KEY: request,
         }
 
         # Add headers to environ
@@ -584,15 +763,7 @@ class MiddlewareToWSGI:
                         )
                         status_code = 500
 
-                headers_dict: Dict[str, str] = {}
-                for h_name, h_value in captured_headers:
-                    headers_dict[h_name] = h_value
-
-                response = Response(
-                    status_code=status_code,
-                    headers=headers_dict,
-                    body=b"".join(body_parts),
-                )
+                response = _build_response(status_code, captured_headers, b"".join(body_parts))
                 return response
 
             # Execute the middleware

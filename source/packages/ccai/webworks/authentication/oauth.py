@@ -24,9 +24,17 @@ OIDC ``id_token`` validation). It deliberately depends on no
 higher-level OAuth framework: provider config is supplied by the
 caller as a plain dict, and the wrapper performs each network round
 trip synchronously. The synchronous shape matches the surrounding
-handler pattern; webworks runs sync handlers on the default
-executor, so blocking on the provider's authorization / token /
-JWKS / userinfo endpoints does not stall the event loop.
+handler pattern: the authentication blueprints hand their sync
+handlers to the default executor when they are dispatched from the
+event loop (see ``SecurityBlueprint._wrap_handler``), so blocking on
+the provider's authorization / token / JWKS / userinfo endpoints does
+not stall the event loop.
+
+Discovery documents and JWKS documents change rarely, so they are
+cached per URL for :data:`DOCUMENT_CACHE_TTL_SECONDS` instead of being
+fetched on every login. A JWKS is fetched again at once when an
+``id_token`` does not verify against the cached copy, which is what a
+provider key rotation looks like.
 
 The class carries no per-request state: handler code constructs a
 fresh instance for the duration of one kickoff or callback request,
@@ -43,8 +51,10 @@ __credits__ = []
 
 
 import secrets
+import threading
+import time
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlencode
 
 import requests as http_requests
@@ -100,6 +110,76 @@ _ACCEPTED_ID_TOKEN_ALGORITHMS = ["RS256", "ES256", "ES384", "ES512"]
 # would tie up the calling worker; cap it tight enough that a stuck
 # provider trips the surrounding error path quickly.
 _HTTP_TIMEOUT_SECONDS = 10
+
+
+# How long a fetched discovery or JWKS document is reused, in seconds.
+DOCUMENT_CACHE_TTL_SECONDS = 3600
+
+# Fetched provider documents by URL, each with the time it was fetched.
+_document_cache: Dict[str, Tuple[float, Any]] = {}
+_document_cache_lock = threading.Lock()
+
+
+def fetch_provider_document(url: str, force_refresh: bool = False) -> Any:
+    """
+        Fetch a provider's discovery or JWKS document, with caching.
+
+        The parsed JSON document is kept per URL for
+        :data:`DOCUMENT_CACHE_TTL_SECONDS`, so a login does not cost an
+        extra network round trip for documents that rarely change.
+
+        :param url: The URL of the document.
+        :param force_refresh: Fetch the document even when a cached
+                              copy is still fresh.
+
+        :returns: The parsed JSON document.
+
+        :raises requests.RequestException: When the fetch fails.
+    """
+    document, _ = _load_provider_document(url, force_refresh=force_refresh)
+    return document
+
+
+def _load_provider_document(url: str, force_refresh: bool = False) -> Tuple[Any, bool]:
+    """
+        Fetch a provider document and report whether it came from the cache.
+
+        :param url: The URL of the document.
+        :param force_refresh: Fetch the document even when a cached
+                              copy is still fresh.
+
+        :returns: A tuple of (parsed JSON document, was_cached).
+
+        :raises requests.RequestException: When the fetch fails.
+    """
+    now = time.time()
+
+    if not force_refresh:
+        with _document_cache_lock:
+            cached = _document_cache.get(url)
+        if cached is not None and now - cached[0] < DOCUMENT_CACHE_TTL_SECONDS:
+            return (cached[1], True)
+
+    response = http_requests.get(
+        url,
+        timeout=_HTTP_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    document = response.json()
+
+    with _document_cache_lock:
+        _document_cache[url] = (now, document)
+
+    return (document, False)
+
+
+def clear_provider_document_cache() -> None:
+    """
+        Forget every cached discovery and JWKS document.
+    """
+    with _document_cache_lock:
+        _document_cache.clear()
+    return
 
 
 class OAuthClient:
@@ -204,13 +284,7 @@ class OAuthClient:
             self._server_metadata = {}
             return self._server_metadata
 
-        response = http_requests.get(
-            metadata_url,
-            timeout=_HTTP_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-
-        loaded = response.json()
+        loaded = fetch_provider_document(metadata_url)
         if not isinstance(loaded, dict):
             self._server_metadata = {}
             return self._server_metadata
@@ -623,23 +697,33 @@ class OAuthClient:
             )
             raise ValueError(errmsg)
 
-        jwks_response = http_requests.get(
-            jwks_uri,
-            timeout=_HTTP_TIMEOUT_SECONDS,
-        )
-        jwks_response.raise_for_status()
-        jwks = jwks_response.json()
+        jwks, jwks_was_cached = _load_provider_document(jwks_uri)
 
         # Decode the JWT against the provider's JWKS, restricting
         # acceptable signing algorithms up front to defeat
         # algorithm-confusion attacks (a JWKS that advertises
         # ``alg: HS256`` for an asymmetric key, etc.).
-        key_set = jsonwebtoken.JsonWebKeySet.import_key_set(jwks)
-        decoded = jsonwebtoken.decode(
-            id_token_str,
-            key=key_set,
-            algorithms=_ACCEPTED_ID_TOKEN_ALGORITHMS,
-        )
+        try:
+            key_set = jsonwebtoken.JsonWebKeySet.import_key_set(jwks)
+            decoded = jsonwebtoken.decode(
+                id_token_str,
+                key=key_set,
+                algorithms=_ACCEPTED_ID_TOKEN_ALGORITHMS,
+            )
+        except (jsonwebtoken.JoseError, ValueError):
+            if not jwks_was_cached:
+                raise
+
+            # The cached JWKS may predate a key rotation at the
+            # provider. Fetch it afresh once; a token that still does
+            # not verify is rejected by the exception this raises.
+            jwks = fetch_provider_document(jwks_uri, force_refresh=True)
+            key_set = jsonwebtoken.JsonWebKeySet.import_key_set(jwks)
+            decoded = jsonwebtoken.decode(
+                id_token_str,
+                key=key_set,
+                algorithms=_ACCEPTED_ID_TOKEN_ALGORITHMS,
+            )
 
         # Build the claims registry. ``essential: True, value: …``
         # asserts the claim is present and equals the expected
@@ -765,8 +849,11 @@ def generate_oauth_nonce() -> str:
 
 
 __all__ = [
+    "DOCUMENT_CACHE_TTL_SECONDS",
     "OAuthClient",
     "OAuthError",
+    "clear_provider_document_cache",
+    "fetch_provider_document",
     "generate_oauth_nonce",
     "generate_oauth_state",
 ]

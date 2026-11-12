@@ -1102,3 +1102,168 @@ def test_session_data_default_timestamps_are_timezone_aware():
         raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Session Lifetime and Cookie Renewal
+# =============================================================================
+
+def test_update_session_extends_by_the_lifetime_the_session_was_created_with():
+    """
+        Test that renewing a long-lived (remember-me) session keeps its own
+        lifetime instead of shrinking it to the store default.
+    """
+    store = InMemorySessionStore(default_expiration=3600)
+    principal = Principal(identifier="user-1")
+    thirty_days = 30 * 86400
+    
+    session = run_async(store.create_session(principal, expires_in=thirty_days))
+    renewed = run_async(store.update_session(session.session_id, extend_expiration=True))
+    
+    remaining = (renewed.expires_at - datetime.now(timezone.utc)).total_seconds()
+    
+    if remaining < thirty_days - 60:
+        errmsg = f"Expected about {thirty_days}s to remain after renewal, got {remaining}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_update_session_does_not_lengthen_a_short_session():
+    """
+        Test that renewing a 60 second session extends it by 60 seconds,
+        not by the store default of an hour.
+    """
+    store = InMemorySessionStore(default_expiration=3600)
+    principal = Principal(identifier="user-1")
+    
+    session = run_async(store.create_session(principal, expires_in=60))
+    renewed = run_async(store.update_session(session.session_id, extend_expiration=True))
+    
+    remaining = (renewed.expires_at - datetime.now(timezone.utc)).total_seconds()
+    
+    if remaining > 61:
+        errmsg = f"Expected at most 60s to remain after renewal, got {remaining}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_session_authenticator_reissues_cookie_on_renewal():
+    """
+        Test that a renewed session comes with a Set-Cookie header whose
+        Max-Age follows the extended expiration.
+    """
+    store = InMemorySessionStore(default_expiration=3600)
+    authenticator = SessionAuthenticator(store, renew_on_access=True)
+    session = run_async(store.create_session(Principal(identifier="user-1"), expires_in=600))
+    
+    result = run_async(authenticator.authenticate(
+        {"cookies": {"session_id": session.session_id}}
+    ))
+    
+    cookie = result.response_headers.get("Set-Cookie", "")
+    
+    if f"session_id={session.session_id}" not in cookie:
+        errmsg = f"Expected the session cookie to be re-issued, got {cookie!r}"
+        raise AssertionError(errmsg)
+    
+    if "Max-Age=" not in cookie:
+        errmsg = f"Expected Max-Age on the re-issued cookie, got {cookie!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_session_authenticator_does_not_reissue_cookie_without_renewal():
+    """
+        Test that no cookie is re-issued when renewal on access is off.
+    """
+    store = InMemorySessionStore(default_expiration=3600)
+    authenticator = SessionAuthenticator(store, renew_on_access=False)
+    session = run_async(store.create_session(Principal(identifier="user-1")))
+    
+    result = run_async(authenticator.authenticate(
+        {"cookies": {"session_id": session.session_id}}
+    ))
+    
+    if "Set-Cookie" in result.response_headers:
+        errmsg = "Expected no Set-Cookie header without renewal"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_session_authenticator_clears_cookie_for_unknown_session():
+    """
+        Test that a cookie naming a session that is unknown or expired is
+        cleared, so the browser stops presenting it.
+    """
+    store = InMemorySessionStore()
+    authenticator = SessionAuthenticator(store)
+    
+    result = run_async(authenticator.authenticate(
+        {"cookies": {"session_id": "no-such-session"}}
+    ))
+    
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = f"Expected FAILURE, got {result.status}"
+        raise AssertionError(errmsg)
+    
+    cookie = result.response_headers.get("Set-Cookie", "")
+    if "Max-Age=0" not in cookie:
+        errmsg = f"Expected a clearing Set-Cookie header, got {cookie!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_in_memory_session_store_stays_within_its_bound():
+    """
+        Test that the store never holds more sessions than max_sessions.
+    """
+    store = InMemorySessionStore(default_expiration=3600, max_sessions=3)
+    
+    for index in range(10):
+        run_async(store.create_session(Principal(identifier=f"user-{index}")))
+    
+    if store.get_session_count() != 3:
+        errmsg = f"Expected 3 sessions, got {store.get_session_count()}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_in_memory_session_store_sweeps_expired_sessions_on_create():
+    """
+        Test that expired sessions are removed when a session is created,
+        not only when they happen to be looked up.
+    """
+    store = InMemorySessionStore(default_expiration=3600)
+    
+    stale = run_async(store.create_session(Principal(identifier="stale")))
+    stale.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    
+    run_async(store.create_session(Principal(identifier="fresh")))
+    
+    if store.get_session_count() != 1:
+        errmsg = f"Expected the expired session to be swept, got {store.get_session_count()} sessions"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_clear_cookie_names_the_cookie_domain():
+    """
+        Test that the clearing cookie repeats the Domain attribute; a
+        cookie set for a domain is only removed when the domain is named.
+    """
+    attributes = CookieAttributes(domain="example.com")
+    
+    cookie = attributes.to_clear_cookie_string("session_id")
+    
+    if "Domain=example.com" not in cookie:
+        errmsg = f"Expected Domain in the clearing cookie, got {cookie!r}"
+        raise AssertionError(errmsg)
+    
+    return

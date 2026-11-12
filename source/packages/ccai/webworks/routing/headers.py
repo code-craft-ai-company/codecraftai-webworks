@@ -5,7 +5,74 @@
     access.
 """
 
-from typing import Dict, Iterable, Optional, Tuple
+import re
+
+from typing import Dict, Iterable, List, Optional, Tuple
+
+
+# A backslash escape inside a quoted cookie value: three octal digits or
+# any single character.
+_COOKIE_ESCAPE_RE: re.Pattern = re.compile(r"\\(?:([0-3][0-7][0-7])|(.))")
+
+
+def _unescape_cookie_value(match: "re.Match") -> str:
+    """
+        Replace one backslash escape of a quoted cookie value.
+
+        :param match: A match of :data:`_COOKIE_ESCAPE_RE`.
+
+        :returns: The character the escape stands for.
+    """
+    octal_digits = match.group(1)
+
+    if octal_digits is not None:
+        rtnval = chr(int(octal_digits, 8))
+    else:
+        rtnval = match.group(2)
+
+    return rtnval
+
+
+def parse_cookie_header(header_value: Optional[str]) -> List[Tuple[str, str]]:
+    """
+        Parse the value of a ``Cookie`` request header into its
+        ``(name, value)`` pairs, in the order the client sent them.
+
+        The header is split pair by pair, so one malformed cookie does not
+        hide the others: ``prefs={"x":1}; session_id=abc`` yields both
+        cookies. A value in double quotes is returned without the quotes
+        and with its backslash escapes resolved.
+        A pair without ``=`` or without a name is skipped.
+
+        The same name can occur more than once -- a browser sends every
+        cookie that matches the request, and cookies set for different
+        paths or domains may share a name. All occurrences are returned so
+        the caller decides which one counts, and can tell that there was
+        more than one.
+
+        :param header_value: The raw ``Cookie`` header value, or ``None``.
+
+        :returns: List of ``(name, value)`` pairs; empty for an empty header.
+    """
+    rtnval: List[Tuple[str, str]] = []
+
+    if header_value:
+        for chunk in str(header_value).split(";"):
+            name, separator, value = chunk.partition("=")
+            name = name.strip()
+            value = value.strip()
+
+            if separator == "" or name == "":
+                continue
+
+            if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+                value = value[1:-1]
+                if "\\" in value:
+                    value = _COOKIE_ESCAPE_RE.sub(_unescape_cookie_value, value)
+
+            rtnval.append((name, value))
+
+    return rtnval
 
 
 class Headers:

@@ -33,7 +33,9 @@ PM/SCM chart components.
 - **Day-of-week header row** — `role="row"` with `role="columnheader"` cells (Sun–Sat or Mon–Sun depending on locale).
 - **Calendar grid** — `role="grid"` containing weeks as `role="row"` and days as `role="gridcell"`.
 - **Day cell** — contains the date number, event chips, and an overflow indicator ("+ N more").
-- **Event chip** — colored pill rendering a single event; truncated label with full title in tooltip.
+- **Event chip** — pill rendering a single event; truncated label with full title in tooltip. The
+  event's `color` is shown as a start stripe and a light tint of the surface behind the text; the
+  text stays `--mj-text`, so any event colour keeps WCAG AA contrast in both themes.
 - **Time grid (week/day view)** — hourly row grid with event blocks positioned by start/end time.
 - **All-day row** — top row in week/day view for all-day events.
 - **Now indicator** — horizontal line at the current time in week/day view.
@@ -98,6 +100,7 @@ PM/SCM chart components.
 | `--mj-cal-today-bg` | `token(--mj-color-primary-subtle)` | Today cell background. |
 | `--mj-cal-other-month-opacity` | `0.4` | Opacity for days outside the current month. |
 | `--mj-cal-event-radius` | `token(--mj-radius-sm)` | Event chip border radius. |
+| `--mj-cal-event-color` | `token(--mj-accent)` | Colour of events without their own `color` (stripe and 18% tint); each event's `color` is written here on its chip. |
 | `--mj-cal-now-color` | `token(--mj-color-error)` | Now indicator line color. |
 | `--mj-cal-weekend-bg` | `token(--mj-color-surface-subtle)` | Weekend column background (week/day view). |
 | `--mj-cal-time-col-width` | `48px` | Width of the time label column in week/day view. |
@@ -164,8 +167,17 @@ that day. The popover is managed by the shared overlay/positioning engine.
 - Event colors must not be the only differentiator between event types; icon or label required.
 
 ## 14. Form participation
-N/A when used as an event calendar. When used as a date picker (shared engine with
-`<mj-date-picker>`), the picker component handles form participation.
+`<mj-calendar>` is form-associated (ElementInternals), so `<mj-form>` and native
+forms collect it:
+
+- With a `name`, it submits the selected day as `YYYY-MM-DD` (nothing while no day
+  is selected). The `value` attribute and property remain the displayed anchor
+  date and are not the submitted value.
+- `required` makes it invalid (`valueMissing`) until a day is selected.
+- Form reset clears the selection; form state restore selects the saved day.
+- A disabled `<fieldset>` or form stops day selection.
+
+For a compact date field in a form, `<mj-date-picker>` remains the better fit.
 
 ## 15. Internationalization & RTL
 - Week grid column order reverses in RTL.

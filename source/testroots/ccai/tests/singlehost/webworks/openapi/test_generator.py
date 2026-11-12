@@ -1060,9 +1060,11 @@ def test_standard_error_responses_included():
     return
 
 
-def test_standard_error_responses_reference_rest_error():
+def test_standard_error_responses_reference_http_error():
     """
-        Test that standard error responses reference the RESTError schema.
+        Test that the standard error responses of an ordinary endpoint
+        reference the HTTPError schema, the ``{detail, status_code}`` body
+        the dispatcher sends.
     """
     desc = _create_mock_descriptor(handler_name="get_user", path="/users/{id:int}")
     registry = _create_mock_registry(descriptors=[desc])
@@ -1079,7 +1081,7 @@ def test_standard_error_responses_reference_rest_error():
         json_content = content.get("application/json", {})
         schema = json_content.get("schema", {})
 
-        expected_ref = "#/components/schemas/RESTError"
+        expected_ref = "#/components/schemas/HTTPError"
         if schema.get("$ref") != expected_ref:
             errmsg = f"Expected $ref '{expected_ref}' for {status_code}, got {schema}"
             raise AssertionError(errmsg)
@@ -1442,10 +1444,12 @@ def test_security_no_access_policy_returns_none():
     return
 
 
-def test_security_fallback_to_generic_oauth2():
+def test_security_omitted_when_no_scheme_is_configured():
     """
-        Test that when no security_schemes are configured, falls back to
-        a generic 'oauth2' reference.
+        Test that when no security_schemes are configured, a protected
+        operation carries no security requirement: a requirement naming a
+        scheme that components.securitySchemes does not define would make
+        the document invalid. The required scopes are still recorded.
     """
     access_policy = _create_mock_access_policy(require_auth=True, scopes=["read"])
     constraints = _create_mock_constraints(access_policy=access_policy)
@@ -1460,18 +1464,13 @@ def test_security_fallback_to_generic_oauth2():
 
     spec = generator.generate()
     operation = spec["paths"]["/data"]["get"]
-    security = operation.get("security", [])
 
-    if len(security) != 1:
-        errmsg = f"Expected 1 security requirement, got {len(security)}"
+    if "security" in operation:
+        errmsg = f"Expected no security requirement, got {operation['security']}"
         raise AssertionError(errmsg)
 
-    if "oauth2" not in security[0]:
-        errmsg = f"Expected 'oauth2' fallback, got {security[0]}"
-        raise AssertionError(errmsg)
-
-    if security[0]["oauth2"] != ["read"]:
-        errmsg = f"Expected scopes ['read'], got {security[0]['oauth2']}"
+    if operation.get("x-required-scopes") != ["read"]:
+        errmsg = f"Expected x-required-scopes ['read'], got {operation.get('x-required-scopes')!r}"
         raise AssertionError(errmsg)
 
     return
@@ -1922,5 +1921,512 @@ def test_derive_tags_with_descriptions():
     if users_tag[0].get("description") != "User endpoints":
         errmsg = f"Expected description 'User endpoints', got {users_tag[0].get('description')!r}"
         raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Generation from endpoints declared through the real endpoint classes
+# =============================================================================
+
+from typing import List, Optional
+
+from ccai.webworks.endpoints.accesspolicy import AccessPolicy
+from ccai.webworks.endpoints.registry import EndpointRegistry
+from ccai.webworks.endpoints.restblueprint import RestBlueprint
+from ccai.webworks.endpoints.restendpoint import RestEndpoint
+from ccai.webworks.endpoints.rest.resourceendpoint import ResourceEndpoint
+from ccai.webworks.endpoints.rest.collectionendpoint import CollectionEndpoint
+from ccai.webworks.openapi.validation import OpenAPIValidator
+
+
+@dataclass
+class ArticleIn:
+    """Request schema for the real-path generator tests."""
+    title: str
+    body: Optional[str] = None
+
+
+@dataclass
+class ArticleOut:
+    """Response schema for the real-path generator tests."""
+    id: int
+    title: str
+
+
+def _generate_for(*sources, **generator_kwargs):
+    """Collect ``sources`` into a registry and generate a specification from it."""
+    registry = EndpointRegistry()
+    registry.collect_from(*sources)
+    generator = OpenAPIGenerator(registry=registry, info=_create_default_info(), **generator_kwargs)
+    return generator, generator.generate()
+
+
+def test_generate_with_schemas_declared_through_attach_at():
+    """An endpoint declared with attach_at(request_schema=..., response_schema=...) generates without error."""
+
+    class ArticlesBlueprint(RestBlueprint):
+        base_path = "/articles"
+
+    @ArticlesBlueprint.attach_at(leaf="drafts", methods=["POST"], request_schema=ArticleIn, response_schema=ArticleOut)
+    def create_article(request):
+        return {}
+
+    _, spec = _generate_for(create_article)
+    operation = spec["paths"]["/articles/drafts"]["post"]
+
+    request_ref = operation["requestBody"]["content"]["application/json"]["schema"]
+    if request_ref != {"$ref": "#/components/schemas/ArticleIn"}:
+        raise AssertionError(f"Expected a $ref to ArticleIn, got {request_ref}")
+
+    if "ArticleIn" not in spec["components"]["schemas"] or "ArticleOut" not in spec["components"]["schemas"]:
+        raise AssertionError(f"Expected both schemas in components, got {sorted(spec['components']['schemas'])}")
+
+    return
+
+
+def test_generate_accepts_an_already_inspected_schema_dict():
+    """A descriptor that carries only the inspected JSON-schema dict is documented with that schema."""
+    inspected = {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+    desc = _create_mock_descriptor(
+        handler_name="create_thing",
+        path="/things",
+        methods=["POST"],
+        extras={"rest": {"request_schema": inspected}},
+    )
+    registry = _create_mock_registry(descriptors=[desc])
+    generator = OpenAPIGenerator(registry=registry, info=_create_default_info(), rest_only=False)
+
+    spec = generator.generate()
+    schema = spec["paths"]["/things"]["post"]["requestBody"]["content"]["application/json"]["schema"]
+
+    if schema != inspected:
+        raise AssertionError(f"Expected the inspected schema to be used as it is, got {schema}")
+
+    return
+
+
+def test_rest_endpoint_attach_at_is_included_by_default():
+    """An endpoint declared with RestEndpoint.attach_at appears without passing rest_only=False."""
+
+    @RestEndpoint.attach_at(leaf="status", methods=["GET"])
+    def status(request):
+        return {}
+
+    _, spec = _generate_for(status)
+
+    if "/status" not in spec["paths"]:
+        raise AssertionError(f"Expected '/status' in the default specification, got {list(spec['paths'])}")
+
+    return
+
+
+def test_declared_query_parameters_are_emitted():
+    """query_params declared on attach_at become optional query parameters."""
+
+    @RestEndpoint.attach_at(leaf="search", methods=["GET"], query_params={"q": str, "page": int})
+    def search(request):
+        return {}
+
+    _, spec = _generate_for(search)
+    parameters = spec["paths"]["/search"]["get"]["parameters"]
+
+    described = {parameter["name"]: (parameter["in"], parameter["required"], parameter["schema"]) for parameter in parameters}
+    expected = {
+        "q": ("query", False, {"type": "string"}),
+        "page": ("query", False, {"type": "integer"}),
+    }
+    if described != expected:
+        raise AssertionError(f"Expected {expected}, got {described}")
+
+    return
+
+
+def test_operation_ids_differ_when_one_handler_serves_put_and_patch():
+    """RestEndpoint.update registers PUT and PATCH on one handler; the two operations get different ids."""
+
+    @RestEndpoint.update(path="/items/{id}")
+    def update_item(request):
+        return {}
+
+    _, spec = _generate_for(update_item)
+    path_item = spec["paths"]["/items/{id}"]
+
+    put_id = path_item["put"]["operationId"]
+    patch_id = path_item["patch"]["operationId"]
+
+    if (put_id, patch_id) != ("update_item_put", "update_item_patch"):
+        raise AssertionError(f"Expected ('update_item_put', 'update_item_patch'), got ({put_id!r}, {patch_id!r})")
+
+    return
+
+
+def test_operation_ids_differ_for_handlers_with_the_same_name():
+    """Two handlers that share a name and a method are told apart by their paths."""
+
+    def make_handler():
+        def list_items(request):
+            return {}
+        return list_items
+
+    first = RestEndpoint.attach_at(leaf="widgets", methods=["GET"])(make_handler())
+    second = RestEndpoint.attach_at(leaf="gadgets", methods=["GET"])(make_handler())
+
+    _, spec = _generate_for(first, second)
+
+    ids = sorted([spec["paths"]["/widgets"]["get"]["operationId"], spec["paths"]["/gadgets"]["get"]["operationId"]])
+
+    if ids != ["get_gadgets_list_items", "get_widgets_list_items"]:
+        raise AssertionError(f"Expected path-qualified ids, got {ids}")
+
+    return
+
+
+def test_operation_id_is_the_handler_name_when_it_is_unique():
+    """A handler whose name no other operation uses keeps its bare name as the operationId."""
+
+    @RestEndpoint.attach_at(leaf="orders", methods=["GET"])
+    def list_orders(request):
+        return {}
+
+    _, spec = _generate_for(list_orders)
+
+    if spec["paths"]["/orders"]["get"]["operationId"] != "list_orders":
+        raise AssertionError(f"Expected 'list_orders', got {spec['paths']['/orders']['get']['operationId']!r}")
+
+    return
+
+
+def test_generated_specification_with_protected_endpoint_validates_without_schemes():
+    """With no security schemes configured, a protected endpoint no longer makes the document invalid."""
+
+    @RestEndpoint.attach_at(leaf="secret", methods=["GET"], access_policy=AccessPolicy(roles=["admin"]))
+    def secret(request):
+        return {}
+
+    generator, spec = _generate_for(secret)
+
+    issues = generator.validate()
+    if len(issues) != 0:
+        raise AssertionError(f"Expected a valid specification, got {issues}")
+
+    if "securitySchemes" in spec.get("components", {}):
+        raise AssertionError("Expected no securitySchemes when none is configured")
+
+    return
+
+
+def test_required_roles_are_recorded_as_an_extension():
+    """The roles an access policy requires are written as x-required-roles."""
+
+    @RestEndpoint.attach_at(leaf="secret", methods=["GET"], access_policy=AccessPolicy(roles=["admin", "auditor"]))
+    def secret(request):
+        return {}
+
+    _, spec = _generate_for(secret)
+    roles = spec["paths"]["/secret"]["get"].get("x-required-roles")
+
+    if sorted(roles) != ["admin", "auditor"]:
+        raise AssertionError(f"Expected x-required-roles ['admin', 'auditor'], got {roles!r}")
+
+    return
+
+
+def test_security_lists_only_the_schemes_the_endpoint_accepts():
+    """An endpoint that names its security schemes is documented with those, not every configured one."""
+    schemes = {
+        "bearer": HTTPSecurityScheme(scheme="bearer"),
+        "api_key": APIKeySecurityScheme(name="X-API-Key"),
+    }
+
+    @RestEndpoint.attach_at(
+        leaf="tokens",
+        methods=["GET"],
+        access_policy=AccessPolicy(require_auth=True),
+        security_schemes=["bearer"],
+    )
+    def tokens(request):
+        return {}
+
+    _, spec = _generate_for(tokens, security_schemes=schemes)
+    security = spec["paths"]["/tokens"]["get"]["security"]
+
+    if security != [{"bearer": []}]:
+        raise AssertionError(f"Expected [{{'bearer': []}}], got {security}")
+
+    return
+
+
+def test_security_never_references_a_scheme_that_is_not_configured():
+    """A scheme an endpoint names but the generator does not define is left out of the requirement."""
+    schemes = {"bearer": HTTPSecurityScheme(scheme="bearer")}
+
+    @RestEndpoint.attach_at(
+        leaf="tokens",
+        methods=["GET"],
+        access_policy=AccessPolicy(require_auth=True),
+        security_schemes=["bearer", "undefined_scheme"],
+    )
+    def tokens(request):
+        return {}
+
+    generator, spec = _generate_for(tokens, security_schemes=schemes)
+
+    if spec["paths"]["/tokens"]["get"]["security"] != [{"bearer": []}]:
+        raise AssertionError(f"Unexpected security: {spec['paths']['/tokens']['get']['security']}")
+
+    if len(generator.validate()) != 0:
+        raise AssertionError("Expected the specification to validate")
+
+    return
+
+
+class _DocumentedArticles(CollectionEndpoint):
+    """A collection endpoint whose generated routes are documented."""
+    resource_name = "articles"
+    request_schema = ArticleIn
+    response_schema = ArticleOut
+    filter_fields = ["author"]
+
+
+def _documented_articles_spec():
+    registry = EndpointRegistry()
+    for descriptor in _DocumentedArticles.register():
+        registry.register(descriptor)
+    generator = OpenAPIGenerator(registry=registry, info=_create_default_info())
+    return generator, generator.generate()
+
+
+def test_resource_endpoint_routes_are_included_by_default():
+    """Routes produced by ResourceEndpoint.register() appear in the default specification."""
+    _, spec = _documented_articles_spec()
+
+    if sorted(spec["paths"].keys()) != ["/articles", "/articles/{id}"]:
+        raise AssertionError(f"Expected the collection and item paths, got {sorted(spec['paths'].keys())}")
+
+    return
+
+
+def test_rest_managed_create_documents_201():
+    """A create route served by the REST processing documents 201, the status it returns."""
+    _, spec = _documented_articles_spec()
+    responses = spec["paths"]["/articles"]["post"]["responses"]
+
+    if "201" not in responses or "200" in responses:
+        raise AssertionError(f"Expected a 201 success response and no 200, got {sorted(responses)}")
+
+    return
+
+
+def test_rest_managed_delete_documents_204_without_content():
+    """A delete route served by the REST processing documents 204 with no body."""
+    _, spec = _documented_articles_spec()
+    responses = spec["paths"]["/articles/{id}"]["delete"]["responses"]
+
+    if "204" not in responses or "content" in responses["204"]:
+        raise AssertionError(f"Expected a 204 response without content, got {responses.get('204')}")
+
+    return
+
+
+def test_rest_managed_errors_reference_rest_error():
+    """A route served by the REST processing documents its errors as RESTError, which is what it sends."""
+    _, spec = _documented_articles_spec()
+    schema = spec["paths"]["/articles/{id}"]["get"]["responses"]["404"]["content"]["application/json"]["schema"]
+
+    if schema != {"$ref": "#/components/schemas/RESTError"}:
+        raise AssertionError(f"Expected a $ref to RESTError, got {schema}")
+
+    return
+
+
+def test_get_and_delete_operations_have_no_request_body():
+    """A request schema shared by an item route is documented only on the methods that take a body."""
+    _, spec = _documented_articles_spec()
+    item = spec["paths"]["/articles/{id}"]
+
+    if "requestBody" in item["get"] or "requestBody" in item["delete"]:
+        raise AssertionError("GET and DELETE must not document a request body")
+
+    if "requestBody" not in item["put"]:
+        raise AssertionError("PUT must document the request body")
+
+    return
+
+
+def test_collection_list_route_documents_its_query_parameters():
+    """The list route of a collection documents page, page_size and its filter fields."""
+    _, spec = _documented_articles_spec()
+    names = sorted(parameter["name"] for parameter in spec["paths"]["/articles"]["get"]["parameters"])
+
+    if names != ["author", "page", "page_size"]:
+        raise AssertionError(f"Expected ['author', 'page', 'page_size'], got {names}")
+
+    return
+
+
+def test_generated_resource_specification_has_unique_operation_ids():
+    """The specification of a full collection endpoint passes validation, including operationId uniqueness."""
+    generator, _ = _documented_articles_spec()
+
+    issues = generator.validate()
+
+    if len(issues) != 0:
+        raise AssertionError(f"Expected no validation issues, got {issues}")
+
+    return
+
+
+def test_http_error_schema_in_components():
+    """The HTTPError schema, the dispatcher's error body, is included in components/schemas."""
+    desc = _create_mock_descriptor(handler_name="get_user", path="/users")
+    registry = _create_mock_registry(descriptors=[desc])
+    generator = OpenAPIGenerator(registry=registry, info=_create_default_info())
+
+    schema = generator.generate()["components"]["schemas"]["HTTPError"]
+
+    if sorted(schema["properties"].keys()) != ["detail", "status_code"]:
+        raise AssertionError(f"Expected 'detail' and 'status_code', got {sorted(schema['properties'].keys())}")
+
+    return
+
+
+def _real_descriptor(name: str, path: str):
+    """Build a real EndpointDescriptor for a GET handler named ``name`` at ``path``."""
+    from ccai.webworks.endpoints.descriptor import EndpointDescriptor
+
+    def handler(request):
+        return {}
+
+    handler.__name__ = name
+
+    return EndpointDescriptor(handler=handler, module=__name__, path=path, methods=["GET"], extras={"endpoint_type": "rest"})
+
+
+def _registry_of(*descriptors):
+    """Build a real EndpointRegistry holding ``descriptors``."""
+    registry = EndpointRegistry()
+    for descriptor in descriptors:
+        registry.register(descriptor)
+    return registry
+
+
+def test_yaml_export_has_no_anchors_or_aliases():
+    """The YAML form writes every repeated structure out in full."""
+    first = _create_mock_descriptor(handler_name="get_a", path="/a")
+    second = _create_mock_descriptor(handler_name="get_b", path="/b")
+    registry = _create_mock_registry(descriptors=[first, second])
+    generator = OpenAPIGenerator(registry=registry, info=_create_default_info())
+
+    yaml_text = generator.generate_yaml()
+
+    if "&id" in yaml_text or "*id" in yaml_text:
+        raise AssertionError("Expected no YAML anchors or aliases in the export")
+
+    return
+
+
+def test_operations_do_not_share_response_objects():
+    """Changing one operation's error response in a generated specification leaves the others alone."""
+    first = _create_mock_descriptor(handler_name="get_a", path="/a")
+    second = _create_mock_descriptor(handler_name="get_b", path="/b")
+    registry = _create_mock_registry(descriptors=[first, second])
+    generator = OpenAPIGenerator(registry=registry, info=_create_default_info())
+
+    spec = generator.generate()
+    spec["paths"]["/a"]["get"]["responses"]["400"]["content"]["application/json"]["schema"]["$ref"] = "changed"
+
+    other = spec["paths"]["/b"]["get"]["responses"]["400"]["content"]["application/json"]["schema"]["$ref"]
+    if other == "changed":
+        raise AssertionError("Expected each operation to have its own response objects")
+
+    return
+
+
+def test_generate_reuses_the_cached_specification():
+    """A second generate() with nothing changed does not rebuild the paths."""
+    registry = _registry_of(_real_descriptor("get_a", "/a"))
+    generator = OpenAPIGenerator(registry=registry, info=_create_default_info())
+
+    builds = []
+    original_build_paths = generator._build_paths
+
+    def counting_build_paths():
+        builds.append(1)
+        return original_build_paths()
+
+    generator._build_paths = counting_build_paths
+
+    first = generator.generate()
+    second = generator.generate()
+
+    if len(builds) != 1:
+        raise AssertionError(f"Expected the paths to be built once, were built {len(builds)} times")
+
+    if first != second:
+        raise AssertionError("Expected the cached specification to equal the first one")
+
+    return
+
+
+def test_generate_rebuilds_after_refresh():
+    """refresh() discards the cached specification."""
+    registry = _registry_of(_real_descriptor("get_a", "/a"))
+    generator = OpenAPIGenerator(registry=registry, info=_create_default_info())
+
+    builds = []
+    original_build_paths = generator._build_paths
+
+    def counting_build_paths():
+        builds.append(1)
+        return original_build_paths()
+
+    generator._build_paths = counting_build_paths
+
+    generator.generate()
+    generator.refresh()
+    generator.generate()
+
+    if len(builds) != 2:
+        raise AssertionError(f"Expected a rebuild after refresh(), paths were built {len(builds)} times")
+
+    return
+
+
+def test_generate_rebuilds_when_an_endpoint_is_added():
+    """An endpoint registered after the first generate() appears in the next one without refresh()."""
+    registry = EndpointRegistry()
+
+    @RestEndpoint.attach_at(leaf="first", methods=["GET"])
+    def first(request):
+        return {}
+
+    @RestEndpoint.attach_at(leaf="second", methods=["GET"])
+    def second(request):
+        return {}
+
+    registry.collect_from(first)
+    generator = OpenAPIGenerator(registry=registry, info=_create_default_info())
+    generator.generate()
+
+    registry.collect_from(second)
+    spec = generator.generate()
+
+    if sorted(spec["paths"].keys()) != ["/first", "/second"]:
+        raise AssertionError(f"Expected both endpoints, got {sorted(spec['paths'].keys())}")
+
+    return
+
+
+def test_modifying_a_generated_specification_does_not_change_the_cache():
+    """A caller may modify the specification it was given; the next generate() is unaffected."""
+    registry = _registry_of(_real_descriptor("get_a", "/a"))
+    generator = OpenAPIGenerator(registry=registry, info=_create_default_info())
+
+    spec = generator.generate()
+    spec["paths"].clear()
+
+    if "/a" not in generator.generate()["paths"]:
+        raise AssertionError("Expected the cached specification to be unaffected by the caller's change")
 
     return

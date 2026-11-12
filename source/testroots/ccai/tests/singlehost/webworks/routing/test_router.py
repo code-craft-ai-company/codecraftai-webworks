@@ -910,3 +910,235 @@ def test_property_router_config_case_sensitive_false():
             f"Expected match for {path_upper} when case_sensitive=False"
     
     return
+
+
+# ============================================================================
+# Canonical paths, HEAD fallback, conflicts and redirects
+# ============================================================================
+
+import threading
+
+from ccai.webworks.routing.router import canonicalize_path
+
+
+def test_canonicalize_path_collapses_repeated_slashes():
+    """
+        Repeated slashes anywhere in a path collapse to one.
+    """
+    assert canonicalize_path("//admin//users") == "/admin/users"
+    assert canonicalize_path("///") == "/"
+    assert canonicalize_path("/docs//") == "/docs/"
+    return
+
+
+def test_canonicalize_path_is_idempotent():
+    """
+        Canonicalising a canonical path returns it unchanged.
+    """
+    for path in ["/", "/a", "/a/b/", "/a/{id}"]:
+        assert canonicalize_path(canonicalize_path(path)) == canonicalize_path(path)
+    return
+
+
+def test_canonicalize_path_rejects_parent_segments_and_nul():
+    """
+        A path with a '..' segment or a NUL character has no canonical form.
+    """
+    for path in ["/a/../b", "/..", "/a/b/..", "/a\x00b"]:
+        assert canonicalize_path(path) is None, f"Expected None for {path!r}"
+    return
+
+
+def test_canonicalize_path_keeps_single_dot_segment():
+    """
+        A '.' segment does not leave its directory; it is kept for the
+        route that matches it.
+    """
+    assert canonicalize_path("/docs//./readme.md") == "/docs/./readme.md"
+    return
+
+
+def test_match_reaches_same_route_for_every_spelling():
+    """
+        //admin/users and /admin//users match the route registered as /admin/users.
+    """
+    router = Router()
+    router.add_endpoint(_create_descriptor("/admin/users"))
+
+    for path in ["/admin/users", "//admin/users", "/admin//users"]:
+        match = router.match(Request(method="GET", path=path))
+        assert match is not None, f"Expected a match for {path}"
+        assert match.matched_path == "/admin/users", f"Unexpected route {match.matched_path}"
+    return
+
+
+def test_match_refuses_dot_segments_in_parameters():
+    """
+        '..' is not accepted as the value of a path parameter.
+    """
+    router = Router()
+    router.add_endpoint(_create_descriptor("/files/{name}"))
+    router.add_endpoint(_create_descriptor("/tree/{rest:path}"))
+
+    assert router.match(Request(method="GET", path="/files/..")) is None
+    assert router.match(Request(method="GET", path="/tree/a/../../etc/passwd")) is None
+    return
+
+
+def test_match_falls_back_to_get_handler_for_head():
+    """
+        HEAD matches the GET handler of a route that registers no HEAD handler.
+    """
+    router = Router()
+    router.add_endpoint(_create_descriptor("/health", methods=["GET"]))
+
+    match = router.match(Request(method="HEAD", path="/health"))
+
+    assert match is not None, "Expected HEAD to match the GET route"
+    assert match.matched_path == "/health"
+    return
+
+
+def test_match_does_not_fall_back_to_get_for_other_methods():
+    """
+        Only HEAD falls back to GET.
+    """
+    router = Router()
+    router.add_endpoint(_create_descriptor("/health", methods=["GET"]))
+
+    assert router.match(Request(method="POST", path="/health")) is None
+    return
+
+
+def test_add_endpoint_rejects_routes_differing_only_by_parameter_name():
+    """
+        /dup/{a} and /dup/{b} match the same requests, so the second is a conflict.
+    """
+    router = Router()
+    router.add_endpoint(_create_descriptor("/dup/{a}"))
+
+    raised = False
+    try:
+        router.add_endpoint(_create_descriptor("/dup/{b}"))
+    except RoutingError:
+        raised = True
+
+    assert raised, "Expected RoutingError for a route that can never be reached"
+    return
+
+
+def test_add_endpoint_rejects_non_terminal_path_converter():
+    """
+        A path converter that is not the last segment can never match.
+    """
+    router = Router()
+
+    raised = False
+    try:
+        router.add_endpoint(_create_descriptor("/w/{p:path}/meta"))
+    except RoutingError:
+        raised = True
+
+    assert raised, "Expected RoutingError for a non-terminal path converter"
+    return
+
+
+def test_add_endpoint_leaves_router_unchanged_when_one_method_conflicts():
+    """
+        A registration that conflicts for one of its methods registers none.
+    """
+    router = Router()
+    router.add_endpoint(_create_descriptor("/items", methods=["POST"]))
+
+    try:
+        router.add_endpoint(_create_descriptor("/items", methods=["GET", "POST"]))
+    except RoutingError:
+        pass
+
+    assert router.get_allowed_methods("/items") == ["POST"], \
+        f"Unexpected methods {router.get_allowed_methods('/items')}"
+    return
+
+
+def test_get_allowed_methods_combines_all_matching_nodes():
+    """
+        Methods registered under differently named parameters are all reported.
+    """
+    router = Router()
+    router.add_endpoint(_create_descriptor("/things/{a}", methods=["GET"]))
+    router.add_endpoint(_create_descriptor("/things/{b}", methods=["POST"]))
+
+    assert router.get_allowed_methods("/things/42") == ["GET", "POST"], \
+        f"Unexpected methods {router.get_allowed_methods('/things/42')}"
+    return
+
+
+def test_get_redirect_path_returns_registered_slash_variant():
+    """
+        With redirect_slashes the router names the registered spelling of a
+        path that differs only by its trailing slash.
+    """
+    router = Router(redirect_slashes=True)
+    router.add_endpoint(_create_descriptor("/docs"))
+    router.add_endpoint(_create_descriptor("/guide/"))
+
+    assert router.get_redirect_path("/docs/", "GET") == "/docs"
+    assert router.get_redirect_path("/guide", "GET") == "/guide/"
+    assert router.get_redirect_path("/unknown/", "GET") is None
+    return
+
+
+def test_get_redirect_path_is_disabled_by_default():
+    """
+        Without redirect_slashes no redirect is offered.
+    """
+    router = Router()
+    router.add_endpoint(_create_descriptor("/docs"))
+
+    assert router.get_redirect_path("/docs/", "GET") is None
+    return
+
+
+def test_router_matches_while_routes_are_added_concurrently():
+    """
+        A route that is being registered is never observed half-inserted:
+        a request for an already registered route keeps matching while
+        other routes are added from another thread.
+    """
+    router = Router()
+    router.add_endpoint(_create_descriptor("/stable"))
+
+    failures = []
+    stop = threading.Event()
+
+    def add_routes():
+        for index in range(300):
+            router.add_endpoint(_create_descriptor(f"/dyn/r{index}"))
+        stop.set()
+
+    writer = threading.Thread(target=add_routes)
+    writer.start()
+
+    while not stop.is_set():
+        if router.match(Request(method="GET", path="/stable")) is None:
+            failures.append("stable route did not match")
+            break
+
+    writer.join()
+
+    assert len(failures) == 0, failures
+    assert router.match(Request(method="GET", path="/dyn/r299")) is not None
+    return
+
+
+def test_remove_dot_segments_drops_single_dot_segments():
+    """
+        '.' segments are removed; a trailing '.' leaves a trailing slash.
+    """
+    from ccai.webworks.routing.router import remove_dot_segments
+
+    assert remove_dot_segments("/files/./private/x") == "/files/private/x"
+    assert remove_dot_segments("/files/.") == "/files/"
+    assert remove_dot_segments("/./") == "/"
+    assert remove_dot_segments("/plain/path") == "/plain/path"
+    return

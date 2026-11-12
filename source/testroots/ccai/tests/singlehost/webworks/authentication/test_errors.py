@@ -1231,3 +1231,105 @@ def test_property_33_internal_error_response_safety():
     
     return
 
+
+# =============================================================================
+# Login Throttle
+# =============================================================================
+
+from ccai.webworks.authentication.errors import LoginThrottle, get_client_key
+
+
+def test_login_throttle_blocks_client_over_rate_limit():
+    """
+        Test that the throttle refuses a client once it has used up its
+        attempts.
+    """
+    throttle = LoginThrottle(
+        rate_limiter=RateLimiter(RateLimitConfig(max_attempts=2, window_seconds=60))
+    )
+    
+    if throttle.check("10.0.0.1", "alice") is not None:
+        errmsg = "Expected the first attempt to be allowed"
+        raise AssertionError(errmsg)
+    
+    throttle.record("10.0.0.1", "alice", success=False)
+    throttle.record("10.0.0.1", "bob", success=False)
+    
+    error = throttle.check("10.0.0.1", "carol")
+    
+    if not isinstance(error, RateLimitExceededError):
+        errmsg = f"Expected RateLimitExceededError, got {error!r}"
+        raise AssertionError(errmsg)
+    
+    if throttle.check("10.0.0.2", "carol") is not None:
+        errmsg = "Expected another client to be unaffected"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_login_throttle_locks_account_after_failures():
+    """
+        Test that the throttle locks an account after repeated failures,
+        whichever client they came from.
+    """
+    throttle = LoginThrottle(
+        lockout_policy=AccountLockoutPolicy(LockoutConfig(max_failures=2))
+    )
+    
+    throttle.record("10.0.0.1", "alice", success=False)
+    throttle.record("10.0.0.2", "alice", success=False)
+    
+    error = throttle.check("10.0.0.3", "alice")
+    
+    if not isinstance(error, AccountLockedError):
+        errmsg = f"Expected AccountLockedError, got {error!r}"
+        raise AssertionError(errmsg)
+    
+    if throttle.get_retry_after("10.0.0.3", "alice") is None:
+        errmsg = "Expected a retry-after value for a locked account"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_login_throttle_success_resets_account_failures():
+    """
+        Test that a successful login clears the account's failure count.
+    """
+    policy = AccountLockoutPolicy(LockoutConfig(max_failures=3))
+    throttle = LoginThrottle(lockout_policy=policy)
+    
+    throttle.record(None, "alice", success=False)
+    throttle.record(None, "alice", success=True)
+    
+    if policy.get_failure_count("alice") != 0:
+        errmsg = f"Expected the failure count to be reset, got {policy.get_failure_count('alice')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_client_key_reads_asgi_client_address():
+    """
+        Test that the throttling key is the peer address from the ASGI
+        scope.
+    """
+    scope = {"type": "http", "client": ("203.0.113.9", 51000)}
+    
+    if get_client_key(scope) != "203.0.113.9":
+        errmsg = f"Expected 203.0.113.9, got {get_client_key(scope)!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_client_key_is_none_without_peer_address():
+    """
+        Test that a request without a peer address yields no key.
+    """
+    if get_client_key({"type": "http"}) is not None:
+        errmsg = "Expected None without a client entry"
+        raise AssertionError(errmsg)
+    
+    return

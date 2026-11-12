@@ -21,6 +21,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 
+#: Key under which :class:`ccai.webworks.security.middleware.SecurityMiddleware`
+#: stores the :class:`SecurityContext` it resolved for a request in the
+#: request scope. The dispatcher reads the same key when it enforces an
+#: endpoint's access policy.
+SECURITY_CONTEXT_SCOPE_KEY = "security_context"
+
+
 @dataclass(frozen=True)
 class SecurityContext:
     """
@@ -58,11 +65,16 @@ class SecurityContext:
         """
             Return True if this context represents an authenticated user.
 
-            A context is considered authenticated when a user_id is present.
+            A context is considered authenticated when a user_id is present
+            and the context has not expired. An expired context identifies
+            nobody: a session whose ``expires_at`` has passed must not
+            authenticate a request or carry its roles into an
+            authorization decision.
 
-            :returns: True if user_id is not None.
+            :returns: True if user_id is not None and the context has not
+                expired.
         """
-        is_auth = self.user_id is not None
+        is_auth = self.user_id is not None and self.is_expired is not True
         return is_auth
 
     @property
@@ -70,15 +82,21 @@ class SecurityContext:
         """
             Return True if this context has expired.
 
-            A context without an expires_at value never expires.
+            A context without an expires_at value never expires. A naive
+            ``expires_at`` (no ``tzinfo``) is interpreted as UTC, so the
+            comparison never fails on mixing naive and aware datetimes.
 
             :returns: True if the current time is past expires_at.
         """
         if self.expires_at is None:
             return False
 
+        expires_at = self.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
         now = datetime.now(timezone.utc)
-        expired = now > self.expires_at
+        expired = now > expires_at
         return expired
 
     def has_role(self, role: str) -> bool:

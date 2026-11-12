@@ -3566,3 +3566,696 @@ def test_property_lazy_vs_eager_equivalence():
             raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# Schema coercion is kept in the stored values
+# =============================================================================
+
+class FailingConfigSource(ConfigSource):
+    """
+        A configuration source that can be told to fail on load.
+    """
+    
+    def __init__(self, values: Dict[str, Any]):
+        self.values = values
+        self.fail = False
+    
+    def load(self) -> Dict[str, Any]:
+        if self.fail:
+            raise ConfigurationError("The source could not be read")
+        return dict(self.values)
+    
+    @property
+    def source_type(self) -> ConfigSourceType:
+        return ConfigSourceType.FILE
+
+
+def test_config_registry_get_returns_schema_coerced_bool():
+    """
+        Test that get() returns False, not the truthy string 'false', for a
+        key the schema declares as bool.
+    """
+    schema = ConfigSchema()
+    schema.define("debug", bool, default=True)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(MockConfigSource({"debug": "false"}, ConfigSourceType.ENVIRONMENT))
+    registry.load()
+    
+    value = registry.get("debug")
+    
+    if value is not False:
+        errmsg = f"Expected False, got {value!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_get_returns_schema_coerced_int():
+    """
+        Test that get() returns an int for a key the schema declares as int.
+    """
+    schema = ConfigSchema()
+    schema.define("server.port", int, default=80)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(MockConfigSource({"server.port": "8080"}))
+    registry.load()
+    
+    value = registry.get("server.port")
+    
+    if value != 8080 or not isinstance(value, int):
+        errmsg = f"Expected the int 8080, got {value!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_items_and_get_value_return_coerced_values():
+    """
+        Test that items() and get_value() return the coerced value too.
+    """
+    schema = ConfigSchema()
+    schema.define("server.port", int)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(MockConfigSource({"server.port": "8080"}))
+    registry.load()
+    
+    items = dict(registry.items())
+    config_value = registry.get_value("server.port")
+    
+    if items["server.port"] != 8080 or config_value.value != 8080:
+        errmsg = f"Expected 8080 from items() and get_value(), got {items['server.port']!r} and {config_value.value!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_model_attribute_access_returns_coerced_value():
+    """
+        Test that attribute and item access on the model return typed values.
+    """
+    from ccai.webworks.configuration import ConfigurationModel
+    
+    schema = ConfigSchema()
+    schema.define("debug", bool)
+    schema.define("server.port", int)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(MockConfigSource({"debug": "false", "server.port": "8080"}))
+    registry.load()
+    
+    model = ConfigurationModel(registry)
+    
+    if model.debug is not False:
+        errmsg = f"Expected model.debug to be False, got {model.debug!r}"
+        raise AssertionError(errmsg)
+    
+    if model.server.port != 8080 or model["server"]["port"] != 8080:
+        errmsg = f"Expected model.server.port to be 8080, got {model.server.port!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_value_without_schema_definition_is_not_coerced():
+    """
+        Test that a key the schema does not define keeps the value the source
+        supplied.
+    """
+    schema = ConfigSchema()
+    schema.define("server.port", int)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(MockConfigSource({"other.value": "8080"}))
+    registry.load()
+    
+    value = registry.get("other.value")
+    
+    if value != "8080":
+        errmsg = f"Expected the string '8080', got {value!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_uncoercible_value_is_kept_when_not_validating():
+    """
+        Test that a value that cannot be coerced is stored as supplied when
+        the load does not validate.
+    """
+    schema = ConfigSchema()
+    schema.define("server.port", int)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(MockConfigSource({"server.port": "abc"}))
+    registry.load(validate=False)
+    
+    value = registry.get("server.port")
+    
+    if value != "abc":
+        errmsg = f"Expected 'abc', got {value!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_override_is_coerced_to_schema_type():
+    """
+        Test that a programmatic override is stored coerced as well.
+    """
+    schema = ConfigSchema()
+    schema.define("server.port", int, default=80)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.load()
+    registry.override("server.port", "9090")
+    
+    value = registry.get("server.port")
+    
+    if value != 9090 or not isinstance(value, int):
+        errmsg = f"Expected the int 9090, got {value!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Sensitive keys are wrapped whatever their source
+# =============================================================================
+
+def test_config_registry_sensitive_key_from_file_is_wrapped():
+    """
+        Test that a schema-sensitive key supplied by a file source is
+        returned as a SecretValue.
+    """
+    from ccai.webworks.configuration import SecretValue
+    
+    schema = ConfigSchema()
+    schema.define("api.token", str, sensitive=True)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(MockConfigSource({"api.token": "tok-123"}))
+    registry.load()
+    
+    value = registry.get("api.token")
+    
+    if not isinstance(value, SecretValue):
+        errmsg = f"Expected a SecretValue, got {type(value).__name__}"
+        raise AssertionError(errmsg)
+    
+    if value.get_secret_value() != "tok-123":
+        errmsg = "Expected get_secret_value() to return the secret"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_sensitive_key_is_masked_in_items_and_repr():
+    """
+        Test that neither items() nor the repr of the ConfigValue shows a
+        sensitive value.
+    """
+    schema = ConfigSchema()
+    schema.define("api.token", str, sensitive=True)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(MockConfigSource({"api.token": "tok-123"}, ConfigSourceType.ENVIRONMENT))
+    registry.load()
+    
+    shown = repr(registry.items()) + repr(registry.get_value("api.token")) + str(registry.get("api.token"))
+    
+    if "tok-123" in shown:
+        errmsg = f"The secret is visible: {shown}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_sensitive_default_is_wrapped():
+    """
+        Test that the schema default of a sensitive key is wrapped too.
+    """
+    from ccai.webworks.configuration import SecretValue
+    
+    schema = ConfigSchema()
+    schema.define("api.token", str, default="default-token", sensitive=True)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.load()
+    
+    value = registry.get("api.token")
+    
+    if not isinstance(value, SecretValue):
+        errmsg = f"Expected a SecretValue, got {type(value).__name__}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_sensitive_override_is_wrapped():
+    """
+        Test that an override of a sensitive key is wrapped.
+    """
+    from ccai.webworks.configuration import SecretValue
+    
+    schema = ConfigSchema()
+    schema.define("api.token", str, sensitive=True)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.load()
+    registry.override("api.token", "tok-456")
+    
+    value = registry.get("api.token")
+    
+    if not isinstance(value, SecretValue) or value.get_secret_value() != "tok-456":
+        errmsg = f"Expected a SecretValue holding the override, got {value!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_validation_error_masks_sensitive_value():
+    """
+        Test that a failing sensitive key does not put its value in the
+        ConfigurationValidationError.
+    """
+    from ccai.webworks.configuration import SecretValue
+    
+    schema = ConfigSchema()
+    schema.define("db.password", int, sensitive=True)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(MockConfigSource({"db.password": "hunter2"}))
+    
+    try:
+        registry.load()
+        errmsg = "Expected ConfigurationValidationError"
+        raise AssertionError(errmsg)
+    except ConfigurationValidationError as exc:
+        if "hunter2" in str(exc):
+            errmsg = f"The secret is in the error message: {exc}"
+            raise AssertionError(errmsg)
+        
+        for error in exc.errors:
+            if error.actual_value != SecretValue.MASKED_VALUE:
+                errmsg = f"Expected a masked actual_value, got {error.actual_value!r}"
+                raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_validation_error_masks_secret_from_secrets_source():
+    """
+        Test that a SecretValue supplied by a source is masked in validation
+        errors even when the schema does not mark the key as sensitive.
+    """
+    from ccai.webworks.configuration import SecretValue
+    
+    schema = ConfigSchema()
+    schema.define("db.port", int)
+    
+    registry = ConfigRegistry(schema=schema)
+    secret = SecretValue(value="not-a-number", key="db.port")
+    registry.register_source(MockConfigSource({"db.port": secret}, ConfigSourceType.SECRETS))
+    
+    try:
+        registry.load()
+        errmsg = "Expected ConfigurationValidationError"
+        raise AssertionError(errmsg)
+    except ConfigurationValidationError as exc:
+        if "not-a-number" in str(exc):
+            errmsg = f"The secret is in the error message: {exc}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_export_diff_masks_sensitive_values():
+    """
+        Test that export_diff() masks sensitive values by default.
+    """
+    from ccai.webworks.configuration import SecretValue
+    
+    schema = ConfigSchema()
+    schema.define("api.token", str, sensitive=True)
+    schema.define("api.url", str, default="http://localhost")
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(MockConfigSource({"api.token": "tok-123", "api.url": "https://api.example.com"}))
+    registry.load()
+    
+    diff = registry.export_diff()
+    
+    if diff["api.token"] != (SecretValue.MASKED_VALUE, None):
+        errmsg = f"Expected the token masked, got {diff['api.token']!r}"
+        raise AssertionError(errmsg)
+    
+    if diff["api.url"] != ("https://api.example.com", "http://localhost"):
+        errmsg = f"Expected the url unmasked, got {diff['api.url']!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_export_diff_unmasks_when_requested():
+    """
+        Test that export_diff(mask_secrets=False) returns the sensitive value.
+    """
+    schema = ConfigSchema()
+    schema.define("api.token", str, sensitive=True)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(MockConfigSource({"api.token": "tok-123"}))
+    registry.load()
+    
+    diff = registry.export_diff(mask_secrets=False)
+    
+    if diff["api.token"] != ("tok-123", None):
+        errmsg = f"Expected the token unmasked, got {diff['api.token']!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_export_diff_masks_secret_not_in_schema():
+    """
+        Test that export_diff() masks a SecretValue for a key the schema does
+        not define.
+    """
+    from ccai.webworks.configuration import SecretValue
+    
+    schema = ConfigSchema()
+    schema.define("api.url", str)
+    
+    registry = ConfigRegistry(schema=schema)
+    secret = SecretValue(value="tok-123", key="api.token")
+    registry.register_source(MockConfigSource({"api.token": secret}, ConfigSourceType.SECRETS))
+    registry.load()
+    
+    diff = registry.export_diff()
+    
+    if diff["api.token"] != (SecretValue.MASKED_VALUE, None):
+        errmsg = f"Expected the token masked, got {diff['api.token']!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# A failed load leaves the live values in place
+# =============================================================================
+
+def test_config_registry_failed_load_keeps_live_values():
+    """
+        Test that the values stay as they were when a source raises during
+        a later load.
+    """
+    source = FailingConfigSource({"server.port": 8080})
+    
+    registry = ConfigRegistry()
+    registry.register_source(source)
+    registry.load()
+    
+    source.fail = True
+    try:
+        registry.load()
+        errmsg = "Expected ConfigurationError from the failing source"
+        raise AssertionError(errmsg)
+    except ConfigurationError:
+        pass  # Expected
+    
+    if registry.items() != [("server.port", 8080)]:
+        errmsg = f"Expected the previous values to stay live, got {registry.items()}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_failed_validation_keeps_live_values():
+    """
+        Test that the values stay as they were when a later load fails
+        validation.
+    """
+    schema = ConfigSchema()
+    schema.define("server.port", int)
+    
+    source = FailingConfigSource({"server.port": 8080})
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(source)
+    registry.load()
+    
+    source.values = {"server.port": "abc"}
+    try:
+        registry.load()
+        errmsg = "Expected ConfigurationValidationError"
+        raise AssertionError(errmsg)
+    except ConfigurationValidationError:
+        pass  # Expected
+    
+    if registry.get("server.port") != 8080:
+        errmsg = f"Expected the previous value 8080 to stay live, got {registry.get('server.port')!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_readers_never_see_a_partial_load():
+    """
+        Test that a thread reading while another reloads always sees a
+        complete set of values.
+    """
+    import threading
+    
+    values = {}
+    for index in range(200):
+        values[f"key{index}"] = index
+    
+    registry = ConfigRegistry()
+    registry.register_source(MockConfigSource(values))
+    registry.load()
+    
+    problems = []
+    stop = threading.Event()
+    
+    def reader() -> None:
+        while not stop.is_set():
+            count = len(registry.items())
+            if count != 200:
+                problems.append(count)
+                break
+            if registry.get("key199") != 199:
+                problems.append("key199 missing")
+                break
+        return
+    
+    thread = threading.Thread(target=reader)
+    thread.start()
+    try:
+        for _ in range(300):
+            registry.load()
+    finally:
+        stop.set()
+        thread.join()
+    
+    if len(problems) > 0:
+        errmsg = f"A reader saw an incomplete configuration: {problems[0]!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_failed_lazy_load_is_reported_on_every_access():
+    """
+        Test that a lazy load that fails validation raises on each access
+        instead of leaving an empty configuration after the first.
+    """
+    schema = ConfigSchema()
+    schema.define("server.port", int, required=True)
+    
+    registry = ConfigRegistry(schema=schema, lazy=True)
+    registry.load()
+    
+    for attempt in range(2):
+        try:
+            registry.get("server.port")
+            errmsg = f"Expected ConfigurationValidationError on access {attempt + 1}"
+            raise AssertionError(errmsg)
+        except ConfigurationValidationError:
+            pass  # Expected
+    
+    return
+
+
+# =============================================================================
+# reload()
+# =============================================================================
+
+def test_config_registry_reload_fires_change_events_for_changed_keys():
+    """
+        Test that reload() sends an event for each changed, added and removed
+        key and none for an unchanged one.
+    """
+    source = FailingConfigSource({"a": 1, "b": 2, "c": 3})
+    
+    registry = ConfigRegistry()
+    registry.register_source(source)
+    registry.load()
+    
+    received = []
+    registry.on_change(lambda event: received.append((event.key, event.old_value, event.new_value)))
+    
+    source.values = {"a": 1, "b": 20, "d": 4}
+    returned = registry.reload()
+    
+    expected = [("b", 2, 20), ("c", 3, None), ("d", None, 4)]
+    
+    if sorted(received) != expected:
+        errmsg = f"Expected events {expected}, got {sorted(received)}"
+        raise AssertionError(errmsg)
+    
+    if len(returned) != 3:
+        errmsg = f"Expected reload() to return 3 events, got {len(returned)}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_reload_validates_and_keeps_values_on_failure():
+    """
+        Test that reload() rejects values that violate the schema and leaves
+        the previous ones live, without sending events.
+    """
+    schema = ConfigSchema()
+    schema.define("server.port", int)
+    
+    source = FailingConfigSource({"server.port": 8080})
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(source)
+    registry.load()
+    
+    received = []
+    registry.on_change(lambda event: received.append(event.key))
+    
+    source.values = {"server.port": "abc"}
+    try:
+        registry.reload()
+        errmsg = "Expected ConfigurationValidationError"
+        raise AssertionError(errmsg)
+    except ConfigurationValidationError:
+        pass  # Expected
+    
+    if registry.get("server.port") != 8080 or len(received) != 0:
+        errmsg = f"Expected 8080 and no events, got {registry.get('server.port')!r} and {received}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_reload_of_frozen_registry_raises():
+    """
+        Test that reload() raises ConfigurationFrozenError on a frozen
+        registry and does not read the sources.
+    """
+    source = FailingConfigSource({"a": 1})
+    
+    registry = ConfigRegistry()
+    registry.register_source(source)
+    registry.load()
+    registry.freeze()
+    
+    source.values = {"a": 2}
+    try:
+        registry.reload()
+        errmsg = "Expected ConfigurationFrozenError"
+        raise AssertionError(errmsg)
+    except ConfigurationFrozenError:
+        pass  # Expected
+    
+    if registry.get("a") != 1:
+        errmsg = f"Expected the frozen value 1, got {registry.get('a')!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_reload_keeps_overrides():
+    """
+        Test that a programmatic override survives a reload.
+    """
+    source = FailingConfigSource({"a": 1})
+    
+    registry = ConfigRegistry()
+    registry.register_source(source)
+    registry.load()
+    registry.override("a", 100)
+    
+    source.values = {"a": 2}
+    registry.reload()
+    
+    if registry.get("a") != 100:
+        errmsg = f"Expected the override 100, got {registry.get('a')!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_atomic_update_reports_coerced_value_in_event():
+    """
+        Test that an atomic update sends the stored (coerced) value in its
+        change event and sends none when the stored value is unchanged.
+    """
+    schema = ConfigSchema()
+    schema.define("server.port", int, default=80)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.load()
+    
+    received = []
+    registry.on_change(lambda event: received.append((event.key, event.old_value, event.new_value)))
+    
+    registry.update({"server.port": "9090"})
+    registry.update({"server.port": "9090"})
+    
+    if received != [("server.port", 80, 9090)]:
+        errmsg = f"Expected one event with the int 9090, got {received}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_registry_passes_schema_keys_to_sources():
+    """
+        Test that the registry tells a source which keys the schema defines
+        before it loads it.
+    """
+    class KeyAwareSource(MockConfigSource):
+        def __init__(self):
+            super().__init__({})
+            self.known_keys = None
+        
+        def use_known_keys(self, keys):
+            self.known_keys = list(keys)
+            return
+    
+    nested = ConfigSchema()
+    nested.define("max_connections", int)
+    
+    schema = ConfigSchema()
+    schema.define("debug", bool)
+    schema.nested("database", nested)
+    
+    source = KeyAwareSource()
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(source)
+    registry.load()
+    
+    if sorted(source.known_keys) != ["database.max_connections", "debug"]:
+        errmsg = f"Expected the schema keys, got {source.known_keys}"
+        raise AssertionError(errmsg)
+    
+    return

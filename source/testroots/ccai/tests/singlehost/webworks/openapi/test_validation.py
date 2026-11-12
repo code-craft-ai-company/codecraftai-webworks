@@ -775,3 +775,51 @@ def test_generator_validate_method():
         raise AssertionError(f"Expected 0 issues, got {len(issues)}")
 
     return
+
+
+# =============================================================================
+# operationId uniqueness
+# =============================================================================
+
+def _spec_with_operation_ids(first_id, second_id):
+    """A minimal valid specification holding two operations with the given operationIds."""
+    return {
+        "openapi": "3.0.3",
+        "info": {"title": "Test API", "version": "1.0.0"},
+        "paths": {
+            "/items/{id}": {
+                "put": {"operationId": first_id, "responses": {"200": {"description": "ok"}}},
+                "patch": {"operationId": second_id, "responses": {"200": {"description": "ok"}}},
+            },
+        },
+    }
+
+
+def test_duplicate_operation_id_is_an_error():
+    """Two operations sharing an operationId make the specification invalid."""
+    validator = OpenAPIValidator()
+
+    try:
+        validator.validate(_spec_with_operation_ids("update_item", "update_item"))
+    except SpecificationValidationError as err:
+        messages = [issue.message for issue in err.issues]
+        if len(messages) != 1 or "update_item" not in messages[0]:
+            errmsg = f"Expected one issue naming the repeated id, got {messages}"
+            raise AssertionError(errmsg)
+    else:
+        raise AssertionError("Expected SpecificationValidationError for a repeated operationId")
+
+    return
+
+
+def test_distinct_operation_ids_are_valid():
+    """Operations with different operationIds raise no issue."""
+    validator = OpenAPIValidator()
+
+    issues = validator.validate(_spec_with_operation_ids("update_item_put", "update_item_patch"))
+
+    if len(issues) != 0:
+        errmsg = f"Expected no issues, got {issues}"
+        raise AssertionError(errmsg)
+
+    return

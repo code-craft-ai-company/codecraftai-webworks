@@ -15,8 +15,13 @@ import shutil
 import tempfile
 
 from ccai.webworks.templating.exceptions import (
+    TemplateConfigurationError,
     TemplateError,
+    TemplateFilterNotFoundError,
     TemplateNotFoundError,
+    TemplateRenderError,
+    TemplateSyntaxError,
+    UndefinedVariableError,
 )
 from ccai.webworks.templating.jinja2_adapter import Jinja2Adapter, Jinja2CompiledTemplate
 
@@ -1348,5 +1353,490 @@ def test_jinja2_adapter_exported_from_package():
     
     if ExportedAdapter is not Jinja2Adapter:
         raise AssertionError("Jinja2Adapter should be exported from package")
+    
+    return
+
+
+# =============================================================================
+# clear_cache() empties Jinja2's own template cache
+# =============================================================================
+
+def test_clear_cache_empties_environment_cache():
+    """
+        Test that clear_cache() removes the templates Jinja2 cached by name.
+    """
+    temp_dir = _create_temp_template_dir({
+        "page.html": "Page"
+    })
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        adapter.render("page.html", {})
+        
+        if len(adapter._environment.cache) != 1:
+            raise AssertionError("The rendered template should be in the Jinja2 cache")
+        
+        adapter.clear_cache()
+        
+        if len(adapter._environment.cache) != 0:
+            raise AssertionError("clear_cache() should empty the Jinja2 cache")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_clear_cache_reloads_modified_parent_template():
+    """
+        Test that after clear_cache() a changed parent template is re-read
+        even though auto_reload is off.
+    """
+    temp_dir = _create_temp_template_dir({
+        "base.html": "old {% block body %}{% endblock %}",
+        "child.html": "{% extends 'base.html' %}{% block body %}child{% endblock %}"
+    })
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir], auto_reload=False)
+        
+        first = adapter.render("child.html", {})
+        
+        with open(os.path.join(temp_dir, "base.html"), "w", encoding="utf-8") as f:
+            f.write("new {% block body %}{% endblock %}")
+        
+        stale = adapter.render("child.html", {})
+        adapter.clear_cache()
+        fresh = adapter.render("child.html", {})
+        
+        if first != "old child" or stale != "old child":
+            raise AssertionError(f"Expected the cached parent before clear_cache(), got {first!r} / {stale!r}")
+        
+        if fresh != "new child":
+            raise AssertionError(f"Expected 'new child' after clear_cache(), got {fresh!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_clear_cache_with_cache_disabled_does_not_raise():
+    """
+        Test that clear_cache() works when Jinja2 has no cache (size 0).
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir], cache_size=0)
+        adapter.clear_cache()
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+# =============================================================================
+# has_filter()
+# =============================================================================
+
+def test_has_filter_reports_jinja2_builtin_filter():
+    """
+        Test that has_filter() is True for a filter Jinja2 ships.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        if adapter.has_filter("escape") is not True:
+            raise AssertionError("has_filter('escape') should be True")
+        
+        if adapter.has_filter("no_such_filter") is not False:
+            raise AssertionError("has_filter('no_such_filter') should be False")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_has_filter_reports_added_filter():
+    """
+        Test that has_filter() is True for a filter added with add_filter().
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        adapter.add_filter("shout", lambda value: str(value).upper())
+        
+        if adapter.has_filter("shout") is not True:
+            raise AssertionError("has_filter('shout') should be True after add_filter()")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+# =============================================================================
+# Native Jinja2 environment options
+# =============================================================================
+
+def test_init_passes_environment_options_to_jinja2():
+    """
+        Test that extra keyword options are set on the Jinja2 environment.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir], trim_blocks=True, lstrip_blocks=True)
+        
+        output = adapter.render_string("  {% if True %}\nyes\n  {% endif %}\n", {})
+        
+        if output != "yes\n":
+            raise AssertionError(f"Expected 'yes\\n' with trim_blocks and lstrip_blocks, got {output!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_init_environment_options_apply_to_async_environment():
+    """
+        Test that extra keyword options also reach the async environment.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir], trim_blocks=True)
+        
+        if adapter._async_env.trim_blocks is not True:
+            raise AssertionError("trim_blocks should be set on the async environment")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_init_rejects_reserved_environment_option():
+    """
+        Test that an option the adapter sets itself cannot be passed again.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        try:
+            Jinja2Adapter(template_dirs=[temp_dir], autoescape=False)
+            raise AssertionError("Expected TemplateConfigurationError for a reserved option")
+        except TemplateConfigurationError:
+            pass  # Expected
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_init_rejects_unknown_environment_option():
+    """
+        Test that an option Jinja2 does not know raises
+        TemplateConfigurationError.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        try:
+            Jinja2Adapter(template_dirs=[temp_dir], no_such_option=True)
+            raise AssertionError("Expected TemplateConfigurationError for an unknown option")
+        except TemplateConfigurationError:
+            pass  # Expected
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+# =============================================================================
+# Engine exceptions are mapped to the specific templating exceptions
+# =============================================================================
+
+def test_render_raises_template_syntax_error_with_name_and_line():
+    """
+        Test that a syntax error raises TemplateSyntaxError carrying the
+        template name and line number.
+    """
+    temp_dir = _create_temp_template_dir({
+        "broken.html": "line one\n{% if %}\n"
+    })
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        try:
+            adapter.render("broken.html", {})
+            raise AssertionError("Expected TemplateSyntaxError")
+        except TemplateSyntaxError as exc:
+            if exc.template_name != "broken.html":
+                raise AssertionError(f"Expected template_name 'broken.html', got {exc.template_name!r}")
+            if exc.line_number != 2:
+                raise AssertionError(f"Expected line_number 2, got {exc.line_number!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_string_raises_template_syntax_error():
+    """
+        Test that render_string() raises TemplateSyntaxError for bad syntax.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        try:
+            adapter.render_string("{% for %}", {})
+            raise AssertionError("Expected TemplateSyntaxError")
+        except TemplateSyntaxError as exc:
+            if exc.line_number != 1:
+                raise AssertionError(f"Expected line_number 1, got {exc.line_number!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_compile_template_raises_template_syntax_error():
+    """
+        Test that compile_template() raises TemplateSyntaxError naming the
+        template.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        try:
+            adapter.compile_template("{% endif %}", template_name="page.html")
+            raise AssertionError("Expected TemplateSyntaxError")
+        except TemplateSyntaxError as exc:
+            if exc.template_name != "page.html":
+                raise AssertionError(f"Expected template_name 'page.html', got {exc.template_name!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_wraps_python_exception_in_template_render_error():
+    """
+        Test that an ordinary exception raised by template code is wrapped
+        in TemplateRenderError with the template name and line.
+    """
+    temp_dir = _create_temp_template_dir({
+        "divide.html": "first\nsecond\n{{ 1 / zero }}\n"
+    })
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        try:
+            adapter.render("divide.html", {"zero": 0})
+            raise AssertionError("Expected TemplateRenderError")
+        except TemplateRenderError as exc:
+            if exc.template_name != "divide.html":
+                raise AssertionError(f"Expected template_name 'divide.html', got {exc.template_name!r}")
+            if exc.line_number != 3:
+                raise AssertionError(f"Expected line_number 3, got {exc.line_number!r}")
+            if not isinstance(exc.__cause__, ZeroDivisionError):
+                raise AssertionError(f"Expected the ZeroDivisionError as the cause, got {exc.__cause__!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_string_wraps_python_exception_in_template_render_error():
+    """
+        Test that render_string() wraps an ordinary exception.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        try:
+            adapter.render_string("{{ 1 / 0 }}", {})
+            raise AssertionError("Expected TemplateRenderError")
+        except TemplateRenderError as exc:
+            if exc.line_number != 1:
+                raise AssertionError(f"Expected line_number 1, got {exc.line_number!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_compiled_wraps_python_exception_in_template_render_error():
+    """
+        Test that render_compiled() wraps an ordinary exception.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        compiled = adapter.compile_template("{{ 1 / 0 }}", template_name="page.html")
+        
+        try:
+            adapter.render_compiled(compiled, {})
+            raise AssertionError("Expected TemplateRenderError")
+        except TemplateRenderError as exc:
+            if exc.template_name != "page.html":
+                raise AssertionError(f"Expected template_name 'page.html', got {exc.template_name!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_stream_wraps_python_exception_in_template_render_error():
+    """
+        Test that render_stream() wraps an ordinary exception.
+    """
+    temp_dir = _create_temp_template_dir({
+        "divide.html": "{{ 1 / 0 }}"
+    })
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        try:
+            list(adapter.render_stream("divide.html", {}))
+            raise AssertionError("Expected TemplateRenderError")
+        except TemplateRenderError:
+            pass  # Expected
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_async_wraps_python_exception_in_template_render_error():
+    """
+        Test that render_async() wraps an ordinary exception.
+    """
+    temp_dir = _create_temp_template_dir({
+        "divide.html": "{{ 1 / 0 }}"
+    })
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        try:
+            asyncio.run(adapter.render_async("divide.html", {}))
+            raise AssertionError("Expected TemplateRenderError")
+        except TemplateRenderError:
+            pass  # Expected
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_strict_undefined_raises_undefined_variable_error():
+    """
+        Test that strict mode raises UndefinedVariableError naming the
+        variable and the template.
+    """
+    temp_dir = _create_temp_template_dir({
+        "strict.html": "ok\n{{ missing_var }}"
+    })
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir], undefined_behavior="strict")
+        
+        try:
+            adapter.render("strict.html", {})
+            raise AssertionError("Expected UndefinedVariableError")
+        except UndefinedVariableError as exc:
+            if exc.variable_name != "missing_var":
+                raise AssertionError(f"Expected variable_name 'missing_var', got {exc.variable_name!r}")
+            if exc.template_name != "strict.html":
+                raise AssertionError(f"Expected template_name 'strict.html', got {exc.template_name!r}")
+            if exc.line_number != 2:
+                raise AssertionError(f"Expected line_number 2, got {exc.line_number!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_silent_undefined_attribute_raises_template_render_error():
+    """
+        Test that, outside strict mode, using an attribute of an undefined
+        variable raises TemplateRenderError naming the variable.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir], undefined_behavior="silent")
+        
+        try:
+            adapter.render_string("{{ user.name }}", {})
+            raise AssertionError("Expected TemplateRenderError")
+        except UndefinedVariableError:
+            raise AssertionError("UndefinedVariableError is reserved for strict mode")
+        except TemplateRenderError as exc:
+            if exc.variable_name != "user":
+                raise AssertionError(f"Expected variable_name 'user', got {exc.variable_name!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_unknown_filter_raises_template_filter_not_found_error():
+    """
+        Test that a template using an unregistered filter raises
+        TemplateFilterNotFoundError with the filter name.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        try:
+            adapter.render_string("{{ value|no_such_filter }}", {"value": 1})
+            raise AssertionError("Expected TemplateFilterNotFoundError")
+        except TemplateFilterNotFoundError as exc:
+            if exc.filter_name != "no_such_filter":
+                raise AssertionError(f"Expected filter_name 'no_such_filter', got {exc.filter_name!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_error_in_included_template_names_that_template():
+    """
+        Test that an error raised inside an included template is reported
+        against the included template and its line.
+    """
+    temp_dir = _create_temp_template_dir({
+        "outer.html": "outer\n{% include 'inner.html' %}",
+        "inner.html": "inner\n\n{{ 1 / 0 }}"
+    })
+    
+    try:
+        adapter = Jinja2Adapter(template_dirs=[temp_dir])
+        
+        try:
+            adapter.render("outer.html", {})
+            raise AssertionError("Expected TemplateRenderError")
+        except TemplateRenderError as exc:
+            if exc.template_name != "inner.html":
+                raise AssertionError(f"Expected template_name 'inner.html', got {exc.template_name!r}")
+            if exc.line_number != 3:
+                raise AssertionError(f"Expected line_number 3, got {exc.line_number!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
     
     return

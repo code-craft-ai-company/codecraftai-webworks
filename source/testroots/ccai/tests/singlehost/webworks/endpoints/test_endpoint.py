@@ -819,3 +819,78 @@ def test_dataclass_to_schema_no_required_fields():
     
     return
 
+
+
+# =============================================================================
+# rest_processing on attach_at
+# =============================================================================
+
+from dataclasses import dataclass as _rest_dataclass
+
+from ccai.webworks.endpoints.descriptor import REST_MANAGED_EXTRA, REST_PROCESSING_EXTRA
+
+
+@_rest_dataclass
+class _RestProcessingSchema:
+    """Schema used by the rest_processing declaration tests."""
+    name: str
+
+
+def test_attach_at_with_schema_marks_route_rest_managed():
+    """
+        Test that attach_at with a request schema records the route as
+        served through the REST processing.
+    """
+    @Endpoint.attach_at(path="/rp/managed", methods=["POST"], request_schema=_RestProcessingSchema)
+    def managed(request):
+        return None
+
+    descriptor = Endpoint._find_descriptors_for_handler(managed)[0]
+
+    if descriptor.extras["rest"].get(REST_MANAGED_EXTRA) is not True:
+        raise AssertionError(f"Expected the route to be REST managed, got {descriptor.extras['rest']}")
+
+    return
+
+
+def test_attach_at_rest_processing_false_records_opt_out():
+    """
+        Test that attach_at(rest_processing=False) records the opt-out and
+        keeps the schema for documentation.
+    """
+    @Endpoint.attach_at(path="/rp/raw", methods=["POST"], request_schema=_RestProcessingSchema, rest_processing=False)
+    def raw(request):
+        return None
+
+    descriptor = Endpoint._find_descriptors_for_handler(raw)[0]
+    rest_extras = descriptor.extras["rest"]
+
+    if rest_extras.get(REST_PROCESSING_EXTRA) is not False:
+        raise AssertionError(f"Expected the opt-out, got {rest_extras}")
+
+    if "request_schema" not in rest_extras:
+        raise AssertionError("Expected the request schema to stay in extras for documentation")
+
+    if "rest_processing" in descriptor.extras:
+        raise AssertionError("Expected rest_processing not to leak into the free-form extras")
+
+    return
+
+
+def test_attach_at_takes_rest_processing_default_from_class_attribute():
+    """
+        Test that a class setting rest_processing = False opts its routes out.
+    """
+    class _RawEndpoint(Endpoint):
+        rest_processing = False
+
+    @_RawEndpoint.attach_at(path="/rp/class-default", methods=["POST"], request_schema=_RestProcessingSchema)
+    def class_default(request):
+        return None
+
+    descriptor = Endpoint._find_descriptors_for_handler(class_default)[0]
+
+    if descriptor.extras["rest"].get(REST_PROCESSING_EXTRA) is not False:
+        raise AssertionError(f"Expected the class default to opt out, got {descriptor.extras['rest']}")
+
+    return

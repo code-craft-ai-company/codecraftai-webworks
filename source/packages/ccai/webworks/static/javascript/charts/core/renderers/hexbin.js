@@ -7,100 +7,112 @@
  *   "hexbin" — aggregates dense scatter points into hexagonal bins
  *
  * Data shape:
- *   model.series[].points: [{ x, y, value? }, ...]
- *   ctx.raw.hexbin?.radius  bin radius in pixels (default 20)
- *   ctx.raw.hexbin?.stat    "count" | "sum" | "mean" (default "count")
+ *   series[].points: [{ x, y, value? }, ...]   points of every series are
+ *                                              merged; non-finite x / y skipped
+ *   hexbin.radius   hexagon circumradius in px (default 20)
+ *   hexbin.bins     alternatively, the number of hexagon columns across the
+ *                   plot: the grid then scales with the chart, so a resize
+ *                   does not regroup the points
+ *   hexbin.stat     "count" (default) | "sum" | "mean" of `value`
+ *   meta.xLabel / meta.yLabel   axis titles
+ *
+ * Attributes (an attribute wins over the matching data option, like every
+ * other renderer option):
+ *   radius        hexagon circumradius in px; overrides hexbin.radius and
+ *                 hexbin.bins
+ *   stat          "count" | "sum" | "mean"; overrides hexbin.stat
+ *   encoding      "color" (default) | "size"
+ *   show-labels   boolean -- print the statistic inside each hexagon
  *
  * Encoding:
- *   Default: fill color proportional to bin stat (sequential ramp).
- *   ctx.attrs("encoding") === "size" → hexagon drawn at radius proportional
- *   to stat; background cell always drawn at full radius for reference.
+ *   Default: fill colour on a sequential ramp that starts at zero (counts)
+ *   so even a single-point bin is clearly visible; a colour bar on the
+ *   right reads it back. encoding="size": hexagon AREA is proportional to
+ *   the statistic, drawn over a faint full-size cell.
  *
- * The offset-grid hexbin algorithm is self-contained (no external library).
+ * Hexagons are flat-topped, in axial coordinates (q, r), each point going
+ * to its nearest centre by cube rounding. Labels and events report the
+ * bin centre in DATA units.
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, formatNumber, extent } from "../svgdraw.js";
-import { linearScale, sqrtScale, niceTicks } from "../scales.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
+import { linearScale } from "../scales.js";
+import {
+  isFiniteNumber, axisLayer, drawTicks, drawAxisTitle, drawBaseline, tickCount, sequentialColor,
+  drawColorRamp, activateOnKey, focusableMark, TEXT_COLOR, SURFACE_COLOR
+} from "./diststats.js";
+import { booleanOption } from "../chartoptions.js";
+
+const DEFAULT_RADIUS = 20;
+const MIN_RADIUS = 4;
+const RAMP_ROOM = 64;
+const STATS = ["count", "sum", "mean"];
 
 
-/* Sequential ramp for bin intensity. */
-const HEX_RAMP = [
-  "var(--mj-chart-heat-1, #eff6ff)",
-  "var(--mj-chart-heat-2, #bfdbfe)",
-  "var(--mj-chart-heat-3, #93c5fd)",
-  "var(--mj-chart-heat-4, #60a5fa)",
-  "var(--mj-chart-heat-5, #3b82f6)",
-  "var(--mj-chart-heat-6, #2563eb)",
-  "var(--mj-chart-heat-7, #1d4ed8)",
-  "var(--mj-chart-heat-8, #1e40af)"
-]
-
-
-function _hexColor(fraction) {
+function _statName(ctx, rawHex) {
   /*
-   * Map a [0,1] fraction to a hex-ramp color.
-   *
-   * :param fraction: Normalized bin value in [0, 1].
-   * :returns: CSS color string.
+   * The bin statistic: the `stat` attribute, else hexbin.stat, else count.
    */
-  const index = Math.min(
-    HEX_RAMP.length - 1,
-    Math.floor(fraction * HEX_RAMP.length)
-  )
-  return HEX_RAMP[index]
+  let stat = "count"
+  const fromAttr = String(ctx.attrs("stat", "")).trim().toLowerCase()
+  if (STATS.indexOf(fromAttr) >= 0) {
+    stat = fromAttr
+  } else if (STATS.indexOf(rawHex.stat) >= 0) {
+    stat = rawHex.stat
+  }
+  return stat
+}
+
+
+function _binRadius(ctx, rawHex, plotW) {
+  /*
+   * The hexagon circumradius in px: the `radius` attribute, else
+   * hexbin.bins columns across the plot, else hexbin.radius, else the
+   * default; never below MIN_RADIUS.
+   */
+  let radius = DEFAULT_RADIUS
+  const attrRadius = parseFloat(ctx.attrs("radius", ""))
+  const columns = Number(rawHex.bins)
+  const dataRadius = Number(rawHex.radius)
+  if (isFiniteNumber(attrRadius) === true && attrRadius > 0) {
+    radius = attrRadius
+  } else if (isFiniteNumber(columns) === true && columns >= 1) {
+    radius = plotW / (columns * 1.5)
+  } else if (isFiniteNumber(dataRadius) === true && dataRadius > 0) {
+    radius = dataRadius
+  }
+  radius = Math.max(radius, MIN_RADIUS)
+  return radius
 }
 
 
 function _hexPoints(cx, cy, r) {
   /*
-   * Compute the six corner points of a regular hexagon (flat-top orientation).
-   *
-   * :param cx: Center x.
-   * :param cy: Center y.
-   * :param r: Circumradius.
-   * :returns: SVG points string.
+   * The six corners of a flat-topped regular hexagon.
    */
-  const pts = []
-  for (let i = 0; i < 6; i = i + 1) {
-    const angle = (Math.PI / 180) * (60 * i)
-    const px = cx + r * Math.cos(angle)
-    const py = cy + r * Math.sin(angle)
-    pts.push(`${px.toFixed(2)},${py.toFixed(2)}`)
+  const points = []
+  for (let index = 0; index < 6; index = index + 1) {
+    const angle = (Math.PI / 3) * index
+    points.push(`${(cx + r * Math.cos(angle)).toFixed(2)},${(cy + r * Math.sin(angle)).toFixed(2)}`)
   }
-  return pts.join(" ")
+  return points.join(" ")
 }
 
 
 function _hexBin(points, xScale, yScale, radius) {
   /*
-   * Bin XY points into hexagonal grid cells using offset-grid geometry.
+   * Group points by flat-topped hexagon (axial coordinates, cube rounding).
    *
-   * The grid uses pointy-top hexagons (rotated 30° from flat-top) in
-   * axial coordinates; each point is assigned to its nearest hex center.
-   *
-   * :param points: Array of { x, y, value? } in data space.
-   * :param xScale: Pixel scale for x.
-   * :param yScale: Pixel scale for y.
-   * :param radius: Hexagon circumradius in pixels.
-   * :returns: Map from "col,row" key → { cx, cy, pts: [...] }.
+   * :returns: Map "q,r" -> { cx, cy, pts } with the centre in plot pixels.
    */
-  /* Hexagonal grid constants for pointy-top orientation. */
-  const w = Math.sqrt(3) * radius   /* width of one hex cell  */
-  const h = 2 * radius              /* height of one hex cell */
-
   const bins = new Map()
-
-  for (let i = 0; i < points.length; i = i + 1) {
-    const pt = points[i]
-    const px = xScale(pt.x)
-    const py = yScale(pt.y)
-
-    /* Axial grid coordinates. */
-    const q = ((2 / 3) * px) / radius
+  for (let index = 0; index < points.length; index = index + 1) {
+    const point = points[index]
+    const px = xScale(point.x)
+    const py = yScale(point.y)
+    const q = (2 / 3) * px / radius
     const r = ((-1 / 3) * px + (Math.sqrt(3) / 3) * py) / radius
-
-    /* Round to nearest hex using cube rounding. */
     const s = -q - r
     let rq = Math.round(q)
     let rr = Math.round(r)
@@ -113,53 +125,39 @@ function _hexBin(points, xScale, yScale, radius) {
     } else if (dr > ds) {
       rr = -rq - rs
     }
-
     const key = `${rq},${rr}`
     if (bins.has(key) === false) {
-      /* Compute center of this hex in pixel space. */
-      const cx = radius * (3 / 2) * rq
-      const cy = radius * (Math.sqrt(3) * rr + (Math.sqrt(3) / 2) * rq)
-      bins.set(key, { cx: cx, cy: cy, pts: [] })
+      bins.set(key, {
+        cx: radius * 1.5 * rq,
+        cy: radius * (Math.sqrt(3) * rr + (Math.sqrt(3) / 2) * rq),
+        pts: []
+      })
     }
-    bins.get(key).pts.push(pt)
+    bins.get(key).pts.push(point)
   }
-
   return bins
 }
 
 
-function _aggregateBin(pts, stat) {
+function _aggregate(points, stat) {
   /*
-   * Compute the bin statistic from accumulated points.
-   *
-   * :param pts: Array of { x, y, value? }.
-   * :param stat: "count" | "sum" | "mean".
-   * :returns: Numeric statistic value.
+   * The bin statistic: count, or sum / mean of the finite `value`s.
    */
-  if (stat === "sum") {
-    let total = 0
-    for (let i = 0; i < pts.length; i = i + 1) {
-      const v = pts[i].value
-      if (typeof v === "number" && Number.isNaN(v) === false) {
-        total = total + v
-      }
+  if (stat !== "sum" && stat !== "mean") {
+    return points.length
+  }
+  let total = 0
+  let count = 0
+  for (let index = 0; index < points.length; index = index + 1) {
+    if (isFiniteNumber(points[index].value) === true) {
+      total = total + points[index].value
+      count = count + 1
     }
+  }
+  if (stat === "sum") {
     return total
   }
-  if (stat === "mean") {
-    let total = 0
-    let count = 0
-    for (let i = 0; i < pts.length; i = i + 1) {
-      const v = pts[i].value
-      if (typeof v === "number" && Number.isNaN(v) === false) {
-        total = total + v
-        count = count + 1
-      }
-    }
-    return count > 0 ? total / count : 0
-  }
-  /* Default: count */
-  return pts.length
+  return count > 0 ? total / count : null
 }
 
 
@@ -168,220 +166,165 @@ export function render(ctx) {
    * Render a hexbin chart.
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
   const model = ctx.model
-  const rawHex = (ctx.raw !== null && ctx.raw !== undefined)
-    ? ctx.raw.hexbin || {}
-    : {}
-
-  const binRadius = Math.max(4, Number(rawHex.radius) || Number(ctx.attrs("radius", "20")))
-  const stat = rawHex.stat || ctx.attrs("stat", "count")
-  const encoding = ctx.attrs("encoding", "color")
-  const showLabels = ctx.attrs("show-labels", "false") === "true"
+  const rawHex = ctx.raw !== null && ctx.raw !== undefined && ctx.raw.hexbin !== null &&
+    typeof ctx.raw.hexbin === "object" ? ctx.raw.hexbin : {}
+  const statName = _statName(ctx, rawHex)
+  const encoding = ctx.attrs("encoding", "color") === "size" ? "size" : "color"
+  const showLabels = booleanOption(ctx, "show-labels", false)
 
   const root = svgEl("g", { part: "plot" }, [])
-
-  const series = model.series
-  if (series === null || series === undefined || series.length === 0) {
-    return root
-  }
-
-  /* Collect all points (merge series for density). */
-  let allPoints = []
-  for (let s = 0; s < series.length; s = s + 1) {
-    const pts = series[s].points
-    if (pts === null || pts === undefined) {
-      continue
-    }
-    for (let p = 0; p < pts.length; p = p + 1) {
-      const pt = pts[p]
-      const validX = typeof pt.x === "number" && Number.isNaN(pt.x) === false
-      const validY = typeof pt.y === "number" && Number.isNaN(pt.y) === false
-      if (validX === true && validY === true) {
-        allPoints.push(pt)
+  const series = Array.isArray(model.series) === true ? model.series : []
+  const points = []
+  for (let si = 0; si < series.length; si = si + 1) {
+    const list = Array.isArray(series[si].points) === true ? series[si].points : []
+    for (let pi = 0; pi < list.length; pi = pi + 1) {
+      const point = list[pi]
+      if (point !== null && typeof point === "object" &&
+          isFiniteNumber(point.x) === true && isFiniteNumber(point.y) === true) {
+        points.push(point)
       }
     }
   }
-
-  if (allPoints.length === 0) {
+  if (points.length === 0) {
     return root
   }
 
-  const margin = { top: 16, right: 16, bottom: 44, left: 56 }
+  const meta = model.meta !== null && model.meta !== undefined ? model.meta : {}
+  const xTitle = typeof meta.xLabel === "string" ? meta.xLabel : ""
+  const yTitle = typeof meta.yLabel === "string" ? meta.yLabel : ""
+  const margin = {
+    top: 16, right: encoding === "color" ? RAMP_ROOM : 16,
+    bottom: xTitle.length > 0 ? 50 : 36,
+    left: yTitle.length > 0 ? 70 : 56
+  }
   const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
+  const radius = _binRadius(ctx, rawHex, plotW)
 
-  const xVals = allPoints.map((pt) => pt.x)
-  const yVals = allPoints.map((pt) => pt.y)
-  const xDomain = extent(xVals)
-  const yDomain = extent(yVals)
+  let xLow = Infinity
+  let xHigh = -Infinity
+  let yLow = Infinity
+  let yHigh = -Infinity
+  for (let pi = 0; pi < points.length; pi = pi + 1) {
+    xLow = Math.min(xLow, points[pi].x)
+    xHigh = Math.max(xHigh, points[pi].x)
+    yLow = Math.min(yLow, points[pi].y)
+    yHigh = Math.max(yHigh, points[pi].y)
+  }
+  const xPad = (xHigh - xLow) * 0.05 || Math.max(Math.abs(xLow) * 0.1, 1)
+  const yPad = (yHigh - yLow) * 0.05 || Math.max(Math.abs(yLow) * 0.1, 1)
+  const xScale = linearScale([xLow - xPad, xHigh + xPad], [0, plotW])
+  const yScale = linearScale([yLow - yPad, yHigh + yPad], [plotH, 0])
 
-  const xPad = (xDomain[1] - xDomain[0]) * 0.05 || 1
-  const yPad = (yDomain[1] - yDomain[0]) * 0.05 || 1
-
-  const xScale = linearScale(
-    [xDomain[0] - xPad, xDomain[1] + xPad],
-    [0, plotW]
-  )
-  const yScale = linearScale(
-    [yDomain[0] - yPad, yDomain[1] + yPad],
-    [plotH, 0]
-  )
-
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
+  const plot = svgEl("g", { transform: `translate(${margin.left},${margin.top})` }, [])
   root.appendChild(plot)
+  const axes = axisLayer(plot)
+  drawTicks(axes, xScale, { side: "bottom", extent: plotH, count: tickCount(plotW, 70) })
+  drawTicks(axes, yScale, { side: "left", extent: plotW, count: tickCount(plotH, 40) })
+  drawAxisTitle(axes, xTitle, "bottom", plotW, plotH, 38)
+  drawAxisTitle(axes, yTitle, "left", plotW, plotH, 54)
 
-  /* Grid lines + tick labels. */
-  const xTicks = niceTicks(xScale.domain()[0], xScale.domain()[1], 5)
-  for (let t = 0; t < xTicks.length; t = t + 1) {
-    const tick = xTicks[t]
-    const x = xScale(tick)
-    plot.appendChild(svgEl("line", {
-      x1: x, y1: 0, x2: x, y2: plotH,
-      stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-    }, []))
-    plot.appendChild(svgEl("text", {
-      x: x, y: plotH + 16, "text-anchor": "middle",
-      "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-    }, formatNumber(tick)))
-  }
-
-  const yTicks = niceTicks(yScale.domain()[0], yScale.domain()[1], 5)
-  for (let t = 0; t < yTicks.length; t = t + 1) {
-    const tick = yTicks[t]
-    const y = yScale(tick)
-    plot.appendChild(svgEl("line", {
-      x1: 0, y1: y, x2: plotW, y2: y,
-      stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-    }, []))
-    plot.appendChild(svgEl("text", {
-      x: -8, y: y + 4, "text-anchor": "end",
-      "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-    }, formatNumber(tick)))
-  }
-
-  /* Clip path so hexagons don't overflow the plot area. */
-  const clipId = "hexbin-clip-" + Math.random().toString(36).slice(2, 8)
+  /* Clip hexagons to the plot area. */
+  const clipId = `hexbin-clip-${Math.random().toString(36).slice(2, 10)}`
   const defs = svgEl("defs", null, [])
-  const clipPath = svgEl("clipPath", { id: clipId }, [])
-  clipPath.appendChild(svgEl("rect", {
-    x: 0, y: 0, width: plotW, height: plotH
-  }, []))
-  defs.appendChild(clipPath)
+  const clip = svgEl("clipPath", { id: clipId }, [])
+  clip.appendChild(svgEl("rect", { x: 0, y: 0, width: plotW, height: plotH }, []))
+  defs.appendChild(clip)
   plot.appendChild(defs)
+  const marks = svgEl("g", { part: "marks", "clip-path": `url(#${clipId})` }, [])
+  plot.appendChild(marks)
 
-  const hexGroup = svgEl("g", { "clip-path": `url(#${clipId})` }, [])
-  plot.appendChild(hexGroup)
-
-  /* Bin the points. */
-  const bins = _hexBin(allPoints, xScale, yScale, binRadius)
-
-  /* Compute bin statistics and domain. */
-  const binStats = []
-  bins.forEach((bin, key) => {
-    const statValue = _aggregateBin(bin.pts, stat)
-    binStats.push({ key: key, cx: bin.cx, cy: bin.cy, statValue: statValue, count: bin.pts.length })
+  const bins = []
+  _hexBin(points, xScale, yScale, radius).forEach((bin) => {
+    const value = _aggregate(bin.pts, statName)
+    if (value !== null) {
+      bins.push({ cx: bin.cx, cy: bin.cy, value: value, count: bin.pts.length })
+    }
   })
-
-  const statValues = binStats.map((b) => b.statValue)
-  const statDomain = extent(statValues)
-
-  /* Size scale for size-encoding mode. */
-  let sizeScale = null
-  if (encoding === "size") {
-    sizeScale = sqrtScale([0, statDomain[1]], [2, binRadius])
+  let statLow = Infinity
+  let statHigh = -Infinity
+  for (let bi = 0; bi < bins.length; bi = bi + 1) {
+    statLow = Math.min(statLow, bins[bi].value)
+    statHigh = Math.max(statHigh, bins[bi].value)
   }
+  /* Ramps start at zero for non-negative statistics. */
+  const rampLow = statLow >= 0 ? 0 : statLow
+  const rampHigh = statHigh > rampLow ? statHigh : rampLow + 1
+  const fractionOf = (value) => (value - rampLow) / (rampHigh - rampLow)
+  const xStep = (xScale.domain()[1] - xScale.domain()[0]) / plotW
+  const yStep = (yScale.domain()[1] - yScale.domain()[0]) / plotH
+  const rows = []
 
-  /* Draw hexagons. */
-  for (let i = 0; i < binStats.length; i = i + 1) {
-    const bin = binStats[i]
-    const cx = bin.cx
-    const cy = bin.cy
-
-    /* Skip bins whose center is outside an expanded plot area. */
-    if (cx < -binRadius * 2 || cx > plotW + binRadius * 2 ||
-        cy < -binRadius * 2 || cy > plotH + binRadius * 2) {
-      continue
-    }
-
-    const span = statDomain[1] - statDomain[0] || 1
-    const fraction = Math.max(0, Math.min(1, (bin.statValue - statDomain[0]) / span))
-
-    let drawRadius = binRadius
-    let fillColor = _hexColor(fraction)
-
+  for (let bi = 0; bi < bins.length; bi = bi + 1) {
+    const bin = bins[bi]
+    const fraction = Math.max(0, Math.min(1, fractionOf(bin.value)))
+    const dataX = xScale.invert(bin.cx)
+    const dataY = yScale.invert(bin.cy)
+    let drawRadius = radius
+    let fill = sequentialColor(fraction)
     if (encoding === "size") {
-      /* Draw a faint full-size background hex first. */
-      hexGroup.appendChild(svgEl("polygon", {
-        points: _hexPoints(cx, cy, binRadius),
-        fill: "var(--mj-chart-heat-1, #eff6ff)",
-        stroke: "var(--mj-border, #e0e3e9)",
-        "stroke-width": 0.5
+      marks.appendChild(svgEl("polygon", {
+        points: _hexPoints(bin.cx, bin.cy, radius), fill: sequentialColor(0),
+        "fill-opacity": 0.35, stroke: SURFACE_COLOR, "stroke-width": 0.5
       }, []))
-      drawRadius = sizeScale !== null ? sizeScale(bin.statValue) : binRadius
-      fillColor = "var(--mj-color-accent-500, #2563eb)"
+      drawRadius = Math.max(radius * Math.sqrt(fraction), 1.5)
+      fill = sequentialColor(1)
     }
-
-    const hexEl = svgEl("polygon", {
-      points: _hexPoints(cx, cy, drawRadius),
-      fill: fillColor,
-      stroke: "var(--mj-surface, #ffffff)",
-      "stroke-width": 0.5,
-      part: "hexbin"
+    const hex = svgEl("polygon", {
+      points: _hexPoints(bin.cx, bin.cy, drawRadius), fill: fill,
+      stroke: SURFACE_COLOR, "stroke-width": 0.75, part: "hexbin"
     }, [])
-
-    hexEl.setAttribute("tabindex", "0")
-    hexEl.setAttribute("role", "img")
-    const ariaLabel = `Bin at (${cx.toFixed(1)}, ${cy.toFixed(1)}): ${stat}=${formatNumber(bin.statValue)}`
-    hexEl.setAttribute("aria-label", ariaLabel)
-    hexEl.appendChild(svgEl("title", null,
-      `${stat}: ${formatNumber(bin.statValue)} (${bin.count} point${bin.count === 1 ? "" : "s"})`))
-
-    const statVal = bin.statValue
-    const binCx = cx
-    const binCy = cy
-    const handler = () => {
+    const statText = statName === "count" ? `${formatNumber(bin.count)} point${bin.count === 1 ? "" : "s"}`
+      : `${statName} ${formatNumber(bin.value)} (${formatNumber(bin.count)} points)`
+    focusableMark(hex, `Bin at x ${formatNumber(dataX, { maximumSignificantDigits: 3 })}, ` +
+      `y ${formatNumber(dataY, { maximumSignificantDigits: 3 })}: ${statText}`)
+    const halfWidth = radius * xStep
+    const halfHeight = radius * Math.sqrt(3) / 2 * yStep
+    activateOnKey(hex, () => {
       ctx.emit("mj-chart-hexbin-click", {
-        cx: binCx, cy: binCy,
-        stat: stat, value: statVal, count: bin.count
+        x: dataX, y: dataY,
+        x0: dataX - halfWidth, x1: dataX + halfWidth,
+        y0: dataY - halfHeight, y1: dataY + halfHeight,
+        stat: statName, value: bin.value, count: bin.count,
+        cx: bin.cx, cy: bin.cy
       })
-    }
-    hexEl.addEventListener("click", handler)
-    hexEl.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault()
-        handler()
-      }
     })
-    hexGroup.appendChild(hexEl)
+    marks.appendChild(hex)
+    rows.push([dataX, dataY, bin.count, bin.value])
 
-    /* Optional count/stat label inside bin. */
     if (showLabels === true && drawRadius > 10) {
-      hexGroup.appendChild(svgEl("text", {
-        x: cx, y: cy + 4,
-        "text-anchor": "middle",
-        "font-size": Math.max(8, Math.min(11, drawRadius * 0.4)),
-        fill: fraction > 0.6
-          ? "var(--mj-text-on-strong, #ffffff)"
-          : "var(--mj-text, #14181f)",
-        "pointer-events": "none"
-      }, formatNumber(bin.statValue)))
+      marks.appendChild(svgEl("text", {
+        x: bin.cx, y: bin.cy + 4, "text-anchor": "middle",
+        "font-size": Math.max(8, Math.min(11, drawRadius * 0.5)), "font-weight": 600,
+        fill: TEXT_COLOR, stroke: SURFACE_COLOR, "stroke-width": 2.5, "stroke-opacity": 0.6,
+        "paint-order": "stroke", "pointer-events": "none", "aria-hidden": "true"
+      }, formatNumber(bin.value, { maximumSignificantDigits: 3 })))
     }
   }
 
-  /* Axis baselines. */
-  plot.appendChild(svgEl("line", {
-    x1: 0, y1: plotH, x2: plotW, y2: plotH,
-    stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
-  }, []))
-  plot.appendChild(svgEl("line", {
-    x1: 0, y1: 0, x2: 0, y2: plotH,
-    stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
-  }, []))
+  drawBaseline(axes, 0, plotH, plotW, plotH)
+  drawBaseline(axes, 0, 0, 0, plotH)
+  if (encoding === "color") {
+    const rampLength = Math.min(plotH, 180)
+    drawColorRamp(axes, {
+      x: plotW + 12, y: (plotH - rampLength) / 2, length: rampLength, thickness: 10, vertical: true,
+      colorAt: (fraction) => sequentialColor(fraction),
+      labels: [
+        { fraction: 0, text: formatNumber(rampLow, { maximumSignificantDigits: 3 }) },
+        { fraction: 1, text: formatNumber(rampHigh, { maximumSignificantDigits: 3 }) }
+      ]
+    })
+  }
 
+  ctx.setLegend([])
+  ctx.setTable({
+    columns: ["Bin x", "Bin y", "Points", statName === "count" ? "Count" : statName],
+    rows: rows,
+    caption: "Hexagonal bins"
+  })
   return root
 }
 

@@ -671,10 +671,19 @@ import string
 
 
 def _random_safe_segment(min_len=1, max_len=15):
-    """Generate a random URL-safe string without slashes."""
+    """
+    Generate a random URL-safe string without slashes.
+
+    The string is never '..': as a path segment that is refused by the
+    path converter, because it would walk out of the directory a handler
+    serves.
+    """
     length = random.randint(min_len, max_len)
     chars = string.ascii_letters + string.digits + "-_."
-    return "".join(random.choice(chars) for _ in range(length))
+    value = "".join(random.choice(chars) for _ in range(length))
+    if value == "..":
+        value = "dots"
+    return value
 
 
 def _random_uuid_string():

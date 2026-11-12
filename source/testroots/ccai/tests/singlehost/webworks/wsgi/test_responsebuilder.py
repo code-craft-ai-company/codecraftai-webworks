@@ -13,6 +13,9 @@ import string
 from typing import Dict
 
 from ccai.webworks.wsgi.response import Response, ResponseBuilder
+from ccai.webworks.wsgi.exceptions import InvalidResponseHeader
+from ccai.webworks.routing.response import Response as FrameworkResponse
+from ccai.webworks.routing.response import StreamingResponse
 
 
 # =============================================================================
@@ -638,9 +641,206 @@ def test_property_response_formatting_correctness():
             errmsg = f"Iteration {iteration}: Body content is not bytes"
             raise AssertionError(errmsg)
         
-        # Property 7: Body content matches original response body
-        if body_content != response.body:
-            errmsg = f"Iteration {iteration}: Body content mismatch. Expected {len(response.body)} bytes, got {len(body_content)} bytes"
+        # Property 7: Body content matches original response body. A 204
+        # or 304 response never carries a body, whatever the response holds.
+        if response.status_code in (204, 304):
+            expected_body = b""
+        else:
+            expected_body = response.body
+        
+        if body_content != expected_body:
+            errmsg = f"Iteration {iteration}: Body content mismatch. Expected {len(expected_body)} bytes, got {len(body_content)} bytes"
             raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Tests for Content-Length, header validation and framework responses
+# =============================================================================
+
+def test_build_sets_content_length_zero_for_empty_body():
+    """
+        Test that build states a Content-Length of zero for a response without a body.
+    """
+    builder = ResponseBuilder()
+    response = Response(status_code=302, headers={"Location": "/next"})
+    
+    _, headers, body_iter = builder.build(response)
+    
+    headers_dict = dict(headers)
+    
+    if headers_dict.get("Content-Length") != "0":
+        errmsg = f"Expected Content-Length '0' for an empty body, got {headers_dict.get('Content-Length')!r}"
+        raise AssertionError(errmsg)
+    
+    if "Content-Type" in headers_dict:
+        errmsg = "Expected no Content-Type header for an empty body"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_build_sets_no_content_length_for_304():
+    """
+        Test that build does not state a Content-Length for a 304 response.
+    """
+    builder = ResponseBuilder()
+    response = Response(status_code=304)
+    
+    _, headers, _ = builder.build(response)
+    
+    if "Content-Length" in dict(headers):
+        errmsg = "Expected no Content-Length header for a 304 response"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_build_strips_body_of_204_response():
+    """
+        Test that build does not pass on a body given to a 204 response.
+    """
+    builder = ResponseBuilder()
+    response = Response(status_code=204, body=b"must not be sent")
+    
+    _, _, body_iter = builder.build(response)
+    
+    body_content = b"".join(body_iter)
+    
+    if body_content != b"":
+        errmsg = f"Expected no body for a 204 response, got {body_content!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_build_refuses_header_value_with_line_break():
+    """
+        Test that build refuses a header that would split the response.
+    """
+    builder = ResponseBuilder()
+    response = Response(status_code=302, headers={"Location": "/x\r\nSet-Cookie: sid=evil"})
+    
+    raised = False
+    try:
+        builder.build(response)
+    except InvalidResponseHeader:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected InvalidResponseHeader for a header value containing CRLF"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_format_headers_refuses_header_name_with_line_break():
+    """
+        Test that format_headers refuses a header name that contains a line break.
+    """
+    builder = ResponseBuilder()
+    
+    raised = False
+    try:
+        builder.format_headers({"X-A\r\nX-B": "value"})
+    except InvalidResponseHeader:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected InvalidResponseHeader for a header name containing CRLF"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_format_header_list_keeps_repeated_headers():
+    """
+        Test that a header given more than once is kept once per value.
+    """
+    builder = ResponseBuilder()
+    
+    result = builder.format_header_list([("Set-Cookie", "a=1"), ("Set-Cookie", "b=2")])
+    
+    if result != [("Set-Cookie", "a=1"), ("Set-Cookie", "b=2")]:
+        errmsg = f"Expected both Set-Cookie headers, got {result}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_build_accepts_framework_response_with_body():
+    """
+        Test that build converts the response class of the framework.
+    """
+    builder = ResponseBuilder()
+    response = FrameworkResponse(status_code=200, headers={"Content-Type": "text/html"}, body=b"<p>hi</p>")
+    
+    status, headers, body_iter = builder.build(response)
+    
+    headers_dict = dict(headers)
+    
+    if status != "200 OK":
+        errmsg = f"Expected status '200 OK', got {status!r}"
+        raise AssertionError(errmsg)
+    
+    if headers_dict.get("Content-Type") != "text/html":
+        errmsg = f"Expected Content-Type 'text/html', got {headers_dict.get('Content-Type')!r}"
+        raise AssertionError(errmsg)
+    
+    if b"".join(body_iter) != b"<p>hi</p>":
+        errmsg = "Expected the body of the framework response"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_build_includes_cookies_of_framework_response():
+    """
+        Test that every cookie of a framework response becomes a Set-Cookie header.
+    """
+    builder = ResponseBuilder()
+    response = FrameworkResponse(status_code=200, body=b"ok")
+    response.set_cookie("session", "abc")
+    response.set_cookie("theme", "dark")
+    
+    _, headers, _ = builder.build(response)
+    
+    cookie_headers = [value for name, value in headers if name == "Set-Cookie"]
+    
+    if len(cookie_headers) != 2:
+        errmsg = f"Expected two Set-Cookie headers, got {cookie_headers}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_build_passes_streaming_response_on_as_iterator():
+    """
+        Test that a streaming response is not collected and gets no Content-Length.
+    """
+    builder = ResponseBuilder()
+    produced = []
+    
+    def generate():
+        for chunk in (b"one", b"two"):
+            produced.append(chunk)
+            yield chunk
+    
+    response = StreamingResponse(generate(), media_type="text/plain")
+    
+    _, headers, body_iter = builder.build(response)
+    
+    if len(produced) != 0:
+        errmsg = f"Expected the stream not to be read by build, it produced {produced}"
+        raise AssertionError(errmsg)
+    
+    if "Content-Length" in dict(headers):
+        errmsg = "Expected no Content-Length header for a streaming response"
+        raise AssertionError(errmsg)
+    
+    if b"".join(body_iter) != b"onetwo":
+        errmsg = "Expected the chunks of the stream from the body iterator"
+        raise AssertionError(errmsg)
     
     return

@@ -748,3 +748,68 @@ def test_property_error_map_inheritance():
             raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# HTTP exceptions carry their own status
+# =============================================================================
+
+def test_not_acceptable_is_handled_as_406():
+    """NotAcceptable becomes a 406 with the supported formats in the message, not a 500."""
+    from ccai.webworks.endpoints.rest.exceptions import NotAcceptable
+
+    handler = ErrorHandler()
+    rest_error, status_code = handler.handle(NotAcceptable(["application/json"]))
+
+    if status_code != 406:
+        raise AssertionError(f"Expected 406, got {status_code}")
+
+    if rest_error.error != "not_acceptable" or "application/json" not in rest_error.message:
+        raise AssertionError(f"Unexpected error body: {rest_error}")
+
+
+def test_unsupported_media_type_is_handled_as_415():
+    """UnsupportedMediaType becomes a 415, not a 500."""
+    from ccai.webworks.endpoints.rest.exceptions import UnsupportedMediaType
+
+    handler = ErrorHandler()
+    rest_error, status_code = handler.handle(UnsupportedMediaType("text/xml", ["application/json"]))
+
+    if status_code != 415 or rest_error.error != "unsupported_media_type":
+        raise AssertionError(f"Expected 415 unsupported_media_type, got {status_code} {rest_error.error}")
+
+
+def test_routing_not_found_is_handled_as_404():
+    """The routing NotFound exception becomes a 404 not_found with its detail as the message."""
+    from ccai.webworks.routing.exceptions import NotFound
+
+    handler = ErrorHandler()
+    rest_error, status_code = handler.handle(NotFound("No such order"))
+
+    if status_code != 404 or rest_error.error != "not_found" or rest_error.message != "No such order":
+        raise AssertionError(f"Expected 404 not_found 'No such order', got {status_code} {rest_error}")
+
+
+def test_registered_mapping_takes_precedence_over_http_exception_status():
+    """A mapping registered for an HTTP exception type wins over the status the exception carries."""
+    from ccai.webworks.endpoints.rest.exceptions import NotAcceptable
+
+    handler = ErrorHandler()
+    handler.register_mapping(NotAcceptable, ErrorMapping(status_code=400, error_code="bad_accept"))
+
+    rest_error, status_code = handler.handle(NotAcceptable(["application/json"]))
+
+    if status_code != 400 or rest_error.error != "bad_accept":
+        raise AssertionError(f"Expected the registered mapping (400 bad_accept), got {status_code} {rest_error.error}")
+
+
+def test_key_error_message_uses_the_template_and_the_plain_key():
+    """The default KeyError mapping reports 'Resource not found: <key>', not the quoted repr of the key."""
+    handler = ErrorHandler()
+    rest_error, status_code = handler.handle(KeyError("user_42"))
+
+    if status_code != 404:
+        raise AssertionError(f"Expected 404, got {status_code}")
+
+    if rest_error.message != "Resource not found: user_42":
+        raise AssertionError(f"Expected 'Resource not found: user_42', got {rest_error.message!r}")

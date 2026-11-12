@@ -87,6 +87,7 @@ sequenceDiagram
 
 Shutdown tears down subsystems in reverse lifecycle order:
 
+0. Extensions: `on_app_shutdown`, then every started extension's `shutdown()` in reverse dependency order, continuing past one that raises. Done once: when the ASGI lifespan shutdown already stopped the extensions, `shutdown()` skips it.
 1. ASGIApplication (stop accepting requests)
 2. AuthenticationMiddleware (if configured)
 3. AuthenticationSystem (clear authenticators)
@@ -140,6 +141,9 @@ class WebApplication(ThisApplication):
 
     @property
     def asgi_app(self) -> ASGIApplication: ...
+
+    @property
+    def wsgi_app(self) -> ASGIBridge: ...   # PEP 3333 callable serving asgi_app (wsgi-layer Req. 16)
 
     @property
     def config(self) -> ManagedConfigRegistry: ...
@@ -269,14 +273,16 @@ def _require_phase(self, required: LifecyclePhase, operation: str) -> None:
 
 This is the core wiring method that replaces the boilerplate in `app.py` files:
 
-1. Creates a `Router` instance.
-2. Loads all `EndpointDescriptor` instances from the global `EndpointRegistry` into the Router via `router.load_from_registry(registry=EndpointRegistry)`.
-3. Flushes any pending routes from `attach_route` calls into the Router.
-4. Flushes any pending blueprints from `attach_blueprint_to_route` calls into the Router.
-5. Creates a `Dispatcher` configured with the Router.
-6. Creates an `ASGIApplication` via `create_asgi_application()`.
-7. Wires the ASGIApplication HTTP handler to `dispatcher.dispatch_async`.
-8. Advances phase to `INFRASTRUCTURE_READY`.
+1. Starts the extensions (once): loads the extensions the `extensions` configuration section names, initializes every registered extension in dependency order and activates it, then fires `on_config_loaded` and `on_app_init` (see the extensibility spec, "Application Integration"). Routes, middleware and components the extensions register are in place before the routes are finalised.
+2. Creates a `RestProcessingRouter` -- a `Router` that serves every route declaring REST metadata through the application's REST processing (`webapp.rest_middleware`; see the rest-api-support spec, requirement 13).
+3. Loads the application's `EndpointRegistry` into the Router via `router.load_from_registry(registry=...)`.
+4. Flushes any pending routes from `attach_route` calls into the Router.
+5. Flushes any pending blueprints from `attach_blueprint_to_route` calls into the Router.
+6. Creates a `Dispatcher` configured with the Router, the application's `MiddlewareRegistry` (`webapp.middleware_registry`), its request lifecycle hooks and the first-request callable that fires `on_app_ready` when the application is served without a lifespan startup.
+7. Creates an `ASGIApplication` via `create_asgi_application()`, wires its HTTP handler to `dispatcher.dispatch_async`, and registers the extensions' serving lifecycle on its lifespan handler: `on_ready` fires `on_app_ready` once the startup handlers succeeded, `on_stopping` stops the extensions (`on_app_shutdown`, then every extension's `shutdown()`) before the shutdown handlers.
+8. Advances phase to `INFRASTRUCTURE_READY`, fills the URL node map extensions read, and fires `on_routes_registered`.
+
+The application also owns, from its constructor, a `MiddlewareRegistry`, the `RESTMiddleware` its router applies, the `ApplicationContext` its extensions see and the `ExtensionHost` holding its `ExtensionRegistry` and `HookManager` (properties `middleware_registry`, `rest_middleware`, `app_context`, `extension_registry`, `hook_manager`), and offers `add_extension(...)` until the extensions start.
 
 ### startup Method
 

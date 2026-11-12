@@ -11,8 +11,10 @@ from ccai.webworks.asgi.application import ASGIApplication, UnknownScopeTypeErro
 from ccai.webworks.asgi.httphandler import HTTPHandler
 from ccai.webworks.asgi.websockethandler import WebSocketHandler
 from ccai.webworks.asgi.lifespanhandler import LifespanHandler
-from ccai.webworks.asgi.errorhandler import ErrorHandler
+from ccai.webworks.asgi.application import create_asgi_application
+from ccai.webworks.asgi.errorhandler import ErrorHandler, ErrorResponse
 from ccai.webworks.asgi.constants import (
+    DEFAULT_MAX_REQUEST_BODY_SIZE,
     SCOPE_TYPE_HTTP,
     SCOPE_TYPE_WEBSOCKET,
     SCOPE_TYPE_LIFESPAN,
@@ -1297,6 +1299,177 @@ def test_asgiapplication_error_handler_logs_exceptions():
     # them first. This test verifies the error response is sent.
     if len(sent_messages) < 1:
         errmsg = "Expected at least one message to be sent"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Tests for error handler wiring, startup gating and the body size option
+# =============================================================================
+
+def run_http_request(app: ASGIApplication, body: bytes = b"") -> List[Dict[str, Any]]:
+    """
+        Run one HTTP request through an application and return the messages it sent.
+    """
+    scope = create_http_scope()
+    receive = create_http_receive_callable(body=body)
+    send, sent_messages = create_send_callable()
+    
+    asyncio.get_event_loop().run_until_complete(app(scope, receive, send))
+    
+    return sent_messages
+
+
+def test_application_reaches_custom_error_handler_for_handler_exception():
+    """
+        Test that a handler registered on the application's error handler is called.
+    """
+    class QuotaError(Exception):
+        pass
+    
+    async def handle_quota(exc: Exception) -> ErrorResponse:
+        return ErrorResponse(status_code=429, body=b"quota used up")
+    
+    async def failing_handler(request: Request) -> Response:
+        raise QuotaError("too many")
+    
+    app = ASGIApplication()
+    app.error_handler.register_handler(QuotaError, handle_quota)
+    app.http_handler.set_handler(failing_handler)
+    
+    sent_messages = run_http_request(app)
+    
+    if sent_messages[0].get("status") != 429:
+        errmsg = f"Expected the status of the custom handler (429), got {sent_messages[0].get('status')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_application_gives_its_error_handler_to_a_passed_http_handler():
+    """
+        Test that an HTTP handler passed in without error handler gets the application's.
+    """
+    http_handler = HTTPHandler()
+    error_handler = ErrorHandler()
+    
+    ASGIApplication(http_handler=http_handler, error_handler=error_handler)
+    
+    if http_handler.error_handler is not error_handler:
+        errmsg = "Expected the HTTP handler to use the error handler of the application"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_application_answers_503_after_failed_startup():
+    """
+        Test that requests are refused with 503 once a startup handler has failed.
+    """
+    handled: List[str] = []
+    
+    async def failing_startup() -> None:
+        raise RuntimeError("database not reachable")
+    
+    async def ok_handler(request: Request) -> Response:
+        handled.append(request.path)
+        return Response(status_code=200, body=b"ok")
+    
+    app = ASGIApplication()
+    app.lifespan_handler.on_startup(failing_startup)
+    app.http_handler.set_handler(ok_handler)
+    
+    lifespan_send, _ = create_send_callable()
+    asyncio.get_event_loop().run_until_complete(
+        app(create_lifespan_scope(), create_lifespan_receive_callable(), lifespan_send)
+    )
+    
+    sent_messages = run_http_request(app)
+    
+    if sent_messages[0].get("status") != 503:
+        errmsg = f"Expected status 503 after a failed startup, got {sent_messages[0].get('status')}"
+        raise AssertionError(errmsg)
+    
+    if len(handled) != 0:
+        errmsg = "Expected the request handler not to be called after a failed startup"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_application_serves_requests_without_lifespan_events():
+    """
+        Test that requests are served when the server never sent lifespan events.
+    """
+    async def ok_handler(request: Request) -> Response:
+        return Response(status_code=200, body=b"ok")
+    
+    app = ASGIApplication()
+    app.http_handler.set_handler(ok_handler)
+    
+    sent_messages = run_http_request(app)
+    
+    if sent_messages[0].get("status") != 200:
+        errmsg = f"Expected status 200 without lifespan events, got {sent_messages[0].get('status')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_application_refuses_websocket_after_failed_startup():
+    """
+        Test that a WebSocket connection is closed, not accepted, after a failed startup.
+    """
+    async def failing_startup() -> None:
+        raise RuntimeError("database not reachable")
+    
+    app = ASGIApplication()
+    app.lifespan_handler.on_startup(failing_startup)
+    
+    lifespan_send, _ = create_send_callable()
+    asyncio.get_event_loop().run_until_complete(
+        app(create_lifespan_scope(), create_lifespan_receive_callable(), lifespan_send)
+    )
+    
+    send, sent_messages = create_send_callable()
+    asyncio.get_event_loop().run_until_complete(
+        app(create_websocket_scope(), create_websocket_receive_callable(), send)
+    )
+    
+    message_types = [msg.get("type") for msg in sent_messages]
+    
+    if message_types != [MESSAGE_WEBSOCKET_CLOSE]:
+        errmsg = f"Expected only a close message, got {message_types}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_create_asgi_application_applies_body_size_option():
+    """
+        Test that the factory passes the body size limit on to the body reader.
+    """
+    app = create_asgi_application(max_request_body_size=2048)
+    
+    if app.http_handler.body_reader.max_size != 2048:
+        errmsg = f"Expected a body limit of 2048, got {app.http_handler.body_reader.max_size}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_create_asgi_application_limits_body_size_by_default():
+    """
+        Test that an application created without options has a body size limit.
+    """
+    app = create_asgi_application()
+    
+    if app.http_handler.body_reader.max_size != DEFAULT_MAX_REQUEST_BODY_SIZE:
+        errmsg = (
+            f"Expected the default body limit {DEFAULT_MAX_REQUEST_BODY_SIZE}, "
+            f"got {app.http_handler.body_reader.max_size}"
+        )
         raise AssertionError(errmsg)
     
     return

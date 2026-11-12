@@ -7,6 +7,8 @@
 
 from typing import List
 
+from ccai.errors.exceptions import ConfigurationError as FoundationConfigurationError
+
 
 class ProductionServerError(Exception):
     """
@@ -15,11 +17,14 @@ class ProductionServerError(Exception):
     pass
 
 
-class ConfigurationError(ProductionServerError):
+class ConfigurationError(FoundationConfigurationError):
     """
         Configuration validation error.
 
-        Raised when server configuration values are invalid.
+        Raised when server configuration values are invalid. It is the
+        ``ccai.errors`` ConfigurationError, so it derives from BaseException
+        and ends the run: a server that was configured wrongly is not
+        started. The message enumerates every problem found.
     """
 
     def __init__(self, errors: List[str]):

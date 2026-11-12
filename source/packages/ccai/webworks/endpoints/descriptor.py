@@ -91,6 +91,160 @@ ENDPOINT_DECLARED_ATTR = "__webworks_declared_descriptors__"
 ENDPOINT_PARENT_PLACEMENT_EXTRA = "parent_placement_path"
 
 
+#: Key in :attr:`EndpointDescriptor.extras` naming the blueprint a route was
+#: declared through: the name of the :class:`Blueprint` or
+#: :class:`RestBlueprint` subclass, unless the handler passed its own value
+#: (``attach_at(..., blueprint="shop")``). The dispatcher reads it to run
+#: middleware registered at ``scope="blueprint"`` under that name.
+ENDPOINT_BLUEPRINT_NAME_EXTRA = "blueprint"
+
+
+def stamp_blueprint_name(
+    descriptor: "EndpointDescriptor",
+    blueprint_name: str,
+    replaces: Optional[str] = None
+) -> None:
+    """
+        Record the blueprint a descriptor belongs to.
+
+        A name the descriptor already carries is kept, unless it is the
+        name given as *replaces*: the name of the ancestor class an
+        in-class-body ``attach_at`` ran against, which the subclass then
+        claims.
+
+        :param descriptor: The descriptor to update in place.
+        :param blueprint_name: The blueprint's name.
+        :param replaces: A name that is overwritten rather than kept.
+    """
+    current = descriptor.extras.get(ENDPOINT_BLUEPRINT_NAME_EXTRA)
+
+    if current is None or (replaces is not None and current == replaces):
+        descriptor.extras[ENDPOINT_BLUEPRINT_NAME_EXTRA] = blueprint_name
+
+    return
+
+
+#: Keys under ``extras["rest"]`` holding the schema *classes* an endpoint was
+#: declared with. ``request_schema`` / ``response_schema`` / ``error_map``
+#: hold the inspected JSON-schema dicts, which are what documentation exports
+#: read; these hold the dataclass or Pydantic classes themselves, which is
+#: what request validation and OpenAPI component generation need.
+REST_REQUEST_SCHEMA_TYPE_EXTRA = "request_schema_type"
+REST_RESPONSE_SCHEMA_TYPE_EXTRA = "response_schema_type"
+REST_ERROR_MAP_TYPES_EXTRA = "error_map_types"
+
+#: Key under ``extras["rest"]`` holding the declared query parameters of an
+#: endpoint, as a mapping of parameter name to Python type.
+REST_QUERY_PARAMS_EXTRA = "query_params"
+
+#: Key under ``extras["rest"]`` set to True on endpoints that are served
+#: through the REST request/response processing (validation, serialization,
+#: status code selection and the RESTError error model):
+#:
+#: * :class:`ResourceEndpoint` / :class:`CollectionEndpoint` routes, whose
+#:   generated handlers run the processing themselves;
+#: * routes declared with REST metadata (a request schema, a response schema
+#:   or an error map) through ``attach_at`` / ``attach_route``, which the
+#:   router of a :class:`WebApplication` wraps in the processing when the
+#:   route is registered (see
+#:   :class:`ccai.webworks.endpoints.rest.restprocessingrouter.RestProcessingRouter`).
+#:
+#: Documentation generators use it to describe the status codes and error
+#: bodies such an endpoint really returns.
+REST_MANAGED_EXTRA = "managed"
+
+#: Key under ``extras["rest"]`` set to False on a route whose declaration
+#: opted out of the REST processing (``rest_processing=False``): its handler
+#: parses the body and shapes the response itself, and the schemas it
+#: declares only document it. A route whose ``extras["rest"]`` does not carry
+#: the key is processed when it declares REST metadata.
+REST_PROCESSING_EXTRA = "processing"
+
+#: The keys under ``extras["rest"]`` that declare REST metadata. A route
+#: carrying any of them is served through the REST processing unless it
+#: opted out (:data:`REST_PROCESSING_EXTRA`). ``query_params`` only documents
+#: the query string and is deliberately not one of them.
+REST_METADATA_KEYS = (
+    "request_schema",
+    REST_REQUEST_SCHEMA_TYPE_EXTRA,
+    "response_schema",
+    REST_RESPONSE_SCHEMA_TYPE_EXTRA,
+    "error_map",
+    REST_ERROR_MAP_TYPES_EXTRA,
+)
+
+
+def _declares_rest_metadata(rest_extras: Dict[str, Any]) -> bool:
+    """
+        Whether a route's ``extras["rest"]`` declares REST metadata: one of
+        :data:`REST_METADATA_KEYS` holds a value (an empty error map
+        declares nothing).
+
+        :param rest_extras: The route's ``extras["rest"]`` mapping.
+
+        :returns: True when REST metadata is declared.
+    """
+    rtnval = False
+
+    for key in REST_METADATA_KEYS:
+        value = rest_extras.get(key)
+        if value is None:
+            continue
+        if isinstance(value, dict) and len(value) == 0:
+            continue
+        rtnval = True
+        break
+
+    return rtnval
+
+
+def record_rest_processing(rest_extras: Dict[str, Any], rest_processing: bool) -> None:
+    """
+        Record on a route's ``extras["rest"]`` whether it is served through
+        the REST request/response processing.
+
+        Called by the declaration APIs (``attach_at``, ``attach_route``,
+        the authentication blueprints) once they have built the REST extras
+        of a route. A route that declares no REST metadata is left alone: it
+        is never processed, whatever was asked.
+
+        :param rest_extras: The route's ``extras["rest"]`` mapping, updated
+                            in place.
+        :param rest_processing: False when the declaration opted out.
+    """
+    if _declares_rest_metadata(rest_extras) is True:
+        if rest_processing is True:
+            rest_extras[REST_MANAGED_EXTRA] = True
+        else:
+            rest_extras[REST_PROCESSING_EXTRA] = False
+
+    return
+
+
+def declares_rest_processing(descriptor: Any) -> bool:
+    """
+        Whether a route is to be served through the REST request/response
+        processing: it declares REST metadata (see :data:`REST_METADATA_KEYS`)
+        and did not opt out with ``rest_processing=False``.
+
+        :param descriptor: The route's descriptor.
+
+        :returns: True when the route's handler is to run inside the REST
+                  processing.
+    """
+    rtnval = False
+
+    extras = getattr(descriptor, "extras", None)
+    if isinstance(extras, dict):
+        rest_extras = extras.get("rest")
+        if isinstance(rest_extras, dict):
+            opted_out = rest_extras.get(REST_PROCESSING_EXTRA) is False
+            if opted_out is False:
+                rtnval = _declares_rest_metadata(rest_extras)
+
+    return rtnval
+
+
 def declare_on_class(owner: Any, descriptor: "EndpointDescriptor") -> None:
     """
         Record a descriptor on the class it was declared through.

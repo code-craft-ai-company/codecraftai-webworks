@@ -2,13 +2,22 @@
  * mjtreenav.js
  *
  * <mj-tree-nav> -- hierarchical navigation tree implementing WAI-ARIA tree/treeitem.
- * Uses aria-activedescendant on the tree root for keyboard focus management.
  * Supports expand/collapse, auto-expand of current item's ancestors, and persist-state.
+ *
+ * The tree items are the author's own <li> elements in the light DOM. Two
+ * things follow from that:
+ *   - Their styles cannot live in the shadow stylesheet (it does not reach
+ *     light-DOM descendants), so the item rules are adopted into the document
+ *     (or the enclosing shadow root), scoped to `mj-tree-nav`.
+ *   - An ID reference such as aria-activedescendant cannot point from the
+ *     shadow tree element to them, so keyboard focus is real DOM focus that
+ *     roves over the items (roving tabindex).
  *
  * WAI-ARIA: nav landmark; ul role=tree; li role=treeitem; aria-expanded; aria-current="page".
  */
 
 import { MjElement, nextId } from "../core/mjelement.js";
+import { html } from "../core/html.js";
 import { t } from "../core/intl.js";
 
 const STYLES = `
@@ -21,14 +30,16 @@ nav { font-size: var(--mj-tree-nav-font-size, var(--mj-font-size-sm)); }
   margin: 0; padding: 0;
   outline: none;
 }
-.tree:focus-visible {
-  outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring);
-  outline-offset: var(--mj-focus-ring-offset);
+`;
+
+/* Rules for the light-DOM items; adopted once per document / shadow root. */
+const LIGHT_STYLES = `
+mj-tree-nav li[role="treeitem"] {
+  list-style: none;
+  outline: none;
 }
 
-.item { list-style: none; }
-
-.item-row {
+mj-tree-nav .item-row {
   display: flex;
   align-items: center;
   height: var(--mj-tree-nav-item-height, 36px);
@@ -38,24 +49,33 @@ nav { font-size: var(--mj-tree-nav-font-size, var(--mj-font-size-sm)); }
   transition: background var(--mj-motion-fast) var(--mj-motion-ease);
   position: relative;
 }
-.item-row:hover { background: var(--mj-tree-nav-bg-hover, var(--mj-bg-muted)); }
+mj-tree-nav[compact] .item-row { height: var(--mj-tree-nav-item-height-compact, 28px); }
+mj-tree-nav .item-row:hover { background: var(--mj-tree-nav-bg-hover, var(--mj-bg-muted)); }
 
-.item[data-active="true"] > .item-row {
-  background: var(--mj-tree-nav-bg-active, var(--mj-bg-muted));
+/* Leaf rows keep the space a toggle would take, so labels line up. */
+mj-tree-nav li[role="treeitem"]:not([aria-expanded]) > .item-row {
+  padding-inline-start: var(--mj-tree-nav-toggle-size, 20px);
+}
+
+mj-tree-nav li[role="treeitem"]:focus-visible > .item-row {
+  background: var(--mj-tree-nav-bg-hover, var(--mj-bg-muted));
   outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring);
-  outline-offset: -2px;
+  outline-offset: calc(0px - var(--mj-focus-ring-width));
 }
 
-.item[aria-current="page"] > .item-row {
+mj-tree-nav li[role="treeitem"][aria-current="page"] > .item-row {
   background: var(--mj-tree-nav-bg-active, var(--mj-bg-muted));
-  border-inline-start: var(--mj-tree-nav-active-border, 2px solid var(--mj-accent));
+  box-shadow: inset var(--mj-tree-nav-active-border-width, 2px) 0 0 var(--mj-tree-nav-active-border-color, var(--mj-accent));
 }
-.item[aria-current="page"] > .item-row .item-link {
+mj-tree-nav:dir(rtl) li[role="treeitem"][aria-current="page"] > .item-row {
+  box-shadow: inset calc(0px - var(--mj-tree-nav-active-border-width, 2px)) 0 0 var(--mj-tree-nav-active-border-color, var(--mj-accent));
+}
+mj-tree-nav li[role="treeitem"][aria-current="page"] > .item-row .item-link {
   color: var(--mj-tree-nav-color-active, var(--mj-accent));
   font-weight: var(--mj-font-weight-medium);
 }
 
-.toggle-btn {
+mj-tree-nav .toggle-btn {
   display: flex; align-items: center; justify-content: center;
   width: var(--mj-tree-nav-toggle-size, 20px);
   height: var(--mj-tree-nav-toggle-size, 20px);
@@ -64,12 +84,14 @@ nav { font-size: var(--mj-tree-nav-font-size, var(--mj-font-size-sm)); }
   color: var(--mj-text-muted);
   padding: 0;
   border-radius: var(--mj-radius-sm);
+}
+mj-tree-nav .toggle-btn svg {
   transition: transform var(--mj-tree-nav-transition-duration, var(--mj-motion-fast)) var(--mj-motion-ease);
 }
-.toggle-btn[aria-hidden="true"] { visibility: hidden; }
-.item[aria-expanded="true"] > .item-row .toggle-btn { transform: rotate(90deg); }
+mj-tree-nav:dir(rtl) .toggle-btn svg { transform: scaleX(-1); }
+mj-tree-nav li[role="treeitem"][aria-expanded="true"] > .item-row .toggle-btn svg { transform: rotate(90deg); }
 
-.item-link {
+mj-tree-nav .item-link {
   flex: 1;
   display: flex; align-items: center;
   height: 100%;
@@ -78,20 +100,42 @@ nav { font-size: var(--mj-tree-nav-font-size, var(--mj-font-size-sm)); }
   color: var(--mj-text);
   min-width: 0;
   padding-inline-start: var(--mj-space-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.item-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.item-icon { flex-shrink: 0; }
+mj-tree-nav .item-link[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 
-.child-tree {
+mj-tree-nav .child-tree {
   list-style: none;
   margin: 0; padding: 0;
-  padding-inline-start: calc(var(--mj-tree-nav-indent, var(--mj-space-5)));
+  padding-inline-start: var(--mj-tree-nav-indent, var(--mj-space-5));
 }
-.item[aria-expanded="false"] > .child-tree { display: none; }
-.item:not([aria-expanded]) > .child-tree { display: none; }
-
-:host([compact]) .item-row { height: 28px; }
+mj-tree-nav li[role="treeitem"][aria-expanded="false"] > .child-tree { display: none; }
+mj-tree-nav li[role="treeitem"]:not([aria-expanded]) > .child-tree { display: none; }
 `;
+
+const TOGGLE_ICON = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 2 9 6 3 10"/></svg>`;
+
+let lightSheet = null;
+
+/*
+ * Adopt the light-DOM item rules into the tree a component lives in (the
+ * document, or the shadow root of an enclosing component). Idempotent.
+ */
+function adoptLightStyles(root) {
+  if (root === null || root === undefined || root.adoptedStyleSheets === undefined) {
+    return
+  }
+  if (lightSheet === null) {
+    lightSheet = new CSSStyleSheet()
+    lightSheet.replaceSync(LIGHT_STYLES)
+  }
+  if (root.adoptedStyleSheets.indexOf(lightSheet) === -1) {
+    root.adoptedStyleSheets = [...root.adoptedStyleSheets, lightSheet]
+  }
+  return
+}
 
 export class MjTreeNav extends MjElement {
   static tagName = "mj-tree-nav";
@@ -99,475 +143,685 @@ export class MjTreeNav extends MjElement {
   static watched = ["nav-label", "current", "parent-toggle", "compact", "auto-expand", "persist-state", "persist-key"];
 
   constructor() {
-    super();
-    this._treeId = nextId("mj-tree");
-    this._activeItemId = null;
-    this._flatItems = [];
+    super()
+    this._treeId = nextId("mj-tree")
+
+    /* The item holding the roving tab stop (and focus, while the tree is focused). */
+    this._activeItem = null
+
+    /* The item this component marked aria-current="page" from `current`. */
+    this._currentItem = null
+
+    /* Visible items in document order (collapsed branches excluded). */
+    this._flatItems = []
+
+    /* Items whose id was generated here; such ids are not stable across pages. */
+    this._generatedIds = new WeakSet()
+
+    this._stateRestored = false
+    this._mutationObserver = null
   }
 
   render() {
-    const navLabel = this.getAttribute("nav-label") || t("mj.treeNav.navLabel") || "Navigation";
-    const markup = `
-      <nav aria-label="${navLabel}">
-        <ul class="tree" part="tree"
-          role="tree"
-          id="${this._treeId}"
-          tabindex="0"
-          aria-label="${navLabel}">
+    const markup = html`
+      <nav>
+        <ul class="tree" part="tree" role="tree" id="${this._treeId}">
           <slot></slot>
         </ul>
       </nav>
-    `;
+    `
     return markup
   }
 
   afterRender() {
-    this._tree = this.$(".tree");
-    this._slot = this.shadowRoot.querySelector("slot");
+    this._nav = this.$("nav")
+    this._tree = this.$(".tree")
+    this._slot = this.shadowRoot.querySelector("slot")
 
-    this.listen(this._slot, "slotchange", this._onSlotChange.bind(this));
-    this.listen(this._tree, "keydown", this._onKeydown.bind(this));
-    this.listen(this._tree, "click", this._onClick.bind(this));
+    this.listen(this._tree, "keydown", this._onKeydown.bind(this))
+    this.listen(this._tree, "click", this._onClick.bind(this))
+    this.listen(this._tree, "focusin", this._onFocusIn.bind(this))
 
-    this._buildTree();
+    /*
+     * Items can be added anywhere in the light-DOM tree at any time (lazy
+     * branches); every such change reprocesses the tree. The component's own
+     * edits are discarded with takeRecords() so a build never re-triggers.
+     */
+    this._mutationObserver = new MutationObserver(() => {
+      this._buildTree()
+    })
+    this._mutationObserver.observe(this, { childList: true, subtree: true })
+    this.onTeardown(() => {
+      this._mutationObserver.disconnect()
+      this._mutationObserver = null
+      this._stateRestored = false
+    })
+
+    this._syncLabel()
+    this._buildTree()
+    return
+  }
+
+  onConnected() {
+    adoptLightStyles(this.getRootNode())
     return
   }
 
   onAttributeChanged(name, oldValue, newValue) {
-    if (name === "current" && this._tree !== undefined) {
-      this._applyCurrent();
+    if (this._tree === undefined || this._tree === null) {
+      return
+    }
+
+    if (name === "current" || name === "auto-expand") {
+      this._applyCurrent()
+      this._refreshFlatItems()
+      this._discardOwnMutations()
+    } else if (name === "nav-label") {
+      this._syncLabel()
     }
     return
   }
 
-  _onSlotChange() {
-    this._buildTree();
+  _syncLabel() {
+    let navLabel = this.getAttribute("nav-label")
+    if (navLabel === null || navLabel.length === 0) {
+      navLabel = t("mj.treeNav.navLabel")
+    }
+    this._nav.setAttribute("aria-label", navLabel)
+    this._tree.setAttribute("aria-label", navLabel)
     return
+  }
+
+  _isEnabled(name) {
+    const enabled = this.hasAttribute(name) === true && this.getAttribute(name) !== "false"
+    return enabled
+  }
+
+  _discardOwnMutations() {
+    if (this._mutationObserver !== null) {
+      this._mutationObserver.takeRecords()
+    }
+    return
+  }
+
+  /* The top-level <li> items. */
+  _rootItems() {
+    const assigned = this._slot.assignedElements({ flatten: true })
+    const items = assigned.filter((element) => element.tagName === "LI")
+    return items
+  }
+
+  /* Every treeitem of this tree, in document order. */
+  _allItems() {
+    const items = []
+    const walk = (list) => {
+      for (let index = 0; index < list.length; index = index + 1) {
+        const li = list[index]
+        items.push(li)
+        const childList = this._childListOf(li)
+        if (childList !== null) {
+          walk(Array.from(childList.children).filter((child) => child.tagName === "LI"))
+        }
+      }
+    }
+    walk(this._rootItems())
+    return items
+  }
+
+  _childListOf(li) {
+    const childList = li.querySelector(":scope > ul, :scope > ol")
+    return childList
+  }
+
+  _linkOf(li) {
+    const link = li.querySelector(":scope > .item-row a, :scope > a")
+    return link
   }
 
   _buildTree() {
-    const items = this._slot.assignedElements({ flatten: true });
-    this._processItems(items, this._tree, 1, items.length, 0);
-    this._flatItems = this._collectFlatItems(this._tree);
-    this._applyCurrent();
-    this._restorePersistedState();
+    const rootItems = this._rootItems()
+    this._processItems(rootItems, 1)
+
+    /* Saved state first, so auto-expand of the current item has the last word. */
+    if (this._stateRestored === false) {
+      this._stateRestored = true
+      this._restorePersistedState()
+    }
+
+    this._applyCurrent()
+    this._refreshFlatItems()
+    this._discardOwnMutations()
     return
   }
 
-  _processItems(items, container, level, setsize, posOffset) {
-    for (let i = 0; i < items.length; i = i + 1) {
-      const item = items[i];
-      if (item.nodeType !== Node.ELEMENT_NODE) {
-        continue
-      }
-
-      const li = item.tagName === "LI" ? item : null;
-      if (li === null) {
-        continue
-      }
+  /* Wire one level of items (and, recursively, their children). Idempotent. */
+  _processItems(items, level) {
+    for (let index = 0; index < items.length; index = index + 1) {
+      const li = items[index]
 
       if (li.id === "") {
-        li.id = nextId("mj-treeitem");
+        li.id = nextId("mj-treeitem")
+        this._generatedIds.add(li)
       }
 
-      li.setAttribute("role", "treeitem");
-      li.setAttribute("aria-level", String(level));
-      li.setAttribute("aria-setsize", String(setsize));
-      li.setAttribute("aria-posinset", String(posOffset + i + 1));
+      li.setAttribute("role", "treeitem")
+      li.setAttribute("aria-level", String(level))
+      li.setAttribute("aria-setsize", String(items.length))
+      li.setAttribute("aria-posinset", String(index + 1))
+      if (li.hasAttribute("tabindex") === false) {
+        li.setAttribute("tabindex", "-1")
+      }
 
-      const childUl = li.querySelector(":scope > ul, :scope > ol");
-      if (childUl !== null) {
-        childUl.setAttribute("role", "group");
-        childUl.className = "child-tree";
-        childUl.setAttribute("part", "child-tree");
+      const row = this._ensureRow(li)
+      const childList = this._childListOf(li)
+
+      if (childList !== null) {
+        childList.setAttribute("role", "group")
+        childList.classList.add("child-tree")
         if (li.getAttribute("aria-expanded") === null) {
-          li.setAttribute("aria-expanded", "false");
+          li.setAttribute("aria-expanded", "false")
         }
-        const children = Array.from(childUl.children);
-        this._processItems(children, childUl, level + 1, children.length, 0);
+        this._ensureToggle(row)
 
-        const row = this._ensureRow(li);
-        this._ensureToggle(row, li);
+        const children = Array.from(childList.children).filter((child) => child.tagName === "LI")
+        this._processItems(children, level + 1)
       } else {
-        const row = this._ensureRow(li);
-        const toggleSlot = row.querySelector(".toggle-btn");
-        if (toggleSlot !== null) {
-          toggleSlot.setAttribute("aria-hidden", "true");
+        /* A leaf (or a parent that lost its children) has no toggle and no expanded state. */
+        const staleToggle = row.querySelector(":scope > .toggle-btn")
+        if (staleToggle !== null) {
+          staleToggle.remove()
         }
+        li.removeAttribute("aria-expanded")
       }
 
-      const link = li.querySelector(":scope > a, :scope > .item-row > a");
+      const link = this._linkOf(li)
       if (link !== null) {
-        link.classList.add("item-link");
-        link.setAttribute("part", "item-link");
-        link.setAttribute("tabindex", "-1");
+        link.classList.add("item-link")
+        link.setAttribute("tabindex", "-1")
       }
     }
     return
   }
 
+  /* Wrap an item's own content (everything except its child list) in a row. */
   _ensureRow(li) {
-    let row = li.querySelector(":scope > .item-row");
-    if (row !== null) {
-      return row
+    let row = li.querySelector(":scope > .item-row")
+    if (row === null) {
+      row = document.createElement("div")
+      row.className = "item-row"
+      li.insertBefore(row, li.firstChild)
     }
-    row = document.createElement("div");
-    row.className = "item-row";
-    row.setAttribute("part", "item-row");
 
-    const existingChildren = Array.from(li.childNodes);
-    li.insertBefore(row, li.firstChild);
-
-    for (let i = 0; i < existingChildren.length; i = i + 1) {
-      const child = existingChildren[i];
+    const children = Array.from(li.childNodes)
+    for (let index = 0; index < children.length; index = index + 1) {
+      const child = children[index]
       const isChildTree = child.nodeType === Node.ELEMENT_NODE &&
-        (child.tagName === "UL" || child.tagName === "OL");
-      if (isChildTree === false) {
-        row.appendChild(child);
+        (child.tagName === "UL" || child.tagName === "OL")
+      if (child !== row && isChildTree === false) {
+        row.appendChild(child)
       }
     }
     return row
   }
 
-  _ensureToggle(row, li) {
-    if (row.querySelector(".toggle-btn") !== null) {
+  _ensureToggle(row) {
+    if (row.querySelector(":scope > .toggle-btn") !== null) {
       return
     }
-    const btn = document.createElement("button");
-    btn.className = "toggle-btn";
-    btn.setAttribute("part", "toggle");
-    btn.setAttribute("type", "button");
-    btn.setAttribute("tabindex", "-1");
-    btn.setAttribute("aria-hidden", "true");
-    btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 2 9 6 3 10"/></svg>`;
-    row.insertBefore(btn, row.firstChild);
+    /* Decorative for assistive technology: aria-expanded on the item carries the state. */
+    const btn = document.createElement("button")
+    btn.className = "toggle-btn"
+    btn.setAttribute("type", "button")
+    btn.setAttribute("tabindex", "-1")
+    btn.setAttribute("aria-hidden", "true")
+    btn.innerHTML = TOGGLE_ICON
+    row.insertBefore(btn, row.firstChild)
     return
   }
 
-  _collectFlatItems(tree) {
-    const flat = [];
-    const walk = (ul) => {
-      const children = Array.from(ul.children);
-      for (let i = 0; i < children.length; i = i + 1) {
-        const li = children[i];
-        if (li.getAttribute("role") !== "treeitem") {
-          continue
-        }
-        flat.push(li);
-        const expanded = li.getAttribute("aria-expanded");
-        if (expanded === "true") {
-          const childUl = li.querySelector(":scope > ul[role='group'], :scope > ol[role='group']");
-          if (childUl !== null) {
-            walk(childUl);
+  _collectFlatItems() {
+    const flat = []
+    const walk = (list) => {
+      for (let index = 0; index < list.length; index = index + 1) {
+        const li = list[index]
+        flat.push(li)
+        if (li.getAttribute("aria-expanded") === "true") {
+          const childList = this._childListOf(li)
+          if (childList !== null) {
+            walk(Array.from(childList.children).filter((child) => child.tagName === "LI"))
           }
         }
       }
-    };
-    walk(tree);
+    }
+    walk(this._rootItems())
     return flat
   }
 
+  /*
+   * Recompute the visible items and keep exactly one of them in the tab
+   * order: the active item while it is visible, else its nearest visible
+   * ancestor, else the current page, else the first item.
+   */
+  _refreshFlatItems() {
+    this._flatItems = this._collectFlatItems()
+
+    let stop = this._activeItem
+    while (stop !== null && this._flatItems.indexOf(stop) === -1) {
+      stop = this._parentItemOf(stop)
+    }
+    if (stop === null && this._currentItem !== null && this._flatItems.indexOf(this._currentItem) !== -1) {
+      stop = this._currentItem
+    }
+    if (stop === null && this._flatItems.length > 0) {
+      stop = this._flatItems[0]
+    }
+
+    if (stop !== this._activeItem) {
+      const hadFocus = this._activeItem !== null && this._activeItem.contains(document.activeElement) === true
+      this._setActiveItem(stop, hadFocus)
+    } else if (stop !== null) {
+      stop.setAttribute("tabindex", "0")
+    }
+    return
+  }
+
+  _parentItemOf(li) {
+    let parentItem = null
+    const group = li.parentElement
+    if (group !== null && group !== this && this.contains(group) === true) {
+      const candidate = group.parentElement
+      if (candidate !== null && candidate.getAttribute("role") === "treeitem") {
+        parentItem = candidate
+      }
+    }
+    return parentItem
+  }
+
+  /* Mark the item named by `current` (an item id, a link href or a link id) within this tree. */
   _applyCurrent() {
-    const current = this.getAttribute("current");
+    if (this._currentItem !== null) {
+      this._currentItem.removeAttribute("aria-current")
+      this._currentItem = null
+    }
+
+    const current = this.getAttribute("current")
     if (current === null || current === "") {
       return
     }
 
-    const allItems = this._tree.querySelectorAll("[role='treeitem']");
-    for (let i = 0; i < allItems.length; i = i + 1) {
-      allItems[i].removeAttribute("aria-current");
-    }
-
-    let currentItem = document.getElementById(current);
-    if (currentItem === null) {
-      currentItem = Array.from(allItems).find(function(item) {
-        const link = item.querySelector("a");
-        return link !== null && (link.getAttribute("href") === current || link.id === current);
-      });
-    }
-
-    if (currentItem !== undefined && currentItem !== null) {
-      currentItem.setAttribute("aria-current", "page");
-      if (this.getAttribute("auto-expand") !== "false") {
-        this._expandAncestors(currentItem);
+    const allItems = this._allItems()
+    let currentItem = null
+    for (let index = 0; index < allItems.length && currentItem === null; index = index + 1) {
+      const item = allItems[index]
+      const link = this._linkOf(item)
+      const matchesLink = link !== null && (link.getAttribute("href") === current || link.id === current)
+      if (item.id === current || matchesLink === true) {
+        currentItem = item
       }
     }
 
-    this._flatItems = this._collectFlatItems(this._tree);
+    if (currentItem !== null) {
+      currentItem.setAttribute("aria-current", "page")
+      this._currentItem = currentItem
+      if (this.getAttribute("auto-expand") !== "false") {
+        this._expandAncestors(currentItem)
+      }
+    }
     return
   }
 
   _expandAncestors(item) {
-    let parent = item.parentElement;
-    while (parent !== null && parent !== this._tree) {
-      if (parent.getAttribute("role") === "treeitem") {
-        parent.setAttribute("aria-expanded", "true");
-      }
-      parent = parent.parentElement;
+    let parent = this._parentItemOf(item)
+    while (parent !== null) {
+      parent.setAttribute("aria-expanded", "true")
+      parent = this._parentItemOf(parent)
     }
     return
   }
 
+  /*
+   * A key for an item that is the same on every page load: its own id when
+   * the author gave it one, else its link target, else its position path.
+   */
+  _stateKeyOf(li) {
+    let key = ""
+    const link = this._linkOf(li)
+
+    if (li.id !== "" && this._generatedIds.has(li) === false) {
+      key = `id:${li.id}`
+    } else if (link !== null && link.getAttribute("href") !== null && link.getAttribute("href") !== "#") {
+      key = `href:${link.getAttribute("href")}`
+    } else {
+      const positions = []
+      let node = li
+      while (node !== null) {
+        positions.unshift(node.getAttribute("aria-posinset"))
+        node = this._parentItemOf(node)
+      }
+      key = `path:${positions.join("/")}`
+    }
+    return key
+  }
+
+  _storageKey() {
+    let key = this.getAttribute("persist-key")
+    if (key === null || key.length === 0) {
+      key = "mj-tree-nav"
+    }
+    return key
+  }
+
   _restorePersistedState() {
-    if (this.getAttribute("persist-state") !== "true") {
+    if (this._isEnabled("persist-state") === false) {
       return
     }
-    const key = this.getAttribute("persist-key") || "mj-tree-nav";
-    let stored = null;
+
+    let state = null
     try {
-      stored = sessionStorage.getItem(key);
+      const stored = sessionStorage.getItem(this._storageKey())
+      state = stored !== null ? JSON.parse(stored) : null
     } catch (_err) {
-      return
-    }
-    if (stored === null) {
-      return
-    }
-    let state = null;
-    try {
-      state = JSON.parse(stored);
-    } catch (_err) {
-      return
+      state = null
     }
     if (state === null || typeof state !== "object") {
       return
     }
-    const ids = Object.keys(state);
-    for (let i = 0; i < ids.length; i = i + 1) {
-      const el = document.getElementById(ids[i]);
-      if (el !== null) {
-        el.setAttribute("aria-expanded", state[ids[i]] === true ? "true" : "false");
+
+    /* Only items of this tree are touched; stale keys match nothing and are ignored. */
+    const allItems = this._allItems()
+    for (let index = 0; index < allItems.length; index = index + 1) {
+      const item = allItems[index]
+      if (item.hasAttribute("aria-expanded") === true) {
+        const saved = state[this._stateKeyOf(item)]
+        if (saved === true || saved === false) {
+          item.setAttribute("aria-expanded", saved === true ? "true" : "false")
+        }
       }
     }
-    this._flatItems = this._collectFlatItems(this._tree);
     return
   }
 
   _persistState() {
-    if (this.getAttribute("persist-state") !== "true") {
+    if (this._isEnabled("persist-state") === false) {
       return
     }
-    const key = this.getAttribute("persist-key") || "mj-tree-nav";
-    const expandableItems = this._tree.querySelectorAll("[role='treeitem'][aria-expanded]");
-    const state = {};
-    for (let i = 0; i < expandableItems.length; i = i + 1) {
-      const item = expandableItems[i];
-      state[item.id] = item.getAttribute("aria-expanded") === "true";
+
+    const state = {}
+    const allItems = this._allItems()
+    for (let index = 0; index < allItems.length; index = index + 1) {
+      const item = allItems[index]
+      if (item.hasAttribute("aria-expanded") === true) {
+        state[this._stateKeyOf(item)] = item.getAttribute("aria-expanded") === "true"
+      }
     }
+
     try {
-      sessionStorage.setItem(key, JSON.stringify(state));
+      sessionStorage.setItem(this._storageKey(), JSON.stringify(state))
     } catch (_err) {
       // storage unavailable
     }
     return
   }
 
-  _setActiveItem(item) {
-    const current = this._tree.querySelector("[data-active='true']");
-    if (current !== null) {
-      current.removeAttribute("data-active");
+  /*
+   * Move the roving tab stop to `item`; with `moveFocus` true the item also
+   * takes DOM focus and its row is scrolled into view.
+   */
+  _setActiveItem(item, moveFocus) {
+    const previous = this._activeItem
+
+    if (previous !== null && previous !== item) {
+      previous.removeAttribute("data-active")
+      previous.setAttribute("tabindex", "-1")
     }
+
+    this._activeItem = item
+
     if (item !== null) {
-      item.setAttribute("data-active", "true");
-      this._tree.setAttribute("aria-activedescendant", item.id);
-      this._activeItemId = item.id;
-      this.emit("mj-tree-nav-focus", { item: item });
-    } else {
-      this._tree.removeAttribute("aria-activedescendant");
-      this._activeItemId = null;
+      item.setAttribute("data-active", "true")
+      item.setAttribute("tabindex", "0")
+
+      if (moveFocus === true) {
+        item.focus({ preventScroll: true })
+        const row = item.querySelector(":scope > .item-row")
+        if (row !== null) {
+          row.scrollIntoView({ block: "nearest", inline: "nearest" })
+        }
+      }
+
+      if (previous !== item) {
+        this.emit("mj-tree-nav-focus", { item: item })
+      }
     }
     return
   }
 
-  _getActiveIndex() {
-    if (this._activeItemId === null) {
-      return -1
-    }
-    for (let i = 0; i < this._flatItems.length; i = i + 1) {
-      if (this._flatItems[i].id === this._activeItemId) {
-        return i
+  /* The treeitem of this tree that an event came from, or null. */
+  _itemFromEvent(event) {
+    let item = null
+    if (event.target instanceof Element) {
+      const candidate = event.target.closest("[role='treeitem']")
+      if (candidate !== null && this.contains(candidate) === true) {
+        item = candidate
       }
     }
-    return -1
+    return item
+  }
+
+  _onFocusIn(event) {
+    /* Focus arriving by Tab or pointer makes that item the active one. */
+    const item = this._itemFromEvent(event)
+    if (item !== null && item !== this._activeItem) {
+      this._setActiveItem(item, false)
+    }
+    return
   }
 
   _onClick(event) {
-    const li = event.target.closest("[role='treeitem']");
+    const li = this._itemFromEvent(event)
     if (li === null) {
       return
     }
 
-    const toggleBtn = event.target.closest(".toggle-btn");
+    const isParent = li.hasAttribute("aria-expanded")
+    const toggleBtn = event.target.closest(".toggle-btn")
+    const onOwnRow = event.target.closest(".item-row") === li.querySelector(":scope > .item-row")
+
     if (toggleBtn !== null) {
-      this._toggleExpand(li);
-      this._setActiveItem(li);
-      event.stopPropagation();
+      this._toggleExpand(li)
+      this._setActiveItem(li, true)
+      event.stopPropagation()
       return
     }
 
-    const link = event.target.closest("a.item-link, a");
-    if (link !== null) {
-      const href = link.getAttribute("href") || "";
-      const proceed = this.emit("mj-tree-nav-navigate", { item: li, href: href }, { cancelable: true });
+    const link = event.target.closest("a")
+    const linkDisabled = link !== null && link.getAttribute("aria-disabled") === "true"
+
+    if (isParent === true && onOwnRow === true && this._isEnabled("parent-toggle") === true) {
+      /* parent-toggle: the parent's label opens and closes the branch instead of navigating. */
+      event.preventDefault()
+      this._toggleExpand(li)
+    } else if (linkDisabled === true) {
+      event.preventDefault()
+    } else if (link !== null && li.contains(link) === true) {
+      const href = link.getAttribute("href") || ""
+      const proceed = this.emit("mj-tree-nav-navigate", { item: li, href: href }, { cancelable: true })
       if (proceed === false) {
-        event.preventDefault();
+        event.preventDefault()
       }
     }
 
-    this._setActiveItem(li);
-    this._flatItems = this._collectFlatItems(this._tree);
+    this._setActiveItem(li, true)
     return
   }
 
+  /* Expand or collapse a parent item; both directions are cancelable. Returns true on change. */
+  _setExpanded(li, expand) {
+    let changed = false
+    const expanded = li.getAttribute("aria-expanded")
+
+    if (expanded !== null && (expanded === "true") !== expand) {
+      const eventName = expand === true ? "mj-tree-nav-expand" : "mj-tree-nav-collapse"
+      const proceed = this.emit(eventName, { item: li, id: li.id }, { cancelable: true })
+      if (proceed === true) {
+        li.setAttribute("aria-expanded", expand === true ? "true" : "false")
+        changed = true
+        this._refreshFlatItems()
+        this._persistState()
+      }
+    }
+    return changed
+  }
+
   _toggleExpand(li) {
-    const expanded = li.getAttribute("aria-expanded");
-    if (expanded === null) {
-      return
+    const expanded = li.getAttribute("aria-expanded")
+    if (expanded !== null) {
+      this._setExpanded(li, expanded === "false")
     }
-
-    if (expanded === "false") {
-      const proceed = this.emit("mj-tree-nav-expand", { item: li, id: li.id }, { cancelable: true });
-      if (proceed === true) {
-        li.setAttribute("aria-expanded", "true");
-      }
-    } else {
-      const proceed = this.emit("mj-tree-nav-collapse", { item: li, id: li.id }, { cancelable: true });
-      if (proceed === true) {
-        li.setAttribute("aria-expanded", "false");
-      }
-    }
-
-    this._flatItems = this._collectFlatItems(this._tree);
-    this._persistState();
     return
   }
 
   _onKeydown(event) {
-    const activeIndex = this._getActiveIndex();
-    const items = this._flatItems;
+    if (event.altKey === true || event.ctrlKey === true || event.metaKey === true) {
+      return
+    }
+
+    const items = this._flatItems
+    if (items.length === 0) {
+      return
+    }
+
+    /* The item the key applies to: where the event came from, else the tab stop. */
+    let item = this._itemFromEvent(event)
+    if (item === null || items.indexOf(item) === -1) {
+      item = this._activeItem
+    }
+    const activeIndex = item !== null ? items.indexOf(item) : -1
+
+    const isRtl = getComputedStyle(this).direction === "rtl"
+    const openKey = isRtl === true ? "ArrowLeft" : "ArrowRight"
+    const closeKey = isRtl === true ? "ArrowRight" : "ArrowLeft"
 
     if (event.key === "ArrowDown") {
-      event.preventDefault();
-      const next = activeIndex < items.length - 1 ? activeIndex + 1 : activeIndex;
-      this._setActiveItem(items[next]);
+      event.preventDefault()
+      const next = activeIndex < items.length - 1 ? activeIndex + 1 : activeIndex
+      this._setActiveItem(items[Math.max(next, 0)], true)
     } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      const prev = activeIndex > 0 ? activeIndex - 1 : 0;
-      this._setActiveItem(items[prev]);
-    } else if (event.key === "ArrowRight") {
-      event.preventDefault();
+      event.preventDefault()
+      const prev = activeIndex > 0 ? activeIndex - 1 : 0
+      this._setActiveItem(items[prev], true)
+    } else if (event.key === openKey) {
+      event.preventDefault()
       if (activeIndex >= 0) {
-        const item = items[activeIndex];
-        const expanded = item.getAttribute("aria-expanded");
+        const expanded = item.getAttribute("aria-expanded")
         if (expanded === "false") {
-          const proceed = this.emit("mj-tree-nav-expand", { item: item, id: item.id }, { cancelable: true });
-          if (proceed === true) {
-            item.setAttribute("aria-expanded", "true");
-            this._flatItems = this._collectFlatItems(this._tree);
-          }
+          this._setExpanded(item, true)
         } else if (expanded === "true") {
-          const childItems = this._collectFlatItems(this._tree);
-          const childIndex = childItems.findIndex(function(el) { return el.id === item.id; });
-          if (childIndex < childItems.length - 1) {
-            this._flatItems = childItems;
-            this._setActiveItem(childItems[childIndex + 1]);
+          /* Already open: move to the first child. */
+          const visible = this._flatItems
+          const position = visible.indexOf(item)
+          if (position !== -1 && position < visible.length - 1 && this._parentItemOf(visible[position + 1]) === item) {
+            this._setActiveItem(visible[position + 1], true)
           }
         }
       }
-    } else if (event.key === "ArrowLeft") {
-      event.preventDefault();
+    } else if (event.key === closeKey) {
+      event.preventDefault()
       if (activeIndex >= 0) {
-        const item = items[activeIndex];
-        const expanded = item.getAttribute("aria-expanded");
-        if (expanded === "true") {
-          const proceed = this.emit("mj-tree-nav-collapse", { item: item, id: item.id }, { cancelable: true });
-          if (proceed === true) {
-            item.setAttribute("aria-expanded", "false");
-            this._flatItems = this._collectFlatItems(this._tree);
-          }
+        if (item.getAttribute("aria-expanded") === "true") {
+          this._setExpanded(item, false)
         } else {
-          const parent = item.closest("[role='group']")?.closest("[role='treeitem']");
-          if (parent !== null && parent !== undefined) {
-            this._setActiveItem(parent);
-            this._flatItems = this._collectFlatItems(this._tree);
+          const parent = this._parentItemOf(item)
+          if (parent !== null) {
+            this._setActiveItem(parent, true)
           }
         }
       }
     } else if (event.key === "Home") {
-      event.preventDefault();
-      if (items.length > 0) {
-        this._setActiveItem(items[0]);
-      }
+      event.preventDefault()
+      this._setActiveItem(items[0], true)
     } else if (event.key === "End") {
-      event.preventDefault();
-      if (items.length > 0) {
-        this._setActiveItem(items[items.length - 1]);
-      }
+      event.preventDefault()
+      this._setActiveItem(items[items.length - 1], true)
     } else if (event.key === "Enter") {
-      event.preventDefault();
+      event.preventDefault()
       if (activeIndex >= 0) {
-        const item = items[activeIndex];
-        const link = item.querySelector("a");
+        const link = this._linkOf(item)
         if (link !== null) {
-          link.click();
+          link.click()
         }
       }
     } else if (event.key === " ") {
-      event.preventDefault();
+      event.preventDefault()
       if (activeIndex >= 0) {
-        this._toggleExpand(items[activeIndex]);
+        this._toggleExpand(item)
       }
     } else if (event.key === "*") {
-      event.preventDefault();
+      event.preventDefault()
       if (activeIndex >= 0) {
-        this._expandAllSiblings(items[activeIndex]);
+        this._expandAllSiblings(item)
       }
     } else if (event.key.length === 1) {
-      this._typeAhead(event.key);
+      this._typeAhead(event.key, activeIndex)
     }
     return
   }
 
   _expandAllSiblings(item) {
-    const parent = item.closest("[role='group']") || this._tree;
-    const siblings = Array.from(parent.querySelectorAll(":scope > [role='treeitem'][aria-expanded]"));
-    for (let i = 0; i < siblings.length; i = i + 1) {
-      siblings[i].setAttribute("aria-expanded", "true");
+    const parent = this._parentItemOf(item)
+    let siblings = this._rootItems()
+    if (parent !== null) {
+      const childList = this._childListOf(parent)
+      siblings = Array.from(childList.children).filter((child) => child.tagName === "LI")
     }
-    this._flatItems = this._collectFlatItems(this._tree);
-    this._persistState();
+
+    for (let index = 0; index < siblings.length; index = index + 1) {
+      if (siblings[index].hasAttribute("aria-expanded") === true) {
+        siblings[index].setAttribute("aria-expanded", "true")
+      }
+    }
+    this._refreshFlatItems()
+    this._persistState()
     return
   }
 
-  _typeAhead(char) {
-    const lower = char.toLowerCase();
-    const startIndex = this._getActiveIndex() + 1;
-    const items = this._flatItems;
+  _labelOf(li) {
+    const row = li.querySelector(":scope > .item-row")
+    const label = row !== null ? row.textContent.trim().toLowerCase() : ""
+    return label
+  }
 
-    for (let i = 0; i < items.length; i = i + 1) {
-      const idx = (startIndex + i) % items.length;
-      const label = items[idx].querySelector(".item-label, a")?.textContent.trim().toLowerCase() || "";
-      if (label.startsWith(lower) === true) {
-        this._setActiveItem(items[idx]);
-        return
+  _typeAhead(char, activeIndex) {
+    const lower = char.toLowerCase()
+    const startIndex = activeIndex + 1
+    const items = this._flatItems
+
+    let matched = false
+    for (let offset = 0; offset < items.length && matched === false; offset = offset + 1) {
+      const index = (startIndex + offset) % items.length
+      if (this._labelOf(items[index]).startsWith(lower) === true) {
+        this._setActiveItem(items[index], true)
+        matched = true
       }
     }
     return
   }
 
   get currentItem() {
-    const found = this._tree.querySelector("[aria-current='page']");
+    let found = this._currentItem
+    if (found === null) {
+      /* An item the author marked directly, without the `current` attribute. */
+      found = this.querySelector("[role='treeitem'][aria-current='page']")
+    }
     return found
   }
 
   get expandedItems() {
-    const items = this._tree.querySelectorAll("[role='treeitem'][aria-expanded='true']");
-    return Array.from(items)
+    const items = this._allItems().filter((item) => item.getAttribute("aria-expanded") === "true")
+    return items
   }
 
   get activeItem() {
-    if (this._activeItemId === null) {
-      return null
-    }
-    return document.getElementById(this._activeItemId)
+    return this._activeItem
   }
 }

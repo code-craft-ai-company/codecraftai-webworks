@@ -293,7 +293,7 @@ def test_serverconfig_custom_values():
         port=9000,
         workers=4,
         threads=2,
-        worker_class="async",
+        worker_class="sync",
         timeout=60,
         log_level="DEBUG",
         enable_tracing=True
@@ -315,8 +315,8 @@ def test_serverconfig_custom_values():
         errmsg = f"Expected threads 2, got {config.threads}"
         raise AssertionError(errmsg)
 
-    if config.worker_class != "async":
-        errmsg = f"Expected worker_class 'async', got '{config.worker_class}'"
+    if config.worker_class != "sync":
+        errmsg = f"Expected worker_class 'sync', got '{config.worker_class}'"
         raise AssertionError(errmsg)
 
     if config.timeout != 60:
@@ -414,7 +414,7 @@ def test_validate_passes_for_valid_custom_config():
         port=443,
         workers=4,
         threads=2,
-        worker_class="async",
+        worker_class="sync",
         timeout=60,
         log_level="DEBUG",
         log_format="json"
@@ -995,7 +995,7 @@ def test_valid_worker_classes_contains_expected():
     """
         Test that VALID_WORKER_CLASSES contains the expected values.
     """
-    expected = {"sync", "async", "gevent"}
+    expected = {"sync", "gevent"}
 
     if VALID_WORKER_CLASSES != expected:
         errmsg = f"Expected VALID_WORKER_CLASSES {expected}, got {VALID_WORKER_CLASSES}"
@@ -1026,5 +1026,179 @@ def test_valid_log_formats_contains_expected():
     if VALID_LOG_FORMATS != expected:
         errmsg = f"Expected VALID_LOG_FORMATS {expected}, got {VALID_LOG_FORMATS}"
         raise AssertionError(errmsg)
+
+    return
+
+
+def test_configuration_error_ends_the_run():
+    """
+        The production ConfigurationError is the ccai.errors one: it derives
+        from BaseException so no 'except Exception' keeps a misconfigured
+        server going.
+    """
+    from ccai.errors.exceptions import ConfigurationError as FoundationConfigurationError
+
+    if not issubclass(ConfigurationError, FoundationConfigurationError) or issubclass(ConfigurationError, Exception):
+        errmsg = "Expected ConfigurationError to be the ccai.errors ConfigurationError and not an Exception"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_default_request_body_limit_is_a_limit():
+    """
+        The body is held in memory, so the default body limit is not unlimited.
+    """
+    from ccai.webworks.wsgi.constants import DEFAULT_MAX_REQUEST_BODY_SIZE
+
+    config = ServerConfig()
+
+    if config.limit_request_body != DEFAULT_MAX_REQUEST_BODY_SIZE:
+        errmsg = f"Expected the default body limit {DEFAULT_MAX_REQUEST_BODY_SIZE}, got {config.limit_request_body}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_validate_refuses_the_removed_async_worker_class():
+    """
+        There is no async worker class: every worker serves ASGI applications
+        through the WSGI bridge.
+    """
+    try:
+        ServerConfig(worker_class="async").validate()
+    except ConfigurationError:
+        return
+
+    errmsg = "Expected ConfigurationError for worker_class 'async'"
+    raise AssertionError(errmsg)
+
+
+def test_validate_gevent_worker_class_needs_gevent():
+    """
+        Selecting gevent without the gevent extra fails with a clear message.
+    """
+    from ccai.webworks.wsgi.serverconfig import is_gevent_available
+
+    if is_gevent_available():
+        ServerConfig(worker_class="gevent").validate()
+        return
+
+    try:
+        ServerConfig(worker_class="gevent").validate()
+    except ConfigurationError as err:
+        if "gevent" not in str(err) or "extra" not in str(err):
+            errmsg = f"Expected the message to name the gevent extra, got {err}"
+            raise AssertionError(errmsg)
+        return
+
+    errmsg = "Expected ConfigurationError for the gevent worker class without gevent"
+    raise AssertionError(errmsg)
+
+
+def test_validate_refuses_bad_new_options():
+    """
+        Negative recycling options, a non-positive memory limit, endpoint paths
+        without a leading slash and an empty trace header are refused.
+    """
+    bad_values = [
+        {"max_requests": -1},
+        {"max_requests_jitter": -1},
+        {"max_connections": 0},
+        {"limit_memory": 0},
+        {"health_check_path": "health"},
+        {"metrics_path": ""},
+        {"trace_header": " "},
+    ]
+
+    for values in bad_values:
+        try:
+            ServerConfig(**values).validate()
+        except ConfigurationError:
+            continue
+        errmsg = f"Expected ConfigurationError for {values}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_to_wsgi_config_maps_the_options():
+    """
+        The WSGI server underneath gets the production options.
+    """
+    config = ServerConfig(
+        host="127.0.0.1",
+        port=18123,
+        workers=3,
+        threads=4,
+        max_requests=100,
+        max_requests_jitter=10,
+        timeout=20,
+        keep_alive=7,
+        graceful_timeout=9,
+        backlog=64,
+        max_connections=50,
+        limit_request_line=2000,
+        limit_request_fields=20,
+        limit_request_field_size=1000,
+        limit_request_body=4096,
+        log_level="WARNING",
+    )
+
+    wsgi_config = config.to_wsgi_config()
+
+    expectations = {
+        "host": "127.0.0.1",
+        "port": 18123,
+        "workers": 3,
+        "threads": 4,
+        "worker_class": "sync",
+        "max_requests": 100,
+        "max_requests_jitter": 10,
+        "timeout": 20,
+        "keepalive": 7,
+        "graceful_timeout": 9,
+        "backlog": 64,
+        "max_connections": 50,
+        "max_request_line": 2000,
+        "max_headers": 20,
+        "max_header_size": 20 * 1002,
+        "max_request_size": 4096,
+        "access_log": False,
+        "log_level": "warning",
+    }
+
+    for name, expected in expectations.items():
+        actual = getattr(wsgi_config, name)
+        if actual != expected:
+            errmsg = f"Expected wsgi config {name}={expected!r}, got {actual!r}"
+            raise AssertionError(errmsg)
+
+    wsgi_config.validate()
+
+    return
+
+
+def test_to_wsgi_config_maps_unlimited_values():
+    """
+        0 (unlimited) and unset options map to what the WSGI server understands.
+    """
+    config = ServerConfig(workers=0, limit_request_fields=0, limit_request_body=0, max_requests=None)
+
+    wsgi_config = config.to_wsgi_config()
+
+    if wsgi_config.workers != config.resolve_workers() or wsgi_config.workers < 1:
+        errmsg = f"Expected the auto-detected worker count, got {wsgi_config.workers}"
+        raise AssertionError(errmsg)
+
+    if wsgi_config.max_request_size != 0 or wsgi_config.max_header_size != 0 or wsgi_config.max_headers < 1000:
+        errmsg = f"Expected unlimited body and header section, got {wsgi_config}"
+        raise AssertionError(errmsg)
+
+    if wsgi_config.max_requests != 0:
+        errmsg = f"Expected no recycling, got {wsgi_config.max_requests}"
+        raise AssertionError(errmsg)
+
+    wsgi_config.validate()
 
     return

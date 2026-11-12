@@ -707,3 +707,242 @@ def test_property_3_debug_page_security_boundary():
             raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Credential Redaction Tests
+# =============================================================================
+
+_SENSITIVE_REQUEST = {
+    "method": "POST",
+    "path": "/login",
+    "headers": {
+        "Authorization": "Bearer abc.def.ghi",
+        "Cookie": "session=s3cr3t-session",
+        "Content-Type": "application/json",
+        "User-Agent": "probe/1.0",
+    },
+    "body": b'{"username": "alice", "password": "hunter2"}',
+}
+
+
+def _make_secret(tag):
+    """
+        Build a secret value at run time.
+
+        The debug page shows the source lines around each frame, so a
+        secret written as a literal in this file would appear on the page
+        as source code. A computed value can only get there through the
+        local variables, which is what the test is about.
+    """
+    return "{}-{}".format(tag, len(tag) * 7919)
+
+
+def _raise_with_sensitive_locals():
+    """
+        Raise an error from a frame that holds credentials in local variables.
+    """
+    password = _make_secret("pw")
+    api_key = _make_secret("key")
+    form = {"username": "alice", "password": _make_secret("form")}
+    visible = _make_secret("visible")
+
+    raise RuntimeError("failure with {} locals".format(len([password, api_key, form, visible])))
+
+
+def _capture_logged_errors(action):
+    """
+        Run an action and return the text of everything logged at ERROR
+        level by the error handler module.
+    """
+    import logging
+
+    records = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    handler_logger = logging.getLogger("ccai.webworks.devexp.debug.errorhandler")
+    collector = _Collector(level=logging.ERROR)
+    handler_logger.addHandler(collector)
+
+    try:
+        action()
+    finally:
+        handler_logger.removeHandler(collector)
+
+    return "\n".join(records)
+
+
+def test_production_log_masks_credential_headers_and_omits_body():
+    """
+        Test that the production error log contains neither credential
+        header values nor the request body.
+    """
+    handler = DebugErrorHandler(debug=False)
+
+    logged = _capture_logged_errors(
+        lambda: handler.handle_exception(_SENSITIVE_REQUEST, ValueError("boom"))
+    )
+
+    for secret in ["abc.def.ghi", "s3cr3t-session", "hunter2"]:
+        if secret in logged:
+            errmsg = "The credential '{}' was written to the log: {}".format(secret, logged)
+            raise AssertionError(errmsg)
+
+    if "probe/1.0" not in logged:
+        errmsg = "Expected ordinary headers to stay in the log: {}".format(logged)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_debug_page_masks_request_credentials():
+    """
+        Test that the debug page shows neither credential header values
+        nor the password in the request body.
+    """
+    handler = DebugErrorHandler(debug=True)
+
+    response = handler.handle_exception(_SENSITIVE_REQUEST, ValueError("boom"))
+    page = response["body"]
+
+    for secret in ["abc.def.ghi", "s3cr3t-session", "hunter2"]:
+        if secret in page:
+            errmsg = "The credential '{}' is shown on the debug page.".format(secret)
+            raise AssertionError(errmsg)
+
+    if "alice" not in page:
+        errmsg = "Expected non-credential body fields to stay on the debug page."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_debug_page_masks_sensitive_local_variables():
+    """
+        Test that local variables named like credentials, and credential
+        fields inside dictionaries, are masked on the debug page.
+    """
+    handler = DebugErrorHandler(debug=True)
+
+    try:
+        _raise_with_sensitive_locals()
+    except RuntimeError as exc:
+        response = handler.handle_exception({"method": "GET", "path": "/"}, exc)
+
+    page = response["body"]
+
+    for tag in ["pw", "key", "form"]:
+        if _make_secret(tag) in page:
+            errmsg = "The local credential built from '{}' is shown on the debug page.".format(tag)
+            raise AssertionError(errmsg)
+
+    if _make_secret("visible") not in page:
+        errmsg = "Expected ordinary local variables to stay on the debug page."
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Custom Template Robustness Tests
+# =============================================================================
+
+def test_custom_template_with_literal_braces_renders():
+    """
+        Test that a custom template containing CSS braces is rendered
+        instead of raising inside the error handler.
+    """
+    handler = DebugErrorHandler(debug=False)
+    handler.register_template(
+        500,
+        "<style>body { color: red }</style><h1>{error_title}</h1><p>{status_code} {error_id}</p>",
+    )
+
+    response = handler.handle_exception({"method": "GET", "path": "/"}, ValueError("boom"))
+    page = response["body"]
+
+    if "body { color: red }" not in page:
+        errmsg = "Expected the CSS to be left as written: {}".format(page)
+        raise AssertionError(errmsg)
+
+    if "<h1>Internal Server Error</h1>" not in page or "<p>500 " not in page:
+        errmsg = "Expected the placeholders to be substituted: {}".format(page)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_custom_template_leaves_unknown_placeholders():
+    """
+        Test that a placeholder the handler does not define is left in
+        place instead of raising KeyError.
+    """
+    handler = DebugErrorHandler(debug=False)
+    handler.register_template(404, "{error_title} {not_a_placeholder}")
+
+    response = handler.handle_exception({"method": "GET", "path": "/"}, ValueError("x"), status_code=404)
+
+    if response["body"] != "Not Found {not_a_placeholder}":
+        errmsg = "Unexpected page: {}".format(response["body"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_unreadable_template_file_falls_back_to_builtin_page():
+    """
+        Test that a template file that is not valid UTF-8 produces the
+        built-in page instead of a second error.
+    """
+    import os
+    import shutil
+    import tempfile
+
+    template_dir = tempfile.mkdtemp()
+
+    try:
+        with open(os.path.join(template_dir, "500.html"), "wb") as template_file:
+            template_file.write(b"\xff\xfe not utf-8 \xff")
+
+        handler = DebugErrorHandler(debug=False, template_path=template_dir)
+
+        response = handler.handle_exception({"method": "GET", "path": "/"}, ValueError("boom"))
+
+        if "Error Reference:" not in response["body"]:
+            errmsg = "Expected the built-in production page, got: {}".format(response["body"][:200])
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(template_dir)
+
+    return
+
+
+def test_source_context_tolerates_non_utf8_source_file():
+    """
+        Test that reading source context from a file that is not valid
+        UTF-8 does not raise.
+    """
+    import os
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(mode="wb", suffix=".py", delete=False) as source_file:
+        source_file.write(b"# caf\xe9 in latin-1\nvalue = 1\n")
+        source_path = source_file.name
+
+    try:
+        handler = DebugErrorHandler(debug=True)
+
+        lines, highlight = handler._get_source_context(source_path, 2)
+
+        if len(lines) != 2 or highlight != 1:
+            errmsg = "Expected 2 context lines with the second highlighted, got {} / {}".format(
+                len(lines), highlight
+            )
+            raise AssertionError(errmsg)
+    finally:
+        os.unlink(source_path)
+
+    return

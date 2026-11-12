@@ -4,297 +4,345 @@
  * <mj-velocity-chart> -- grouped bar chart of committed vs completed work
  * per sprint, with a rolling-average line overlay.
  *
- * SVG is aria-hidden; accessible data table always present.
+ * The SVG is a labelled group whose sprint bar groups are keyboard reachable
+ * (one tab stop, arrow keys between sprints); selecting a sprint outlines it
+ * and writes its values to the read-out in the header. Sprint groups keep a
+ * minimum width, so a long history scrolls horizontally instead of
+ * collapsing. A data table with the same values can be disclosed from the
+ * header.
+ *
+ * Data: `data` property, `src` attribute or inline JSON child --
+ *   { sprints: [{ name, committed, completed }] }
  */
 
-import { MjElement, nextId } from "../core/mjelement.js";
-import { formatNumber } from "../core/intl.js";
+import { nextId } from "../core/mjelement.js";
+import { html } from "../core/html.js";
+import { formatNumber, t } from "../core/intl.js";
+import {
+  PM_CHART_STYLES, PmChartElement, SECONDARY_SERIES_FILL, SECONDARY_SERIES_STROKE,
+  emptyStateMarkup, markSelection, setEmptyState, toNumber, toText, truncateMiddle,
+  wireMarks
+} from "./pmchartsupport.js";
 
 const PAD_L = 52;
 const PAD_R = 16;
-const PAD_T = 16;
+const PAD_T = 24;
 const PAD_B = 50;
+const SVG_H = 300;
 const BAR_GAP = 4;
+const MIN_GROUP_W = 56;
+const CAPTION_MIN_GROUP_W = 96;
+const LABEL_CHAR_W = 6;
+const DEFAULT_ROLLING_WINDOW = 3;
+
+/* Display text of the delivery status of a sprint. */
+const STATUS_LABEL_KEYS = {
+  onTarget:       "mj.velocityChart.statusOnTarget",
+  underDelivered: "mj.velocityChart.statusUnderDelivered",
+  exceeded:       "mj.velocityChart.statusExceeded"
+};
 
 const STYLES = `
-:host {
-  display: block;
-  font-family: var(--mj-font-sans);
-  font-size: var(--mj-font-size-sm);
-  color: var(--mj-text);
-  background: var(--mj-bg);
-  border: 1px solid var(--mj-border);
-  border-radius: var(--mj-radius-md);
-  overflow: hidden;
-}
-.wrapper { display: flex; flex-direction: column; }
-.header { display: flex; align-items: center; gap: var(--mj-space-2); padding: var(--mj-space-2) var(--mj-space-3); border-bottom: 1px solid var(--mj-border); flex-wrap: wrap; }
-.toggle-btn { font: inherit; font-size: var(--mj-font-size-xs); background: var(--mj-surface); border: 1px solid var(--mj-border-strong); border-radius: var(--mj-radius-sm); padding: 2px var(--mj-space-2); cursor: pointer; color: var(--mj-text); }
-.toggle-btn:focus-visible { outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring); outline-offset: var(--mj-focus-ring-offset); }
-.svg-wrap { overflow-x: auto; }
-svg { display: block; }
-.bar-group-el { cursor: pointer; }
-.bar-group-el:focus { outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring); }
-.legend { display: flex; flex-wrap: wrap; gap: var(--mj-space-3); padding: var(--mj-space-2) var(--mj-space-3); border-top: 1px solid var(--mj-border); font-size: var(--mj-font-size-xs); }
-.legend-item { display: flex; align-items: center; gap: var(--mj-space-1); }
-.swatch { width: 16px; height: 10px; display: inline-block; border-radius: 2px; }
-.a11y-table-wrap { padding: var(--mj-space-3); }
-.a11y-table-wrap table { border-collapse: collapse; width: 100%; font-size: var(--mj-font-size-sm); }
-.a11y-table-wrap th, .a11y-table-wrap td { border: 1px solid var(--mj-border); padding: var(--mj-space-1) var(--mj-space-2); text-align: left; }
-[hidden] { display: none !important; }
+${PM_CHART_STYLES}
+.sprint-readout { font-size: var(--mj-font-size-xs); color: var(--mj-text-muted); }
+.bar-group-el[data-selected="true"] .selection-frame { stroke: var(--mj-text); }
+.swatch { inline-size: 16px; block-size: 10px; display: inline-block; border-radius: 2px; }
+.swatch-committed { background: ${SECONDARY_SERIES_FILL}; border: 1px solid ${SECONDARY_SERIES_STROKE}; }
+.swatch-completed { background: var(--mj-accent); }
+.swatch-average { block-size: 3px; background: var(--mj-color-warning); }
 `;
 
-export class MjVelocityChart extends MjElement {
+export class MjVelocityChart extends PmChartElement {
   static tagName = "mj-velocity-chart";
   static styles = STYLES;
   static watched = ["unit", "bar-mode", "rolling-window", "show-average", "show-committed"];
 
   constructor() {
-    super();
-    this._data = null;
-    this._selectedSprint = null;
-    this._showTable = false;
-    this._tableId = nextId("mj-vc-table");
+    super()
+    this._selectedSprint = null
+    this._selectedKey = null
+    this._tableId = nextId("mj-vc-table")
   }
 
   render() {
-    return `
-      <div class="wrapper" part="wrapper" role="img" aria-label="Velocity chart">
-        <div class="header">
-          <strong style="font-size:var(--mj-font-size-sm)">Velocity Chart</strong>
-          <span style="flex:1"></span>
-          <button class="toggle-btn" aria-controls="${this._tableId}" aria-expanded="false">Show data table</button>
+    const chartLabel = t("mj.velocityChart.label")
+
+    const markup = html`
+      <div class="wrapper" part="wrapper" role="group" aria-label="${chartLabel}">
+        <div class="toolbar header">
+          <strong class="toolbar-title">${t("mj.velocityChart.title")}</strong>
+          <span class="sprint-readout" part="sprint-detail" role="status"></span>
+          <span class="toolbar-spacer"></span>
+          <button class="chart-button toggle-btn" type="button" aria-controls="${this._tableId}" aria-expanded="false">${t("mj.velocityChart.showDataTable")}</button>
         </div>
-        <div class="svg-wrap">
-          <svg part="svg" aria-hidden="true"></svg>
+        <div class="chart-scroll svg-wrap">
+          <svg part="svg" role="group" aria-label="${chartLabel}"></svg>
+          ${emptyStateMarkup()}
         </div>
         <div class="legend" part="legend">
-          <span class="legend-item" part="legend-committed"><span class="swatch" style="background:var(--mj-color-accent-200)"></span> Committed</span>
-          <span class="legend-item" part="legend-completed"><span class="swatch" style="background:var(--mj-accent)"></span> Completed</span>
-          <span class="legend-item" part="legend-average"><span class="swatch" style="background:var(--mj-color-warning);height:3px;margin-top:4px;"></span> Rolling Avg</span>
+          <span class="legend-item legend-committed" part="legend-committed"><span class="swatch swatch-committed"></span> ${t("mj.velocityChart.legendCommitted")}</span>
+          <span class="legend-item" part="legend-completed"><span class="swatch swatch-completed"></span> ${t("mj.velocityChart.legendCompleted")}</span>
+          <span class="legend-item legend-average" part="legend-average"><span class="swatch swatch-average"></span> ${t("mj.velocityChart.legendAverage")}</span>
         </div>
         <div id="${this._tableId}" class="a11y-table-wrap" hidden>
           <table part="data-table">
-            <caption>Sprint velocity data</caption>
-            <thead><tr><th>Sprint</th><th>Committed</th><th>Completed</th><th>Difference</th><th>Rolling Average</th></tr></thead>
+            <caption>${t("mj.velocityChart.tableCaption")}</caption>
+            <thead><tr><th scope="col">${t("mj.velocityChart.columnSprint")}</th><th scope="col">${t("mj.velocityChart.columnCommitted")}</th><th scope="col">${t("mj.velocityChart.columnCompleted")}</th><th scope="col">${t("mj.velocityChart.columnDifference")}</th><th scope="col">${t("mj.velocityChart.columnAverage")}</th></tr></thead>
             <tbody class="table-body"></tbody>
           </table>
         </div>
-        <slot hidden></slot>
-      </div>`;
+      </div>`
+    return markup
   }
 
   afterRender() {
-    this._svg = this.$("svg");
-    this._tableBody = this.$(".table-body");
-    this._tableWrap = this.$("#" + this._tableId);
-    this._toggleBtn = this.$(".toggle-btn");
-    this.listen(this._toggleBtn, "click", this._onToggleTable.bind(this));
-    if (this._data !== null) {
-      this._draw();
-    }
-    return;
-  }
+    this._svg = this.$("svg")
+    this._wrapper = this.$(".wrapper")
+    this._svgWrap = this.$(".svg-wrap")
+    this._readout = this.$(".sprint-readout")
+    this._tableBody = this.$(".table-body")
 
-  get data() {
-    return this._data;
-  }
+    wireMarks(this, this._svg, (mark) => {
+      this._onMarkActivate(mark)
+    }, (key) => {
+      this._activeMarkKey = key
+    })
 
-  set data(value) {
-    this._data = value;
-    if (this._svg !== undefined) {
-      this._draw();
-    }
-    return;
+    this.listen(this.shadowRoot, "keydown", (event) => {
+      if (event.key === "Escape" && this._selectedSprint !== null) {
+        event.preventDefault()
+        this._clearSelection(true)
+      }
+    })
+
+    this.setupChart({
+      alternativeButton: this.$(".toggle-btn"),
+      alternativeRegion: this.$(`#${this._tableId}`),
+      resizeTarget: this._svgWrap
+    })
+    return
   }
 
   get selectedSprint() {
-    return this._selectedSprint;
+    return this._selectedSprint
   }
 
   get rollingAverage() {
-    const sprints = (this._data && this._data.sprints) || [];
-    const window = parseInt(this.getAttribute("rolling-window") || "3", 10);
-    return this._computeRolling(sprints, window);
+    const averages = this._computeRolling(this._sprints(), this._rollingWindow())
+    return averages
   }
 
-  _computeRolling(sprints, window) {
-    const avgs = [];
-    for (let i = 0; i < sprints.length; i = i + 1) {
-      const slice = sprints.slice(Math.max(0, i - window + 1), i + 1);
-      const avg = slice.reduce((sum, s) => sum + (s.completed || 0), 0) / slice.length;
-      avgs.push(avg);
+  onDataChanged() {
+    this._clearSelection(false)
+    return
+  }
+
+  onDataDrawn() {
+    this.emit("mj-data-load", { sprints: this._sprints().length })
+    return
+  }
+
+  _sprints() {
+    const source = this._data !== null && Array.isArray(this._data.sprints) === true ? this._data.sprints : []
+    const sprints = source.map((sprint, index) => {
+      const safe = sprint !== null && typeof sprint === "object" ? sprint : {}
+      const hasName = safe.name !== undefined && safe.name !== null && toText(safe.name).length > 0
+      const described = {
+        source: sprint,
+        name: hasName === true ? toText(safe.name) : t("mj.velocityChart.fallbackName", { number: index + 1 }),
+        committed: Math.max(0, toNumber(safe.committed, 0)),
+        completed: Math.max(0, toNumber(safe.completed, 0))
+      }
+      return described
+    })
+    return sprints
+  }
+
+  /* The rolling window: a whole number of sprints, never below one. */
+  _rollingWindow() {
+    const parsed = parseInt(this.getAttribute("rolling-window"), 10)
+    const size = Number.isFinite(parsed) === true && parsed >= 1 ? parsed : DEFAULT_ROLLING_WINDOW
+    return size
+  }
+
+  _computeRolling(sprints, windowSize) {
+    const size = Number.isFinite(windowSize) === true && windowSize >= 1 ? Math.floor(windowSize) : 1
+    const averages = []
+    for (let index = 0; index < sprints.length; index = index + 1) {
+      const slice = sprints.slice(Math.max(0, index - size + 1), index + 1)
+      const sum = slice.reduce((running, sprint) => running + toNumber(sprint.completed, 0), 0)
+      averages.push(sum / slice.length)
     }
-    return avgs;
+    return averages
   }
 
-  _onToggleTable() {
-    this._showTable = !this._showTable;
-    this._tableWrap.hidden = !this._showTable;
-    this._toggleBtn.setAttribute("aria-expanded", String(this._showTable));
-    return;
-  }
-
-  _draw() {
-    const d = this._data;
-    if (d === null || d === undefined) {
-      return;
+  /* "onTarget", "underDelivered" or "exceeded" (keys of STATUS_LABEL_KEYS). */
+  _statusOf(sprint) {
+    const difference = sprint.completed - sprint.committed
+    let status = "onTarget"
+    if (difference < -sprint.committed * 0.2) {
+      status = "underDelivered"
+    } else if (difference > 0) {
+      status = "exceeded"
     }
-    const sprints = d.sprints || [];
+    return status
+  }
+
+  _clearSelection(notify) {
+    const hadSelection = this._selectedSprint !== null
+    this._selectedSprint = null
+    this._selectedKey = null
+    if (this._svg !== undefined) {
+      markSelection(this._svg, null)
+      this._readout.textContent = ""
+    }
+    if (notify === true && hadSelection === true) {
+      this.emit("mj-sprint-deselect", {})
+    }
+    return
+  }
+
+  drawChart() {
+    const sprints = this._sprints()
+    const rollingWindow = this._rollingWindow()
+    const rollingAverages = this._computeRolling(sprints, rollingWindow)
+    const unit = this.getAttribute("unit") !== null && this.getAttribute("unit").length > 0 ? this.getAttribute("unit") : t("mj.velocityChart.defaultUnit")
+    const grouped = this.getAttribute("bar-mode") !== "overlay"
+    const showAverage = this.enabledUnlessFalse("show-average")
+    const showCommitted = this.enabledUnlessFalse("show-committed")
+
+    this.$(".legend-committed").hidden = showCommitted === false
+    this.$(".legend-average").hidden = showAverage === false
+    this._buildTable(sprints, rollingAverages)
+
     if (sprints.length === 0) {
-      return;
+      this.renderSvg(this._svg, 0, 0, "", null)
+      this._svg.toggleAttribute("hidden", true)
+      this._readout.textContent = ""
+      setEmptyState(this, "empty")
+      this._wrapper.setAttribute("aria-label", t("mj.velocityChart.noDataLabel"))
+      return
     }
 
-    const unit = this.getAttribute("unit") || "points";
-    const barMode = this.getAttribute("bar-mode") || "grouped";
-    const rollingWindow = parseInt(this.getAttribute("rolling-window") || "3", 10);
-    const showAverage = this.getAttribute("show-average") !== "false";
-    const showCommitted = this.getAttribute("show-committed") !== "false";
-    const rollingAvgs = this._computeRolling(sprints, rollingWindow);
+    this._svg.toggleAttribute("hidden", false)
+    setEmptyState(this, "ready")
 
-    const maxVal = sprints.reduce((m, s) => Math.max(m, s.committed || 0, s.completed || 0), 0) * 1.15 || 10;
+    const highest = sprints.reduce((maximum, sprint) => Math.max(maximum, sprint.committed, sprint.completed), 0)
+    const maxScale = highest > 0 ? highest * 1.15 : 10
 
-    const containerW = (this._svg.parentElement && this._svg.parentElement.clientWidth) || 700;
-    const svgH = 300;
-    const chartW = containerW - PAD_L - PAD_R;
-    const chartH = svgH - PAD_T - PAD_B;
-
-    const groupW = chartW / sprints.length;
-    const singleBarW = barMode === "grouped" ? (groupW - BAR_GAP * 3) / 2 : groupW - BAR_GAP * 2;
-    const ty = (val) => PAD_T + (1 - val / maxVal) * chartH;
-    const barBase = PAD_T + chartH;
-
-    let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${containerW}" height="${svgH}">`;
-
-    for (let i = 0; i <= 4; i = i + 1) {
-      const val = (i / 4) * maxVal;
-      const y = ty(val);
-      svg += `<line x1="${PAD_L}" y1="${y}" x2="${containerW - PAD_R}" y2="${y}" stroke="var(--mj-border)" stroke-width="1" aria-hidden="true"/>`;
-      svg += `<text x="${PAD_L - 6}" y="${y + 4}" text-anchor="end" font-size="10" fill="var(--mj-text-muted)">${formatNumber(Math.round(val))}</text>`;
+    const containerWidth = this._svgWrap.clientWidth > 0 ? this._svgWrap.clientWidth : 700
+    const groupWidth = Math.max(MIN_GROUP_W, (containerWidth - PAD_L - PAD_R) / sprints.length)
+    const plotWidth = groupWidth * sprints.length
+    const totalWidth = Math.ceil(plotWidth + PAD_L + PAD_R)
+    const plotHeight = SVG_H - PAD_T - PAD_B
+    const barBase = PAD_T + plotHeight
+    const plotRight = PAD_L + plotWidth
+    const barWidth = grouped === true ? (groupWidth - BAR_GAP * 3) / 2 : groupWidth - BAR_GAP * 2
+    const valueToY = (value) => {
+      const y = PAD_T + (1 - value / maxScale) * plotHeight
+      return y
     }
 
-    svg += `<line part="value-axis" x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${barBase}" stroke="var(--mj-border-strong)" stroke-width="1.5" aria-hidden="true"/>`;
-    svg += `<line part="sprint-axis" x1="${PAD_L}" y1="${barBase}" x2="${containerW - PAD_R}" y2="${barBase}" stroke="var(--mj-border-strong)" stroke-width="1.5" aria-hidden="true"/>`;
+    const parts = []
 
-    const avgPts = [];
+    for (let step = 0; step <= 4; step = step + 1) {
+      const value = (step / 4) * maxScale
+      const y = valueToY(value)
+      parts.push(html`<line x1="${PAD_L}" y1="${y}" x2="${plotRight}" y2="${y}" stroke="var(--mj-border)" stroke-width="1" aria-hidden="true"/>`)
+      parts.push(html`<text x="${PAD_L - 6}" y="${y + 4}" text-anchor="end" font-size="10" fill="var(--mj-text-muted)">${formatNumber(Math.round(value))}</text>`)
+    }
+    parts.push(html`<text part="value-axis-title" transform="rotate(-90)" x="${-(PAD_T + plotHeight / 2)}" y="12" text-anchor="middle" font-size="10" fill="var(--mj-text-muted)">${unit}</text>`)
 
-    sprints.forEach((sprint, i) => {
-      const gx = PAD_L + i * groupW;
-      const completed = sprint.completed || 0;
-      const committed = sprint.committed || 0;
-      const diff = completed - committed;
-      const statusLabel = diff < -committed * 0.2 ? "Under-delivered" : diff > 0 ? "Exceeded" : "On target";
-      const ariaLabel = `Sprint ${this._esc(sprint.name || String(i + 1))}: committed ${formatNumber(committed)}, completed ${formatNumber(completed)}, ${statusLabel}`;
+    parts.push(html`<line part="value-axis" x1="${PAD_L}" y1="${PAD_T}" x2="${PAD_L}" y2="${barBase}" stroke="var(--mj-border-strong)" stroke-width="1.5" aria-hidden="true"/>`)
+    parts.push(html`<line part="sprint-axis" x1="${PAD_L}" y1="${barBase}" x2="${plotRight}" y2="${barBase}" stroke="var(--mj-border-strong)" stroke-width="1.5" aria-hidden="true"/>`)
 
-      svg += `<g class="bar-group-el" part="bar-group" tabindex="0" role="button" aria-label="${ariaLabel}" data-sprint-idx="${i}">`;
+    const labelChars = Math.max(3, Math.floor((groupWidth - 4) / LABEL_CHAR_W))
+    const averagePoints = []
 
-      if (barMode === "grouped") {
-        if (showCommitted && committed > 0) {
-          const bx = gx + BAR_GAP;
-          svg += `<rect part="committed-bar" x="${bx}" y="${ty(committed)}" width="${singleBarW}" height="${barBase - ty(committed)}" rx="3" fill="var(--mj-color-accent-200)" aria-hidden="true"/>`;
-        }
-        const bx2 = gx + BAR_GAP * 2 + singleBarW;
-        svg += `<rect part="completed-bar" x="${bx2}" y="${ty(completed)}" width="${singleBarW}" height="${barBase - ty(completed)}" rx="3" fill="var(--mj-accent)" aria-hidden="true"/>`;
-      } else {
-        if (showCommitted && committed > 0) {
-          svg += `<rect part="committed-bar" x="${gx + BAR_GAP}" y="${ty(committed)}" width="${singleBarW}" height="${barBase - ty(committed)}" rx="3" fill="var(--mj-color-accent-200)" aria-hidden="true"/>`;
-        }
-        svg += `<rect part="completed-bar" x="${gx + BAR_GAP}" y="${ty(completed)}" width="${singleBarW}" height="${barBase - ty(completed)}" rx="3" fill="var(--mj-accent)" aria-hidden="true"/>`;
+    sprints.forEach((sprint, index) => {
+      const groupX = PAD_L + index * groupWidth
+      const centreX = groupX + groupWidth / 2
+      const status = this._statusOf(sprint)
+      const statusText = t(STATUS_LABEL_KEYS[status])
+      const label = t("mj.velocityChart.sprintLabel", {
+        name: sprint.name,
+        committed: formatNumber(sprint.committed),
+        completed: formatNumber(sprint.completed),
+        unit: unit,
+        status: statusText,
+        average: formatNumber(Math.round(rollingAverages[index]))
+      })
+      const shapes = []
+
+      /* A transparent frame makes the whole column the target and shows selection. */
+      shapes.push(html`<rect class="selection-frame" x="${groupX + 1}" y="${PAD_T}" width="${groupWidth - 2}" height="${plotHeight}" fill="transparent" stroke="transparent" stroke-width="1.5" rx="3"/>`)
+
+      const committedX = groupX + BAR_GAP
+      const completedX = grouped === true ? groupX + BAR_GAP * 2 + barWidth : groupX + BAR_GAP
+      if (showCommitted === true && sprint.committed > 0) {
+        shapes.push(html`<rect part="committed-bar" x="${committedX}" y="${valueToY(sprint.committed)}" width="${barWidth}" height="${barBase - valueToY(sprint.committed)}" rx="3" fill="${SECONDARY_SERIES_FILL}" stroke="${SECONDARY_SERIES_STROKE}" stroke-width="1" aria-hidden="true"/>`)
+      }
+      const completedWidth = grouped === true ? barWidth : Math.max(4, barWidth - 12)
+      const completedOffset = grouped === true ? 0 : (barWidth - completedWidth) / 2
+      shapes.push(html`<rect part="completed-bar" x="${completedX + completedOffset}" y="${valueToY(sprint.completed)}" width="${completedWidth}" height="${barBase - valueToY(sprint.completed)}" rx="3" fill="var(--mj-accent)" aria-hidden="true"/>`)
+
+      if (status !== "onTarget") {
+        const captionColor = status === "exceeded" ? "var(--mj-color-success)" : "var(--mj-color-danger)"
+        const captionY = valueToY(Math.max(sprint.completed, showCommitted === true ? sprint.committed : 0)) - 5
+        /* Short of room the caption becomes an arrow; the tooltip has the words. */
+        const captionText = groupWidth >= CAPTION_MIN_GROUP_W ? statusText : (status === "exceeded" ? "▲" : "▼")
+        shapes.push(html`<text x="${centreX}" y="${captionY}" text-anchor="middle" font-size="9" fill="${captionColor}" aria-hidden="true">${captionText}</text>`)
       }
 
-      if (diff < -committed * 0.2) {
-        svg += `<text x="${gx + groupW / 2}" y="${ty(completed) - 4}" text-anchor="middle" font-size="9" fill="var(--mj-color-danger)">Under-delivered</text>`;
-      } else if (diff > 0) {
-        svg += `<text x="${gx + groupW / 2}" y="${ty(completed) - 4}" text-anchor="middle" font-size="9" fill="var(--mj-color-success)">Exceeded</text>`;
-      }
+      parts.push(html`<g class="bar-group-el" part="bar-group" tabindex="-1" role="button" aria-label="${label}" data-mark="sprint:${index}"><title>${label}</title>${shapes}</g>`)
+      parts.push(html`<text x="${centreX}" y="${barBase + 16}" text-anchor="middle" font-size="10" fill="var(--mj-text-muted)"><title>${sprint.name}</title>${truncateMiddle(sprint.name, labelChars)}</text>`)
 
-      svg += `</g>`;
+      averagePoints.push({ x: centreX, y: valueToY(rollingAverages[index]) })
+    })
 
-      const avgX = gx + groupW / 2;
-      const avgY = ty(rollingAvgs[i] || 0);
-      avgPts.push(`${avgX},${avgY}`);
-
-      svg += `<text x="${gx + groupW / 2}" y="${barBase + 16}" text-anchor="middle" font-size="10" fill="var(--mj-text-muted)">${this._esc((sprint.name || `S${i + 1}`).slice(0, 8))}</text>`;
-    });
-
-    if (showAverage && avgPts.length > 1) {
-      svg += `<polyline part="average-line" points="${avgPts.join(" ")}" stroke="var(--mj-color-warning)" stroke-width="2" fill="none" aria-hidden="true"/>`;
-      avgPts.forEach((pt) => {
-        const parts = pt.split(",");
-        svg += `<circle cx="${parts[0]}" cy="${parts[1]}" r="3" fill="var(--mj-color-warning)" aria-hidden="true"/>`;
-      });
+    if (showAverage === true && averagePoints.length > 1) {
+      const path = averagePoints.map((point) => `${point.x},${point.y}`).join(" ")
+      parts.push(html`<polyline part="average-line" points="${path}" stroke="var(--mj-color-warning)" stroke-width="2" fill="none" pointer-events="none" aria-hidden="true"/>`)
+      averagePoints.forEach((point) => {
+        parts.push(html`<circle cx="${point.x}" cy="${point.y}" r="3" fill="var(--mj-color-warning)" pointer-events="none" aria-hidden="true"/>`)
+      })
     }
 
-    svg += `</svg>`;
-
-    const svgWrap = this.$(".svg-wrap");
-    if (svgWrap !== null) {
-      const oldSvg = svgWrap.querySelector("svg");
-      if (oldSvg !== null) {
-        oldSvg.outerHTML = svg;
-      }
-    }
-    const newSvg = this.shadowRoot.querySelector("svg");
-    if (newSvg !== null) {
-      this._svg = newSvg;
-      this.listen(newSvg, "click", this._onSvgClick.bind(this));
-      this.listen(newSvg, "keydown", this._onSvgKeydown.bind(this));
+    this.renderSvg(this._svg, totalWidth, SVG_H, html`${parts}`, this._selectedKey)
+    if (this._selectedKey !== null) {
+      const selectedMark = this._svg.querySelector("[data-selected='true']")
+      this._readout.textContent = selectedMark !== null ? selectedMark.getAttribute("aria-label") : ""
     }
 
-    this._buildTable(sprints, rollingAvgs);
-
-    const wrapper = this.$(".wrapper");
-    if (wrapper !== null) {
-      wrapper.setAttribute("aria-label", `Velocity chart: ${sprints.length} sprints, unit: ${unit}, rolling window: ${rollingWindow}`);
-    }
-    return;
+    const summary = t("mj.velocityChart.summary", { count: sprints.length, unit: unit, window: rollingWindow })
+    this._wrapper.setAttribute("aria-label", summary)
+    this._svg.setAttribute("aria-label", t("mj.velocityChart.svgLabel", { summary: summary }))
+    return
   }
 
-  _buildTable(sprints, rollingAvgs) {
-    if (this._tableBody === null || this._tableBody === undefined) {
-      return;
-    }
-    const rows = sprints.map((s, i) => {
-      const diff = (s.completed || 0) - (s.committed || 0);
-      return `<tr><td>${this._esc(s.name || String(i + 1))}</td><td>${formatNumber(s.committed || 0)}</td><td>${formatNumber(s.completed || 0)}</td><td>${diff >= 0 ? "+" : ""}${formatNumber(diff)}</td><td>${formatNumber(Math.round(rollingAvgs[i] || 0))}</td></tr>`;
-    });
-    this._tableBody.innerHTML = rows.join("");
-    return;
+  _buildTable(sprints, rollingAverages) {
+    const rows = sprints.map((sprint, index) => {
+      const difference = sprint.completed - sprint.committed
+      const row = html`<tr><td>${sprint.name}</td><td>${formatNumber(sprint.committed)}</td><td>${formatNumber(sprint.completed)}</td><td>${difference >= 0 ? "+" : ""}${formatNumber(difference)}</td><td>${formatNumber(Math.round(rollingAverages[index]))}</td></tr>`
+      return row
+    })
+    this._tableBody.innerHTML = String(html`${rows}`)
+    return
   }
 
-  _onSvgClick(event) {
-    const el = event.target.closest("[data-sprint-idx]");
-    if (el !== null) {
-      const idx = parseInt(el.getAttribute("data-sprint-idx"), 10);
-      const sprints = (this._data && this._data.sprints) || [];
-      const sprint = sprints[idx];
-      if (sprint !== undefined) {
-        this._selectedSprint = sprint;
-        this.emit("mj-sprint-select", { sprint });
-      }
-    }
-    return;
-  }
+  _onMarkActivate(mark) {
+    const key = mark.getAttribute("data-mark")
+    const index = Number(key.slice(key.indexOf(":") + 1))
+    const source = this._data !== null && Array.isArray(this._data.sprints) === true ? this._data.sprints : []
+    const sprint = source[index]
 
-  _onSvgKeydown(event) {
-    if (event.key === "Enter" || event.key === " ") {
-      this._onSvgClick(event);
+    if (sprint !== undefined) {
+      this._selectedSprint = sprint
+      this._selectedKey = key
+      markSelection(this._svg, key)
+      this._readout.textContent = mark.getAttribute("aria-label")
+      this.emit("mj-sprint-select", { sprint: sprint })
     }
-    if (event.key === "Escape") {
-      this._selectedSprint = null;
-      this.emit("mj-sprint-deselect", {});
-    }
-    return;
-  }
-
-  _esc(str) {
-    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
-
-  onAttributeChanged(name, oldValue, newValue) {
-    if (this._svg !== undefined && this._data !== null) {
-      this._draw();
-    }
-    return;
+    return
   }
 }

@@ -12,10 +12,12 @@
 from typing import List, Tuple
 
 from ccai.webworks.flash import (
+    DEFAULT_MAX_MESSAGE_LENGTH,
     FlashError,
     FlashManager,
     FlashStore,
     InMemoryFlashStore,
+    LazyFlashMessages,
     make_flash_context_processor,
 )
 
@@ -438,3 +440,268 @@ def test_context_processor_uses_configured_keys():
         raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# InMemoryFlashStore bounds
+# =============================================================================
+
+class _Clock:
+    """A settable time source for the store."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_store_drops_the_oldest_message_beyond_the_per_session_cap():
+    """A session keeps at most max_messages_per_session messages, the newest ones."""
+    store = InMemoryFlashStore(max_messages_per_session=2)
+
+    for number in range(5):
+        store.add(SESSION_ID, "info", "message {}".format(number))
+
+    pending = store.peek_all(SESSION_ID)
+
+    if pending != [("info", "message 3"), ("info", "message 4")]:
+        errmsg = "Expected the two newest messages, got {!r}".format(pending)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_store_drops_the_longest_idle_session_beyond_the_session_cap():
+    """The store keeps at most max_sessions sessions; the one idle longest makes room for a new one."""
+    store = InMemoryFlashStore(max_sessions=2)
+
+    store.add("session-a", "info", "a")
+    store.add("session-b", "info", "b")
+    store.add("session-c", "info", "c")
+
+    if store.session_count() != 2:
+        errmsg = "Expected 2 sessions, got {}".format(store.session_count())
+        raise AssertionError(errmsg)
+
+    if store.peek_all("session-a") != []:
+        raise AssertionError("Expected the session idle longest to have been dropped")
+
+    if store.peek_all("session-c") != [("info", "c")]:
+        raise AssertionError("Expected the newest session to be kept")
+
+    return
+
+
+def test_store_session_cap_keeps_a_session_that_received_a_newer_message():
+    """A session that just received a message is not the one dropped to make room."""
+    store = InMemoryFlashStore(max_sessions=2)
+
+    store.add("session-a", "info", "a1")
+    store.add("session-b", "info", "b")
+    store.add("session-a", "info", "a2")
+    store.add("session-c", "info", "c")
+
+    if store.peek_all("session-a") != [("info", "a1"), ("info", "a2")]:
+        raise AssertionError("Expected the recently used session to be kept")
+
+    if store.peek_all("session-b") != []:
+        raise AssertionError("Expected the session idle longest to have been dropped")
+
+    return
+
+
+def test_store_does_not_return_expired_messages():
+    """A message older than the TTL is not returned."""
+    clock = _Clock()
+    store = InMemoryFlashStore(ttl_seconds=10, time_source=clock)
+
+    store.add(SESSION_ID, "info", "old")
+    clock.now = 11.0
+
+    if store.consume_all(SESSION_ID) != []:
+        raise AssertionError("Expected an expired message not to be returned")
+
+    return
+
+
+def test_store_returns_a_message_within_its_ttl():
+    """A message younger than the TTL is returned."""
+    clock = _Clock()
+    store = InMemoryFlashStore(ttl_seconds=10, time_source=clock)
+
+    store.add(SESSION_ID, "info", "fresh")
+    clock.now = 9.0
+
+    if store.consume_all(SESSION_ID) != [("info", "fresh")]:
+        raise AssertionError("Expected a message within its TTL to be returned")
+
+    return
+
+
+def test_store_discards_expired_sessions_when_a_message_is_added():
+    """Sessions whose messages have all expired are removed by a later add, without ever being read."""
+    clock = _Clock()
+    store = InMemoryFlashStore(ttl_seconds=10, time_source=clock)
+
+    for number in range(5):
+        store.add("abandoned-{}".format(number), "error", "Login failed")
+
+    clock.now = 60.0
+    store.add(SESSION_ID, "info", "current")
+
+    if store.session_count() != 1:
+        errmsg = "Expected only the current session to remain, got {}".format(store.session_count())
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_store_truncates_a_message_longer_than_the_limit():
+    """A message longer than max_message_length is cut to that length and marked."""
+    store = InMemoryFlashStore(max_message_length=10)
+
+    store.add(SESSION_ID, "info", "abcdefghijklmnopqrstuvwxyz")
+
+    pending = store.peek_all(SESSION_ID)
+
+    if pending != [("info", "abcdefg...")]:
+        errmsg = "Expected the message cut to 10 characters, got {!r}".format(pending)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_store_default_message_limit_bounds_a_huge_message():
+    """With the default limits a very long message is stored at the default maximum length."""
+    store = InMemoryFlashStore()
+
+    store.add(SESSION_ID, "info", "x" * (DEFAULT_MAX_MESSAGE_LENGTH * 10))
+
+    stored_message = store.peek_all(SESSION_ID)[0][1]
+
+    if len(stored_message) != DEFAULT_MAX_MESSAGE_LENGTH:
+        errmsg = "Expected {} characters, got {}".format(DEFAULT_MAX_MESSAGE_LENGTH, len(stored_message))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_store_rejects_a_limit_below_one():
+    """A store cannot be built with a limit that would make it hold nothing."""
+    try:
+        InMemoryFlashStore(max_sessions=0)
+    except FlashError:
+        return
+
+    raise AssertionError("Expected FlashError for max_sessions=0")
+
+
+def test_store_without_ttl_keeps_messages_indefinitely():
+    """ttl_seconds=None disables expiry."""
+    clock = _Clock()
+    store = InMemoryFlashStore(ttl_seconds=None, time_source=clock)
+
+    store.add(SESSION_ID, "info", "kept")
+    clock.now = 10.0 ** 9
+
+    if store.peek_all(SESSION_ID) != [("info", "kept")]:
+        raise AssertionError("Expected the message to be kept when expiry is disabled")
+
+    return
+
+
+# =============================================================================
+# The context processor reads the store only when the messages are used
+# =============================================================================
+
+def test_processor_does_not_consume_until_the_messages_are_read():
+    """A render that never looks at the flash messages leaves them in the store."""
+    manager = FlashManager()
+    manager.add(SESSION_ID, "saved")
+    processor = make_flash_context_processor(manager)
+
+    output = processor({"session_id": SESSION_ID})
+
+    if not isinstance(output["flash_messages"], LazyFlashMessages):
+        raise AssertionError("Expected the processor to inject a LazyFlashMessages")
+
+    if manager.peek_all(SESSION_ID) != [("info", "saved")]:
+        raise AssertionError("Expected the message to still be pending after an unused render")
+
+    return
+
+
+def test_processor_consumes_when_the_messages_are_iterated():
+    """Iterating the injected messages reads them and removes them from the store."""
+    manager = FlashManager()
+    manager.add(SESSION_ID, "saved")
+    processor = make_flash_context_processor(manager)
+
+    output = processor({"session_id": SESSION_ID})
+    shown = [message for message in output["flash_messages"]]
+
+    if shown != [("info", "saved")]:
+        errmsg = "Expected the pending message, got {!r}".format(shown)
+        raise AssertionError(errmsg)
+
+    if manager.peek_all(SESSION_ID) != []:
+        raise AssertionError("Expected the store to be drained once the messages were read")
+
+    return
+
+
+def test_lazy_messages_are_read_once_per_render():
+    """Using the injected messages twice in one render shows the same messages both times."""
+    manager = FlashManager()
+    manager.add(SESSION_ID, "saved")
+    processor = make_flash_context_processor(manager)
+
+    messages = processor({"session_id": SESSION_ID})["flash_messages"]
+
+    first_use = bool(messages)
+    second_use = list(messages)
+
+    if first_use is not True or second_use != [("info", "saved")]:
+        errmsg = "Expected the same messages on both uses, got {!r} then {!r}".format(first_use, second_use)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_lazy_messages_resolve_through_the_template_context():
+    """The framework's template context resolves the injected value to the list, by name and by index."""
+    from ccai.webworks.templating.context import TemplateContext
+
+    manager = FlashManager()
+    manager.add(SESSION_ID, "saved", "success")
+    processor = make_flash_context_processor(manager)
+
+    context = TemplateContext(processor({"session_id": SESSION_ID}))
+
+    if context.resolve("flash_messages.0") != ("success", "saved"):
+        raise AssertionError("Expected 'flash_messages.0' to resolve to the first message")
+
+    if context.resolve("flash_messages") != [("success", "saved")]:
+        raise AssertionError("Expected 'flash_messages' to resolve to the list of messages")
+
+    return
+
+
+def test_an_intermediate_render_leaves_the_messages_for_the_page_that_shows_them():
+    """A render that ignores the messages, followed by one that shows them, shows them."""
+    manager = FlashManager()
+    manager.add(SESSION_ID, "saved")
+    processor = make_flash_context_processor(manager)
+
+    # An error page or an email template: same session, messages never used
+    processor({"session_id": SESSION_ID})
+
+    shown = list(processor({"session_id": SESSION_ID})["flash_messages"])
+
+    if shown != [("info", "saved")]:
+        errmsg = "Expected the message to reach the page that displays it, got {!r}".format(shown)
+        raise AssertionError(errmsg)
+
+    return
+

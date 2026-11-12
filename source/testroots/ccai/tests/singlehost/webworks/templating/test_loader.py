@@ -1275,3 +1275,175 @@ def test_resolve_name_respects_directory_priority():
         _cleanup_temp_dir(temp_dir2)
     
     return
+
+
+# =============================================================================
+# Template names are confined to the template directories
+# =============================================================================
+
+def _create_templates_beside_secret() -> tuple:
+    """
+        Create a root directory holding a template directory and, beside it,
+        a directory with a file that is not a template.
+        
+        :returns: A ``(root_dir, template_dir, secret_path)`` tuple.
+    """
+    root_dir = tempfile.mkdtemp()
+    template_dir = os.path.join(root_dir, "templates")
+    secret_dir = os.path.join(root_dir, "secret")
+    os.makedirs(template_dir)
+    os.makedirs(secret_dir)
+    
+    with open(os.path.join(template_dir, "index.html"), "w", encoding="utf-8") as f:
+        f.write("Index")
+    
+    secret_path = os.path.join(secret_dir, "secret.cfg")
+    with open(secret_path, "w", encoding="utf-8") as f:
+        f.write("password")
+    
+    return root_dir, template_dir, secret_path
+
+
+def test_load_rejects_parent_directory_segment():
+    """
+        Test that a name with a '..' segment is not found.
+    """
+    root_dir, template_dir, _ = _create_templates_beside_secret()
+    
+    try:
+        loader = TemplateLoader(directories=[template_dir])
+        
+        try:
+            content = loader.load("../secret/secret.cfg")
+            raise AssertionError(f"A file outside the template directory was loaded: {content!r}")
+        except TemplateNotFoundError:
+            pass  # Expected
+    finally:
+        _cleanup_temp_dir(root_dir)
+    
+    return
+
+
+def test_get_path_rejects_parent_directory_segment_inside_name():
+    """
+        Test that a '..' segment in the middle of a name is not found, even
+        when the path stays inside the template directory.
+    """
+    root_dir, template_dir, _ = _create_templates_beside_secret()
+    
+    try:
+        os.makedirs(os.path.join(template_dir, "sub"))
+        loader = TemplateLoader(directories=[template_dir])
+        
+        path = loader.get_path("sub/../index.html")
+        
+        if path is not None:
+            raise AssertionError(f"Expected None for a name with a '..' segment, got {path!r}")
+    finally:
+        _cleanup_temp_dir(root_dir)
+    
+    return
+
+
+def test_get_path_rejects_backslash_parent_directory_segment():
+    """
+        Test that a '..' segment written with backslashes is not found.
+    """
+    root_dir, template_dir, _ = _create_templates_beside_secret()
+    
+    try:
+        loader = TemplateLoader(directories=[template_dir])
+        
+        path = loader.get_path("..\\secret\\secret.cfg")
+        
+        if path is not None:
+            raise AssertionError(f"Expected None for a backslash traversal name, got {path!r}")
+    finally:
+        _cleanup_temp_dir(root_dir)
+    
+    return
+
+
+def test_exists_rejects_absolute_name():
+    """
+        Test that an absolute name is not found.
+    """
+    root_dir, template_dir, secret_path = _create_templates_beside_secret()
+    
+    try:
+        loader = TemplateLoader(directories=[template_dir])
+        
+        if loader.exists(secret_path):
+            raise AssertionError("An absolute name outside the template directory should not exist")
+        
+        inside_path = os.path.join(template_dir, "index.html")
+        if loader.exists(inside_path):
+            raise AssertionError("An absolute name should not exist even when it is inside the directory")
+    finally:
+        _cleanup_temp_dir(root_dir)
+    
+    return
+
+
+def test_resolve_name_rejects_empty_and_nul_names():
+    """
+        Test that an empty name and a name with a NUL character are not found.
+    """
+    root_dir, template_dir, _ = _create_templates_beside_secret()
+    
+    try:
+        loader = TemplateLoader(directories=[template_dir])
+        
+        if loader.resolve_name("") is not None:
+            raise AssertionError("An empty name should not resolve")
+        
+        if loader.resolve_name("index.html\x00.txt") is not None:
+            raise AssertionError("A name with a NUL character should not resolve")
+    finally:
+        _cleanup_temp_dir(root_dir)
+    
+    return
+
+
+def test_get_path_rejects_symlink_leaving_directory():
+    """
+        Test that a symbolic link pointing outside the template directory is
+        not found.
+    """
+    root_dir, template_dir, secret_path = _create_templates_beside_secret()
+    
+    try:
+        link_path = os.path.join(template_dir, "link.html")
+        os.symlink(secret_path, link_path)
+        
+        loader = TemplateLoader(directories=[template_dir])
+        
+        path = loader.get_path("link.html")
+        
+        if path is not None:
+            raise AssertionError(f"Expected None for a link leaving the directory, got {path!r}")
+    finally:
+        _cleanup_temp_dir(root_dir)
+    
+    return
+
+
+def test_get_path_allows_subdirectory_name():
+    """
+        Test that an ordinary name in a subdirectory is still found.
+    """
+    temp_dir = _create_temp_template_dir({
+        "pages/about.html": "About"
+    })
+    
+    try:
+        loader = TemplateLoader(directories=[temp_dir])
+        
+        content = loader.load("pages/about.html")
+        
+        if content != "About":
+            raise AssertionError(f"Expected 'About', got {content!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return

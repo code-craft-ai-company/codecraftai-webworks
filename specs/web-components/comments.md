@@ -27,7 +27,7 @@ Use for structured conversational threads anchored to a piece of content (docume
 - **comment body** — rendered HTML from Markdown or plain text (sanitized).
 - **comment actions** — reply button, reaction button, edit button (if `currentUserId` matches author), delete button.
 - **reaction bar** — `<mj-chip>` list of emoji + count; click to toggle own reaction.
-- **reply thread** — nested `<div role="group" aria-label="Replies to {author}">` containing child `<article>` elements; collapsed by default beyond `max-visible-replies`.
+- **reply thread** — `<div role="group" aria-label="Replies to {author}">` nested inside the parent comment's `<article>` (so the feed root holds only `<article>` elements), containing child `<article>` elements; collapsed by default beyond `max-visible-replies`.
 - **reply composer** — inline `<mj-mention-input>` shown on reply activation; submit and cancel buttons.
 - **top-level composer** — `<mj-mention-input>` at the top or bottom of the feed for new root comments.
 - **load-more replies** — "Show N more replies" button per thread.
@@ -107,7 +107,7 @@ Clicking "Reply" on a comment opens an inline `<mj-mention-input>` below the com
 | Key | Action |
 |-----|--------|
 | `Tab` / `Shift+Tab` | Navigate through comments and controls |
-| `Page Down` / `Page Up` | Move between top-level comment articles (APG Feed) |
+| `Page Down` / `Page Up` | Move between top-level comment articles (APG Feed); from inside a reply, relative to the top-level article that holds it |
 | `Enter` on "Reply" button | Opens inline reply composer |
 | `Enter` in composer | Submits if `<mj-mention-input>` has no open suggestion popup |
 | `Escape` in edit/reply composer | Cancels and restores the prior state |
@@ -115,7 +115,7 @@ Clicking "Reply" on a comment opens an inline `<mj-mention-input>` below the com
 | `Enter` / `Space` on delete button | Opens confirmation dialog |
 
 ## 13. Accessibility
-Feed root carries `role="feed"` with `aria-label`. Each comment is `<article>` with `aria-labelledby` its author + timestamp header. Nested reply threads use `role="group"` with `aria-label="Replies to {authorName}"`. `aria-busy="true"` on the feed root during initial load and during reply expansion. Reaction chips carry `aria-pressed` and `aria-label="React with {emoji}, {count} reactions"`. The delete confirmation uses `<mj-dialog role="alertdialog">`. Edit and delete buttons are only rendered for `current-user-id`-matching comments, reducing noise for other users. Inline composers inherit accessibility from `<mj-mention-input>`.
+Feed root carries `role="feed"` with `aria-label`; its children are the top-level comment `<article>` elements only. Each comment is `<article>` with `aria-labelledby` its author + timestamp header. Nested reply threads use `role="group"` with `aria-label="Replies to {authorName}"` and sit inside the article of the comment they answer. `aria-busy="true"` on the feed root during initial load and during reply expansion. Reaction chips carry `aria-pressed` and `aria-label="React with {emoji}, {count} reactions"`. The delete confirmation uses `<mj-dialog role="alertdialog">`. Edit and delete buttons are only rendered for `current-user-id`-matching comments, reducing noise for other users. Inline composers inherit accessibility from `<mj-mention-input>`.
 
 ## 14. Form participation
 N/A — the component manages its own submission cycle. Not form-associated.

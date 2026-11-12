@@ -11,10 +11,16 @@
 """
 
 import os
+import shutil
 import tempfile
 
 from ccai.webworks.templating.cache import TemplateCache
 from ccai.webworks.templating.config import TemplateConfig
+from ccai.webworks.templating.exceptions import (
+    TemplateConfigurationError,
+    TemplateNotFoundError,
+    UndefinedVariableError,
+)
 from ccai.webworks.templating.filters import BUILTIN_FILTERS
 from ccai.webworks.templating.jinja2_adapter import Jinja2Adapter
 from ccai.webworks.templating.loader import TemplateLoader
@@ -186,7 +192,7 @@ def test_setup_with_mako_config():
 
 def test_setup_registers_builtin_filters_with_jinja2():
     """
-        Test that all BUILTIN_FILTERS are registered with the Jinja2 engine.
+        Test that every BUILTIN_FILTERS name is available in the Jinja2 engine.
     """
     _clean_state()
 
@@ -208,7 +214,8 @@ def test_setup_registers_builtin_filters_with_jinja2():
 
 def test_setup_registers_builtin_filters_with_mako():
     """
-        Test that all BUILTIN_FILTERS are registered with the Mako engine.
+        Test that every BUILTIN_FILTERS name is available in the Mako engine,
+        either as a registered filter or as one Mako provides itself.
     """
     _clean_state()
 
@@ -216,14 +223,425 @@ def test_setup_registers_builtin_filters_with_mako():
     renderer = setup_templating(config)
     engine = renderer.engine
 
-    # MakoAdapter stores filters in its _filters dict
     for filter_name in BUILTIN_FILTERS:
-        if filter_name not in engine._filters:
+        if engine.has_filter(filter_name) is False:
             raise AssertionError(
-                f"Built-in filter '{filter_name}' not registered with Mako engine"
+                f"Built-in filter '{filter_name}' not available in the Mako engine"
             )
 
     _clean_state()
+    return
+
+
+def test_setup_keeps_jinja2_own_filters():
+    """
+        Test that setup_templating() does not replace a filter Jinja2 ships.
+    """
+    import jinja2
+
+    _clean_state()
+
+    renderer = setup_templating()
+    env_filters = renderer.engine._environment.filters
+
+    default_filters = jinja2.Environment().filters
+
+    for filter_name in ("escape", "e", "default", "d", "format", "sort", "join", "first", "last", "trim", "safe"):
+        if env_filters[filter_name] is not default_filters[filter_name]:
+            raise AssertionError(f"Jinja2's own '{filter_name}' filter was replaced")
+
+    _clean_state()
+    return
+
+
+def test_setup_adds_missing_filters_to_jinja2():
+    """
+        Test that the filters Jinja2 lacks (date, json) are registered.
+    """
+    _clean_state()
+
+    renderer = setup_templating()
+    env_filters = renderer.engine._environment.filters
+
+    if env_filters["date"] is not BUILTIN_FILTERS["date"]:
+        raise AssertionError("The 'date' filter should be the built-in filter_date")
+
+    if env_filters["json"] is not BUILTIN_FILTERS["json"]:
+        raise AssertionError("The 'json' filter should be the built-in filter_json")
+
+    _clean_state()
+    return
+
+
+def test_setup_escape_filter_does_not_double_escape():
+    """
+        Test that {{ value|e }} is escaped once under auto-escaping.
+    """
+    _clean_state()
+
+    renderer = setup_templating()
+    output = renderer.render_string("{{ '<b>'|e }}")
+
+    if output != "&lt;b&gt;":
+        raise AssertionError(f"Expected '&lt;b&gt;', got {output!r}")
+
+    _clean_state()
+    return
+
+
+def test_setup_default_filter_keeps_falsy_defined_value():
+    """
+        Test that {{ 0|default('N/A') }} renders the defined value 0.
+    """
+    _clean_state()
+
+    renderer = setup_templating()
+    output = renderer.render_string("{{ 0|default('N/A') }}")
+
+    if output != "0":
+        raise AssertionError(f"Expected '0', got {output!r}")
+
+    _clean_state()
+    return
+
+
+def test_setup_format_filter_uses_percent_formatting():
+    """
+        Test that {{ '%s-%s'|format(1, 2) }} formats as Jinja2 documents.
+    """
+    _clean_state()
+
+    renderer = setup_templating()
+    output = renderer.render_string("{{ '%s-%s'|format(1, 2) }}")
+
+    if output != "1-2":
+        raise AssertionError(f"Expected '1-2', got {output!r}")
+
+    _clean_state()
+    return
+
+
+def test_setup_sort_filter_accepts_attribute():
+    """
+        Test that sort(attribute=...) works as Jinja2 documents.
+    """
+    _clean_state()
+
+    renderer = setup_templating()
+    output = renderer.render_string(
+        "{% for item in items|sort(attribute='n') %}{{ item.n }}{% endfor %}",
+        {"items": [{"n": 2}, {"n": 1}, {"n": 3}]}
+    )
+
+    if output != "123":
+        raise AssertionError(f"Expected '123', got {output!r}")
+
+    _clean_state()
+    return
+
+
+def test_setup_json_filter_is_usable_in_script_block():
+    """
+        Test that {{ data|json }} renders valid JSON that cannot close a
+        script block.
+    """
+    import json
+
+    _clean_state()
+
+    renderer = setup_templating()
+    data = {"name": "</script><script>alert(1)</script>"}
+    output = renderer.render_string("{{ data|json }}", {"data": data})
+
+    if "</script>" in output:
+        raise AssertionError(f"JSON output can close a script block: {output!r}")
+
+    if "&#34;" in output or "&quot;" in output:
+        raise AssertionError(f"JSON output was entity-escaped: {output!r}")
+
+    if json.loads(output) != data:
+        raise AssertionError(f"JSON output does not parse to the original value: {output!r}")
+
+    _clean_state()
+    return
+
+
+def test_setup_mako_builtin_filter_is_usable_in_template():
+    """
+        Test that a built-in filter registered with Mako can be used.
+    """
+    _clean_state()
+
+    config = TemplateConfig(engine="mako")
+    renderer = setup_templating(config)
+    output = renderer.render_string("${ name | upper }", {"name": "abc"})
+
+    if output != "ABC":
+        raise AssertionError(f"Expected 'ABC', got {output!r}")
+
+    _clean_state()
+    return
+
+
+# =============================================================================
+# Engine libraries are optional extras
+# =============================================================================
+
+def _hide_engine_library(library_name: str, adapter_module_name: str) -> dict:
+    """
+        Make an engine library look as if it is not installed.
+
+        :param library_name: Top-level package name of the engine library.
+        :param adapter_module_name: Module name of the adapter that imports it.
+
+        :returns: The removed ``sys.modules`` entries, for
+            :func:`_restore_engine_library`.
+    """
+    import sys
+
+    saved_modules = {}
+    for module_name in list(sys.modules.keys()):
+        is_library_module = module_name == library_name or module_name.startswith(f"{library_name}.")
+        if is_library_module or module_name == adapter_module_name:
+            saved_modules[module_name] = sys.modules.pop(module_name)
+
+    # A None entry makes "import <library_name>" raise ModuleNotFoundError.
+    sys.modules[library_name] = None
+
+    return saved_modules
+
+
+def _restore_engine_library(library_name: str, saved_modules: dict) -> None:
+    """
+        Undo :func:`_hide_engine_library`.
+
+        :param library_name: Top-level package name of the engine library.
+        :param saved_modules: The entries returned by ``_hide_engine_library``.
+    """
+    import sys
+
+    del sys.modules[library_name]
+    sys.modules.update(saved_modules)
+    return
+
+
+def test_setup_with_jinja2_works_without_mako_installed():
+    """
+        Test that a Jinja2 configuration does not need the mako package.
+    """
+    _clean_state()
+
+    saved_modules = _hide_engine_library("mako", "ccai.webworks.templating.mako_adapter")
+    try:
+        renderer = setup_templating(TemplateConfig(engine="jinja2"))
+        output = renderer.render_string("Hello {{ name }}", {"name": "World"})
+
+        if output != "Hello World":
+            raise AssertionError(f"Expected 'Hello World', got {output!r}")
+
+        if TemplateEngineRegistry.is_registered("mako"):
+            raise AssertionError("The Mako adapter should not be registered when mako is not installed")
+    finally:
+        _restore_engine_library("mako", saved_modules)
+        _clean_state()
+
+    return
+
+
+def test_setup_with_mako_works_without_jinja2_installed():
+    """
+        Test that a Mako configuration does not need the jinja2 package.
+    """
+    _clean_state()
+
+    saved_modules = _hide_engine_library("jinja2", "ccai.webworks.templating.jinja2_adapter")
+    try:
+        renderer = setup_templating(TemplateConfig(engine="mako"))
+        output = renderer.render_string("Hello ${ name }", {"name": "World"})
+
+        if output != "Hello World":
+            raise AssertionError(f"Expected 'Hello World', got {output!r}")
+
+        if TemplateEngineRegistry.is_registered("jinja2"):
+            raise AssertionError("The Jinja2 adapter should not be registered when jinja2 is not installed")
+    finally:
+        _restore_engine_library("jinja2", saved_modules)
+        _clean_state()
+
+    return
+
+
+def test_setup_raises_when_configured_engine_is_not_installed():
+    """
+        Test that configuring an engine whose library is missing raises
+        TemplateConfigurationError.
+    """
+    _clean_state()
+
+    saved_modules = _hide_engine_library("mako", "ccai.webworks.templating.mako_adapter")
+    try:
+        try:
+            setup_templating(TemplateConfig(engine="mako"))
+            raise AssertionError("Expected TemplateConfigurationError for a missing engine library")
+        except TemplateConfigurationError as exc:
+            if exc.field_name != "engine":
+                raise AssertionError(f"Expected field_name 'engine', got {exc.field_name!r}")
+    finally:
+        _restore_engine_library("mako", saved_modules)
+        _clean_state()
+
+    return
+
+
+# =============================================================================
+# engine_options and configuration validation
+# =============================================================================
+
+def test_setup_passes_engine_options_to_jinja2():
+    """
+        Test that engine_options such as trim_blocks reach the Jinja2
+        environment.
+    """
+    _clean_state()
+
+    config = TemplateConfig.from_dict({
+        "engine": "jinja2",
+        "engine_options": {
+            "trim_blocks": True,
+            "lstrip_blocks": True
+        }
+    })
+    renderer = setup_templating(config)
+    environment = renderer.engine._environment
+
+    if environment.trim_blocks is not True:
+        raise AssertionError("trim_blocks should be set on the Jinja2 environment")
+
+    if environment.lstrip_blocks is not True:
+        raise AssertionError("lstrip_blocks should be set on the Jinja2 environment")
+
+    _clean_state()
+    return
+
+
+def test_setup_passes_engine_options_to_mako():
+    """
+        Test that engine_options such as strict_undefined reach Mako.
+    """
+    _clean_state()
+
+    config = TemplateConfig(engine="mako", engine_options={"strict_undefined": True})
+    renderer = setup_templating(config)
+
+    try:
+        renderer.render_string("${ missing_name }", {})
+        raise AssertionError("Expected UndefinedVariableError with strict_undefined")
+    except UndefinedVariableError as exc:
+        if exc.variable_name != "missing_name":
+            raise AssertionError(f"Expected variable_name 'missing_name', got {exc.variable_name!r}")
+
+    _clean_state()
+    return
+
+
+def test_setup_rejects_unknown_engine_option():
+    """
+        Test that an engine option Jinja2 does not know raises
+        TemplateConfigurationError.
+    """
+    _clean_state()
+
+    config = TemplateConfig(engine="jinja2", engine_options={"no_such_option": True})
+
+    try:
+        setup_templating(config)
+        raise AssertionError("Expected TemplateConfigurationError for an unknown engine option")
+    except TemplateConfigurationError as exc:
+        if exc.field_name != "engine_options":
+            raise AssertionError(f"Expected field_name 'engine_options', got {exc.field_name!r}")
+
+    _clean_state()
+    return
+
+
+def test_setup_validates_config():
+    """
+        Test that setup_templating() rejects an invalid configuration.
+    """
+    _clean_state()
+
+    config = TemplateConfig(undefined_behavior="bogus")
+
+    try:
+        setup_templating(config)
+        raise AssertionError("Expected TemplateConfigurationError for an invalid configuration")
+    except TemplateConfigurationError as exc:
+        if exc.field_name != "undefined_behavior":
+            raise AssertionError(f"Expected field_name 'undefined_behavior', got {exc.field_name!r}")
+
+    _clean_state()
+    return
+
+
+# =============================================================================
+# Template names cannot leave the template directories
+# =============================================================================
+
+def test_setup_render_rejects_parent_directory_name():
+    """
+        Test that a template name with '..' cannot read a file outside the
+        template directory.
+    """
+    _clean_state()
+
+    root_dir = tempfile.mkdtemp()
+    try:
+        template_dir = os.path.join(root_dir, "templates")
+        secret_dir = os.path.join(root_dir, "secret")
+        os.makedirs(template_dir)
+        os.makedirs(secret_dir)
+        _write_template(secret_dir, "secret.cfg", "password {{ 7 * 7 }}")
+
+        renderer = setup_templating(TemplateConfig(directories=[template_dir]))
+
+        try:
+            output = renderer.render("../secret/secret.cfg")
+            raise AssertionError(f"A file outside the template directory was rendered: {output!r}")
+        except TemplateNotFoundError:
+            pass  # Expected
+    finally:
+        shutil.rmtree(root_dir, ignore_errors=True)
+        _clean_state()
+
+    return
+
+
+def test_setup_render_rejects_absolute_name():
+    """
+        Test that an absolute template name cannot read a file outside the
+        template directory.
+    """
+    _clean_state()
+
+    root_dir = tempfile.mkdtemp()
+    try:
+        template_dir = os.path.join(root_dir, "templates")
+        secret_dir = os.path.join(root_dir, "secret")
+        os.makedirs(template_dir)
+        os.makedirs(secret_dir)
+        secret_path = _write_template(secret_dir, "secret.cfg", "password {{ 7 * 7 }}")
+
+        renderer = setup_templating(TemplateConfig(directories=[template_dir]))
+
+        try:
+            output = renderer.render(secret_path)
+            raise AssertionError(f"A file outside the template directory was rendered: {output!r}")
+        except TemplateNotFoundError:
+            pass  # Expected
+    finally:
+        shutil.rmtree(root_dir, ignore_errors=True)
+        _clean_state()
+
     return
 
 

@@ -96,10 +96,15 @@ class SSLManager:
         """
             Check if HTTP to HTTPS redirect is enabled.
 
-            :returns: True if ssl_redirect is enabled and SSL is configured.
-        """
-        rtnval = self._config.ssl_redirect and self.is_ssl_enabled
+            TLS is either terminated by this server (ssl_certfile and
+            ssl_keyfile) or by a proxy in front of it, which reports the
+            scheme the client used in X-Forwarded-Proto. The redirect applies
+            to requests whose scheme is http either way, so it depends on the
+            ssl_redirect option alone.
 
+            :returns: True if ssl_redirect is enabled.
+        """
+        rtnval = self._config.ssl_redirect is True
         return rtnval
 
     def validate_config(self) -> None:
@@ -264,7 +269,7 @@ class SSLManager:
 
             :param scheme: The original request scheme.
             :param host: The request host header value.
-            :param path: The request path.
+            :param path: The request path, with its query string.
 
             :returns: The HTTPS redirect URL.
         """
@@ -328,37 +333,94 @@ class SSLManager:
         """
             Apply cipher suite configuration to the SSL context.
 
-            The ssl module's set_ciphers() only accepts TLS 1.2 cipher
-            strings. TLS 1.3 cipher suites are managed automatically by
-            the ssl module. This method attempts to set the configured
-            ciphers and silently falls back to defaults if the cipher
-            string only contains TLS 1.3 suite names.
+            The configured string may name TLS 1.3 cipher suites (names
+            that start with 'TLS_', such as TLS_AES_256_GCM_SHA384) and
+            TLS 1.2 cipher strings in the OpenSSL format. The two kinds
+            are separate lists in OpenSSL.
+
+            Only the TLS 1.2 part is passed to set_ciphers(). The TLS 1.3
+            names are never passed to it: set_ciphers() does not know
+            them, and when it fails it has already replaced the TLS 1.2
+            list with an empty one, which leaves a context that cannot
+            talk TLS 1.2 at all. A string that only names TLS 1.3 suites
+            therefore leaves the TLS 1.2 defaults of the ssl module in
+            place. The ssl module offers no way to choose the TLS 1.3
+            suites, the secure defaults of OpenSSL apply to them.
 
             :param context: The SSL context to configure.
 
-            :raises: SSLConfigError if the cipher string is truly invalid.
+            :raises: SSLConfigError if the cipher string is invalid.
         """
         if not self._config.ssl_ciphers:
             return
 
+        tls12_parts = []
+        tls13_parts = []
+
+        for part in self._config.ssl_ciphers.split(":"):
+            part = part.strip()
+            if len(part) == 0:
+                continue
+
+            if part.startswith("TLS_"):
+                tls13_parts.append(part)
+            else:
+                tls12_parts.append(part)
+
+        if len(tls13_parts) > 0:
+            self._check_tls13_suites(context, tls13_parts)
+
+        if len(tls12_parts) == 0:
+            # Nothing to set for TLS 1.2, its defaults stay in place
+            return
+
+        tls12_ciphers = ":".join(tls12_parts)
+
         try:
-            context.set_ciphers(self._config.ssl_ciphers)
-        except ssl.SSLError:
-            # TLS 1.3 cipher suite names (e.g. TLS_AES_256_GCM_SHA384)
-            # are not accepted by set_ciphers(). If the string looks like
-            # it only contains TLS 1.3 suites, fall back to defaults.
-            # Otherwise re-raise as a config error.
-            parts = [p.strip() for p in self._config.ssl_ciphers.split(":")]
-            all_tls13 = all(p.startswith("TLS_") for p in parts if p)
+            context.set_ciphers(tls12_ciphers)
+        except ssl.SSLError as exc:
+            errmsg = f"Invalid cipher suite configuration: '{self._config.ssl_ciphers}'"
+            raise SSLConfigError(errmsg) from exc
 
-            if not all_tls13:
-                raise SSLConfigError(
-                    f"Invalid cipher suite configuration: '{self._config.ssl_ciphers}'"
+        return
+
+    def _check_tls13_suites(self, context: ssl.SSLContext, configured: list) -> None:
+        """
+            Check the configured TLS 1.3 cipher suites against the context.
+
+            The suites cannot be chosen through the ssl module, but a name
+            that the context does not offer is a mistake in the
+            configuration and is refused. When the context offers suites
+            beyond the configured ones, that is logged: they stay enabled.
+
+            :param context: The SSL context being configured.
+            :param configured: The configured TLS 1.3 cipher suite names.
+
+            :raises: SSLConfigError if a configured suite is not offered.
+        """
+        offered = []
+        for cipher in context.get_ciphers():
+            if cipher.get("protocol") == "TLSv1.3":
+                offered.append(cipher.get("name"))
+
+        for suite_name in configured:
+            if suite_name not in offered:
+                errmsg = (
+                    f"Invalid cipher suite configuration: TLS 1.3 cipher suite "
+                    f"'{suite_name}' is not available. Available: {sorted(offered)}"
                 )
+                raise SSLConfigError(errmsg)
 
-            # TLS 1.3 ciphers are handled automatically by the ssl module
-            _logger.debug(
-                "Cipher string contains only TLS 1.3 suites, using defaults for TLS 1.2"
+        not_configured = []
+        for suite_name in offered:
+            if suite_name not in configured:
+                not_configured.append(suite_name)
+
+        if len(not_configured) > 0:
+            _logger.info(
+                "TLS 1.3 cipher suites are managed by OpenSSL and cannot be "
+                "restricted here, these stay enabled as well: %s",
+                not_configured,
             )
 
         return

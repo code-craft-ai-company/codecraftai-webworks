@@ -20,6 +20,8 @@ import threading
 from pathlib import Path
 from typing import Callable, Dict, Optional, Set, TYPE_CHECKING
 
+from ccai.webworks.configuration.exceptions import ConfigurationFrozenError
+
 if TYPE_CHECKING:
     from ccai.webworks.configuration.registry import ConfigRegistry
 
@@ -66,10 +68,19 @@ class ConfigWatcher:
             # Stop watching on shutdown
             watcher.stop()
         
+        When no ``on_change`` callback is given, a change reloads the
+        registry with :meth:`ConfigRegistry.reload`: the new configuration is
+        validated against the schema before it goes live, the callbacks
+        registered with ``registry.on_change`` are told about every key that
+        changed, and a frozen registry is left alone. A reload that fails,
+        for example because the file was caught half written or its content
+        violates the schema, leaves the previous configuration in effect and
+        is tried again on every following poll until it succeeds.
+        
         :param registry: The ConfigRegistry to notify on configuration changes.
         :param poll_interval: Interval in seconds between file checks (default: 1.0).
         :param on_change: Optional callback to invoke when files change.
-                         If not provided, registry.load() is called.
+                         If not provided, registry.reload() is called.
     """
     
     # Default polling interval in seconds
@@ -98,6 +109,17 @@ class ConfigWatcher:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
+        
+        # Paths whose change could not be applied because the reload of the
+        # registry failed, with the text of the failure. They are reloaded
+        # again on the next poll. Guarded by a lock of its own because a
+        # reload is triggered both with and without self._lock held.
+        self._failed_reloads: Dict[Path, str] = {}
+        self._failed_reloads_lock = threading.Lock()
+        
+        # Counts the reloads attempted, so a poll can tell whether one of
+        # its own changes already retried a failed reload.
+        self._reload_attempts = 0
     
     @property
     def registry(self) -> 'ConfigRegistry':
@@ -295,6 +317,8 @@ class ConfigWatcher:
         with self._lock:
             paths_to_check = set(self._watched_paths)
         
+        attempts_before = self._reload_attempts
+        
         for path in paths_to_check:
             if not path.exists():
                 # File was deleted - check if we had it before
@@ -311,6 +335,27 @@ class ConfigWatcher:
             else:
                 # Check single file
                 self._check_file(path)
+        
+        # A reload that failed on an earlier poll is tried again, unless a
+        # change seen by this poll has just done so.
+        if self._reload_attempts == attempts_before:
+            self._retry_failed_reloads()
+    
+    def _retry_failed_reloads(self) -> None:
+        """
+            Reload the registry again when an earlier reload failed.
+            
+            A file is often seen while it is still being written, and the
+            modification time recorded for it then does not change again, so
+            without this the corrected content would never be loaded.
+        """
+        with self._failed_reloads_lock:
+            has_failed_reloads = len(self._failed_reloads) > 0
+        
+        if has_failed_reloads:
+            self._reload_registry(None)
+        
+        return
     
     def _check_file(self, path: Path) -> None:
         """
@@ -372,16 +417,72 @@ class ConfigWatcher:
                 )
         else:
             # Default behavior: reload the registry
-            try:
-                self._registry.load(validate=False)
-            except Exception:
-                # Don't let reload exceptions break the watcher.
-                # Operator must be able to see why a config-file
-                # change isn't being picked up.
+            self._reload_registry(path)
+    
+    def _reload_registry(self, path: Optional[Path]) -> bool:
+        """
+            Reload the registry after a change, keeping the watcher alive.
+            
+            The reload is validated and staged by the registry, so a failure
+            leaves the previous configuration in effect. A failure is
+            remembered and the reload is attempted again on the next poll.
+            
+            :param path: The path whose change caused the reload, or None
+                         when this is another attempt after a failure.
+            
+            :returns: True if the registry was reloaded.
+        """
+        reloaded = False
+        self._reload_attempts += 1
+        
+        try:
+            self._registry.reload()
+            reloaded = True
+        except ConfigurationFrozenError:
+            # A frozen configuration is not changed by an edit to a file.
+            with self._failed_reloads_lock:
+                self._failed_reloads.clear()
+            logger.info(
+                "ConfigWatcher: registry is frozen; change to %s was not loaded",
+                path,
+            )
+        except Exception as exc:
+            # Don't let reload exceptions break the watcher.
+            # Operator must be able to see why a config-file
+            # change isn't being picked up.
+            failure_text = f"{type(exc).__name__}: {exc}"
+            
+            with self._failed_reloads_lock:
+                is_repeat = failure_text in self._failed_reloads.values()
+                if path is not None:
+                    self._failed_reloads[path] = failure_text
+                else:
+                    for failed_path in self._failed_reloads:
+                        self._failed_reloads[failed_path] = failure_text
+            
+            if is_repeat:
+                # The same failure as on the previous attempt: already in
+                # the journal with its traceback.
+                logger.debug(
+                    "ConfigWatcher: registry.reload() still failing: %s",
+                    failure_text,
+                )
+            else:
                 logger.exception(
-                    "ConfigWatcher: registry.load() raised after change to %s",
+                    "ConfigWatcher: registry.reload() raised after change to %s; "
+                    "the previous configuration stays in effect and the reload will be retried",
                     path,
                 )
+        
+        if reloaded:
+            with self._failed_reloads_lock:
+                had_failures = len(self._failed_reloads) > 0
+                self._failed_reloads.clear()
+            
+            if had_failures:
+                logger.info("ConfigWatcher: registry reloaded after earlier failed attempts")
+        
+        return reloaded
     
     def check_now(self) -> Set[Path]:
         """
@@ -394,6 +495,7 @@ class ConfigWatcher:
             :returns: Set of paths that have changed since the last check.
         """
         changed_paths: Set[Path] = set()
+        attempts_before = self._reload_attempts
         
         with self._lock:
             paths_to_check = set(self._watched_paths)
@@ -422,6 +524,11 @@ class ConfigWatcher:
         # Trigger callbacks for changed files
         for path in changed_paths:
             self._trigger_change(path)
+        
+        # Another attempt at a reload that failed on an earlier check,
+        # unless a change seen by this check has just made one.
+        if self._reload_attempts == attempts_before:
+            self._retry_failed_reloads()
         
         return changed_paths
     

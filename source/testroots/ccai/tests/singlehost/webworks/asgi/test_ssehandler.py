@@ -352,20 +352,16 @@ def test_ssehandler_sse_headers_include_cache_control():
     return
 
 
-def test_ssehandler_sse_headers_include_connection():
+def test_ssehandler_sse_headers_do_not_include_connection():
     """
-        Test that SSE_HEADERS includes connection header.
+        Test that SSE_HEADERS has no connection header, which HTTP/2 servers refuse.
     """
     handler = SSEHandler()
     
     headers_dict = {name: value for name, value in handler.SSE_HEADERS}
     
-    if b"connection" not in headers_dict:
-        errmsg = "Expected 'connection' in SSE_HEADERS"
-        raise AssertionError(errmsg)
-    
-    if headers_dict[b"connection"] != b"keep-alive":
-        errmsg = f"Expected connection 'keep-alive', got {headers_dict[b'connection']}"
+    if b"connection" in headers_dict:
+        errmsg = "Expected no 'connection' header in SSE_HEADERS"
         raise AssertionError(errmsg)
     
     return
@@ -489,8 +485,8 @@ def test_get_sse_headers_returns_default_headers():
     
     headers = handler.get_sse_headers()
     
-    if len(headers) != 3:
-        errmsg = f"Expected 3 default headers, got {len(headers)}"
+    if len(headers) != 2:
+        errmsg = f"Expected 2 default headers, got {len(headers)}"
         raise AssertionError(errmsg)
     
     return
@@ -505,8 +501,8 @@ def test_get_sse_headers_includes_additional_headers():
     additional = [(b"x-custom", b"value")]
     headers = handler.get_sse_headers(additional_headers=additional)
     
-    if len(headers) != 4:
-        errmsg = f"Expected 4 headers, got {len(headers)}"
+    if len(headers) != 3:
+        errmsg = f"Expected 3 headers, got {len(headers)}"
         raise AssertionError(errmsg)
     
     headers_dict = {name: value for name, value in headers}
@@ -943,10 +939,10 @@ def test_stream_with_receive_streams_events():
     handler = SSEHandler()
     send, sent_messages = create_send_callable()
     
-    # Create receive that returns disconnect after events are sent
-    receive, _ = create_receive_callable([
-        {"type": MESSAGE_HTTP_DISCONNECT}
-    ])
+    # The client stays connected while the events are sent. A receive
+    # that reported the disconnect at once would describe a client that
+    # was gone before the stream began.
+    receive, _ = create_receive_callable([])
     
     events = [
         SSEEvent(data="Event 1"),
@@ -1185,11 +1181,13 @@ def test_stream_with_receive_detects_client_disconnect():
     return
 
 
-def test_stream_includes_keep_alive_header():
+def test_stream_keeps_connection_open_without_connection_header():
     """
-        Test that stream() includes Connection: keep-alive header.
+        Test that stream() keeps the response open and sends no Connection header.
         
-        This validates Requirement 6.7: Keep connection open.
+        This validates Requirement 6.7: Keep connection open. The response
+        stays open through more_body=True, the Connection header belongs to
+        the server and HTTP/2 servers refuse a response that carries it.
     """
     handler = SSEHandler()
     send, sent_messages = create_send_callable()
@@ -1207,12 +1205,14 @@ def test_stream_includes_keep_alive_header():
     headers = start_message.get("headers", [])
     headers_dict = {name: value for name, value in headers}
     
-    if b"connection" not in headers_dict:
-        errmsg = "Expected 'connection' header"
+    if b"connection" in headers_dict:
+        errmsg = "Expected no 'connection' header"
         raise AssertionError(errmsg)
     
-    if headers_dict[b"connection"] != b"keep-alive":
-        errmsg = f"Expected connection 'keep-alive', got {headers_dict[b'connection']}"
+    event_message = sent_messages[1]
+    
+    if event_message.get("more_body") is not True:
+        errmsg = "Expected the event to be sent with more_body=True"
         raise AssertionError(errmsg)
     
     return
@@ -1378,6 +1378,180 @@ def test_stream_handles_send_error_in_finally():
     # Should have attempted to send messages
     if call_count[0] < 2:
         errmsg = f"Expected at least 2 send calls, got {call_count[0]}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Tests for field sanitising and disconnect detection on an idle stream
+# =============================================================================
+
+def test_format_removes_line_breaks_from_event_name():
+    """
+        Test that a line break in the event name cannot add a field to the event.
+    """
+    event = SSEEvent(data="payload", event="update\ndata: injected")
+    
+    formatted = event.format()
+    
+    data_lines = [line for line in formatted.split("\n") if line.startswith("data:")]
+    
+    if data_lines != ["data: payload"]:
+        errmsg = f"Expected exactly one data field, got {formatted!r}"
+        raise AssertionError(errmsg)
+    
+    if "event: updatedata: injected\n" not in formatted:
+        errmsg = f"Expected the event name on one line, got {formatted!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_format_removes_line_breaks_from_event_id():
+    """
+        Test that a line break in the ID cannot end the event and start another.
+    """
+    event = SSEEvent(data="payload", id="42\r\n\r\ndata: second event")
+    
+    formatted = event.format()
+    
+    # One event ends with one empty line, a second empty line would be a second event
+    if formatted.count("\n\n") != 1:
+        errmsg = f"Expected a single event, got {formatted!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_format_splits_data_on_bare_carriage_return():
+    """
+        Test that a carriage return on its own in the data starts a new data line.
+    """
+    event = SSEEvent(data="first\rsecond")
+    
+    formatted = event.format()
+    
+    if formatted != "data: first\ndata: second\n\n":
+        errmsg = f"Expected two data lines, got {formatted!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_format_splits_data_on_carriage_return_line_feed_once():
+    """
+        Test that CRLF in the data is one line break and not two.
+    """
+    event = SSEEvent(data="first\r\nsecond")
+    
+    formatted = event.format()
+    
+    if formatted != "data: first\ndata: second\n\n":
+        errmsg = f"Expected two data lines, got {formatted!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_stream_with_receive_stops_idle_stream_when_client_disconnects():
+    """
+        Test that an idle stream ends when the client disconnects, without waiting for an event.
+    """
+    handler = SSEHandler()
+    send, sent_messages = create_send_callable()
+    generator_closed: List[bool] = []
+    
+    async def receive() -> Dict[str, Any]:
+        await asyncio.sleep(0.1)
+        return {"type": MESSAGE_HTTP_DISCONNECT}
+    
+    async def idle_event_source():
+        try:
+            yield SSEEvent(data="only event")
+            # No further event for a long time
+            await asyncio.sleep(60)
+            yield SSEEvent(data="never sent")
+        finally:
+            generator_closed.append(True)
+    
+    async def run_test():
+        await asyncio.wait_for(
+            handler.stream_with_receive(send, receive, idle_event_source()),
+            timeout=5.0
+        )
+        return
+    
+    asyncio.get_event_loop().run_until_complete(run_test())
+    
+    if generator_closed != [True]:
+        errmsg = "Expected the event generator to be closed after the client disconnected"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_stream_with_receive_sends_nothing_after_disconnect():
+    """
+        Test that no end message is sent to a client that has disconnected.
+    """
+    handler = SSEHandler()
+    send, sent_messages = create_send_callable()
+    
+    async def receive() -> Dict[str, Any]:
+        await asyncio.sleep(0.1)
+        return {"type": MESSAGE_HTTP_DISCONNECT}
+    
+    async def idle_event_source():
+        yield SSEEvent(data="only event")
+        await asyncio.sleep(60)
+    
+    async def run_test():
+        await asyncio.wait_for(
+            handler.stream_with_receive(send, receive, idle_event_source()),
+            timeout=5.0
+        )
+        return
+    
+    asyncio.get_event_loop().run_until_complete(run_test())
+    
+    last_message = sent_messages[-1]
+    
+    if last_message.get("more_body") is not True:
+        errmsg = f"Expected the event to be the last message sent, got {last_message}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_stream_with_receive_ignores_messages_that_are_not_a_disconnect():
+    """
+        Test that a receive message other than the disconnect does not end the monitoring.
+    """
+    handler = SSEHandler()
+    send, sent_messages = create_send_callable()
+    
+    # A request body message arrives first, the client stays connected
+    receive, _ = create_receive_callable([
+        {"type": "http.request", "body": b"", "more_body": False},
+    ])
+    
+    events = [SSEEvent(data="Event 1"), SSEEvent(data="Event 2")]
+    
+    async def run_test():
+        event_source = create_async_event_generator(events)
+        await handler.stream_with_receive(send, receive, event_source)
+        return
+    
+    asyncio.get_event_loop().run_until_complete(run_test())
+    
+    event_messages = [
+        msg for msg in sent_messages
+        if msg.get("type") == MESSAGE_HTTP_RESPONSE_BODY and msg.get("more_body") is True
+    ]
+    
+    if len(event_messages) != 2:
+        errmsg = f"Expected both events to be sent, got {len(event_messages)}"
         raise AssertionError(errmsg)
     
     return

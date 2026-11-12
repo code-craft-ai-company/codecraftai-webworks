@@ -271,14 +271,16 @@ def test_property_9_version_check_consistent_with_validation():
     return
 
 
-def test_property_9_ssl_redirect_requires_ssl_enabled():
+def test_property_9_ssl_redirect_follows_the_option():
     """
-        Property 9: SSL Redirect Requires SSL Enabled
+        Property 9: SSL Redirect Follows the Option
 
-        For any configuration, HTTP to HTTPS redirect SHALL only be
-        active when both SSL is enabled and ssl_redirect is True.
+        For any configuration, HTTP to HTTPS redirect SHALL be active
+        exactly when ssl_redirect is True, whether TLS is terminated by
+        the server (certificate and key) or by a proxy in front of it,
+        and SHALL never redirect an https request.
 
-        **Validates: Requirement 10.8 (related)**
+        **Validates: Requirement 10.8**
     """
     for iteration in range(100):
         has_cert = random.choice([True, False])
@@ -292,8 +294,7 @@ def test_property_9_ssl_redirect_requires_ssl_enabled():
         )
         manager = SSLManager(config)
 
-        ssl_enabled = has_cert and has_key
-        expected_redirect = ssl_enabled and redirect_flag
+        expected_redirect = redirect_flag
 
         if manager.ssl_redirect_enabled != expected_redirect:
             errmsg = (

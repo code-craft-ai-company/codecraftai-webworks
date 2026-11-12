@@ -10,6 +10,7 @@ import json
 import os
 import tempfile
 
+from ccai.webworks.wsgi.constants import DEFAULT_MAX_REQUEST_BODY_SIZE
 from ccai.webworks.wsgi.serverconfig import ServerConfig, ConfigurationError
 
 
@@ -779,3 +780,211 @@ def test_to_json_returns_valid_json():
     
     return
 
+
+
+# =============================================================================
+# Tests for the request line limit and the default request body limit
+# =============================================================================
+
+def test_serverconfig_default_max_request_size_is_a_limit():
+    """
+        Test that request bodies are limited by default and not unlimited.
+    """
+    config = ServerConfig()
+    
+    if config.max_request_size != DEFAULT_MAX_REQUEST_BODY_SIZE:
+        errmsg = f"Expected default max_request_size {DEFAULT_MAX_REQUEST_BODY_SIZE}, got {config.max_request_size}"
+        raise AssertionError(errmsg)
+    
+    if config.max_request_size <= 0:
+        errmsg = "Expected the default max_request_size to be a limit"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_serverconfig_default_max_request_line():
+    """
+        Test that ServerConfig has a default limit for the request line.
+    """
+    config = ServerConfig()
+    
+    if config.max_request_line != 8192:
+        errmsg = f"Expected default max_request_line 8192, got {config.max_request_line}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_serverconfig_validate_rejects_negative_max_request_line():
+    """
+        Test that validate refuses a negative request line limit.
+    """
+    config = ServerConfig(max_request_line=-1)
+    
+    raised = False
+    try:
+        config.validate()
+    except ConfigurationError:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected ConfigurationError for a negative max_request_line"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_serverconfig_from_environ_reads_max_request_line():
+    """
+        Test that the request line limit can be set from the environment.
+    """
+    original = os.environ.get("WSGI_SERVER_MAX_REQUEST_LINE")
+    os.environ["WSGI_SERVER_MAX_REQUEST_LINE"] = "4096"
+    
+    try:
+        config = ServerConfig.from_environ()
+    finally:
+        if original is None:
+            del os.environ["WSGI_SERVER_MAX_REQUEST_LINE"]
+        else:
+            os.environ["WSGI_SERVER_MAX_REQUEST_LINE"] = original
+    
+    if config.max_request_line != 4096:
+        errmsg = f"Expected max_request_line 4096 from the environment, got {config.max_request_line}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_serverconfig_from_file_reads_max_request_line():
+    """
+        Test that the request line limit can be set from a configuration file.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        config_path = os.path.join(tmpdir, "server.json")
+        
+        with open(config_path, "w", encoding="utf-8") as config_file:
+            json.dump({"max_request_line": 2048}, config_file)
+        
+        config = ServerConfig.from_file(config_path)
+    
+    if config.max_request_line != 2048:
+        errmsg = f"Expected max_request_line 2048 from the file, got {config.max_request_line}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_serverconfig_as_dict_includes_max_request_line():
+    """
+        Test that as_dict reports the request line limit.
+    """
+    config = ServerConfig(max_request_line=1024)
+    
+    config_dict = config.as_dict()
+    
+    if config_dict.get("max_request_line") != 1024:
+        errmsg = f"Expected max_request_line 1024 in as_dict, got {config_dict.get('max_request_line')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_serverconfig_max_requests_defaults_to_no_recycling():
+    """
+        Workers are not recycled unless max_requests is set.
+    """
+    config = ServerConfig()
+    
+    if config.max_requests != 0 or config.max_requests_jitter != 0:
+        errmsg = f"Expected max_requests 0 and jitter 0, got {config.max_requests} and {config.max_requests_jitter}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_serverconfig_validate_rejects_negative_max_requests():
+    """
+        Negative max_requests and max_requests_jitter are refused.
+    """
+    for values in ({"max_requests": -1}, {"max_requests_jitter": -1}):
+        try:
+            ServerConfig(**values).validate()
+        except ConfigurationError:
+            continue
+        errmsg = f"Expected ConfigurationError for {values}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_serverconfig_max_requests_from_environ_file_and_dict():
+    """
+        max_requests and its jitter are read from the environment and files
+        and written by as_dict.
+    """
+    saved = {key: os.environ.get(key) for key in ("WSGI_SERVER_MAX_REQUESTS", "WSGI_SERVER_MAX_REQUESTS_JITTER")}
+    
+    try:
+        os.environ["WSGI_SERVER_MAX_REQUESTS"] = "500"
+        os.environ["WSGI_SERVER_MAX_REQUESTS_JITTER"] = "50"
+        from_environ = ServerConfig.from_environ()
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as config_file:
+        json.dump({"max_requests": 7, "max_requests_jitter": 2}, config_file)
+        config_path = config_file.name
+    
+    try:
+        from_file = ServerConfig.from_file(config_path)
+    finally:
+        os.remove(config_path)
+    
+    as_dict = ServerConfig(max_requests=9).as_dict()
+    
+    if (from_environ.max_requests, from_environ.max_requests_jitter) != (500, 50):
+        errmsg = f"Expected 500/50 from the environment, got {from_environ.max_requests}/{from_environ.max_requests_jitter}"
+        raise AssertionError(errmsg)
+    
+    if (from_file.max_requests, from_file.max_requests_jitter) != (7, 2):
+        errmsg = f"Expected 7/2 from the file, got {from_file.max_requests}/{from_file.max_requests_jitter}"
+        raise AssertionError(errmsg)
+    
+    if as_dict.get("max_requests") != 9 or "max_requests_jitter" not in as_dict:
+        errmsg = f"Expected max_requests in as_dict, got {as_dict}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_serverconfig_gevent_worker_class_needs_gevent():
+    """
+        The gevent worker class validates only when gevent is installed.
+    """
+    from ccai.webworks.wsgi.serverconfig import is_gevent_available
+    
+    config = ServerConfig(worker_class="gevent")
+    
+    try:
+        config.validate()
+        refused = False
+    except ConfigurationError as err:
+        refused = True
+        message = str(err)
+    
+    if is_gevent_available():
+        if refused:
+            errmsg = "Expected the gevent worker class to validate with gevent installed"
+            raise AssertionError(errmsg)
+    else:
+        if not refused or "gevent" not in message:
+            errmsg = "Expected a ConfigurationError naming gevent when it is not installed"
+            raise AssertionError(errmsg)
+    
+    return

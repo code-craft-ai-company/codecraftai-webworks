@@ -100,7 +100,7 @@ def test_cors_preflight_returns_204_without_calling_handler(origin, num_allowed)
     request = Request(
         method="OPTIONS",
         path="/test",
-        headers={"Origin": origin}
+        headers={"Origin": origin, "Access-Control-Request-Method": "POST"}
     )
 
     handler_called = [False]
@@ -141,7 +141,7 @@ def test_cors_preflight_wildcard_returns_204(max_age):
     request = Request(
         method="OPTIONS",
         path="/anything",
-        headers={"Origin": "http://any-origin.example.com"}
+        headers={"Origin": "http://any-origin.example.com", "Access-Control-Request-Method": "POST"}
     )
 
     handler_called = [False]

@@ -27,7 +27,6 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 
-import asyncio
 import logging
 import secrets
 import time
@@ -37,13 +36,15 @@ from typing import Any, Dict, List, Optional
 
 from ccai.webworks.authentication.basic import IdentityProvider
 from ccai.webworks.authentication.core import AuthenticationContext, Principal
+from ccai.webworks.authentication.session import InMemorySessionStore
 from ccai.webworks.authentication.blueprints.responses import AuthError
 from ccai.webworks.authentication.blueprints.schemas import (
     SessionLoginRequest,
     SessionInfo
 )
 from ccai.webworks.authentication.blueprints.security import (
-    SecurityBlueprint
+    SecurityBlueprint,
+    run_async as _shared_run_async
 )
 from ccai.webworks.endpoints.doc import Doc
 
@@ -106,49 +107,38 @@ def _run_async(coro: Any) -> Any:
         Run an asynchronous coroutine synchronously, regardless of
         whether the calling thread already has a running event loop.
 
-        Uvicorn / Hypercorn workers always have a running loop on the
-        request-handling thread, so the naive pattern
-        ``asyncio.get_event_loop().run_until_complete(coro)`` raises
-        ``RuntimeError: This event loop is already running``. When a
-        running loop is detected this helper offloads the coroutine
-        to a fresh worker thread with its own loop and blocks on the
-        thread's result; the sync caller observes a normal return
-        value with no nested-loop interleaving.
+        Delegates to
+        :func:`ccai.webworks.authentication.blueprints.security.run_async`,
+        which drives the coroutine on the application's event loop when
+        the handler was offloaded from it.
 
         :param coro: The coroutine to execute.
 
         :returns: The result of the coroutine.
     """
-    try:
-        running_loop = asyncio.get_running_loop()
-    except RuntimeError:
-        running_loop = None
-
-    if running_loop is None:
-        # No running loop on this thread — drive the coroutine here
-        # with a fresh loop.
-        result = asyncio.run(coro)
-        return result
-
-    # A running loop is present (the typical ASGI case). Offload to
-    # a worker thread that owns its own loop so we never recurse
-    # into the live loop.
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(asyncio.run, coro)
-        result = future.result()
-
+    result = _shared_run_async(coro)
     return result
 
 
 class SessionStore:
     """
-        Abstract base class for session persistence.
+        Legacy abstract base class for blueprint-only session persistence.
+
+        This record-oriented contract stores the principal identifier
+        only, so a session kept in such a store cannot be turned back
+        into an authenticated request by
+        :class:`ccai.webworks.authentication.session.SessionAuthenticator`.
+        It remains supported for the blueprint's own endpoints.
+
+        New code should configure :attr:`SessionAuthBlueprint.session_store`
+        with a store that follows
+        :class:`ccai.webworks.authentication.session.SessionStore` (for
+        example :class:`InMemorySessionStore`), which persists the full
+        :class:`Principal` and is the store the authenticator reads. That
+        is also what the blueprint uses when no store is configured.
 
         Subclasses must implement all methods to provide session storage
-        and retrieval. The default :class:`SessionAuthBlueprint` uses an
-        in-memory dictionary when no store is configured.
+        and retrieval.
 
         Each session is represented as a dictionary with the following keys:
             - ``session_id``: Unique session identifier string.
@@ -241,9 +231,16 @@ class SessionAuthBlueprint(SecurityBlueprint):
             identity_provider: The :class:`IdentityProvider` used for
                                credential validation. Must be set before
                                the login endpoint can process requests.
-            session_store: Optional :class:`SessionStore` for persisting
-                           sessions. When None, sessions are stored in an
-                           in-memory dictionary.
+            session_store: Optional store for persisting sessions. A
+                           store that follows
+                           :class:`ccai.webworks.authentication.session.SessionStore`
+                           keeps the full principal and is shared with
+                           :class:`SessionAuthenticator`; a subclass of
+                           this module's legacy :class:`SessionStore`
+                           is still accepted. When None, an
+                           :class:`InMemorySessionStore` private to the
+                           blueprint class is used (see
+                           :meth:`get_session_store`).
             session_duration: Default session lifetime in seconds. Defaults
                               to 3600 (1 hour).
             remember_me_duration: Extended session lifetime in seconds when
@@ -263,7 +260,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
     tags: List[str] = ["Authentication", "Session"]
 
     identity_provider: Optional[IdentityProvider] = None
-    session_store: Optional[SessionStore] = None
+    session_store: Optional[Any] = None
     session_duration: int = 3600
     remember_me_duration: int = 86400 * 30
     cookie_name: str = "session_id"
@@ -300,8 +297,96 @@ class SessionAuthBlueprint(SecurityBlueprint):
     COOKIE_HEADER_NAME: str = "Cookie"
     SET_COOKIE_HEADER: str = "Set-Cookie"
 
-    # In-memory fallback store when no session_store is configured
-    _memory_store: Dict[str, Dict[str, Any]] = {}
+    # Session data key under which the authentication scheme that
+    # created the session is recorded.
+    SESSION_DATA_SCHEME_KEY: str = "scheme"
+
+    @classmethod
+    def get_session_store(cls) -> Any:
+        """
+            Get the store the blueprint keeps sessions in.
+
+            Returns the configured :attr:`session_store`, or an
+            :class:`InMemorySessionStore` that belongs to this blueprint
+            class alone (a subclass gets its own). Hand the same store to
+            :class:`ccai.webworks.authentication.session.SessionAuthenticator`
+            so the cookie a login sets authenticates later requests::
+
+                SessionAuthenticator(
+                    session_store=SiteSession.get_session_store(),
+                    cookie_name=SiteSession.cookie_name
+                )
+
+            :returns: The session store in use.
+        """
+        if cls.session_store is not None:
+            return cls.session_store
+
+        store = cls.__dict__.get("_default_session_store")
+        if store is None:
+            store = InMemorySessionStore(
+                default_expiration=cls.session_duration,
+                max_sessions=cls.MEMORY_STORE_MAX_ENTRIES
+            )
+            cls._default_session_store = store
+            cls.note_memory_fallback("session_store")
+
+        return store
+
+    @classmethod
+    def _uses_legacy_store(cls) -> bool:
+        """
+            Check whether the configured store follows the legacy,
+            record-oriented :class:`SessionStore` contract.
+
+            :returns: True for a legacy store, False for a store that
+                      follows the authenticator's protocol.
+        """
+        rtnval = isinstance(cls.session_store, SessionStore)
+        return rtnval
+
+    @classmethod
+    def _parse_expiry(cls, expires_at: Any) -> Optional[datetime]:
+        """
+            Parse a stored ``expires_at`` value into an aware datetime.
+
+            A timestamp without a timezone (common after a database round
+            trip) is taken to be UTC.
+
+            :param expires_at: An ISO 8601 string or a datetime.
+
+            :returns: The aware datetime, or None if the value cannot be
+                      interpreted.
+        """
+        expires_dt = None
+
+        if isinstance(expires_at, datetime):
+            expires_dt = expires_at
+        elif isinstance(expires_at, str):
+            try:
+                expires_dt = datetime.fromisoformat(expires_at)
+            except ValueError:
+                expires_dt = None
+
+        if expires_dt is not None and expires_dt.tzinfo is None:
+            expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+
+        return expires_dt
+
+    @classmethod
+    def _isoformat(cls, value: Any) -> Optional[str]:
+        """
+            Render a timestamp from a session record for a response.
+
+            :param value: A datetime, an ISO 8601 string or None.
+
+            :returns: The ISO 8601 string, or None.
+        """
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value)
 
     @classmethod
     def _generate_session_id(cls) -> str:
@@ -475,12 +560,16 @@ class SessionAuthBlueprint(SecurityBlueprint):
             return response
 
         # Extract credentials from request body
-        body = request.json()
+        body = cls.read_request_data(request)
+        if body is None:
+            response = cls.invalid_body_response()
+            return response
+
         username = body.get("username")
         password = body.get("password")
-        remember_me = body.get("remember_me", False)
+        remember_me = body.get("remember_me", False) is True
 
-        if username is None or password is None:
+        if not isinstance(username, str) or not isinstance(password, str):
             error = AuthError(
                 error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Username and password required"
@@ -512,9 +601,15 @@ class SessionAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=500)
             return response
 
+        throttled_response = cls.check_login_throttle(request, username)
+        if throttled_response is not None:
+            return throttled_response
+
         principal = _run_async(
             cls.identity_provider.validate_credentials(username, password)
         )
+
+        cls.record_login_attempt(request, username, principal is not None)
 
         if principal is None:
             error = AuthError(
@@ -612,24 +707,17 @@ class SessionAuthBlueprint(SecurityBlueprint):
         else:
             duration = cls.session_duration
 
-        session_id = cls._generate_session_id()
-        now = datetime.now(tz=timezone.utc)
-        created_at = now.isoformat()
-        last_accessed = created_at
-        expires_ts = time.time() + duration
-        expires_at = datetime.fromtimestamp(
-            expires_ts, tz=timezone.utc
-        ).isoformat()
+        if cls._uses_legacy_store():
+            # Legacy record-oriented store: only the principal id is kept
+            session_id = cls._generate_session_id()
+            now = datetime.now(tz=timezone.utc)
+            created_at = now.isoformat()
+            last_accessed = created_at
+            expires_ts = time.time() + duration
+            expires_at = datetime.fromtimestamp(
+                expires_ts, tz=timezone.utc
+            ).isoformat()
 
-        session_data = {
-            "session_id": session_id,
-            "principal_id": principal.identifier,
-            "created_at": created_at,
-            "expires_at": expires_at,
-            "last_accessed": last_accessed,
-        }
-
-        if cls.session_store is not None:
             _run_async(
                 cls.session_store.create_session(
                     session_id=session_id,
@@ -640,12 +728,30 @@ class SessionAuthBlueprint(SecurityBlueprint):
                 )
             )
         else:
-            cls._memory_store[session_id] = session_data
+            # The session is created through the store protocol that
+            # SessionAuthenticator reads, with the full principal, so
+            # the cookie authenticates later requests.
+            session_values: Dict[str, Any] = dict(attributes)
+            session_values[cls.SESSION_DATA_SCHEME_KEY] = scheme
+
+            session = _run_async(
+                cls.get_session_store().create_session(
+                    principal=principal,
+                    expires_in=duration,
+                    data=session_values
+                )
+            )
+
+            session_id = session.session_id
+            created_at = cls._isoformat(session.created_at)
+            last_accessed = cls._isoformat(session.last_accessed)
+            expires_at = cls._isoformat(session.expires_at)
 
         cookie_header = cls._build_cookie_header(session_id, duration)
 
+        # The session id travels only in the HttpOnly cookie. Echoing it
+        # in the body would hand it to any script running in the page.
         response_body = {
-            "session_id": session_id,
             "principal_id": principal.identifier,
             "created_at": created_at,
             "expires_at": expires_at,
@@ -703,10 +809,7 @@ class SessionAuthBlueprint(SecurityBlueprint):
 
         if session_id is not None:
             # Invalidate the session in the store
-            if cls.session_store is not None:
-                _run_async(cls.session_store.delete_session(session_id))
-            else:
-                cls._memory_store.pop(session_id, None)
+            _run_async(cls.get_session_store().delete_session(session_id))
 
         # Build the clear-cookie header
         clear_cookie = cls._build_clear_cookie_header()
@@ -768,13 +871,10 @@ class SessionAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=401)
             return response
 
+        session_store = cls.get_session_store()
+
         # Look up the session
-        if cls.session_store is not None:
-            session_data = _run_async(
-                cls.session_store.get_session(session_id)
-            )
-        else:
-            session_data = cls._memory_store.get(session_id)
+        session_data = _run_async(session_store.get_session(session_id))
 
         if session_data is None:
             error = AuthError(
@@ -782,58 +882,67 @@ class SessionAuthBlueprint(SecurityBlueprint):
                 error_description="Session not found or expired"
             )
             response = cls.format_error(error, status_code=401)
+            response["headers"] = {
+                cls.SET_COOKIE_HEADER: cls._build_clear_cookie_header()
+            }
             return response
 
-        # Check expiration
-        expires_at = session_data.get("expires_at")
-        if expires_at is not None:
-            now = datetime.now(tz=timezone.utc)
-            try:
-                expires_dt = datetime.fromisoformat(expires_at)
-                if now > expires_dt:
-                    # Session has expired — remove it
-                    if cls.session_store is not None:
-                        _run_async(
-                            cls.session_store.delete_session(session_id)
-                        )
-                    else:
-                        cls._memory_store.pop(session_id, None)
+        is_legacy_record = isinstance(session_data, dict)
 
-                    error = AuthError(
-                        error=cls.SESSION_EXPIRED_ERROR_CODE,
-                        error_description="Session has expired"
+        # Check expiration. A session whose expiry cannot be read is
+        # treated as expired rather than as valid forever.
+        if is_legacy_record:
+            expires_at = session_data.get("expires_at")
+            is_expired = False
+            if expires_at is not None:
+                expires_dt = cls._parse_expiry(expires_at)
+                if expires_dt is None:
+                    logger.warning(
+                        "Session info: unreadable expires_at=%r for session=%s; "
+                        "treating the session as expired",
+                        expires_at,
+                        _session_id_prefix(session_id),
                     )
-                    response = cls.format_error(error, status_code=401)
-                    return response
-            except (ValueError, TypeError):
-                # Stored expires_at is malformed (legacy session, store
-                # corruption, clock-skew round-tripping issues). The
-                # session is salvageable but the operator wants to know
-                # the store is producing bad timestamps.
-                logger.warning(
-                    "Session info: failed to parse expires_at=%r for session=%s; "
-                    "skipping expiry check",
-                    expires_at,
-                    _session_id_prefix(session_id),
-                )
+                    is_expired = True
+                else:
+                    is_expired = datetime.now(tz=timezone.utc) > expires_dt
+        else:
+            is_expired = session_data.is_expired
+
+        if is_expired:
+            # Session has expired — remove it and clear the cookie
+            _run_async(session_store.delete_session(session_id))
+            error = AuthError(
+                error=cls.SESSION_EXPIRED_ERROR_CODE,
+                error_description="Session has expired"
+            )
+            response = cls.format_error(error, status_code=401)
+            response["headers"] = {
+                cls.SET_COOKIE_HEADER: cls._build_clear_cookie_header()
+            }
+            return response
 
         # Renew session — update last_accessed timestamp
         now_str = datetime.now(tz=timezone.utc).isoformat()
-
-        if cls.session_store is not None:
+        if is_legacy_record:
             _run_async(
-                cls.session_store.update_last_accessed(session_id, now_str)
+                session_store.update_last_accessed(session_id, now_str)
             )
+            principal_id = session_data.get("principal_id")
+            created_at = cls._isoformat(session_data.get("created_at"))
+            expires_at = cls._isoformat(session_data.get("expires_at"))
         else:
-            if session_id in cls._memory_store:
-                cls._memory_store[session_id]["last_accessed"] = now_str
+            _run_async(session_store.update_session(session_id))
+            principal_id = session_data.principal_id
+            created_at = cls._isoformat(session_data.created_at)
+            expires_at = cls._isoformat(session_data.expires_at)
 
-        # Build response body
+        # Build response body. The session id stays in the HttpOnly
+        # cookie and is not repeated here.
         response_body = {
-            "session_id": session_data.get("session_id"),
-            "principal_id": session_data.get("principal_id"),
-            "created_at": session_data.get("created_at"),
-            "expires_at": session_data.get("expires_at"),
+            "principal_id": principal_id,
+            "created_at": created_at,
+            "expires_at": expires_at,
             "last_accessed": now_str,
         }
 

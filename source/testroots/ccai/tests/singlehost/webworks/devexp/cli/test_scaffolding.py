@@ -533,3 +533,205 @@ def test_execute_with_webapp_template():
         shutil.rmtree(temp_dir)
 
     return
+
+
+# =============================================================================
+# Tests That the Scaffolded Projects Work
+# =============================================================================
+
+_SCAFFOLD_PROBE = """
+import json
+import sys
+
+sys.path.insert(0, ".")
+
+from ccai.webworks.devexp.testing.testclient import TestClient
+
+import app as application
+
+client = TestClient(application.app)
+
+results = {}
+for path in json.loads(sys.argv[1]):
+    response = client.get(path)
+    results[path] = [response.status_code, response.text]
+
+client.close()
+
+print("RESULTS=" + json.dumps(results))
+"""
+
+
+def _request_scaffolded_project(template_name, paths):
+    """
+        Generate a project, import its app.py in a child process and
+        request the given paths from it.
+
+        The child process is needed because a scaffolded application
+        establishes the process-global web application persona.
+
+        :returns: A dictionary of path to [status_code, body_text].
+    """
+    import json
+    import subprocess
+    import sys
+
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        project_path = os.path.join(temp_dir, "demo-project")
+        create_project_structure(project_path, template_name)
+
+        completed = subprocess.run(
+            [sys.executable, "-c", _SCAFFOLD_PROBE, json.dumps(paths)],
+            cwd=project_path,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if completed.returncode != 0:
+            errmsg = "The scaffolded '{}' project failed to import or serve:{}{}".format(
+                template_name, os.linesep, completed.stderr[-2000:]
+            )
+            raise AssertionError(errmsg)
+
+        results = None
+        for line in completed.stdout.splitlines():
+            if line.startswith("RESULTS="):
+                results = json.loads(line[len("RESULTS="):])
+
+        if results is None:
+            errmsg = "The scaffold probe printed no results: {}".format(completed.stdout[-500:])
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+
+    return results
+
+
+def test_scaffolded_minimal_project_imports_and_serves():
+    """
+        Test that the minimal template generates an app.py that imports
+        and answers a request to its index endpoint.
+    """
+    results = _request_scaffolded_project("minimal", ["/"])
+
+    status_code, body = results["/"]
+
+    if status_code != 200:
+        errmsg = "Expected 200 from '/', got {}: {}".format(status_code, body[:200])
+        raise AssertionError(errmsg)
+
+    if "Welcome to demo-project" not in body:
+        errmsg = "Expected the welcome message in the body, got: {}".format(body[:200])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_scaffolded_api_project_imports_and_serves():
+    """
+        Test that the api template generates an application whose health
+        endpoint and items blueprint both answer.
+    """
+    results = _request_scaffolded_project("api", ["/api/health", "/api/items/list"])
+
+    if results["/api/health"][0] != 200:
+        errmsg = "Expected 200 from '/api/health', got {}".format(results["/api/health"])
+        raise AssertionError(errmsg)
+
+    if results["/api/items/list"][0] != 200 or "Widget" not in results["/api/items/list"][1]:
+        errmsg = "Expected the sample items from '/api/items/list', got {}".format(results["/api/items/list"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_scaffolded_webapp_project_imports_and_serves():
+    """
+        Test that the webapp template generates an application that
+        renders its template and serves its static asset.
+    """
+    results = _request_scaffolded_project("webapp", ["/", "/static/site.css", "/static/../app.py"])
+
+    if results["/"][0] != 200 or "<h1>demo-project</h1>" not in results["/"][1]:
+        errmsg = "Expected the rendered index page from '/', got {}".format(results["/"])
+        raise AssertionError(errmsg)
+
+    if results["/static/site.css"][0] != 200 or "font-family" not in results["/static/site.css"][1]:
+        errmsg = "Expected the stylesheet from '/static/site.css', got {}".format(results["/static/site.css"])
+        raise AssertionError(errmsg)
+
+    if results["/static/../app.py"][0] == 200:
+        errmsg = "The static handler served a file outside the static directory."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_webapp_asset_directories_are_not_packages():
+    """
+        Test that templates/ and static/ hold assets and no __init__.py.
+    """
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        project_path = os.path.join(temp_dir, "webapp-project")
+        create_project_structure(project_path, "webapp")
+
+        for asset_dir in ["templates", "static"]:
+            init_path = os.path.join(project_path, asset_dir, "__init__.py")
+            if os.path.exists(init_path):
+                errmsg = "Did not expect an __init__.py in the '{}' directory.".format(asset_dir)
+                raise AssertionError(errmsg)
+
+        if os.path.isfile(os.path.join(project_path, "templates", "index.html")) is not True:
+            errmsg = "Expected templates/index.html to be generated."
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+
+    return
+
+
+def test_webapp_app_differs_from_api_app():
+    """
+        Test that the webapp template's app.py is not a copy of the api one.
+    """
+    from ccai.webworks.devexp.cli.scaffolding import APP_TEMPLATES
+
+    if APP_TEMPLATES["webapp"] == APP_TEMPLATES["api"]:
+        errmsg = "Expected the webapp app.py to differ from the api app.py."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_create_project_structure_rejects_unsafe_project_name():
+    """
+        Test that a project name that could break out of a string
+        literal is rejected before anything is written.
+    """
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        project_path = os.path.join(temp_dir, 'bad"name')
+
+        raised = False
+        try:
+            create_project_structure(project_path, "minimal")
+        except ValueError:
+            raised = True
+
+        if raised is not True:
+            errmsg = "Expected ValueError for an unsafe project name."
+            raise AssertionError(errmsg)
+
+        if os.path.exists(project_path):
+            errmsg = "Expected no directory to be created for an unsafe project name."
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+
+    return

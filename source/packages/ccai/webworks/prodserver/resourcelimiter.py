@@ -9,6 +9,8 @@
 
 import logging
 import os
+import shutil
+import sys
 import tempfile
 from typing import TYPE_CHECKING, Dict, Optional
 
@@ -359,25 +361,27 @@ class ResourceLimiter:
         """
         return list(self._warnings)
 
-    def setup_worker_tmp_dir(self) -> Optional[str]:
+    def setup_worker_tmp_dir(self) -> str:
         """
             Set up the worker temporary directory.
 
-            Creates a temporary directory for worker use. If the server
-            configuration does not specify a worker temp directory, a
-            system default temporary directory is created.
+            Creates a new temporary directory for the worker processes to
+            share (the production server keeps the metrics snapshots of the
+            workers there). It is created inside the configured
+            ``worker_tmp_dir``, or in the system temporary directory when
+            none is configured.
 
-            :returns: The path to the temporary directory, or None on failure.
+            :returns: The path to the temporary directory.
+
+            :raises OSError: If the directory cannot be created.
         """
-        try:
-            tmp_dir = tempfile.mkdtemp(prefix="webworks_worker_")
-            self._worker_tmp_dir = tmp_dir
-            _logger.info("Worker temp directory created: %s", tmp_dir)
-        except OSError as exc:
-            _logger.error("Failed to create worker temp directory: %s", exc)
-            return None
+        parent_dir = self._config.worker_tmp_dir
 
-        return self._worker_tmp_dir
+        tmp_dir = tempfile.mkdtemp(prefix="webworks_worker_", dir=parent_dir)
+        self._worker_tmp_dir = tmp_dir
+        _logger.info("Worker temp directory created: %s", tmp_dir)
+
+        return tmp_dir
 
     def cleanup_worker_tmp_dir(self) -> None:
         """
@@ -388,7 +392,7 @@ class ResourceLimiter:
         """
         if self._worker_tmp_dir is not None and os.path.isdir(self._worker_tmp_dir):
             try:
-                os.rmdir(self._worker_tmp_dir)
+                shutil.rmtree(self._worker_tmp_dir)
                 _logger.info(
                     "Worker temp directory removed: %s",
                     self._worker_tmp_dir,
@@ -431,3 +435,36 @@ class ResourceLimiter:
         self._warnings.clear()
 
         return
+
+
+def current_memory_usage() -> int:
+    """
+        Get the resident memory of the current process.
+
+        Reads ``/proc/self/statm`` where it exists (Linux). Elsewhere the
+        peak resident size from ``getrusage`` is used, which only grows, so a
+        memory limit still catches a worker that grew past it.
+
+        :returns: Resident memory in bytes, 0 when the platform reports none.
+    """
+    statm_path = "/proc/self/statm"
+
+    if os.path.exists(statm_path):
+        with open(statm_path, "r", encoding="ascii") as statm_file:
+            fields = statm_file.read().split()
+        rtnval = int(fields[1]) * os.sysconf("SC_PAGE_SIZE")
+        return rtnval
+
+    try:
+        import resource
+    except ImportError:
+        # Windows has no resource module and no cheap way to read this
+        return 0
+
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == "darwin":
+        rtnval = int(peak)
+    else:
+        rtnval = int(peak) * 1024
+
+    return rtnval

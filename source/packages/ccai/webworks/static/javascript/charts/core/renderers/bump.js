@@ -7,77 +7,51 @@
  *   "bump" — rank chart (rank on y-axis, inverted so rank 1 is at top)
  *
  * ctx.attrs recognised:
- *   (none beyond the standard ctx fields)
+ *   x-scale   "category" (default) | "auto" | "time" | "linear" (line.js
+ *             rules). Ranks are per period, so every x value gets its own
+ *             evenly spaced slot by default -- "2020", "2021" are seasons,
+ *             not instants on a time axis; set x-scale="auto" or "time" for
+ *             a proportional time axis.
  *
- * Series data: series[].points [{x, y}] where y is an integer rank (1 = best).
- * x values are years, quarters, or any ordered category.
+ * Series data: series[].points [{x, y}] or series[].values [] where y is a
+ * rank (1 = best). x values are years, quarters, dates or any ordered
+ * category.
  *
- * The rank axis is inverted (rank 1 at top). Series are drawn as smooth
- * S-curves between rank dots at each time position.
- * End-of-line labels are nudged apart to avoid overlap when two series
- * share the same final rank.
+ * Integer ranks spanning at most 30 places use an inverted axis with one
+ * gridline per rank (rank 1 at the top). Any other y data (raw values,
+ * fractions, wide ranges) uses a normal value axis with nice ticks. Series
+ * are drawn as S-curves between their dots; a null rank (not ranked in that
+ * period) breaks the line. Series that share a rank in a period have their
+ * dots set slightly apart so each stays visible and clickable. Each series
+ * is labelled next to its own last point, in the text colour with a leader
+ * in the series colour; labels are nudged apart within the plot.
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber, smoothPath } from "../svgdraw.js";
-import { linearScale, pointScale, niceTicks } from "../scales.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
+import { niceTicks } from "../scales.js";
+import { LABEL_FONT_SIZE, textWidth, truncateText, nudgeLabels } from "./bar.js";
+import { trendSeries, trendFrame, sortedPixels, pointTargets } from "./line.js";
+
+/* The most rank places that still get one gridline each. */
+const RANK_GRID_LIMIT = 30;
+
+/* Horizontal distance between the dots of tied series (px). */
+const TIE_SPREAD = 7;
+
+const LABEL_GAP = 14;
 
 
-function _getXY(ser, categories) {
+function _bumpSegment(p1, p2) {
   /*
-   * Flatten a series to [{x (string), y (number)}].
+   * A horizontal-tangent cubic Bezier (S-curve) from p1 to p2, without the
+   * leading move.
    */
-  const xy = []
-  if (ser.points !== undefined && ser.points !== null && ser.points.length > 0) {
-    for (let p = 0; p < ser.points.length; p = p + 1) {
-      const pt = ser.points[p]
-      xy.push({ x: String(pt.x), y: typeof pt.y === "number" ? pt.y : null })
-    }
-  } else if (ser.values !== undefined && ser.values !== null) {
-    for (let v = 0; v < ser.values.length; v = v + 1) {
-      const cat = categories[v] !== undefined ? String(categories[v]) : String(v)
-      xy.push({ x: cat, y: typeof ser.values[v] === "number" ? ser.values[v] : null })
-    }
-  }
-  return xy
-}
-
-
-function _bumpPath(p1, p2) {
-  /*
-   * Build a horizontal-monotone cubic Bezier (S-curve) from pixel point p1 to p2.
-   * Control points are horizontally displaced by half the x distance, keeping
-   * y tangents vertical — the classic bump-chart connector.
-   *
-   * :param p1: {x, y} start pixel point.
-   * :param p2: {x, y} end pixel point.
-   * :returns: Partial SVG path data string (no leading M).
-   */
-  const cx = (p2.x - p1.x) / 2
-  const data = `C${(p1.x + cx).toFixed(2)},${p1.y.toFixed(2)} ` +
-    `${(p2.x - cx).toFixed(2)},${p2.y.toFixed(2)} ` +
+  const half = (p2.x - p1.x) / 2
+  const data = `C${(p1.x + half).toFixed(2)},${p1.y.toFixed(2)} ` +
+    `${(p2.x - half).toFixed(2)},${p2.y.toFixed(2)} ` +
     `${p2.x.toFixed(2)},${p2.y.toFixed(2)}`
   return data
-}
-
-
-function _nudgeLabels(labelInfos, minGap) {
-  /*
-   * Simple greedy nudge to separate overlapping end labels on the y-axis.
-   *
-   * :param labelInfos: Array of {y, label, seriesName} sorted by y.
-   * :param minGap: Minimum pixel gap between label centres.
-   * :returns: Array of {y, label, seriesName} with y adjusted.
-   */
-  const sorted = labelInfos.slice().sort((a, b) => a.y - b.y)
-  for (let i = 1; i < sorted.length; i = i + 1) {
-    const prev = sorted[i - 1]
-    const curr = sorted[i]
-    if (curr.y - prev.y < minGap) {
-      curr.y = prev.y + minGap
-    }
-  }
-  return sorted
 }
 
 
@@ -91,210 +65,174 @@ export function render(ctx) {
   const model = ctx.model
   const root = svgEl("g", { part: "plot" }, [])
 
-  if (model.series.length === 0) {
-    return root
-  }
-
-  /* Normalise all series. */
-  const normSeries = []
-  for (let s = 0; s < model.series.length; s = s + 1) {
-    normSeries.push({
-      name: model.series[s].name,
-      xy: _getXY(model.series[s], model.categories)
-    })
-  }
-
-  /* Collect ordered x labels. */
-  const xLabelSet = []
-  const xLabelSeen = {}
-  for (let s = 0; s < normSeries.length; s = s + 1) {
-    for (let p = 0; p < normSeries[s].xy.length; p = p + 1) {
-      const label = normSeries[s].xy[p].x
-      if (xLabelSeen[label] !== true) {
-        xLabelSet.push(label)
-        xLabelSeen[label] = true
-      }
-    }
-  }
-
-  if (xLabelSet.length === 0) {
-    return root
-  }
-
-  /* Find the rank range across all series. */
-  let rankMin = Infinity
-  let rankMax = -Infinity
-  for (let s = 0; s < normSeries.length; s = s + 1) {
-    for (let p = 0; p < normSeries[s].xy.length; p = p + 1) {
-      const y = normSeries[s].xy[p].y
-      if (y === null) {
+  const list = trendSeries(model)
+  let low = Infinity
+  let high = -Infinity
+  let integers = true
+  for (let s = 0; s < list.length; s = s + 1) {
+    for (let p = 0; p < list[s].points.length; p = p + 1) {
+      const value = list[s].points[p].y
+      if (value === null) {
         continue
       }
-      if (y < rankMin) {
-        rankMin = y
-      }
-      if (y > rankMax) {
-        rankMax = y
-      }
+      low = Math.min(low, value)
+      high = Math.max(high, value)
+      integers = integers === true && Number.isInteger(value) === true
     }
   }
-  if (rankMin === Infinity) {
+  if (low === Infinity) {
     return root
   }
 
-  /* Invert the y domain so rank 1 appears at the top. */
-  const yDomainLow = rankMin
-  const yDomainHigh = rankMax
-
-  const labelColW = 100  /* right-side labels */
-  const margin = { top: 16, right: labelColW, bottom: 32, left: 40 }
-  const plotW = Math.max(ctx.width - margin.left - margin.right, 40)
-  const plotH = Math.max(ctx.height - margin.top - margin.bottom, 40)
-
-  /* Invert: map rankMax -> 0 (top), rankMin -> plotH (bottom). */
-  const xScale = pointScale(xLabelSet, [0, plotW])
-  const yScale = linearScale([yDomainHigh, yDomainLow], [plotH, 0])
-
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
-  root.appendChild(plot)
-
-  /* Horizontal gridlines at each integer rank. */
-  for (let rank = rankMin; rank <= rankMax; rank = rank + 1) {
-    const y = yScale(rank)
-    plot.appendChild(svgEl("line", {
-      x1: 0, y1: y, x2: plotW, y2: y,
-      stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-    }, []))
-    /* Rank label on the left axis. */
-    plot.appendChild(svgEl("text", {
-      x: -8, y: y + 4, "text-anchor": "end",
-      "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-    }, String(rank)))
+  const ranked = integers === true && high - low <= RANK_GRID_LIMIT
+  let frameOptions = null
+  if (ranked === true) {
+    const ranks = []
+    for (let rank = low; rank <= high; rank = rank + 1) {
+      ranks.push(rank)
+    }
+    frameOptions = {
+      yDomain: [low - 0.5, high + 0.5], nice: false, invert: true,
+      yTicks: ranks, yFormat: (value) => String(value)
+    }
+  } else {
+    const span = high === low ? [low - 1, high + 1] : [low, high]
+    frameOptions = { yDomain: span, yTicks: niceTicks(span[0], span[1], 5) }
   }
 
-  /* X-axis category labels. */
-  for (let i = 0; i < xLabelSet.length; i = i + 1) {
-    const label = xLabelSet[i]
-    const x = xScale(label)
-    plot.appendChild(svgEl("text", {
-      x: x, y: plotH + 16, "text-anchor": "middle",
-      "font-size": 11, fill: "var(--mj-text, #14181f)"
-    }, escapeHtml(label)))
+  /* The label column is as wide as the longest name (capped). */
+  let labelWidth = 0
+  for (let s = 0; s < list.length; s = s + 1) {
+    labelWidth = Math.max(labelWidth, textWidth(list[s].name))
+  }
+  const labelColumn = Math.ceil(Math.min(labelWidth, ctx.width * 0.3) + 18)
+  frameOptions.rightExtra = labelColumn
+  frameOptions.xScale = "category"
+  const frame = trendFrame(ctx, list, model, frameOptions)
+  root.appendChild(frame.plot)
+
+  /* Place every point; spread tied dots apart. */
+  const placed = list.map((series) => sortedPixels(series, frame))
+  const ties = new Map()
+  for (let s = 0; s < placed.length; s = s + 1) {
+    for (let p = 0; p < placed[s].length; p = p + 1) {
+      const pixel = placed[s][p]
+      pixel.baseX = pixel.x
+      if (pixel.y === null) {
+        continue
+      }
+      const key = `${pixel.x.toFixed(1)}|${pixel.value}`
+      if (ties.has(key) === false) {
+        ties.set(key, [])
+      }
+      ties.get(key).push(pixel)
+    }
+  }
+  for (const group of ties.values()) {
+    if (group.length < 2) {
+      continue
+    }
+    for (let index = 0; index < group.length; index = index + 1) {
+      group[index].x = group[index].x + (index - (group.length - 1) / 2) * TIE_SPREAD
+    }
   }
 
-  /* Axis baseline. */
-  plot.appendChild(svgEl("line", {
-    x1: 0, y1: plotH, x2: plotW, y2: plotH,
-    stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
-  }, []))
+  const lines = svgEl("g", { part: "lines" }, [])
+  const dots = svgEl("g", { part: "dots" }, [])
+  const labels = svgEl("g", { part: "labels", "aria-hidden": "true" }, [])
+  frame.marks.appendChild(lines)
+  frame.marks.appendChild(dots)
+  frame.marks.appendChild(labels)
 
-  /* Collect end-label positions for collision avoidance. */
   const endLabels = []
+  for (let s = 0; s < list.length; s = s + 1) {
+    const name = list[s].name
+    const color = ctx.colorFor(name)
+    const pixels = placed[s]
 
-  /* Draw each series. */
-  for (let s = 0; s < normSeries.length; s = s + 1) {
-    const ser = normSeries[s]
-    const color = ctx.colorFor(ser.name)
-    const seriesGroup = svgEl("g", { part: "series" }, [])
-
-    /* Build pixel points; skip null ranks. */
-    const pixelPts = []
-    for (let p = 0; p < ser.xy.length; p = p + 1) {
-      const pt = ser.xy[p]
-      if (pt.y === null) {
-        pixelPts.push(null)
+    /* One sub-path per run of ranked periods. */
+    let data = ""
+    let previous = null
+    for (let p = 0; p < pixels.length; p = p + 1) {
+      const pixel = pixels[p]
+      if (pixel.y === null) {
+        previous = null
         continue
       }
-      pixelPts.push({
-        x: xScale(pt.x), y: yScale(pt.y),
-        xLabel: pt.x, yVal: pt.y
-      })
-    }
-
-    /* Draw S-curve segments between consecutive non-null pixel points. */
-    const validSegs = pixelPts.filter((pt) => pt !== null)
-    if (validSegs.length >= 2) {
-      let pathData = `M${validSegs[0].x.toFixed(2)},${validSegs[0].y.toFixed(2)}`
-      for (let p = 1; p < validSegs.length; p = p + 1) {
-        pathData = pathData + " " + _bumpPath(validSegs[p - 1], validSegs[p])
+      if (previous === null) {
+        data = data + `M${pixel.x.toFixed(2)},${pixel.y.toFixed(2)} `
+      } else {
+        data = data + _bumpSegment(previous, pixel) + " "
       }
-      const pathEl = svgEl("path", {
-        d: pathData,
-        fill: "none",
-        stroke: color,
-        "stroke-width": 2.5,
-        "stroke-linecap": "round"
-      }, [])
-      seriesGroup.appendChild(pathEl)
-    } else if (validSegs.length === 1) {
-      /* Single point: still draw a dot. */
+      previous = pixel
+    }
+    if (data !== "") {
+      lines.appendChild(svgEl("path", {
+        d: data.trim(), fill: "none", stroke: color,
+        "stroke-width": 2.5, "stroke-linecap": "round", part: "bump-line", "data-series": name
+      }, []))
     }
 
-    /* Draw rank dots and interactive hit targets. */
-    for (let p = 0; p < pixelPts.length; p = p + 1) {
-      const pt = pixelPts[p]
-      if (pt === null) {
+    const targets = []
+    for (let p = 0; p < pixels.length; p = p + 1) {
+      const pixel = pixels[p]
+      if (pixel.y === null) {
         continue
       }
-
-      const dot = svgEl("circle", {
-        cx: pt.x.toFixed(2), cy: pt.y.toFixed(2), r: 5,
-        fill: color,
-        stroke: "var(--mj-surface, #fff)",
-        "stroke-width": 1.5
-      }, [])
-      seriesGroup.appendChild(dot)
-
-      const hit = svgEl("circle", {
-        cx: pt.x.toFixed(2), cy: pt.y.toFixed(2), r: 8,
-        fill: "transparent",
-        tabindex: "0",
-        role: "img",
-        "aria-label": `${escapeHtml(ser.name)}, ${escapeHtml(pt.xLabel)}: rank ${pt.yVal}`
-      }, [])
-      hit.appendChild(svgEl("title", null,
-        `${ser.name} - ${pt.xLabel}: rank ${pt.yVal}`))
-      const handler = (() => {
-        const capturedSeries = ser.name
-        const capturedX = pt.xLabel
-        const capturedY = pt.yVal
-        return () => {
-          ctx.emit("mj-chart-bump-click", {
-            series: capturedSeries, x: capturedX, rank: capturedY
-          })
-        }
-      })()
-      hit.addEventListener("click", handler)
-      hit.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          handler()
-        }
+      dots.appendChild(svgEl("circle", {
+        cx: pixel.x.toFixed(2), cy: pixel.y.toFixed(2), r: 5,
+        fill: color, stroke: "var(--mj-surface, #fff)", "stroke-width": 1.5, part: "dot"
+      }, []))
+      const xLabel = frame.x.labelOf(pixel.point)
+      const valueText = ranked === true ? `rank ${pixel.value}` : formatNumber(pixel.value)
+      targets.push({
+        x: pixel.x, y: pixel.y,
+        label: `${name}, ${xLabel}: ${valueText}`,
+        detail: { series: name, x: pixel.point.raw !== null ? pixel.point.raw : xLabel, rank: pixel.value }
       })
-      seriesGroup.appendChild(hit)
     }
+    pointTargets(dots, targets, { ctx: ctx, eventName: "mj-chart-bump-click", width: frame.plotW, radius: 8 })
 
-    /* Collect the last valid point for end labelling. */
-    const lastPt = validSegs.length > 0 ? validSegs[validSegs.length - 1] : null
-    if (lastPt !== null) {
-      endLabels.push({ y: lastPt.y, label: ser.name, color: color })
+    const known = pixels.filter((pixel) => pixel.y !== null)
+    if (known.length > 0) {
+      const last = known[known.length - 1]
+      endLabels.push({ x: last.x, baseX: last.baseX, y: last.y, anchorY: last.y, name: name, color: color })
     }
-
-    plot.appendChild(seriesGroup)
   }
 
-  /* Draw end-of-line labels with nudge to avoid overlap. */
-  const nudged = _nudgeLabels(endLabels, 14)
-  for (let i = 0; i < nudged.length; i = i + 1) {
-    const item = nudged[i]
-    plot.appendChild(svgEl("text", {
-      x: plotW + 8,
-      y: item.y + 4,
-      "font-size": 11,
-      fill: item.color
-    }, escapeHtml(item.label)))
+  /* Labels next to each series' own last point, nudged per column. */
+  const columns = new Map()
+  for (let index = 0; index < endLabels.length; index = index + 1) {
+    const key = endLabels[index].baseX.toFixed(0)
+    if (columns.has(key) === false) {
+      columns.set(key, [])
+    }
+    columns.get(key).push(endLabels[index])
+  }
+  for (const column of columns.values()) {
+    nudgeLabels(column, LABEL_GAP, 4, frame.plotH - 4)
+    const labelX = Math.max(...column.map((item) => item.x)) + 12
+    for (let index = 0; index < column.length; index = index + 1) {
+      const item = column[index]
+      const room = frame.plotW + frame.margin.right - labelX - 4
+      if (Math.abs(item.y - item.anchorY) > 2) {
+        labels.appendChild(svgEl("line", {
+          x1: (item.x + 6).toFixed(2), y1: item.anchorY.toFixed(2),
+          x2: (labelX - 2).toFixed(2), y2: item.y.toFixed(2),
+          stroke: item.color, "stroke-width": 1.5
+        }, []))
+      } else {
+        labels.appendChild(svgEl("line", {
+          x1: (item.x + 6).toFixed(2), y1: item.y.toFixed(2),
+          x2: (labelX - 2).toFixed(2), y2: item.y.toFixed(2),
+          stroke: item.color, "stroke-width": 2
+        }, []))
+      }
+      labels.appendChild(svgEl("text", {
+        x: labelX.toFixed(2), y: (item.y + 4).toFixed(2),
+        "font-size": LABEL_FONT_SIZE, fill: "var(--mj-text, #14181f)"
+      }, truncateText(item.name, Math.max(room, 24))))
+    }
   }
 
   return root

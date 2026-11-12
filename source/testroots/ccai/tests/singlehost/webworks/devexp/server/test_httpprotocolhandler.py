@@ -236,8 +236,10 @@ def _encode_chunked(data):
         parts.append(LINE_TERMINATOR)
         offset += chunk_size
 
-    # Terminal chunk
+    # Terminal chunk, followed by the empty line that ends the (empty)
+    # trailer section. Without it the chunked body is not complete.
     parts.append(b"0")
+    parts.append(LINE_TERMINATOR)
     parts.append(LINE_TERMINATOR)
 
     return b"".join(parts)
@@ -685,7 +687,8 @@ def test_property_receive_body_delivery():
         **Validates: Requirements 4.1, 4.2**
 
         For any request body, calling receive should return the full
-        body with more_body=False.
+        body with more_body=False. A further call reports
+        http.disconnect once the client has gone away.
     """
     for _ in range(100):
         body = _random_body(max_size=512)
@@ -711,18 +714,14 @@ def test_property_receive_body_delivery():
                 errmsg = "Expected more_body=False, got {}".format(msg["more_body"])
                 raise AssertionError(errmsg)
 
-            # Second call should return empty body with more_body=False
+            # The client disconnects; the next receive reports it.
+            handler.connection_lost(None)
+
             msg2 = await handler._receive()
 
-            if msg2["body"] != b"":
-                errmsg = "Expected empty body on second receive, got {} bytes".format(
-                    len(msg2["body"])
-                )
-                raise AssertionError(errmsg)
-
-            if msg2["more_body"] is not False:
-                errmsg = "Expected more_body=False on second receive, got {}".format(
-                    msg2["more_body"]
+            if msg2["type"] != "http.disconnect":
+                errmsg = "Expected 'http.disconnect' on second receive, got '{}'".format(
+                    msg2["type"]
                 )
                 raise AssertionError(errmsg)
 
@@ -1141,6 +1140,702 @@ def test_send_body_before_start_closes_connection():
 
     if not transport.is_closed:
         errmsg = "Expected transport to be closed when body sent before start"
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Request/Response Exchange Helpers
+# =============================================================================
+
+class _ClosingTransport(_MockTransport):
+    """
+        A mock transport that reports the close back to the protocol,
+        as a real transport does.
+    """
+
+    def __init__(self, handler):
+        super().__init__()
+        self._handler = handler
+
+    def close(self):
+        if not self._closed:
+            self._closed = True
+            self._handler.connection_lost(None)
+
+
+def _exchange(app, segments, debug=False, **handler_kwargs):
+    """
+        Feed request bytes to a handler inside a running loop, one
+        segment at a time, and let the application run to completion.
+
+        :returns: A tuple of (handler, transport).
+    """
+    handler = HTTPProtocolHandler(
+        app=app, server_host="127.0.0.1", server_port=8000, debug=debug, **handler_kwargs
+    )
+    transport = _ClosingTransport(handler)
+    transport._extra["peername"] = ("192.168.1.1", 54321)
+
+    async def drive():
+        handler.connection_made(transport)
+
+        for segment in segments:
+            handler.data_received(segment)
+            # Let the request task run before the next segment arrives.
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+        for _ in range(20):
+            await asyncio.sleep(0)
+
+        handler._cancel_keepalive_timer()
+
+    asyncio.run(drive())
+
+    return handler, transport
+
+
+async def _hello_app(scope, receive, send):
+    """
+        An ASGI app that answers every request with the body 'hello'.
+    """
+    await receive()
+    await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/plain")]})
+    await send({"type": "http.response.body", "body": b"hello"})
+
+
+async def _echo_app(scope, receive, send):
+    """
+        An ASGI app that answers with the request body.
+    """
+    message = await receive()
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": message["body"]})
+
+
+async def _streaming_app(scope, receive, send):
+    """
+        An ASGI app that streams its body in two pieces without a length.
+    """
+    await receive()
+    await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/plain")]})
+    await send({"type": "http.response.body", "body": b"AAA", "more_body": True})
+    await send({"type": "http.response.body", "body": b"BBB", "more_body": True})
+    await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+
+# =============================================================================
+# Unit Tests for Streaming Responses
+# =============================================================================
+
+def test_streaming_response_writes_status_line_and_headers_once():
+    """
+        Test that a response sent in several body messages has one
+        status line and one header block.
+    """
+    _handler, transport = _exchange(_streaming_app, [b"GET /stream HTTP/1.1\r\nHost: x\r\n\r\n"])
+
+    written = transport.written_data
+
+    if written.count(b"HTTP/1.1 200 OK") != 1:
+        errmsg = "Expected exactly one status line, got {}: {!r}".format(
+            written.count(b"HTTP/1.1 200 OK"), written
+        )
+        raise AssertionError(errmsg)
+
+    if written.count(b"content-type: text/plain") != 1:
+        errmsg = "Expected the headers to be written once: {!r}".format(written)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_streaming_response_without_length_uses_chunked_encoding():
+    """
+        Test that a streamed body without Content-Length is framed with
+        Transfer-Encoding: chunked and a terminating chunk.
+    """
+    _handler, transport = _exchange(_streaming_app, [b"GET /stream HTTP/1.1\r\nHost: x\r\n\r\n"])
+
+    head, _separator, body = transport.written_data.partition(b"\r\n\r\n")
+
+    if b"transfer-encoding: chunked" not in head:
+        errmsg = "Expected 'transfer-encoding: chunked' in the response head: {!r}".format(head)
+        raise AssertionError(errmsg)
+
+    if b"content-length" in head:
+        errmsg = "Did not expect a content-length on a chunked response: {!r}".format(head)
+        raise AssertionError(errmsg)
+
+    if body != b"3\r\nAAA\r\n3\r\nBBB\r\n0\r\n\r\n":
+        errmsg = "Unexpected chunked body: {!r}".format(body)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_streaming_response_to_http10_client_is_delimited_by_close():
+    """
+        Test that a streamed body for an HTTP/1.0 client is sent raw and
+        the connection is closed to mark its end.
+    """
+    _handler, transport = _exchange(_streaming_app, [b"GET /stream HTTP/1.0\r\n\r\n"])
+
+    head, _separator, body = transport.written_data.partition(b"\r\n\r\n")
+
+    if b"transfer-encoding" in head:
+        errmsg = "Did not expect chunked encoding for an HTTP/1.0 client: {!r}".format(head)
+        raise AssertionError(errmsg)
+
+    if body != b"AAABBB":
+        errmsg = "Expected the raw body 'AAABBB', got {!r}".format(body)
+        raise AssertionError(errmsg)
+
+    if not transport.is_closed:
+        raise AssertionError("Expected the connection to be closed after the body.")
+
+    return
+
+
+def test_single_body_response_declares_content_length():
+    """
+        Test that a response sent in one body message gets a
+        Content-Length and keeps the connection open.
+    """
+    _handler, transport = _exchange(_hello_app, [b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"])
+
+    head, _separator, body = transport.written_data.partition(b"\r\n\r\n")
+
+    if b"content-length: 5" not in head:
+        errmsg = "Expected 'content-length: 5' in the response head: {!r}".format(head)
+        raise AssertionError(errmsg)
+
+    if body != b"hello":
+        errmsg = "Expected body 'hello', got {!r}".format(body)
+        raise AssertionError(errmsg)
+
+    if transport.is_closed:
+        raise AssertionError("Expected the keep-alive connection to stay open.")
+
+    return
+
+
+def test_head_request_gets_no_body():
+    """
+        Test that the response to a HEAD request carries the headers
+        but no body bytes.
+    """
+    _handler, transport = _exchange(_hello_app, [b"HEAD / HTTP/1.1\r\nHost: x\r\n\r\n"])
+
+    head, _separator, body = transport.written_data.partition(b"\r\n\r\n")
+
+    if body != b"":
+        errmsg = "Expected no body for HEAD, got {!r}".format(body)
+        raise AssertionError(errmsg)
+
+    if b"content-length: 5" not in head:
+        errmsg = "Expected the length of the matching GET in the head: {!r}".format(head)
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Unit Tests for receive() and http.disconnect
+# =============================================================================
+
+def test_receive_waits_instead_of_returning_empty_requests():
+    """
+        Test that a second receive() blocks while the client is connected
+        instead of returning immediately.
+    """
+    handler = _create_handler()
+    _connect_handler(handler)
+    handler._body = b"payload"
+    handler._body_delivered = False
+
+    async def _check():
+        await handler._receive()
+
+        timed_out = False
+        try:
+            await asyncio.wait_for(handler._receive(), timeout=0.05)
+        except asyncio.TimeoutError:
+            timed_out = True
+
+        if timed_out is not True:
+            raise AssertionError("Expected the second receive() to wait for a disconnect.")
+
+    _run_async(_check())
+
+    return
+
+
+def test_receive_reports_disconnect_when_connection_is_lost():
+    """
+        Test that a receive() that is waiting returns http.disconnect
+        when the connection is lost.
+    """
+    handler = _create_handler()
+    _connect_handler(handler)
+    handler._body = b""
+    handler._body_delivered = False
+
+    async def _check():
+        await handler._receive()
+
+        waiting = asyncio.ensure_future(handler._receive())
+        await asyncio.sleep(0)
+
+        if waiting.done():
+            raise AssertionError("Expected receive() to be waiting before the disconnect.")
+
+        handler.connection_lost(None)
+
+        message = await asyncio.wait_for(waiting, timeout=1.0)
+
+        if message["type"] != "http.disconnect":
+            errmsg = "Expected 'http.disconnect', got '{}'".format(message["type"])
+            raise AssertionError(errmsg)
+
+    _run_async(_check())
+
+    return
+
+
+def test_send_after_disconnect_raises():
+    """
+        Test that sending a body after the client disconnected raises,
+        so a stream that never calls receive() still stops.
+    """
+    from ccai.webworks.devexp.server.httpprotocolhandler import ClientDisconnectedError
+
+    handler = _create_handler()
+    _connect_handler(handler)
+
+    async def _check():
+        await handler._send({"type": "http.response.start", "status": 200, "headers": []})
+        handler.connection_lost(None)
+
+        raised = False
+        try:
+            await handler._send({"type": "http.response.body", "body": b"x", "more_body": True})
+        except ClientDisconnectedError:
+            raised = True
+
+        if raised is not True:
+            raise AssertionError("Expected ClientDisconnectedError after the client disconnected.")
+
+    _run_async(_check())
+
+    return
+
+
+# =============================================================================
+# Unit Tests for Chunked Request Bodies
+# =============================================================================
+
+def test_chunked_body_with_terminator_in_later_segment():
+    """
+        Test that the CRLF that ends a chunked body may arrive in a later
+        TCP segment without being taken for the next request line.
+    """
+    segments = [
+        b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n",
+        b"\r\n",
+    ]
+
+    handler, transport = _exchange(_echo_app, segments)
+
+    written = transport.written_data
+
+    if b"400" in written.split(b"\r\n", 1)[0]:
+        errmsg = "Did not expect a 400 response: {!r}".format(written)
+        raise AssertionError(errmsg)
+
+    if not written.endswith(b"abc"):
+        errmsg = "Expected the echoed body 'abc', got {!r}".format(written)
+        raise AssertionError(errmsg)
+
+    if len(handler._buffer) != 0:
+        errmsg = "Expected the chunked terminator to be consumed, buffer holds {!r}".format(bytes(handler._buffer))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_chunked_body_keeps_pipelined_request():
+    """
+        Test that bytes following a chunked body are kept and handled as
+        the next request on the connection.
+    """
+    segments = [
+        b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b"3\r\nabc\r\n0\r\n\r\n"
+        b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\nxyz",
+    ]
+
+    _handler, transport = _exchange(_echo_app, segments)
+
+    written = transport.written_data
+
+    if written.count(b"HTTP/1.1 200 OK") != 2:
+        errmsg = "Expected two responses, got: {!r}".format(written)
+        raise AssertionError(errmsg)
+
+    if not written.endswith(b"xyz"):
+        errmsg = "Expected the second response to echo 'xyz': {!r}".format(written)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_chunked_body_trailers_are_consumed():
+    """
+        Test that trailer fields after the last chunk are consumed with
+        the body.
+    """
+    segments = [
+        b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b"3\r\nabc\r\n0\r\nX-Checksum: 1\r\n\r\n",
+    ]
+
+    handler, transport = _exchange(_echo_app, segments)
+
+    if not transport.written_data.endswith(b"abc"):
+        errmsg = "Expected the echoed body 'abc', got {!r}".format(transport.written_data)
+        raise AssertionError(errmsg)
+
+    if len(handler._buffer) != 0:
+        errmsg = "Expected the trailers to be consumed, buffer holds {!r}".format(bytes(handler._buffer))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_invalid_chunk_size_returns_400():
+    """
+        Test that a malformed chunk size is answered with 400 instead of
+        leaving the request hanging.
+    """
+    segments = [
+        b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nabc\r\n0\r\n\r\n",
+    ]
+
+    _handler, transport = _exchange(_echo_app, segments)
+
+    if not transport.written_data.startswith(b"HTTP/1.1 400"):
+        errmsg = "Expected a 400 response, got {!r}".format(transport.written_data[:60])
+        raise AssertionError(errmsg)
+
+    if not transport.is_closed:
+        raise AssertionError("Expected the connection to be closed after a malformed chunk.")
+
+    return
+
+
+def test_decode_chunked_returns_none_for_incomplete_body():
+    """
+        Test that a chunked body without its terminating empty line is
+        not reported as complete.
+    """
+    handler = _create_handler()
+
+    decoded = handler._decode_chunked(b"3\r\nabc\r\n0\r\n")
+
+    if decoded is not None:
+        errmsg = "Expected None for an incomplete chunked body, got {!r}".format(decoded)
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Unit Tests for Request Body Limits
+# =============================================================================
+
+def test_content_length_over_limit_returns_413():
+    """
+        Test that a Content-Length above the body limit is answered with
+        413 before any body is buffered.
+    """
+    segments = [b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 2048\r\n\r\n"]
+
+    _handler, transport = _exchange(_echo_app, segments, max_body_bytes=1024)
+
+    if not transport.written_data.startswith(b"HTTP/1.1 413"):
+        errmsg = "Expected a 413 response, got {!r}".format(transport.written_data[:60])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_chunked_body_over_limit_returns_413():
+    """
+        Test that a chunked body that grows past the limit is answered
+        with 413.
+    """
+    segments = [
+        b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b"10\r\n" + b"a" * 16 + b"\r\n10\r\n" + b"b" * 16 + b"\r\n0\r\n\r\n",
+    ]
+
+    _handler, transport = _exchange(_echo_app, segments, max_body_bytes=20)
+
+    if not transport.written_data.startswith(b"HTTP/1.1 413"):
+        errmsg = "Expected a 413 response, got {!r}".format(transport.written_data[:60])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_body_within_limit_is_accepted():
+    """
+        Test that a body exactly at the limit is delivered.
+    """
+    segments = [b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\n\r\nabcd"]
+
+    _handler, transport = _exchange(_echo_app, segments, max_body_bytes=4)
+
+    if not transport.written_data.endswith(b"abcd"):
+        errmsg = "Expected the echoed body 'abcd', got {!r}".format(transport.written_data)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_signed_content_length_returns_400():
+    """
+        Test that a Content-Length that is not a plain decimal number
+        is rejected.
+    """
+    for bad_value in [b"-5", b"+5", b"5_0", b"0x10", b"five"]:
+        segments = [b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: " + bad_value + b"\r\n\r\n"]
+
+        _handler, transport = _exchange(_echo_app, segments)
+
+        if not transport.written_data.startswith(b"HTTP/1.1 400"):
+            errmsg = "Expected a 400 response for Content-Length {!r}, got {!r}".format(
+                bad_value, transport.written_data[:60]
+            )
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_content_length_with_transfer_encoding_returns_400():
+    """
+        Test that a request declaring both body framings is rejected.
+    """
+    segments = [
+        b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b"3\r\nabc\r\n0\r\n\r\n",
+    ]
+
+    _handler, transport = _exchange(_echo_app, segments)
+
+    if not transport.written_data.startswith(b"HTTP/1.1 400"):
+        errmsg = "Expected a 400 response, got {!r}".format(transport.written_data[:60])
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Unit Tests for Response Header Validation and Missing Responses
+# =============================================================================
+
+def test_response_header_value_with_crlf_is_rejected():
+    """
+        Test that a response header value containing CR/LF is refused
+        and nothing of it reaches the client.
+    """
+    async def _injecting_app(scope, receive, send):
+        await receive()
+        await send({
+            "type": "http.response.start",
+            "status": 302,
+            "headers": [(b"location", b"/next\r\nset-cookie: evil=1")],
+        })
+        await send({"type": "http.response.body", "body": b""})
+
+    _handler, transport = _exchange(_injecting_app, [b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"])
+
+    written = transport.written_data
+
+    if b"evil=1" in written:
+        errmsg = "The injected header reached the client: {!r}".format(written)
+        raise AssertionError(errmsg)
+
+    if not written.startswith(b"HTTP/1.1 500"):
+        errmsg = "Expected a 500 response, got {!r}".format(written[:60])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_response_header_name_with_space_is_rejected():
+    """
+        Test that an invalid response header name is refused.
+    """
+    handler = _create_handler()
+    _connect_handler(handler)
+
+    async def _check():
+        raised = False
+        try:
+            await handler._send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"bad name", b"value")],
+            })
+        except ValueError:
+            raised = True
+
+        if raised is not True:
+            raise AssertionError("Expected ValueError for an invalid header name.")
+
+    _run_async(_check())
+
+    return
+
+
+def test_application_returning_without_response_gets_500():
+    """
+        Test that a 500 is sent when the application returns without
+        sending a response, instead of an empty reply.
+    """
+    async def _silent_app(scope, receive, send):
+        return
+
+    _handler, transport = _exchange(_silent_app, [b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"])
+
+    if not transport.written_data.startswith(b"HTTP/1.1 500"):
+        errmsg = "Expected a 500 response, got {!r}".format(transport.written_data[:60])
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Unit Tests for Request IDs and Request Targets
+# =============================================================================
+
+def test_response_carries_a_request_id():
+    """
+        Test that every response has an X-Request-ID header and that the
+        ID is the one set for the log lines of the request.
+    """
+    from ccai.webworks.devexp.logging.devlogger import get_request_id
+
+    seen = []
+
+    async def _recording_app(scope, receive, send):
+        seen.append(get_request_id())
+        await receive()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    _handler, transport = _exchange(_recording_app, [b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"])
+
+    if len(seen) != 1 or seen[0] is None:
+        errmsg = "Expected a request ID to be set while the application runs, got {}".format(seen)
+        raise AssertionError(errmsg)
+
+    expected_header = b"x-request-id: " + seen[0].encode("ascii")
+
+    if expected_header not in transport.written_data:
+        errmsg = "Expected '{}' in the response: {!r}".format(expected_header.decode(), transport.written_data)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_incoming_request_id_is_honoured():
+    """
+        Test that a well-formed X-Request-ID sent by the client is used.
+    """
+    request = b"GET / HTTP/1.1\r\nHost: x\r\nX-Request-ID: trace-42\r\n\r\n"
+
+    _handler, transport = _exchange(_hello_app, [request])
+
+    if b"x-request-id: trace-42" not in transport.written_data:
+        errmsg = "Expected the client's request ID in the response: {!r}".format(transport.written_data)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_malformed_incoming_request_id_is_replaced():
+    """
+        Test that a request ID that is not a plain token is not echoed.
+    """
+    request = b"GET / HTTP/1.1\r\nHost: x\r\nX-Request-ID: bad id <script>\r\n\r\n"
+
+    _handler, transport = _exchange(_hello_app, [request])
+
+    if b"<script>" in transport.written_data:
+        errmsg = "The malformed request ID was echoed: {!r}".format(transport.written_data)
+        raise AssertionError(errmsg)
+
+    if b"x-request-id: " not in transport.written_data:
+        errmsg = "Expected a generated request ID in the response."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_absolute_form_request_target_is_reduced_to_its_path():
+    """
+        Test that an absolute-form request target reaches the application
+        as its path and query string.
+    """
+    scopes = []
+
+    async def _scope_app(scope, receive, send):
+        scopes.append(scope)
+        await receive()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    _exchange(_scope_app, [b"GET http://example.com/items/7?full=1 HTTP/1.1\r\nHost: example.com\r\n\r\n"])
+
+    if scopes[0]["path"] != "/items/7":
+        errmsg = "Expected path '/items/7', got '{}'".format(scopes[0]["path"])
+        raise AssertionError(errmsg)
+
+    if scopes[0]["query_string"] != b"full=1":
+        errmsg = "Expected query string b'full=1', got {!r}".format(scopes[0]["query_string"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_non_ascii_request_target_is_decoded_as_utf8():
+    """
+        Test that raw UTF-8 bytes in a request target are passed through
+        intact: raw_path keeps the bytes and path is their UTF-8 text.
+    """
+    scopes = []
+
+    async def _scope_app(scope, receive, send):
+        scopes.append(scope)
+        await receive()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    target = "/caf\u00e9".encode("utf-8")
+
+    _exchange(_scope_app, [b"GET " + target + b" HTTP/1.1\r\nHost: x\r\n\r\n"])
+
+    if scopes[0]["raw_path"] != target:
+        errmsg = "Expected raw_path {!r}, got {!r}".format(target, scopes[0]["raw_path"])
+        raise AssertionError(errmsg)
+
+    if scopes[0]["path"] != "/caf\u00e9":
+        errmsg = "Expected the decoded path '/caf\u00e9', got {!r}".format(scopes[0]["path"])
         raise AssertionError(errmsg)
 
     return

@@ -8,10 +8,17 @@
 import json
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any, Dict, IO, Optional, Tuple
+from typing import Any, Dict, IO, List, Optional, Tuple
 from urllib.parse import parse_qs
 
+from ccai.webworks.routing.multipart import parse_multipart as parse_multipart_body
+from ccai.webworks.routing.multipart import secure_filename
 from ccai.webworks.wsgi.exceptions import BadRequestBody, RequestEntityTooLarge
+
+
+# Number of bytes read from wsgi.input at a time when the size of the body
+# is not known in advance
+READ_CHUNK_SIZE: int = 65536
 
 
 @dataclass
@@ -24,6 +31,20 @@ class UploadedFile:
     content_type: str
     content: bytes
     size: int
+    
+    @property
+    def safe_filename(self) -> str:
+        """
+            Get the filename in a form that is safe to use on disk.
+            
+            The 'filename' field is what the client sent and may hold path
+            separators or parent directory references. Use this value, and
+            never 'filename', to build a path.
+            
+            :returns: Sanitised filename, empty if nothing usable is left.
+        """
+        rtnval = secure_filename(self.filename)
+        return rtnval
     
     def save(self, path: str) -> None:
         """
@@ -88,26 +109,36 @@ class RequestBodyParser:
             
             :raises: RequestEntityTooLarge if body exceeds max_size.
         """
-        # Check content length against max size before reading
         if content_length is not None:
+            if content_length < 0:
+                # A negative size would turn into a read of everything
+                errmsg = f"negative Content-Length: {content_length}"
+                raise BadRequestBody(errmsg)
+            
+            # Check content length against max size before reading
             if self._max_size > 0 and content_length > self._max_size:
                 raise RequestEntityTooLarge(self._max_size, content_length)
-        
-        # Determine how many bytes to read
-        if content_length is not None:
-            bytes_to_read = content_length
+            
+            rtnval = wsgi_input.read(content_length)
         else:
-            # No content length, read all available data
-            bytes_to_read = -1
-        
-        # Read the body
-        if bytes_to_read == -1:
-            # Read all available data, but check size limit
-            rtnval = wsgi_input.read()
-            if self._max_size > 0 and len(rtnval) > self._max_size:
-                raise RequestEntityTooLarge(self._max_size, len(rtnval))
-        else:
-            rtnval = wsgi_input.read(bytes_to_read)
+            # No content length. Read in bounded steps and stop as soon as
+            # the limit is passed, so the limit holds for bodies that do
+            # not announce their size.
+            parts: List[bytes] = []
+            total_size = 0
+            
+            while True:
+                chunk = wsgi_input.read(READ_CHUNK_SIZE)
+                if len(chunk) == 0:
+                    break
+                
+                total_size += len(chunk)
+                if self._max_size > 0 and total_size > self._max_size:
+                    raise RequestEntityTooLarge(self._max_size, total_size)
+                
+                parts.append(chunk)
+            
+            rtnval = b"".join(parts)
         
         return rtnval
     
@@ -188,6 +219,51 @@ class RequestBodyParser:
             :raises: BadRequestBody if body cannot be parsed.
             :raises: RequestEntityTooLarge if body exceeds max_size.
         """
+        field_lists, file_lists = self.parse_multipart_multi(
+            wsgi_input,
+            content_type,
+            content_length
+        )
+        
+        # Single-valued view: when a name is repeated the last value wins
+        form_fields: Dict[str, str] = {}
+        for field_name, field_values in field_lists.items():
+            form_fields[field_name] = field_values[-1]
+        
+        uploaded_files: Dict[str, UploadedFile] = {}
+        for field_name, field_files in file_lists.items():
+            uploaded_files[field_name] = field_files[-1]
+        
+        rtnval = (form_fields, uploaded_files)
+        return rtnval
+    
+    def parse_multipart_multi(
+        self,
+        wsgi_input: IO[bytes],
+        content_type: str,
+        content_length: Optional[int]
+    ) -> Tuple[Dict[str, List[str]], Dict[str, List[UploadedFile]]]:
+        """
+            Parse multipart/form-data body preserving repeated field names.
+            
+            A form sends the same name several times for a group of check
+            boxes or for a file input that accepts several files. Every value
+            is kept, in the order it appeared in the body.
+            
+            The parts are parsed by the multipart parser of the framework
+            ('ccai.webworks.routing.multipart'), so the WSGI layer, the ASGI
+            layer and the request object agree on how a body is read.
+            
+            :param wsgi_input: The wsgi.input file-like object.
+            :param content_type: Content-Type header with boundary.
+            :param content_length: Content-Length header value.
+            
+            :returns: Tuple of (form_fields, uploaded_files), each mapping a
+                      field name to the list of its values.
+            
+            :raises: BadRequestBody if body cannot be parsed.
+            :raises: RequestEntityTooLarge if body exceeds max_size.
+        """
         # Extract boundary from content type
         boundary = self._extract_boundary(content_type)
         if boundary is None:
@@ -196,65 +272,25 @@ class RequestBodyParser:
         # Read the raw body first (with size checking)
         body = self.parse_raw(wsgi_input, content_length)
         
-        # Parse the multipart data
-        form_fields: Dict[str, str] = {}
-        uploaded_files: Dict[str, UploadedFile] = {}
+        parsed = parse_multipart_body(body, content_type)
         
-        # Split by boundary
-        boundary_bytes = b"--" + boundary.encode("utf-8")
-        parts = body.split(boundary_bytes)
+        form_fields: Dict[str, List[str]] = {}
+        for field_name, field_value in parsed.form_parts:
+            if field_name not in form_fields:
+                form_fields[field_name] = []
+            form_fields[field_name].append(field_value)
         
-        # Skip the first empty part and the last closing part
-        for part in parts[1:]:
-            # Check for closing boundary
-            if part.startswith(b"--"):
-                continue
-            
-            # Strip leading CRLF
-            if part.startswith(b"\r\n"):
-                part = part[2:]
-            
-            # Find the header/body separator
-            separator_pos = part.find(b"\r\n\r\n")
-            if separator_pos == -1:
-                continue
-            
-            headers_section = part[:separator_pos]
-            body_section = part[separator_pos + 4:]
-            
-            # Remove trailing CRLF from body
-            if body_section.endswith(b"\r\n"):
-                body_section = body_section[:-2]
-            
-            # Parse part headers
-            part_headers = self._parse_part_headers(headers_section)
-            
-            # Extract content disposition
-            content_disposition = part_headers.get("content-disposition", "")
-            disposition_params = self._parse_content_disposition(content_disposition)
-            
-            field_name = disposition_params.get("name")
-            if field_name is None:
-                continue
-            
-            filename = disposition_params.get("filename")
-            
-            if filename is not None:
-                # This is a file upload
-                part_content_type = part_headers.get("content-type", "application/octet-stream")
-                uploaded_file = UploadedFile(
-                    filename=filename,
-                    content_type=part_content_type,
-                    content=body_section,
-                    size=len(body_section)
-                )
-                uploaded_files[field_name] = uploaded_file
-            else:
-                # This is a regular form field
-                try:
-                    form_fields[field_name] = body_section.decode("utf-8")
-                except UnicodeDecodeError:
-                    form_fields[field_name] = body_section.decode("latin-1")
+        uploaded_files: Dict[str, List[UploadedFile]] = {}
+        for file_part in parsed.file_parts:
+            uploaded_file = UploadedFile(
+                filename=file_part.filename,
+                content_type=file_part.content_type,
+                content=file_part.content,
+                size=len(file_part.content)
+            )
+            if file_part.name not in uploaded_files:
+                uploaded_files[file_part.name] = []
+            uploaded_files[file_part.name].append(uploaded_file)
         
         rtnval = (form_fields, uploaded_files)
         return rtnval

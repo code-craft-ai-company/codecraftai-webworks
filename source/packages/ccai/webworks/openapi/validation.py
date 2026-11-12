@@ -22,6 +22,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, List
 
 
+# The keys of a path item that hold operations.
+HTTP_OPERATION_METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
+
+
 @dataclass
 class ValidationIssue:
     """
@@ -90,6 +94,7 @@ class OpenAPIValidator:
         issues.extend(self._validate_structure(spec))
         issues.extend(self._validate_refs(spec))
         issues.extend(self._validate_security(spec))
+        issues.extend(self._validate_operation_ids(spec))
 
         if self.strict:
             issues.extend(self._validate_strict(spec))
@@ -283,6 +288,54 @@ class OpenAPIValidator:
                                 severity="error",
                             )
                             issues.append(issue)
+
+        return issues
+
+    def _validate_operation_ids(self, spec: Dict[str, Any]) -> List[ValidationIssue]:
+        """
+            Validate that every ``operationId`` is used by one operation only.
+
+            OpenAPI requires operationIds to be unique across the document;
+            client generators name a method after each one, so a repeated id
+            produces clashing methods.
+
+            :param spec: An OpenAPI specification dictionary.
+
+            :returns: A list of issues, one for each repeated use of an id.
+        """
+        issues: List[ValidationIssue] = []
+
+        first_use: Dict[str, str] = {}
+
+        paths = spec.get("paths", {})
+        for path_str, path_item in paths.items():
+            if not isinstance(path_item, dict):
+                continue
+
+            for method, operation in path_item.items():
+                if method.lower() not in HTTP_OPERATION_METHODS:
+                    continue
+
+                if not isinstance(operation, dict):
+                    continue
+
+                operation_id = operation.get("operationId")
+                if operation_id is None:
+                    continue
+
+                location = f"paths.{path_str}.{method}"
+                if operation_id in first_use:
+                    issue = ValidationIssue(
+                        path=f"{location}.operationId",
+                        message=(
+                            f"operationId '{operation_id}' is already used by "
+                            f"{first_use[operation_id]}; operationIds must be unique"
+                        ),
+                        severity="error",
+                    )
+                    issues.append(issue)
+                else:
+                    first_use[operation_id] = location
 
         return issues
 

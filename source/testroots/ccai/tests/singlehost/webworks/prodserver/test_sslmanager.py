@@ -584,15 +584,16 @@ def test_should_not_redirect_when_disabled():
     return
 
 
-def test_should_not_redirect_when_ssl_not_enabled():
+def test_should_redirect_when_tls_is_terminated_by_a_proxy():
     """
-        Test that redirect is disabled when SSL is not configured.
+        Test that redirect applies without a local certificate: TLS may be
+        terminated by a proxy in front of the server.
     """
     config = ServerConfig(ssl_redirect=True)
     manager = SSLManager(config)
 
-    if manager.should_redirect_http("http"):
-        errmsg = "Expected no redirect when SSL is not enabled"
+    if not manager.should_redirect_http("http") or manager.should_redirect_http("https"):
+        errmsg = "Expected http to be redirected and https not, without a local certificate"
         raise AssertionError(errmsg)
 
     return
@@ -626,12 +627,12 @@ def test_ssl_redirect_enabled_property():
         errmsg = "Expected ssl_redirect_enabled to be False when redirect is off"
         raise AssertionError(errmsg)
 
-    # Disabled: redirect but no SSL
+    # Enabled: redirect, TLS terminated by a proxy
     config_no_ssl = ServerConfig(ssl_redirect=True)
     manager_no_ssl = SSLManager(config_no_ssl)
 
-    if manager_no_ssl.ssl_redirect_enabled:
-        errmsg = "Expected ssl_redirect_enabled to be False when SSL is not configured"
+    if not manager_no_ssl.ssl_redirect_enabled:
+        errmsg = "Expected ssl_redirect_enabled to follow ssl_redirect without a local certificate"
         raise AssertionError(errmsg)
 
     return
@@ -757,6 +758,167 @@ def test_get_status_with_ca_certs():
 
     if status["client_cert_required"] is not True:
         errmsg = f"Expected client_cert_required=True, got {status['client_cert_required']}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Unit Tests for SSLManager - TLS 1.2 cipher suites with TLS 1.3 names configured
+# =============================================================================
+
+def _count_ciphers_by_protocol(context: ssl.SSLContext) -> dict:
+    """
+        Count the cipher suites of a context per TLS protocol version.
+
+        :returns: Dictionary of protocol name to number of cipher suites.
+    """
+    counts = {}
+
+    for cipher in context.get_ciphers():
+        protocol = cipher["protocol"]
+        counts[protocol] = counts.get(protocol, 0) + 1
+
+    return counts
+
+
+def test_default_ciphers_keep_tls12_cipher_suites():
+    """
+        Test that the default cipher configuration, which names TLS 1.3
+        suites, leaves the context with TLS 1.2 cipher suites.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        certfile, keyfile = _create_self_signed_cert(tmpdir)
+
+        config = ServerConfig(ssl_certfile=certfile, ssl_keyfile=keyfile)
+        manager = SSLManager(config)
+
+        context = manager.create_ssl_context()
+        counts = _count_ciphers_by_protocol(context)
+
+    if counts.get("TLSv1.2", 0) == 0:
+        errmsg = f"Expected TLS 1.2 cipher suites with the default configuration, got {counts}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_tls12_client_can_connect_with_default_ciphers():
+    """
+        Test that a client limited to TLS 1.2 completes a handshake with
+        a context created from the default configuration, whose minimum
+        version is TLS 1.2.
+    """
+    import socket
+    import threading
+
+    server_errors = []
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        certfile, keyfile = _create_self_signed_cert(tmpdir)
+
+        config = ServerConfig(ssl_certfile=certfile, ssl_keyfile=keyfile)
+        manager = SSLManager(config)
+        manager.create_ssl_context()
+
+        listen_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listen_sock.bind(("127.0.0.1", 0))
+        listen_sock.listen(1)
+        port = listen_sock.getsockname()[1]
+
+        def serve_one():
+            conn, _ = listen_sock.accept()
+            try:
+                tls_conn = manager.wrap_socket(conn)
+                tls_conn.close()
+            except Exception as server_err:
+                server_errors.append(server_err)
+                conn.close()
+            return
+
+        server_thread = threading.Thread(target=serve_one)
+        server_thread.start()
+
+        client_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        client_context.check_hostname = False
+        client_context.verify_mode = ssl.CERT_NONE
+        client_context.maximum_version = ssl.TLSVersion.TLSv1_2
+
+        negotiated = None
+        client_error = None
+
+        try:
+            raw_sock = socket.create_connection(("127.0.0.1", port), timeout=5.0)
+            try:
+                tls_sock = client_context.wrap_socket(raw_sock)
+                negotiated = tls_sock.version()
+                tls_sock.close()
+            except ssl.SSLError as ssl_err:
+                client_error = ssl_err
+                raw_sock.close()
+        finally:
+            server_thread.join(timeout=5.0)
+            listen_sock.close()
+
+    if negotiated != "TLSv1.2":
+        errmsg = f"Expected a TLS 1.2 handshake, got {negotiated} (client error: {client_error}, server errors: {server_errors})"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_mixed_cipher_string_applies_tls12_part():
+    """
+        Test that the TLS 1.2 part of a cipher string that also names
+        TLS 1.3 suites is applied to the context.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        certfile, keyfile = _create_self_signed_cert(tmpdir)
+
+        config = ServerConfig(
+            ssl_certfile=certfile,
+            ssl_keyfile=keyfile,
+            ssl_ciphers="TLS_AES_256_GCM_SHA384:ECDHE-RSA-AES256-GCM-SHA384",
+        )
+        manager = SSLManager(config)
+
+        context = manager.create_ssl_context()
+
+        tls12_names = []
+        for cipher in context.get_ciphers():
+            if cipher["protocol"] == "TLSv1.2":
+                tls12_names.append(cipher["name"])
+
+    if tls12_names != ["ECDHE-RSA-AES256-GCM-SHA384"]:
+        errmsg = f"Expected only the configured TLS 1.2 cipher suite, got {tls12_names}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_unknown_tls13_cipher_suite_name_raises():
+    """
+        Test that a name that looks like a TLS 1.3 suite but is not one
+        is refused and not silently ignored.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        certfile, keyfile = _create_self_signed_cert(tmpdir)
+
+        config = ServerConfig(
+            ssl_certfile=certfile,
+            ssl_keyfile=keyfile,
+            ssl_ciphers="TLS_NOT_A_REAL_CIPHER_SUITE",
+        )
+        manager = SSLManager(config)
+
+        raised = False
+        try:
+            manager.create_ssl_context()
+        except SSLConfigError:
+            raised = True
+
+    if not raised:
+        errmsg = "Expected SSLConfigError for an unknown TLS 1.3 cipher suite name"
         raise AssertionError(errmsg)
 
     return

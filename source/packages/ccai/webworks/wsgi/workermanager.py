@@ -12,9 +12,12 @@ import os
 import signal
 import sys
 import time
+import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
+from ccai.webworks.wsgi.constants import WORKER_BOOT_ERROR_EXIT_CODE
+from ccai.webworks.wsgi.exceptions import WorkerBootError
 from ccai.webworks.wsgi.serverconfig import ServerConfig
 from ccai.webworks.wsgi.socketlistener import SocketListener
 from ccai.webworks.wsgi.worker import Worker
@@ -22,6 +25,58 @@ from ccai.webworks.wsgi.worker import Worker
 
 # Default logger for worker manager
 _logger = logging.getLogger("webworks.wsgi.workermanager")
+
+# Exit code of a worker process that ended with an error while serving
+_WORKER_ERROR_EXIT_CODE = 1
+
+# Callable told about every worker process that ended: (pid, worker_id, exit_code).
+# The exit code is None when the process was ended by a signal.
+WorkerExitCallback = Callable[[int, int, Optional[int]], None]
+
+
+def prepare_worker_process(config: ServerConfig) -> None:
+    """
+        Prepare a new worker process before its Worker is created.
+        
+        For the gevent worker class the standard library is patched for
+        cooperative I/O here, before anything in the worker creates threads,
+        sockets or locks. The handler threads of the worker then run as
+        greenlets.
+        
+        :param config: The server configuration.
+    """
+    if config.worker_class == "gevent":
+        from gevent import monkey
+        monkey.patch_all()
+    
+    return
+
+
+def _report_worker_end(worker_id: int, exit_code: int) -> int:
+    """
+        Decide the exit code of a worker process from how it ended.
+        
+        Called in the 'finally' of a forked worker process, which must end
+        with os._exit and never return into the code of the server it was
+        forked from. An exception that is not an Exception (a
+        ConfigurationError or SemanticError of the application) is printed
+        with its traceback and ends the worker as a failed boot, so the
+        server stops instead of starting workers that fail the same way.
+        
+        :param worker_id: ID of the worker.
+        :param exit_code: The exit code decided so far.
+        
+        :returns: The exit code to end the process with.
+    """
+    passing_error = sys.exc_info()[1]
+    
+    if passing_error is not None and not isinstance(passing_error, Exception):
+        sys.stderr.write(f"Worker {worker_id} ended with {type(passing_error).__name__}:\n")
+        traceback.print_exception(type(passing_error), passing_error, passing_error.__traceback__)
+        sys.stderr.flush()
+        exit_code = WORKER_BOOT_ERROR_EXIT_CODE
+    
+    return exit_code
 
 
 @dataclass
@@ -50,7 +105,8 @@ class WorkerManager:
         self,
         app: Callable[[Dict[str, Any], Callable], Iterable[bytes]],
         listener: SocketListener,
-        config: Optional[ServerConfig] = None
+        config: Optional[ServerConfig] = None,
+        exit_callback: Optional[WorkerExitCallback] = None
     ):
         """
             Construct a worker manager.
@@ -58,9 +114,17 @@ class WorkerManager:
             :param app: The WSGI application callable.
             :param listener: The socket listener for accepting connections.
             :param config: Server configuration. If None, uses defaults.
+            :param exit_callback: Called in this process for every worker
+                                  process that ended, with its pid, worker id
+                                  and exit code.
         """
         self._app = app
         self._listener = listener
+        self._exit_callback = exit_callback
+        
+        # Set when a worker could not start serving. No replacement is
+        # started then, it would fail the same way; the server stops.
+        self._boot_failed = False
         
         if config is not None:
             self._config = config
@@ -70,6 +134,10 @@ class WorkerManager:
         # Worker tracking: pid -> WorkerInfo
         self._workers: Dict[int, WorkerInfo] = {}
         self._next_worker_id = 0
+        
+        # Process objects of the workers that were started with the spawn
+        # method: pid -> Process. Forked workers are tracked by pid alone.
+        self._processes: Dict[int, Any] = {}
         
         # Manager state
         self._running = False
@@ -102,6 +170,15 @@ class WorkerManager:
     def config(self) -> ServerConfig:
         """Get the server configuration."""
         return self._config
+    
+    @property
+    def boot_failed(self) -> bool:
+        """
+            Check whether a worker failed to start serving.
+            
+            :returns: True once a worker ended with the boot error exit code.
+        """
+        return self._boot_failed
 
     def spawn(self, num_workers: Optional[int] = None) -> None:
         """
@@ -164,13 +241,19 @@ class WorkerManager:
         pid = os.fork()
         
         if pid == 0:
-            # Child process - run worker
+            # Child process - run worker. It never returns from here.
+            exit_code = 0
             try:
                 self._run_worker_process(worker_id)
+            except WorkerBootError as boot_err:
+                _logger.error("Worker %d failed to boot: %s", worker_id, str(boot_err), exc_info=boot_err)
+                exit_code = WORKER_BOOT_ERROR_EXIT_CODE
             except Exception as exc:
                 _logger.exception("Worker %d crashed: %s", worker_id, str(exc))
+                exit_code = _WORKER_ERROR_EXIT_CODE
             finally:
-                os._exit(0)
+                exit_code = _report_worker_end(worker_id, exit_code)
+                os._exit(exit_code)
         
         # Parent process - return child PID
         return pid
@@ -185,20 +268,25 @@ class WorkerManager:
         """
         ctx = multiprocessing.get_context("spawn")
         
+        # The child is given the listening socket itself and the whole
+        # configuration. A child that binds the address again would get a
+        # listener of its own, and one built from the address alone would
+        # not have the TLS settings.
         process = ctx.Process(
             target=_worker_process_entry,
             args=(
                 self._app,
                 self._config,
                 worker_id,
-                self._listener.config.host,
-                self._listener.config.port,
-                self._listener.config.unix_socket,
+                self._listener.socket,
             )
         )
         process.start()
         
-        return process.pid
+        pid = process.pid
+        self._processes[pid] = process
+        
+        return pid
     
     def _run_worker_process(self, worker_id: int) -> None:
         """
@@ -209,6 +297,10 @@ class WorkerManager:
         # Reset signal handlers in child
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
         signal.signal(signal.SIGINT, signal.SIG_DFL)
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        
+        prepare_worker_process(self._config)
         
         # Create and run worker
         worker = Worker(
@@ -218,12 +310,17 @@ class WorkerManager:
             worker_id=worker_id
         )
         
-        # Setup signal handlers for graceful shutdown
+        # Setup signal handlers for shutdown. A handler runs on the main
+        # thread, in between whatever that thread was doing, so it only
+        # records the request. The worker finishes the requests in flight
+        # and returns from run() by itself.
         def handle_term(signum: int, frame: Any) -> None:
-            worker.shutdown(graceful=True)
+            worker.request_shutdown(graceful=True)
+            return
         
         def handle_int(signum: int, frame: Any) -> None:
-            worker.shutdown(graceful=False)
+            worker.request_shutdown(graceful=False)
+            return
         
         signal.signal(signal.SIGTERM, handle_term)
         signal.signal(signal.SIGINT, handle_int)
@@ -253,8 +350,10 @@ class WorkerManager:
         """
             Reap terminated worker processes.
         """
+        if len(self._processes) > 0:
+            self._reap_spawned_workers()
+        
         if sys.platform == "win32":
-            self._reap_workers_windows()
             return
         
         # Unix: use waitpid with WNOHANG
@@ -267,6 +366,7 @@ class WorkerManager:
                 
                 if pid in self._workers:
                     worker_info = self._workers.pop(pid)
+                    exit_code: Optional[int] = None
                     
                     if os.WIFEXITED(status):
                         exit_code = os.WEXITSTATUS(status)
@@ -285,6 +385,8 @@ class WorkerManager:
                             "Worker %d (pid=%d) terminated unexpectedly",
                             worker_info.worker_id, pid
                         )
+                    
+                    self._worker_ended(pid, worker_info.worker_id, exit_code)
             except ChildProcessError:
                 break
             except OSError:
@@ -292,22 +394,65 @@ class WorkerManager:
         
         return
     
-    def _reap_workers_windows(self) -> None:
-        """Reap terminated workers on Windows."""
+    def _reap_spawned_workers(self) -> None:
+        """
+            Reap terminated workers that were started with the spawn method.
+            
+            The process object is asked whether the worker is alive. Probing
+            with 'os.kill(pid, 0)' is not an option: on Windows that call does
+            not probe, it terminates the process.
+        """
         dead_pids: List[int] = []
         
-        for pid, worker_info in self._workers.items():
-            try:
-                os.kill(pid, 0)
-            except OSError:
+        for pid, process in self._processes.items():
+            if not process.is_alive():
                 dead_pids.append(pid)
-                _logger.info(
-                    "Worker %d (pid=%d) terminated",
-                    worker_info.worker_id, pid
-                )
         
         for pid in dead_pids:
-            del self._workers[pid]
+            process = self._processes.pop(pid)
+            
+            # Collect the exit status so the process does not linger
+            process.join(timeout=0)
+            
+            worker_info = self._workers.pop(pid, None)
+            if worker_info is not None:
+                _logger.info(
+                    "Worker %d (pid=%d) terminated (exit code %s)",
+                    worker_info.worker_id, pid, process.exitcode
+                )
+                
+                exit_code = process.exitcode
+                if exit_code is not None and exit_code < 0:
+                    # A negative exit code is the signal that ended the process
+                    exit_code = None
+                
+                self._worker_ended(pid, worker_info.worker_id, exit_code)
+        
+        return
+    
+    def _worker_ended(self, pid: int, worker_id: int, exit_code: Optional[int]) -> None:
+        """
+            Record the end of a worker process.
+            
+            :param pid: PID of the worker process.
+            :param worker_id: ID of the worker.
+            :param exit_code: Its exit code, None when a signal ended it.
+        """
+        if exit_code == WORKER_BOOT_ERROR_EXIT_CODE:
+            self._boot_failed = True
+            _logger.error(
+                "Worker %d (pid=%d) failed to boot, no replacement is started",
+                worker_id, pid
+            )
+        
+        if self._exit_callback is not None:
+            try:
+                self._exit_callback(pid, worker_id, exit_code)
+            except Exception as callback_err:
+                _logger.exception(
+                    "The worker exit callback failed for worker %d (pid=%d): %s",
+                    worker_id, pid, str(callback_err)
+                )
         
         return
     
@@ -315,6 +460,11 @@ class WorkerManager:
         """Maintain the configured number of workers."""
         # Only maintain workers if the manager has been started
         if not self._running:
+            return
+        
+        # A worker that could not boot is not replaced, the next one would
+        # fail the same way
+        if self._boot_failed:
             return
         
         current_count = len(self._workers)
@@ -336,6 +486,42 @@ class WorkerManager:
         return
 
 
+    def replace_workers(self) -> None:
+        """
+            Replace every worker with a fresh one, without dropping connections.
+            
+            New workers are started first and take connections from the
+            listener at once. The old workers are then asked to stop
+            gracefully: they finish the requests in flight and exit, and are
+            reaped by monitor(). This is what a reload (SIGHUP) of the
+            production server does.
+        """
+        if not self._running or self._shutdown_requested:
+            return
+        
+        old_pids = list(self._workers.keys())
+        
+        _logger.info("Replacing %d workers", len(old_pids))
+        
+        for _ in range(self._config.workers):
+            self._spawn_worker()
+        
+        for pid in old_pids:
+            worker_info = self._workers.get(pid)
+            if worker_info is None:
+                continue
+            
+            try:
+                process = self._processes.get(pid)
+                if process is not None and sys.platform == "win32":
+                    process.terminate()
+                else:
+                    os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                _logger.debug("Worker %d (pid=%d) already ended", worker_info.worker_id, pid)
+        
+        return
+    
     def shutdown(self, graceful: bool = True) -> None:
         """
             Shutdown all worker processes.
@@ -370,6 +556,7 @@ class WorkerManager:
             self._force_kill_workers()
         
         self._workers.clear()
+        self._processes.clear()
         self._running = False
         
         _logger.info("Worker manager shutdown complete")
@@ -382,7 +569,13 @@ class WorkerManager:
             _logger.warning("Force killing worker %d (pid=%d)", worker_info.worker_id, pid)
             
             try:
-                os.kill(pid, signal.SIGKILL)
+                process = self._processes.get(pid)
+                if process is not None:
+                    # A spawned worker is killed through its process object,
+                    # there is no SIGKILL on Windows.
+                    process.kill()
+                else:
+                    os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 # The worker already exited, which is the outcome the force kill wanted.
                 pass
@@ -399,7 +592,14 @@ class WorkerManager:
         """
         for pid, worker_info in self._workers.items():
             try:
-                os.kill(pid, signum)
+                process = self._processes.get(pid)
+                if process is not None and sys.platform == "win32":
+                    # Windows cannot deliver a signal to another process,
+                    # 'os.kill' would terminate it whatever the signal is.
+                    # Say so by terminating through the process object.
+                    process.terminate()
+                else:
+                    os.kill(pid, signum)
                 _logger.debug("Sent signal %d to worker %d (pid=%d)", signum, worker_info.worker_id, pid)
             except ProcessLookupError:
                 _logger.debug("Worker %d (pid=%d) already dead", worker_info.worker_id, pid)
@@ -455,34 +655,49 @@ def _worker_process_entry(
     app: Callable,
     config: ServerConfig,
     worker_id: int,
-    host: str,
-    port: int,
-    unix_socket: Optional[str]
+    listen_socket: Any
 ) -> None:
     """
         Entry point for spawned worker processes.
         
         This function is called in the child process when using spawn method.
+        
+        :param app: The WSGI application callable.
+        :param config: The full server configuration.
+        :param worker_id: ID of this worker.
+        :param listen_socket: The listening socket of the server, shared with
+                              the parent process.
     """
-    # Recreate listener in child process
-    listener_config = ServerConfig(host=host, port=port, unix_socket=unix_socket)
-    listener = SocketListener(listener_config)
-    listener.bind()
+    prepare_worker_process(config)
+    
+    # Use the listener of the parent. Binding again would create a second
+    # listener, and the TLS settings come from the full configuration.
+    listener = SocketListener(config)
+    listener.attach(listen_socket)
+    
+    if config.ssl_certfile is not None:
+        listener.setup_ssl()
     
     # Create and run worker
     worker = Worker(app, listener, config, worker_id=worker_id)
     
     def handle_term(signum: int, frame: Any) -> None:
-        worker.shutdown(graceful=True)
+        worker.request_shutdown(graceful=True)
+        return
     
     def handle_int(signum: int, frame: Any) -> None:
-        worker.shutdown(graceful=False)
+        worker.request_shutdown(graceful=False)
+        return
     
     signal.signal(signal.SIGTERM, handle_term)
     signal.signal(signal.SIGINT, handle_int)
     
     try:
         worker.run()
+    except WorkerBootError as boot_err:
+        _logger.error("Worker %d failed to boot: %s", worker_id, str(boot_err), exc_info=boot_err)
+        listener.close()
+        sys.exit(WORKER_BOOT_ERROR_EXIT_CODE)
     finally:
         listener.close()
     

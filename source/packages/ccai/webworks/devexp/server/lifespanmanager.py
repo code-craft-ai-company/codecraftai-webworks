@@ -6,9 +6,11 @@
     application. It sends ``lifespan.startup`` and ``lifespan.shutdown``
     events and waits for the corresponding complete or failed responses.
 
-    If the application does not implement lifespan handling and raises
-    an exception, the manager catches it and proceeds as if startup
-    succeeded.
+    An application that does not implement lifespan handling rejects the
+    lifespan scope: it returns or raises before it reads the startup
+    event. The manager then proceeds without lifespan events. An
+    application that reads the startup event and then raises has a
+    startup hook that failed, which is reported as a startup failure.
 """
 
 import asyncio
@@ -18,6 +20,13 @@ from typing import Any, Dict, Optional
 
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_STARTUP_TIMEOUT_SECONDS: float = 60.0
+"""Seconds the application is given to answer the ``lifespan.startup`` event."""
+
+DEFAULT_SHUTDOWN_TIMEOUT_SECONDS: float = 30.0
+"""Seconds the application is given to answer the ``lifespan.shutdown`` event."""
 
 
 # =============================================================================
@@ -34,10 +43,29 @@ class LifespanManager:
         properties to inspect the result.
 
         :param app: The ASGI application callable.
+        :param startup_timeout: Seconds to wait for the application to answer
+            the startup event before startup is treated as failed.
+        :param shutdown_timeout: Seconds to wait for the application to answer
+            the shutdown event.
     """
 
-    def __init__(self, app: Any) -> None:
+    def __init__(
+        self,
+        app: Any,
+        startup_timeout: float = DEFAULT_STARTUP_TIMEOUT_SECONDS,
+        shutdown_timeout: float = DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
+    ) -> None:
+        """
+            Construct a LifespanManager.
+
+            :param app: The ASGI application callable.
+            :param startup_timeout: Seconds to wait for the startup response.
+            :param shutdown_timeout: Seconds to wait for the shutdown response.
+        """
         self._app = app
+        self._startup_timeout = startup_timeout
+        self._shutdown_timeout = shutdown_timeout
+        self._startup_event_read: bool = False
         self._startup_complete: bool = False
         self._startup_failed: bool = False
         self._shutdown_complete: bool = False
@@ -87,9 +115,19 @@ class LifespanManager:
             Sends the ``lifespan.startup`` event and waits for either
             ``lifespan.startup.complete`` or ``lifespan.startup.failed``.
 
-            If the application raises an exception (indicating it does
-            not support lifespan), the manager catches it and proceeds
-            as if startup succeeded.
+            When the application ends without answering, the outcome
+            depends on whether it had read the startup event:
+
+            - It never called ``receive``: it rejected the lifespan scope,
+              so it does not support the protocol. Startup proceeds and no
+              further lifespan events are sent.
+            - It read the startup event and then raised: a startup hook
+              failed. The exception is logged with its traceback and
+              startup is marked as failed, so the server does not accept
+              requests against an application that is not initialised.
+
+            An application that does not answer within the startup timeout
+            is treated as failed.
         """
         scope: Dict[str, Any] = {
             "type": "lifespan",
@@ -98,6 +136,7 @@ class LifespanManager:
 
         self._receive_queue = asyncio.Queue()
         self._send_queue = asyncio.Queue()
+        self._startup_event_read = False
 
         async def receive() -> Dict[str, Any]:
             """
@@ -106,6 +145,10 @@ class LifespanManager:
                 :returns: The next message from the receive queue.
             """
             message = await self._receive_queue.get()
+
+            if message.get("type", "") == "lifespan.startup":
+                self._startup_event_read = True
+
             return message
 
         async def send(message: Dict[str, Any]) -> None:
@@ -133,6 +176,7 @@ class LifespanManager:
 
         done, _pending = await asyncio.wait(
             [send_future, app_task],
+            timeout=self._startup_timeout,
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -156,25 +200,53 @@ class LifespanManager:
                     "Unexpected lifespan response type: %s",
                     response_type,
                 )
-        else:
+        elif app_task in done:
             # The app task completed before sending a response.
-            # This means the app raised an exception or does not
-            # support lifespan. Cancel the pending send future.
             send_future.cancel()
 
-            # Consume the exception from the app task to prevent
-            # the "Task exception was never retrieved" warning.
-            if app_task.done() and not app_task.cancelled():
-                try:
-                    app_task.exception()
-                except Exception:
-                    # Retrieval only marks the exception as observed; the outcome is handled just below.
-                    pass
+            app_error = None
+            if not app_task.cancelled():
+                app_error = app_task.exception()
 
-            self._startup_complete = True
-            logger.info(
-                "ASGI application does not support lifespan protocol. "
-                "Proceeding as successful."
+            if app_error is not None and self._startup_event_read:
+                # The application accepted the lifespan scope, read the
+                # startup event and then failed: its startup did not finish.
+                self._startup_failed = True
+                self._failure_message = "{}: {}".format(type(app_error).__name__, app_error)
+                logger.error(
+                    "ASGI lifespan startup raised an exception.",
+                    exc_info=(type(app_error), app_error, app_error.__traceback__),
+                )
+            else:
+                # The application returned or raised without reading the
+                # startup event, which is how an application without
+                # lifespan support rejects the scope.
+                self._startup_complete = True
+
+                if app_error is not None:
+                    logger.info(
+                        "ASGI application does not support lifespan protocol "
+                        "(it raised %s: %s on the lifespan scope). Proceeding as successful.",
+                        type(app_error).__name__,
+                        app_error,
+                    )
+                else:
+                    logger.info(
+                        "ASGI application does not support lifespan protocol. "
+                        "Proceeding as successful."
+                    )
+        else:
+            # Neither a response nor an end of the application: it is stuck.
+            send_future.cancel()
+            app_task.cancel()
+
+            self._startup_failed = True
+            self._failure_message = "The application did not answer the lifespan startup event within {} seconds.".format(
+                self._startup_timeout
+            )
+            logger.error(
+                "ASGI lifespan startup failed: %s",
+                self._failure_message,
             )
 
         return
@@ -212,6 +284,7 @@ class LifespanManager:
 
         done, _pending = await asyncio.wait(
             [send_future, app_task],
+            timeout=self._shutdown_timeout,
             return_when=asyncio.FIRST_COMPLETED,
         )
 
@@ -234,13 +307,37 @@ class LifespanManager:
                     "Unexpected lifespan response type: %s",
                     response_type,
                 )
-        else:
+        elif app_task in done:
             # The app task completed before sending a response.
             send_future.cancel()
             self._shutdown_complete = True
-            logger.info(
-                "ASGI application raised during lifespan shutdown. "
-                "Proceeding as complete."
+
+            app_error = None
+            if not app_task.cancelled():
+                app_error = app_task.exception()
+
+            if app_error is not None:
+                self._shutdown_failed = True
+                self._failure_message = "{}: {}".format(type(app_error).__name__, app_error)
+                logger.error(
+                    "ASGI lifespan shutdown raised an exception.",
+                    exc_info=(type(app_error), app_error, app_error.__traceback__),
+                )
+            else:
+                logger.info(
+                    "ASGI application ended without answering lifespan shutdown. "
+                    "Proceeding as complete."
+                )
+        else:
+            # The application did not answer in time; shutdown continues.
+            send_future.cancel()
+            self._shutdown_failed = True
+            self._failure_message = "The application did not answer the lifespan shutdown event within {} seconds.".format(
+                self._shutdown_timeout
+            )
+            logger.error(
+                "ASGI lifespan shutdown failed: %s",
+                self._failure_message,
             )
 
         # Wait for the app task to finish if it is still running.

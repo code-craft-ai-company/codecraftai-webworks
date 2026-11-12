@@ -13,6 +13,10 @@
  * attribute, the host `aria-label` / `aria-labelledby`, or an associated
  * <label> element, in that order, through `aria-labelledby` on a label
  * element inside the shadow root.
+ *
+ * The `value` attribute is the default value (what a form reset restores);
+ * the live value is the `value` property. A user selection changes the
+ * property and the submitted form value, never the attribute.
  */
 
 import { MjElement, nextId } from "../core/mjelement.js";
@@ -65,8 +69,9 @@ const STYLES = `
 }
 :host([open]) .chevron { transform: rotate(180deg); }
 
-:host([disabled]) .trigger { opacity: 0.55; cursor: not-allowed; }
+.trigger:disabled { opacity: 0.55; cursor: not-allowed; }
 :host([invalid]) .trigger { border-color: var(--mj-color-danger); }
+:host(:state(user-invalid)) .trigger { border-color: var(--mj-color-danger); }
 :host([readonly]) .trigger { cursor: default; }
 
 .popup {
@@ -75,7 +80,8 @@ const STYLES = `
   border: 1px solid var(--mj-border);
   border-radius: var(--mj-select-border-radius, var(--mj-radius-md));
   box-shadow: var(--mj-elevation-2);
-  min-width: var(--mj-select-popup-min-width, 0);
+  /* At least as wide as the trigger (--_anchor-width, set on open) unless the page says otherwise. */
+  min-inline-size: var(--mj-select-popup-min-width, var(--_anchor-width, 0px));
   max-height: var(--mj-select-popup-max-height, 18rem);
   overflow-y: auto;
   z-index: var(--mj-layer-popover);
@@ -100,6 +106,7 @@ const STYLES = `
 .option[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
 .option.focused { background: var(--mj-bg-muted); outline: none; }
 
+.optgroup { padding: 0; }
 .optgroup-label {
   padding: var(--mj-space-1) var(--mj-space-3);
   font-size: var(--mj-font-size-sm);
@@ -127,6 +134,9 @@ const CHECK_ICON_MARKUP =
  * observes through attributeChangedCallback) do not trigger a rebuild.
  */
 const OPTION_ATTRIBUTES = ["value", "disabled", "label"]
+
+/* How long typed characters accumulate into one typeahead search string. */
+const TYPEAHEAD_RESET_MS = 500
 
 /*
  * Text content of `node` with the subtree of `skip` left out, whitespace
@@ -157,7 +167,7 @@ export class MjSelect extends FormControlMixin(MjElement) {
   static tagName = "mj-select";
   static styles = STYLES;
   static watched = [
-    "value", "open", "disabled", "readonly", "invalid", "placeholder", "size",
+    "value", "open", "disabled", "readonly", "required", "invalid", "placeholder", "size",
     "label", "aria-label", "aria-labelledby"
   ];
 
@@ -169,6 +179,13 @@ export class MjSelect extends FormControlMixin(MjElement) {
     this._typeaheadTimer = null
     this._disposePosition = null
     this._optionData = []
+
+    /* True while an ancestor <fieldset disabled> disables the control. */
+    this._formDisabled = false
+
+    /* The `value` attribute change applied before the first render, if any. */
+    this._preRenderValue = null
+
     this._listboxId = nextId("mj-select-lb")
     this._triggerId = nextId("mj-select-tr")
     this._labelId = nextId("mj-select-lbl")
@@ -224,20 +241,37 @@ export class MjSelect extends FormControlMixin(MjElement) {
     this._syncTriggerLabel()
     this._syncAccessibleName()
     this._syncAccessibility()
+
+    /* `open` present at first render, or still set when the element is re-inserted. */
+    this._syncOpen()
+    return
+  }
+
+  onDisconnected() {
+    this._stopPositioning()
+    clearTimeout(this._typeaheadTimer)
+    this._typeaheadTimer = null
+    this._typeahead = ""
     return
   }
 
   onAttributeChanged(name, oldValue, newValue) {
-    if (name === "value") {
+    if (name === "value" && this._isReplayedValue(newValue) === false) {
       this._setFormValue(newValue || "")
       this._syncTriggerLabel()
       this._updateOptionSelected()
     }
-    if (name === "open" && this._trigger !== undefined) {
+    if (name === "open") {
       this._syncOpen()
     }
-    if (name === "disabled" || name === "readonly" || name === "invalid") {
+    if (name === "disabled" || name === "readonly" || name === "invalid" || name === "required") {
       this._syncAccessibility()
+    }
+    if (name === "disabled" && this._isDisabled() === true && this.hasAttribute("open") === true) {
+      this._close(false)
+    }
+    if (name === "required" && this._internals !== undefined) {
+      this._refreshValidity()
     }
     if (name === "placeholder") {
       this._syncTriggerLabel()
@@ -246,6 +280,31 @@ export class MjSelect extends FormControlMixin(MjElement) {
       this._syncAccessibleName()
     }
     return
+  }
+
+  /*
+   * The base class delivers an attribute change that arrived before the first
+   * render a second time once the shadow DOM exists. For `value` the first
+   * delivery already stored the value, and applying it again would discard a
+   * `value` property assigned in between. Returns true for that repeat.
+   */
+  _isReplayedValue(newValue) {
+    let replayed = false
+
+    if (this._rendered === false) {
+      this._preRenderValue = { value: newValue }
+    } else if (this._preRenderValue !== null) {
+      replayed = this._preRenderValue.value === newValue
+      this._preRenderValue = null
+    }
+
+    return replayed
+  }
+
+  /* Disabled by its own attribute or by an ancestor <fieldset disabled>. */
+  _isDisabled() {
+    const disabled = this.hasAttribute("disabled") === true || this._formDisabled === true
+    return disabled
   }
 
   /* ----- option building ----- */
@@ -291,9 +350,50 @@ export class MjSelect extends FormControlMixin(MjElement) {
     this._syncTriggerLabel()
     if (this.hasAttribute("open") === true) {
       const current = this._currentOptionIndex()
-      this._moveFocus(current >= 0 ? current : 0)
+      this._moveFocus(current >= 0 ? current : this._firstEnabledIndex())
     }
     return
+  }
+
+  _optionNodes() {
+    const nodes = Array.from(this._listbox.querySelectorAll(".option"))
+    return nodes
+  }
+
+  /*
+   * The value an <mj-option> stands for: its `value` attribute, or its text
+   * when the attribute is absent (as a native <option> does). Without the
+   * fallback every valueless option would share the empty value.
+   */
+  _optionValue(optionEl, label) {
+    let value = label
+    if (optionEl.hasAttribute("value") === true) {
+      value = optionEl.getAttribute("value")
+    }
+    return value
+  }
+
+  /*
+   * The shadow node that holds the options of an <mj-optgroup>: a
+   * role="group" container named by its label row.
+   */
+  _buildGroupNode(groupEl) {
+    const labelId = nextId("mj-optgroup")
+
+    const groupNode = document.createElement("div")
+    groupNode.className = "optgroup"
+    groupNode.setAttribute("part", "optgroup")
+    groupNode.setAttribute("role", "group")
+    groupNode.setAttribute("aria-labelledby", labelId)
+
+    const labelNode = document.createElement("div")
+    labelNode.className = "optgroup-label"
+    labelNode.setAttribute("part", "optgroup-label")
+    labelNode.id = labelId
+    labelNode.textContent = groupEl.getAttribute("label") || ""
+    groupNode.appendChild(labelNode)
+
+    return groupNode
   }
 
   _buildOptions() {
@@ -313,13 +413,21 @@ export class MjSelect extends FormControlMixin(MjElement) {
       return
     }
 
+    /* <mj-optgroup> element -> the group node built for it. */
+    const groupNodes = new Map()
+
     optionEls.forEach((opt, idx) => {
+      const groupEl = opt.closest("mj-optgroup")
+      const inGroup = groupEl !== null && this.contains(groupEl) === true
+      const label = opt.getAttribute("label") || opt.textContent.trim()
+
       const item = {
         id: nextId("mj-opt"),
-        value: opt.getAttribute("value") || "",
-        label: opt.getAttribute("label") || opt.textContent.trim(),
-        disabled: opt.hasAttribute("disabled"),
-        index: idx
+        value: this._optionValue(opt, label),
+        label: label,
+        disabled: opt.hasAttribute("disabled") || (inGroup === true && groupEl.hasAttribute("disabled")),
+        index: idx,
+        el: opt
       }
       opt._mjId = item.id
       this._optionData.push(item)
@@ -343,7 +451,17 @@ export class MjSelect extends FormControlMixin(MjElement) {
       labelEl.setAttribute("part", "option-label")
       labelEl.textContent = item.label
       node.appendChild(labelEl)
-      this._listbox.appendChild(node)
+
+      let container = this._listbox
+      if (inGroup === true) {
+        if (groupNodes.has(groupEl) === false) {
+          const groupNode = this._buildGroupNode(groupEl)
+          groupNodes.set(groupEl, groupNode)
+          this._listbox.appendChild(groupNode)
+        }
+        container = groupNodes.get(groupEl)
+      }
+      container.appendChild(node)
     })
     return
   }
@@ -445,29 +563,46 @@ export class MjSelect extends FormControlMixin(MjElement) {
 
   /* ----- open/close ----- */
 
+  _stopPositioning() {
+    if (this._disposePosition !== null) {
+      this._disposePosition()
+      this._disposePosition = null
+    }
+    return
+  }
+
+  /*
+   * Bring the popup, the trigger state and the active option in line with
+   * the `open` attribute. Safe to call repeatedly: the positioner is
+   * replaced, never stacked.
+   */
   _syncOpen() {
+    if (this._trigger === undefined || this._trigger === null) {
+      return
+    }
+
     const isOpen = this.hasAttribute("open")
     this._trigger.setAttribute("aria-expanded", isOpen === true ? "true" : "false")
+    this._stopPositioning()
 
     if (isOpen === true) {
-      this._popup.style.minWidth = `${this._trigger.offsetWidth}px`
+      this._popup.style.setProperty("--_anchor-width", `${this._trigger.offsetWidth}px`)
       this._disposePosition = autoPosition(this._popup, this._trigger, {
         placement: "bottom-start"
       })
-      this._focusedIndex = this._currentOptionIndex()
-      this._moveFocus(this._focusedIndex >= 0 ? this._focusedIndex : 0)
+      const current = this._currentOptionIndex()
+      this._moveFocus(current >= 0 ? current : this._firstEnabledIndex())
     } else {
-      if (this._disposePosition !== null) {
-        this._disposePosition()
-        this._disposePosition = null
-      }
       this._clearFocus()
     }
     return
   }
 
   _open() {
-    if (this.hasAttribute("disabled") || this.hasAttribute("readonly")) {
+    if (this._isDisabled() === true || this.hasAttribute("readonly") === true) {
+      return
+    }
+    if (this.hasAttribute("open") === true) {
       return
     }
     const proceed = this.emit("mj-open", {}, { cancelable: true })
@@ -478,13 +613,20 @@ export class MjSelect extends FormControlMixin(MjElement) {
     return
   }
 
-  _close() {
+  /*
+   * Close the popup. `restoreFocus` returns focus to the trigger: wanted
+   * after Escape or an option pick, not after a click elsewhere on the page
+   * (that would pull focus out of whatever the user just clicked).
+   */
+  _close(restoreFocus) {
     if (this.hasAttribute("open") === false) {
       return
     }
     this.removeAttribute("open")
     this.emit("mj-close", {})
-    this._trigger.focus()
+    if (restoreFocus === true) {
+      this._trigger.focus()
+    }
     return
   }
 
@@ -494,8 +636,25 @@ export class MjSelect extends FormControlMixin(MjElement) {
     return idx
   }
 
+  /* Index of the first / last option that is not disabled, or -1. */
+  _firstEnabledIndex() {
+    const index = this._optionData.findIndex((item) => item.disabled !== true)
+    return index
+  }
+
+  _lastEnabledIndex() {
+    let index = -1
+    for (let position = this._optionData.length - 1; position >= 0; position = position - 1) {
+      if (this._optionData[position].disabled !== true) {
+        index = position
+        break
+      }
+    }
+    return index
+  }
+
   _moveFocus(index) {
-    const opts = this._listbox.querySelectorAll(".option")
+    const opts = this._optionNodes()
     opts.forEach((el) => el.classList.remove("focused"))
     if (index < 0 || index >= opts.length) {
       this._trigger.removeAttribute("aria-activedescendant")
@@ -511,7 +670,7 @@ export class MjSelect extends FormControlMixin(MjElement) {
   }
 
   _clearFocus() {
-    const opts = this._listbox.querySelectorAll(".option")
+    const opts = this._optionNodes()
     opts.forEach((el) => el.classList.remove("focused"))
     this._trigger.removeAttribute("aria-activedescendant")
     this._focusedIndex = -1
@@ -522,7 +681,7 @@ export class MjSelect extends FormControlMixin(MjElement) {
 
   _onTriggerClick() {
     if (this.hasAttribute("open")) {
-      this._close()
+      this._close(true)
     } else {
       this._open()
     }
@@ -574,7 +733,8 @@ export class MjSelect extends FormControlMixin(MjElement) {
     }
     const inside = event.composedPath().includes(this)
     if (inside === false) {
-      this._close()
+      /* Light dismiss: focus stays wherever the click put it. */
+      this._close(false)
     }
     return
   }
@@ -595,7 +755,7 @@ export class MjSelect extends FormControlMixin(MjElement) {
     } else if (event.key === "Escape") {
       if (isOpen === true) {
         event.preventDefault()
-        this._close()
+        this._close(true)
       }
     } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault()
@@ -604,7 +764,7 @@ export class MjSelect extends FormControlMixin(MjElement) {
         return
       }
       const delta = event.key === "ArrowDown" ? 1 : -1
-      const allOpts = Array.from(this._listbox.querySelectorAll(".option"))
+      const allOpts = this._optionNodes()
       const current = this._focusedIndex >= 0 ? this._focusedIndex : -1
       let next = current + delta
       while (next >= 0 && next < allOpts.length) {
@@ -617,22 +777,31 @@ export class MjSelect extends FormControlMixin(MjElement) {
         this._moveFocus(next)
       }
     } else if (event.key === "Home") {
-      event.preventDefault()
       if (isOpen === true) {
-        this._moveFocus(0)
+        event.preventDefault()
+        const first = this._firstEnabledIndex()
+        if (first >= 0) {
+          this._moveFocus(first)
+        }
       }
     } else if (event.key === "End") {
-      event.preventDefault()
       if (isOpen === true) {
-        const allOpts = this._listbox.querySelectorAll(".option")
-        this._moveFocus(allOpts.length - 1)
+        event.preventDefault()
+        const last = this._lastEnabledIndex()
+        if (last >= 0) {
+          this._moveFocus(last)
+        }
       }
     } else if (event.key === "Tab") {
       if (isOpen === true) {
-        this._close()
+        this._close(false)
       }
-    } else if (event.key.length === 1) {
-      if (isOpen === true) {
+    } else if (event.key.length === 1 && event.ctrlKey === false && event.metaKey === false && event.altKey === false) {
+      /* Typeahead also works on the closed trigger: it opens the list first. */
+      if (isOpen === false) {
+        this._open()
+      }
+      if (this.hasAttribute("open") === true) {
         this._typeaheadMatch(event.key)
       }
     }
@@ -644,29 +813,35 @@ export class MjSelect extends FormControlMixin(MjElement) {
     this._typeahead = this._typeahead + char.toLowerCase()
     this._typeaheadTimer = setTimeout(() => {
       this._typeahead = ""
-    }, 500)
+    }, TYPEAHEAD_RESET_MS)
 
-    const allOpts = Array.from(this._listbox.querySelectorAll(".option"))
-    const match = allOpts.find((el) => {
-      const label = el.querySelector(".option-label")
-      const text = label !== null ? label.textContent.toLowerCase() : ""
-      return text.startsWith(this._typeahead) && el.getAttribute("aria-disabled") !== "true"
+    const match = this._optionData.find((item) => {
+      return item.disabled !== true && item.label.toLowerCase().startsWith(this._typeahead)
     })
-    if (match !== null && match !== undefined) {
-      const index = parseInt(match.dataset.index, 10)
-      this._moveFocus(index)
+    if (match !== undefined) {
+      this._moveFocus(match.index)
     }
     return
   }
 
+  /*
+   * A user selection. The `value` attribute is left alone: it is the default
+   * value a form reset goes back to. Picking the option that is already
+   * selected only closes the popup.
+   */
   _selectValue(newValue) {
     const previousValue = this._value
-    this._setFormValue(newValue)
-    this.setAttribute("value", newValue)
-    this._syncTriggerLabel()
-    this._updateOptionSelected()
-    this.emit("mj-change", { value: newValue, previousValue: previousValue })
-    this._close()
+    if (newValue !== previousValue) {
+      this._setFormValue(newValue)
+      this._syncTriggerLabel()
+      this._updateOptionSelected()
+      this.emit("mj-change", {
+        value: newValue,
+        previousValue: previousValue,
+        option: this.selectedOption
+      })
+    }
+    this._close(true)
     return
   }
 
@@ -676,15 +851,21 @@ export class MjSelect extends FormControlMixin(MjElement) {
     if (this._trigger === undefined) {
       return
     }
-    const disabled = this.hasAttribute("disabled")
+    const disabled = this._isDisabled()
     this._trigger.disabled = disabled
+    const required = this.hasAttribute("required")
+    if (required === true) {
+      this._trigger.setAttribute("aria-required", "true")
+    } else {
+      this._trigger.removeAttribute("aria-required")
+    }
     const readonly = this.hasAttribute("readonly")
     if (readonly === true) {
       this._trigger.setAttribute("aria-readonly", "true")
     } else {
       this._trigger.removeAttribute("aria-readonly")
     }
-    const invalid = this.hasAttribute("invalid")
+    const invalid = this.hasAttribute("invalid") || this._isUserInvalid() === true
     if (invalid === true) {
       this._trigger.setAttribute("aria-invalid", "true")
     } else {
@@ -693,8 +874,51 @@ export class MjSelect extends FormControlMixin(MjElement) {
     return
   }
 
+  /*
+   * FormControlMixin hooks: a failed validation (an mj-form submit) marks the
+   * control invalid, as the `invalid` attribute does, until it is valid again.
+   */
+  onInvalid(message) {
+    if (this._trigger !== undefined && this._trigger !== null) {
+      this._syncAccessibility()
+    }
+    return
+  }
+
+  onValidityRestored() {
+    if (this._trigger !== undefined && this._trigger !== null) {
+      this._syncAccessibility()
+    }
+    return
+  }
+
   _validationAnchor() {
     return this._trigger || this
+  }
+
+  /* ----- form callbacks ----- */
+
+  /* The base class has already restored the form value; show it. */
+  onFormReset(initial) {
+    this._syncTriggerLabel()
+    this._updateOptionSelected()
+    return
+  }
+
+  onFormRestore(state) {
+    this._syncTriggerLabel()
+    this._updateOptionSelected()
+    return
+  }
+
+  /* An ancestor <fieldset disabled> was switched on or off. */
+  onFormDisabled(disabled) {
+    this._formDisabled = disabled === true
+    this._syncAccessibility()
+    if (this._formDisabled === true && this._trigger !== undefined) {
+      this._close(false)
+    }
+    return
   }
 
   /* ----- scriptable API ----- */
@@ -724,9 +948,21 @@ export class MjSelect extends FormControlMixin(MjElement) {
     if (value === true) {
       this._open()
     } else {
-      this._close()
+      this._close(false)
     }
     return
+  }
+
+  /* Every <mj-option> of the select, in document order. */
+  get options() {
+    return this._getOptionEls()
+  }
+
+  /* The <mj-option> that carries the current value, or null. */
+  get selectedOption() {
+    const match = this._optionData.find((item) => item.value === this._value)
+    const option = match !== undefined ? match.el : null
+    return option
   }
 
   get disabled() {

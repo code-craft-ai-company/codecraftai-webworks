@@ -115,6 +115,35 @@ def component_for(group_key: str, tag: str) -> "ComponentDoc | None":
     return doc
 
 
+def component_neighbours(
+    group_key: str,
+    tag: str,
+) -> "tuple[ComponentDoc | None, ComponentDoc | None]":
+    """
+        Return the components before and after one within its group, in the
+        order the group page lists them.
+
+        :param group_key: The group key.
+        :param tag: The component tag.
+
+        :returns: (previous, next); either is None at the ends or when unknown.
+    """
+
+    components = group_components(group_key)
+
+    previous_doc = None
+    next_doc = None
+    for index, doc in enumerate(components):
+        if doc.tag == tag:
+            if index > 0:
+                previous_doc = components[index - 1]
+            if index + 1 < len(components):
+                next_doc = components[index + 1]
+            break
+
+    return previous_doc, next_doc
+
+
 def total_component_count() -> int:
     """
         Return the total number of catalogued components.

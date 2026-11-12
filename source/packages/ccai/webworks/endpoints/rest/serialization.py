@@ -12,12 +12,19 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
+import base64
 import dataclasses
+import enum
 import json
+
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Protocol, Type, runtime_checkable
+from uuid import UUID
 
 from ccai.webworks.endpoints.rest.exceptions import ValidationError
 from ccai.webworks.endpoints.rest.models import FieldError
+from ccai.webworks.endpoints.typeinspection import resolve_field_types, unwrap_optional
 
 
 @runtime_checkable
@@ -107,15 +114,121 @@ def _is_pydantic_model_instance(obj: Any) -> bool:
         return False
 
 
+def to_json_compatible(data: Any) -> Any:
+    """
+        Convert a Python value into one :func:`json.dumps` can write.
+
+        Containers are converted recursively, so a ``datetime`` three levels
+        down inside a dataclass is handled the same as one at the top. The
+        conversions are:
+
+        - ``datetime`` / ``date`` / ``time``: ISO 8601 text.
+        - ``timedelta``: seconds, as a number.
+        - ``UUID`` and ``Decimal``: their text form. A ``Decimal`` is not
+          written as a JSON number because a float cannot hold it exactly.
+        - ``Enum``: the member's value, converted in turn.
+        - ``bytes`` / ``bytearray``: base64 text.
+        - ``set`` / ``frozenset`` / ``tuple``: a list.
+        - Pydantic model: ``model_dump(mode="json")``.
+        - an object with a ``to_dict()`` method: the converted result.
+        - any other dataclass instance: an object of its fields.
+
+        A dict key that is not a string, number, bool or None is converted the
+        same way and then written as text.
+
+        :param data: The value to convert.
+
+        :returns: A value built only from dict, list, str, int, float, bool
+                  and None.
+
+        :raises TypeError: If a value has no JSON representation. It used to
+                           be written as ``str(value)``, which put text such
+                           as ``<Order object at 0x7f...>`` in a response and
+                           hid the mistake.
+    """
+    # Enum first: an IntEnum or StrEnum member is also an int or a str.
+    if isinstance(data, enum.Enum):
+        return to_json_compatible(data.value)
+
+    if data is None or isinstance(data, (str, bool, int, float)):
+        return data
+
+    if isinstance(data, dict):
+        converted: Dict[Any, Any] = {}
+        for key, value in data.items():
+            converted[_to_json_key(key)] = to_json_compatible(value)
+        return converted
+
+    if isinstance(data, (list, tuple, set, frozenset)):
+        return [to_json_compatible(item) for item in data]
+
+    if isinstance(data, (datetime, date, time)):
+        return data.isoformat()
+
+    if isinstance(data, timedelta):
+        return data.total_seconds()
+
+    if isinstance(data, (UUID, Decimal)):
+        return str(data)
+
+    if isinstance(data, (bytes, bytearray)):
+        return base64.b64encode(bytes(data)).decode("ascii")
+
+    if _is_pydantic_model_instance(data):
+        # mode="json" makes Pydantic itself render datetime, UUID, Decimal
+        # and Enum fields, honouring any serializers the model declares.
+        return to_json_compatible(data.model_dump(mode="json"))
+
+    # An object that defines its own wire form (PaginatedResponse,
+    # BulkOperationResult, RESTError) is asked for it, before the generic
+    # dataclass rule below would dump its fields as they are.
+    to_dict = getattr(data, "to_dict", None)
+    if callable(to_dict):
+        return to_json_compatible(to_dict())
+
+    if _is_dataclass_instance(data):
+        # Not dataclasses.asdict(): it deep-copies every value, and what is
+        # needed here is the conversion of each field.
+        converted = {}
+        for dc_field in dataclasses.fields(data):
+            converted[dc_field.name] = to_json_compatible(getattr(data, dc_field.name))
+        return converted
+
+    errmsg = "Object of type {} is not JSON serializable".format(type(data).__name__)
+    raise TypeError(errmsg)
+
+
+def _to_json_key(key: Any) -> Any:
+    """
+        Convert a dict key into one JSON accepts.
+
+        :param key: The key to convert.
+
+        :returns: The key unchanged when JSON accepts it as it is, otherwise
+                  its converted value as text.
+    """
+    if isinstance(key, enum.Enum):
+        rtnval = str(to_json_compatible(key.value))
+        return rtnval
+
+    if key is None or isinstance(key, (str, int, float, bool)):
+        return key
+
+    rtnval = str(to_json_compatible(key))
+    return rtnval
+
+
 class JSONSerializer:
     """
         JSON serializer supporting dataclasses and Pydantic models.
         
         This serializer converts Python objects to JSON bytes. It handles:
         - dict: Direct JSON encoding
-        - dataclass: Convert to dict via dataclasses.asdict()
-        - Pydantic model: Use model_dump()
+        - dataclass: An object of its fields
+        - Pydantic model: Use model_dump(mode="json")
         - list: Serialize each item recursively
+        - datetime, date, time, UUID, Decimal, Enum and bytes values,
+          wherever they appear (see :func:`to_json_compatible`)
         
         Attributes:
             content_type: Always "application/json".
@@ -133,6 +246,9 @@ class JSONSerializer:
             
             Returns:
                 JSON-encoded bytes with UTF-8 encoding.
+
+            Raises:
+                TypeError: If a value in ``data`` has no JSON representation.
         """
         converted = self._convert_to_serializable(data)
         return json.dumps(converted, ensure_ascii=False).encode("utf-8")
@@ -147,28 +263,8 @@ class JSONSerializer:
             Returns:
                 JSON-serializable Python object (dict, list, or primitive).
         """
-        if data is None:
-            return None
-        
-        if isinstance(data, (str, int, float, bool)):
-            return data
-        
-        if isinstance(data, dict):
-            return {key: self._convert_to_serializable(value) for key, value in data.items()}
-        
-        if isinstance(data, (list, tuple)):
-            return [self._convert_to_serializable(item) for item in data]
-        
-        if _is_pydantic_model_instance(data):
-            # Pydantic model: use model_dump()
-            return data.model_dump()
-        
-        if _is_dataclass_instance(data):
-            # Dataclass: use asdict()
-            return dataclasses.asdict(data)
-        
-        # Fallback: try to convert to string
-        return str(data)
+        rtnval = to_json_compatible(data)
+        return rtnval
 
 
 
@@ -319,18 +415,25 @@ class JSONDeserializer:
         fields = dataclasses.fields(schema)
         field_errors: List[FieldError] = []
         kwargs: Dict[str, Any] = {}
+
+        # Resolve the annotations to real types: under postponed annotations
+        # ``dc_field.type`` is a string, and an optional nested dataclass
+        # (``Address | None``) is a union, so neither would be recognised
+        # as a nested dataclass from the declared type alone.
+        field_types = resolve_field_types(schema)
         
         for dc_field in fields:
             field_name = dc_field.name
+            field_type = unwrap_optional(field_types.get(field_name, dc_field.type))
             
             if field_name in data:
                 # Field is present in data
                 value = data[field_name]
                 
                 # Check for nested dataclass
-                if _is_dataclass_type(dc_field.type):
+                if value is not None and _is_dataclass_type(field_type):
                     try:
-                        value = self._deserialize_dataclass(value, dc_field.type)
+                        value = self._deserialize_dataclass(value, field_type)
                     except ValidationError as e:
                         # Prefix field errors with parent field name
                         for fe in e.field_errors:
@@ -464,7 +567,13 @@ class SerializerRegistry:
             return None
         
         # Parse Accept header into list of (content_type, quality) tuples
-        accept_types = self._parse_accept_header(accept_header)
+        parsed_types = self._parse_accept_header(accept_header)
+
+        # A range with q=0 means "not acceptable" (RFC 9110 section 12.4.2):
+        # it is never selected, and a type it names is not selected through
+        # a wildcard either.
+        refused_types = [content_type for content_type, quality in parsed_types if quality <= 0.0]
+        accept_types = [(content_type, quality) for content_type, quality in parsed_types if quality > 0.0]
         
         # Sort by quality (descending)
         accept_types.sort(key=lambda x: x[1], reverse=True)
@@ -473,19 +582,42 @@ class SerializerRegistry:
         for content_type, _ in accept_types:
             # Handle wildcards
             if content_type == "*/*":
-                # Return first registered serializer's content type
-                if self._serializers:
-                    return next(iter(self._serializers.keys()))
+                # Return the first registered serializer the client did not refuse
+                for registered_type in self._serializers.keys():
+                    if not self._is_refused(registered_type, refused_types):
+                        return registered_type
             elif content_type.endswith("/*"):
                 # Type wildcard (e.g., "application/*")
                 type_prefix = content_type[:-1]  # "application/"
                 for registered_type in self._serializers.keys():
                     if registered_type.startswith(type_prefix):
-                        return registered_type
+                        if not self._is_refused(registered_type, refused_types):
+                            return registered_type
             elif content_type in self._serializers:
                 return content_type
         
         return None
+
+    @staticmethod
+    def _is_refused(content_type: str, refused_types: List[str]) -> bool:
+        """
+            Whether a content type is covered by a media range the client
+            sent with ``q=0``.
+
+            Args:
+                content_type: A registered content type.
+                refused_types: The media ranges sent with ``q=0``.
+
+            Returns:
+                True if the client refused the content type.
+        """
+        for refused in refused_types:
+            if refused == "*/*" or refused == content_type:
+                return True
+            if refused.endswith("/*") and content_type.startswith(refused[:-1]):
+                return True
+
+        return False
     
     def _parse_accept_header(self, accept_header: str) -> List[tuple]:
         """

@@ -1291,3 +1291,510 @@ def test_property_33_error_threshold_quarantine():
             raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# discover()
+# =============================================================================
+
+class _DiscoveredExtension(Extension):
+    """
+        An extension class that takes its metadata from its manifest.
+    """
+
+    def initialize(self, context) -> None:
+        super().initialize(context)
+        self.seen_config = dict(context.config)
+        return
+
+
+def _write_extension_manifest(directory: str, name: str, entry_point: str, extra: Optional[Dict[str, Any]] = None) -> None:
+    """
+        Write an extension.json manifest into a new subdirectory.
+
+        :param directory: The search path to create the subdirectory in.
+        :param name: The extension name; also the subdirectory name.
+        :param entry_point: The entry point to put in the manifest.
+        :param extra: Additional manifest fields.
+    """
+    import json
+    import os
+
+    manifest_data = {"name": name, "version": "1.0.0", "entry_point": entry_point}
+    if extra is not None:
+        manifest_data.update(extra)
+
+    extension_dir = os.path.join(directory, name)
+    os.makedirs(extension_dir)
+
+    with open(os.path.join(extension_dir, "extension.json"), "w") as manifest_file:
+        json.dump(manifest_data, manifest_file)
+
+    return
+
+
+_DISCOVERED_ENTRY_POINT = "ccai.tests.singlehost.webworks.extensibility.test_registry._DiscoveredExtension"
+
+
+def test_discover_registers_extensions_found_in_paths():
+    """
+        Test that discover() loads and registers the extensions whose
+        manifests are found and returns their names.
+    """
+    import shutil
+    import tempfile
+
+    from pathlib import Path
+
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        _write_extension_manifest(temp_dir, "found-one", _DISCOVERED_ENTRY_POINT)
+        _write_extension_manifest(temp_dir, "found-two", _DISCOVERED_ENTRY_POINT)
+
+        registry = ExtensionRegistry(app_context=_FakeAppContext())
+        names = registry.discover([Path(temp_dir)])
+
+        if names != ["found-one", "found-two"]:
+            errmsg = "Expected ['found-one', 'found-two'], got {}".format(names)
+            raise AssertionError(errmsg)
+
+        if not isinstance(registry.get("found-one"), _DiscoveredExtension):
+            errmsg = "Expected 'found-one' to be registered as a _DiscoveredExtension"
+            raise AssertionError(errmsg)
+
+        if registry.get_state("found-two") != ExtensionState.REGISTERED:
+            errmsg = "Expected 'found-two' to be in the REGISTERED state"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return
+
+
+def test_discover_skips_extension_that_cannot_be_loaded():
+    """
+        Test that a manifest whose entry point is not an extension is
+        skipped and the other extensions are still registered.
+    """
+    import shutil
+    import tempfile
+
+    from pathlib import Path
+
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        _write_extension_manifest(temp_dir, "bad-entry", "sys.exit")
+        _write_extension_manifest(temp_dir, "good-entry", _DISCOVERED_ENTRY_POINT)
+
+        registry = ExtensionRegistry(app_context=_FakeAppContext())
+        names = registry.discover([Path(temp_dir)])
+
+        if names != ["good-entry"]:
+            errmsg = "Expected ['good-entry'], got {}".format(names)
+            raise AssertionError(errmsg)
+
+        if registry.get("bad-entry") is not None:
+            errmsg = "Expected 'bad-entry' not to be registered"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return
+
+
+def test_discover_skips_name_that_is_already_registered():
+    """
+        Test that a discovered extension does not replace one registered
+        under the same name.
+    """
+    import shutil
+    import tempfile
+
+    from pathlib import Path
+
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        _write_extension_manifest(temp_dir, "simple-ext", _DISCOVERED_ENTRY_POINT)
+
+        registry = ExtensionRegistry(app_context=_FakeAppContext())
+        existing = _SimpleExtension()
+        registry.register(existing)
+
+        names = registry.discover([Path(temp_dir)])
+
+        if names != [] or registry.get("simple-ext") is not existing:
+            errmsg = "Expected the registered extension to be kept, got {}".format(names)
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return
+
+
+def test_discover_respects_allowed_packages():
+    """
+        Test that discover() does not load an extension outside the allowed
+        packages.
+    """
+    import shutil
+    import tempfile
+
+    from pathlib import Path
+
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        _write_extension_manifest(temp_dir, "found-one", _DISCOVERED_ENTRY_POINT)
+
+        registry = ExtensionRegistry(app_context=_FakeAppContext())
+        names = registry.discover([Path(temp_dir)], allowed_packages=["some.other.package"])
+
+        if names != []:
+            errmsg = "Expected no extension to be registered, got {}".format(names)
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return
+
+
+def test_discovered_extension_gets_manifest_config_defaults():
+    """
+        Test that the configuration schema of a discovered extension's
+        manifest supplies defaults when the extension is initialized.
+    """
+    import shutil
+    import tempfile
+
+    from pathlib import Path
+
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        config_schema = {
+            "type": "object",
+            "properties": {"greeting": {"type": "string", "default": "hello"}},
+        }
+        _write_extension_manifest(temp_dir, "configured", _DISCOVERED_ENTRY_POINT, extra={"config_schema": config_schema})
+
+        registry = ExtensionRegistry(app_context=_FakeAppContext())
+        registry.discover([Path(temp_dir)])
+        registry.initialize_all()
+
+        extension = registry.get("configured")
+
+        if extension.seen_config.get("greeting") != "hello":
+            errmsg = "Expected the manifest default for 'greeting', got {}".format(extension.seen_config)
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return
+
+
+# =============================================================================
+# Services are shared between extensions and contexts are frozen
+# =============================================================================
+
+class _ServiceProviderExtension(Extension):
+    """
+        An extension that registers a service when it is initialized.
+    """
+
+    name = "service-provider"
+
+    def initialize(self, context) -> None:
+        super().initialize(context)
+        context.register_service("db", "the-database")
+        return
+
+
+class _ServiceConsumerExtension(Extension):
+    """
+        An extension that looks a service up when it is initialized.
+    """
+
+    name = "service-consumer"
+    dependencies = ["service-provider"]
+
+    def initialize(self, context) -> None:
+        super().initialize(context)
+        self.found_service = context.get_service("db")
+        return
+
+
+def test_service_registered_by_one_extension_is_found_by_another():
+    """
+        Test that an extension finds a service a dependency registered.
+    """
+    registry = ExtensionRegistry(app_context=_FakeAppContext())
+    consumer = _ServiceConsumerExtension()
+    registry.register(consumer)
+    registry.register(_ServiceProviderExtension())
+
+    registry.initialize_all()
+
+    if consumer.found_service != "the-database":
+        errmsg = "Expected the consumer to find the provider's service, got {!r}".format(consumer.found_service)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_contexts_are_frozen_after_initialize_all():
+    """
+        Test that registering a service after initialize_all() raises
+        ExtensionContextFrozenError.
+    """
+    from ccai.webworks.extensibility.exceptions import ExtensionContextFrozenError
+
+    registry = ExtensionRegistry(app_context=_FakeAppContext())
+    extension = _SimpleExtension()
+    registry.register(extension)
+
+    registry.initialize_all()
+
+    raised = False
+    try:
+        extension.context.register_service("late", object())
+    except ExtensionContextFrozenError:
+        raised = True
+
+    if raised is not True:
+        errmsg = "Expected ExtensionContextFrozenError after initialize_all()"
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Hooks follow the state of their extension
+# =============================================================================
+
+def _registry_with_hook(hook_name: str, callback) -> ExtensionRegistry:
+    """
+        Create a registry with the simple extension initialized, enabled and
+        owning one hook callback.
+
+        :param hook_name: The hook to register the callback for.
+        :param callback: The hook callback.
+
+        :returns: The registry.
+    """
+    registry = ExtensionRegistry(app_context=_FakeAppContext())
+    registry.register(_SimpleExtension())
+    registry.initialize_all()
+    registry.enable("simple-ext")
+    registry.hook_manager.register(hook_name, callback, extension_name="simple-ext")
+    return registry
+
+
+def test_disabled_extension_hooks_do_not_run():
+    """
+        Test that the hooks of a disabled extension are not executed.
+    """
+    calls = []
+    registry = _registry_with_hook("before_request", lambda: calls.append("called"))
+
+    registry.disable("simple-ext")
+    registry.hook_manager.execute("before_request")
+
+    if len(calls) != 0:
+        errmsg = "Expected the hook of a disabled extension not to run"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_reenabled_extension_hooks_run_again():
+    """
+        Test that the hooks of an extension run again once it is enabled.
+    """
+    calls = []
+    registry = _registry_with_hook("before_request", lambda: calls.append("called"))
+
+    registry.disable("simple-ext")
+    registry.enable("simple-ext")
+    registry.hook_manager.execute("before_request")
+
+    if calls != ["called"]:
+        errmsg = "Expected the hook to run once after re-enabling, got {}".format(calls)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_hook_failures_count_as_extension_errors():
+    """
+        Test that a hook callback that raises is recorded as an error of its
+        extension.
+    """
+    def failing_hook():
+        raise RuntimeError("hook failed")
+
+    registry = _registry_with_hook("before_request", failing_hook)
+
+    registry.hook_manager.execute("before_request")
+    registry.hook_manager.execute("before_request")
+
+    if registry.get_error_count("simple-ext") != 2:
+        errmsg = "Expected 2 recorded errors, got {}".format(registry.get_error_count("simple-ext"))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_repeatedly_failing_hook_quarantines_extension_and_stops_running():
+    """
+        Test that a hook that keeps failing quarantines its extension, after
+        which the hook is no longer executed.
+    """
+    calls = []
+
+    def failing_hook():
+        calls.append("called")
+        raise RuntimeError("hook failed")
+
+    registry = _registry_with_hook("before_request", failing_hook)
+
+    for _ in range(10):
+        registry.hook_manager.execute("before_request")
+
+    if registry.get_state("simple-ext") != ExtensionState.QUARANTINED:
+        errmsg = "Expected the extension to be quarantined, got {}".format(registry.get_state("simple-ext"))
+        raise AssertionError(errmsg)
+
+    if len(calls) != 5:
+        errmsg = "Expected the hook to run 5 times before quarantine stopped it, got {}".format(len(calls))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_failing_on_extension_error_hook_does_not_recurse():
+    """
+        Test that an on_extension_error callback that raises is recorded
+        without firing on_extension_error again for itself.
+    """
+    calls = []
+
+    def failing_error_hook(error_info):
+        calls.append(error_info.hook_name)
+        raise RuntimeError("error hook failed")
+
+    def failing_hook():
+        raise RuntimeError("hook failed")
+
+    registry = ExtensionRegistry(app_context=_FakeAppContext())
+    registry.register(_SimpleExtension())
+    registry.register(_ExtensionA())
+    registry.initialize_all()
+
+    registry.hook_manager.register("before_request", failing_hook, extension_name="simple-ext")
+    registry.hook_manager.register("on_extension_error", failing_error_hook, extension_name="ext-a")
+
+    registry.hook_manager.execute("before_request")
+
+    if calls != ["before_request"]:
+        errmsg = "Expected on_extension_error to fire once, got {}".format(calls)
+        raise AssertionError(errmsg)
+
+    if registry.get_error_count("ext-a") != 1:
+        errmsg = "Expected the failing error hook to be recorded once, got {}".format(registry.get_error_count("ext-a"))
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Shutting the extensions down
+# =============================================================================
+
+class _ShutdownRecorder(Extension):
+    """An extension that records its shutdown in a shared list."""
+
+    name = ""
+    log: List[str] = []
+    fail_shutdown = False
+
+    def shutdown(self) -> None:
+        type(self).log.append(self.name)
+        if self.fail_shutdown is True:
+            raise RuntimeError("shutdown of {} failed".format(self.name))
+        return
+
+
+def _make_shutdown_recorder(name: str, dependencies: List[str], log: List[str], fail: bool = False) -> Extension:
+    """
+        Build a _ShutdownRecorder subclass instance with its own name,
+        dependencies and failure behaviour.
+
+        :param name: The extension name.
+        :param dependencies: The names it depends on.
+        :param log: The shared shutdown log.
+        :param fail: Whether its shutdown raises.
+
+        :returns: The extension instance.
+    """
+    recorder_cls = type(
+        "_Recorder_" + name.replace("-", "_"),
+        (_ShutdownRecorder,),
+        {"name": name, "dependencies": list(dependencies), "log": log, "fail_shutdown": fail}
+    )
+    rtnval = recorder_cls()
+    return rtnval
+
+
+def test_shutdown_all_runs_in_reverse_dependency_order_past_failures():
+    """
+        Test that shutdown_all shuts down dependents before their
+        dependencies, continues past an extension whose shutdown raises,
+        records the failure and suspends the hooks of every extension.
+    """
+    log: List[str] = []
+    registry = ExtensionRegistry(app_context=_FakeAppContext())
+
+    registry.register(_make_shutdown_recorder("base", [], log))
+    registry.register(_make_shutdown_recorder("middle", ["base"], log, fail=True))
+    registry.register(_make_shutdown_recorder("top", ["middle"], log))
+
+    registry.initialize_all()
+
+    if registry.initialized_names() != ["base", "middle", "top"]:
+        raise AssertionError("Unexpected initialization order {}".format(registry.initialized_names()))
+
+    failed = registry.shutdown_all()
+
+    if log != ["top", "middle", "base"]:
+        raise AssertionError("Expected reverse dependency order, got {}".format(log))
+
+    if failed != ["middle"]:
+        raise AssertionError("Expected 'middle' to be reported as failed, got {}".format(failed))
+
+    if registry.get_error_count("middle") != 1:
+        raise AssertionError("Expected the failed shutdown to be recorded as an error")
+
+    for name in ("base", "middle", "top"):
+        if registry.hook_manager.is_suspended(name) is not True:
+            raise AssertionError("Expected the hooks of {} to be suspended".format(name))
+
+    return
+
+
+def test_shutdown_all_skips_extensions_that_were_never_initialized():
+    """
+        Test that shutdown_all only shuts down what initialize_all started.
+    """
+    log: List[str] = []
+    registry = ExtensionRegistry(app_context=_FakeAppContext())
+    registry.register(_make_shutdown_recorder("never-started", [], log))
+
+    failed = registry.shutdown_all()
+
+    if log != [] or failed != []:
+        raise AssertionError("Expected nothing to be shut down, got {} / {}".format(log, failed))
+
+    return

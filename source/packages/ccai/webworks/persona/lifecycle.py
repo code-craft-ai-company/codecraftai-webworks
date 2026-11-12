@@ -77,14 +77,21 @@ class BlueprintAlreadyRegisteredError(SemanticError):
         :class:`RestBlueprint` class that has already been registered
         with the WebApplication.
 
-        :param blueprint_cls: The blueprint class that was already registered.
+        :param blueprint_cls: The blueprint class -- or the configured
+            blueprint instance -- that was already registered.
     """
 
     def __init__(self, blueprint_cls: Type):
         self.blueprint_cls = blueprint_cls
 
+        # A configured blueprint (a Swagger UI or ReDoc page, say) is
+        # registered as an instance, which has no __name__ of its own.
+        blueprint_name = getattr(blueprint_cls, "__name__", None)
+        if blueprint_name is None:
+            blueprint_name = type(blueprint_cls).__name__
+
         errmsg = (
-            f"Blueprint '{blueprint_cls.__name__}' has already been registered. "
+            f"Blueprint '{blueprint_name}' has already been registered. "
             f"Duplicate registration is not allowed."
         )
         super().__init__(errmsg)

@@ -47,35 +47,35 @@ high-level grid of many pipelines.
 
 | Mode / Variant | Attribute | Behavior |
 |---|---|---|
-| Horizontal | `orientation="horizontal"` (default) | Stages flow left to right |
-| Vertical | `orientation="vertical"` | Stages flow top to bottom |
 | Compact | `density="compact"` | Stage boxes show icon and name only |
 | Full | `density="full"` (default) | Stage boxes include duration and actor |
-| Read-only | `readonly` (boolean) | No approval actions; logs are still viewable |
-| Live | `live` (boolean) | SSE or polling via adapter at `poll-interval` ms |
+| Read-only | `readonly` (boolean) | Gates are still selectable and show their status, but a pending gate offers no Approve / Reject buttons; logs are still viewable |
+| Live | `live` (boolean) | Each new `data` assignment is compared with the previous one and `mj-status-change` fires per stage whose status changed (announced politely, assertively for `failed`). The component does not poll or stream itself (SSE / `poll-interval` not implemented) |
+
+Stages always flow left to right (inline direction); the former `orientation`
+attribute was removed and is not observed.
 
 ## 5. Attributes
 
 | Attribute | Type | Default | Reflects | Description |
 |-----------|------|---------|----------|-------------|
-| `src` | string | `""` | yes | URL for the CI data-source adapter |
-| `adapter` | string | `"static"` | yes | Adapter key: `"static"`, `"github-actions"`, `"gitlab-ci"`, `"jenkins"` |
-| `orientation` | `"horizontal"` \| `"vertical"` | `"horizontal"` | yes | Layout direction |
-| `density` | `"compact"` \| `"full"` | `"full"` | yes | Detail level on stage nodes |
-| `readonly` | boolean | `false` | yes | Prevents approval/gate actions |
-| `live` | boolean | `false` | yes | Enables live status updates |
-| `poll-interval` | number (ms) | `15000` | yes | Polling interval when `live` is set and SSE unavailable |
-| `run-id` | string | `""` | yes | Pipeline run identifier forwarded to the adapter |
-| `locale` | string | `""` | yes | BCP 47 locale for duration/timestamp formatting |
-| `label-loading` | string | `"Loading pipeline…"` | yes | Overrides loading message |
-| `label-empty` | string | `"No pipeline data."` | yes | Overrides empty message |
-| `label-error` | string | `"Failed to load pipeline."` | yes | Overrides error message |
+| `src` | string | `""` | no | URL of a JSON document with the pipeline data, fetched when no `data` property has been assigned. Changing it clears the data and fetches again. A failure shows the error state and fires `mj-error` |
+| `adapter` | string | `"static"` | yes | **Not implemented** (not observed by the component). Adapter key: `"static"`, `"github-actions"`, `"gitlab-ci"`, `"jenkins"` |
+| `density` | `"compact"` \| `"full"` | `"full"` | yes | `compact` draws smaller stage boxes (112×48 instead of 140×64) |
+| `readonly` | boolean | `false` | yes | Hides the Approve / Reject buttons of pending gates |
+| `live` | boolean | `false` | yes | Emits `mj-status-change` for status changes between data assignments (see Live above) |
+| `poll-interval` | number (ms) | `15000` | yes | **Not implemented** (not observed by the component). Polling interval when `live` is set and SSE unavailable |
+| `run-id` | string | `""` | yes | **Not implemented** (not observed by the component). Pipeline run identifier forwarded to the adapter (`mj-data-load` reports `data.id`) |
+| `locale` | string | `""` | yes | **Not implemented** (not observed by the component). BCP 47 locale for duration/timestamp formatting |
+| `label-loading` | string | `"Loading pipeline…"` | yes | **Not implemented** (not observed by the component). Overrides loading message |
+| `label-empty` | string | `"No pipeline data."` | yes | **Not implemented** (not observed by the component). Overrides empty message (use the `empty` slot) |
+| `label-error` | string | `"Failed to load pipeline."` | yes | **Not implemented** (not observed by the component). Overrides error message |
 
 ## 6. Properties
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `data` | `PipelineData` | Full pipeline object: `{ id, stages, gates, edges, status, startedAt, finishedAt }` |
+| `data` | `PipelineData` | Full pipeline object: `{ id, stages, gates, edges, status, startedAt, finishedAt }`. `edges` is optional: without it the stages are chained in array order. Gates whose `fromStage` names no known stage are skipped. Data can instead be declared with the `src` attribute or an inline `<script type="application/json">` child; an assigned `data` property always wins |
 | `selectedStage` | `StageNode \| null` | Currently selected/expanded stage |
 | `overallStatus` | `"pending" \| "running" \| "passed" \| "failed" \| "cancelled"` | Computed from stage statuses |
 
@@ -96,10 +96,10 @@ high-level grid of many pipelines.
 |-------|----------|---------|------------|-------------|
 | `mj-stage-select` | `{ stage: StageNode }` | yes | no | Stage node clicked/activated |
 | `mj-stage-deselect` | `{}` | yes | no | Selection cleared |
-| `mj-gate-approve` | `{ gate: GateNode, action: "approve" \| "reject" }` | yes | yes | Gate action fired; cancelable to intercept |
-| `mj-status-change` | `{ stageId: string, previous: string, current: string }` | yes | no | A stage status changed (live mode) |
-| `mj-data-load` | `{ stages: number, runId: string }` | yes | no | After a successful data fetch |
-| `mj-error` | `{ message: string, cause: unknown }` | yes | no | Adapter error |
+| `mj-gate-approve` | `{ gate: GateNode, action: "approve" \| "reject" }` | yes | yes | Approve / Reject pressed on a pending gate (never when `readonly`). Canceling it keeps the gate pending; otherwise the decision is shown in the chart, focus returns to the gate and the outcome is announced. The host's `data` object is not modified |
+| `mj-status-change` | `{ stageId: string, previous: string, current: string }` | yes | no | A stage status differs from the previously assigned data (only while `live` is set) |
+| `mj-data-load` | `{ stages: number, runId: string }` | yes | no | After data is assigned (property, `src` or inline JSON) and drawn; `runId` is `data.id` as text |
+| `mj-error` | `{ message: string }` | yes | no | The `src` fetch failed or the inline JSON could not be parsed |
 
 ## 9. CSS parts & custom properties
 
@@ -164,7 +164,9 @@ and `Intl.DurationFormat` where available.
 
 ## 13. Accessibility
 
-- Root element: `role="img"` with `aria-label` summarizing pipeline state
+- Root wrapper: `role="group"` with `aria-label` summarizing pipeline state; the
+  `<svg>` is a labelled `role="group"` whose stage and gate marks are
+  `role="button"` with one roving tab stop
   (e.g. "CI pipeline: 6 stages, status: failed").
 - Stage nodes: `role="button"` with `aria-expanded` (log panel open/closed);
   `aria-label` = "{name} stage, status: {status}, duration: {duration}".

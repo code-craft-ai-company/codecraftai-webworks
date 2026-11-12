@@ -2,28 +2,37 @@
  * voronoi.js
  *
  * Voronoi diagram renderer — partitions the 2-D plot surface into
- * nearest-neighbour regions around seed points.  Uses a simple
- * half-plane intersection (Fortune's algorithm approximation via
- * iterative half-plane clipping) implemented without external libraries.
+ * nearest-neighbour regions around seed points, by half-plane clipping
+ * (Sutherland-Hodgman on perpendicular bisectors), without external
+ * libraries.
+ *
+ * Cells are computed in DATA units (the Euclidean partition of the data
+ * space) and then mapped to the screen, so they do not change when the
+ * chart is resized. `aspect="equal"` (attribute, or raw.aspect) draws both
+ * axes with one scale so the cells also look Euclidean on screen.
+ *
+ * Each cell is clipped only by the sites that can still reach it (sites
+ * are tried nearest first; one farther than twice the cell's radius
+ * cannot cut it), which keeps large inputs fast. Duplicate sites are
+ * merged. The domain is padded so edge seeds and their labels stay inside.
  *
  * Registered types:
  *   "voronoi"
  *
  * ctx.raw shape:
  *   raw.series  [{name, points:[{x, y, label?}]}]
+ *
+ * Attribute `mode`: "filled" (default) | "overlay" (outlines only).
+ *
+ * Interaction: each cell emits `mj-chart-cell-click` { series, label, x, y }.
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber } from "../svgdraw.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
 import { linearScale, niceTicks } from "../scales.js";
-import { extent } from "../svgdraw.js";
 
 
 /* ── half-plane polygon clipping (Sutherland-Hodgman on line bisectors) ─ */
-
-function _dot(a, b) {
-  return a.x * b.x + a.y * b.y
-}
 
 function _clipPolygonByHalfPlane(polygon, px1, py1, px2, py2) {
   /*
@@ -74,60 +83,61 @@ function _clipPolygonByHalfPlane(polygon, px1, py1, px2, py2) {
 }
 
 
-function _voronoiCells(points, w, h) {
+function _voronoiCells(points, box) {
   /*
-   * Compute Voronoi cells for a set of 2-D points within a [0,w]×[0,h]
-   * bounding box via iterative half-plane clipping.
+   * Compute Voronoi cells for 2-D points inside a bounding box.
    *
-   * For each seed point, the cell is the intersection of half-planes
-   * defined by the perpendicular bisectors to every other seed point.
+   * For each site the cell starts as the box and is clipped by the
+   * perpendicular bisector to other sites, nearest first; a site farther
+   * than twice the cell's current radius cannot cut the cell, so the
+   * remaining sites are skipped.
    *
-   * :param points: Array of {x, y}.
-   * :param w:      Plot width.
-   * :param h:      Plot height.
+   * :param points: Array of {x, y} (distinct).
+   * :param box: { x0, y0, x1, y1 }.
    * :returns: Array of polygons (arrays of {x,y}), one per input point.
    */
   const boundingBox = [
-    { x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }
+    { x: box.x0, y: box.y0 }, { x: box.x1, y: box.y0 },
+    { x: box.x1, y: box.y1 }, { x: box.x0, y: box.y1 }
   ]
-
   const cells = []
 
   for (let i = 0; i < points.length; i = i + 1) {
     const si = points[i]
     let cell = boundingBox.slice()
-
+    const others = []
     for (let j = 0; j < points.length; j = j + 1) {
-      if (j === i) {
-        continue
+      if (j !== i) {
+        const dx = points[j].x - si.x
+        const dy = points[j].y - si.y
+        others.push({ index: j, distance: dx * dx + dy * dy })
       }
-      const sj = points[j]
+    }
+    others.sort((a, b) => a.distance - b.distance)
 
-      /* Perpendicular bisector of si and sj:
-       * mid-point M, normal direction (sj - si).
-       * Half-plane: all p where (p - M)·(sj - si) ≤ 0  (closer to si).
-       * Expressed as directed line: from mid point perpendicular.
-       */
+    for (let k = 0; k < others.length; k = k + 1) {
+      let reach = 0
+      for (let v = 0; v < cell.length; v = v + 1) {
+        const dx = cell[v].x - si.x
+        const dy = cell[v].y - si.y
+        reach = Math.max(reach, dx * dx + dy * dy)
+      }
+      /* distance^2 > (2 * radius)^2 = 4 * radius^2: no farther site matters. */
+      if (others[k].distance > 4 * reach) {
+        break
+      }
+      const sj = points[others[k].index]
       const mx = (si.x + sj.x) / 2
       const my = (si.y + sj.y) / 2
       const dx = sj.x - si.x
       const dy = sj.y - si.y
-
-      /* Directed line: p1 = M + perp, p2 = M - perp (so left side = si side) */
-      const px1 = mx + dy
-      const py1 = my - dx
-      const px2 = mx - dy
-      const py2 = my + dx
-
-      cell = _clipPolygonByHalfPlane(cell, px1, py1, px2, py2)
+      cell = _clipPolygonByHalfPlane(cell, mx + dy, my - dx, mx - dy, my + dx)
       if (cell.length === 0) {
         break
       }
     }
-
     cells.push(cell)
   }
-
   return cells
 }
 
@@ -150,154 +160,145 @@ function _polygonPath(polygon) {
 
 /* ── renderer ─────────────────────────────────────────────────────────── */
 
+function _paddedExtent(values) {
+  /*
+   * [min, max] widened by 6% each side (a single value gets +-1).
+   */
+  let low = Math.min(...values)
+  let high = Math.max(...values)
+  if (low === high) {
+    low = low - 1
+    high = high + 1
+  }
+  const pad = (high - low) * 0.06
+  return [low - pad, high + pad]
+}
+
+
 export function render(ctx) {
   /*
    * Render a Voronoi diagram.
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
-  const raw  = ctx.raw
+  const raw = ctx.raw !== null && ctx.raw !== undefined ? ctx.raw : {}
   const root = svgEl("g", { part: "plot" }, [])
+  const series = ctx.model.series
 
-  const series = (raw !== null && raw !== undefined && Array.isArray(raw.series))
-    ? raw.series
-    : []
-
-  if (series.length === 0) {
-    return root
-  }
-
-  const mode   = ctx.attrs("mode", "filled")
-  const margin = { top: 16, right: 16, bottom: 40, left: 52 }
-  const plotW  = Math.max(ctx.width  - margin.left - margin.right,  10)
-  const plotH  = Math.max(ctx.height - margin.top  - margin.bottom, 10)
-
-  /* Collect all points and compute data-space extents */
-  const allXValues = []
-  const allYValues = []
+  /* Sites: finite x / y, duplicates merged (labels joined). */
+  const sites = []
+  const byKey = new Map()
   for (let s = 0; s < series.length; s = s + 1) {
-    const pts = series[s].points || []
-    for (let p = 0; p < pts.length; p = p + 1) {
-      if (typeof pts[p].x === "number") {
-        allXValues.push(pts[p].x)
+    const entry = series[s]
+    const points = Array.isArray(entry.points) === true ? entry.points : []
+    for (let p = 0; p < points.length; p = p + 1) {
+      const point = points[p]
+      if (point === null || typeof point !== "object" ||
+          typeof point.x !== "number" || Number.isFinite(point.x) === false ||
+          typeof point.y !== "number" || Number.isFinite(point.y) === false) {
+        continue
       }
-      if (typeof pts[p].y === "number") {
-        allYValues.push(pts[p].y)
+      const label = point.label !== undefined && point.label !== null ? String(point.label) : null
+      const key = `${point.x}|${point.y}`
+      if (byKey.has(key) === true) {
+        const site = byKey.get(key)
+        if (label !== null) {
+          site.labels.push(label)
+        }
+        continue
       }
+      const site = {
+        dataX: point.x, dataY: point.y, labels: label !== null ? [label] : [],
+        seriesName: entry.name, color: ctx.colorFor(entry.name)
+      }
+      byKey.set(key, site)
+      sites.push(site)
     }
   }
 
-  if (allXValues.length === 0) {
+  ctx.setTable({
+    columns: ["Series", "Label", "X", "Y"],
+    rows: sites.map((site) => [site.seriesName, site.labels.join(", "), site.dataX, site.dataY]),
+    caption: ctx.label
+  })
+
+  if (sites.length === 0) {
     return root
   }
 
-  const xExt  = extent(allXValues)
-  const yExt  = extent(allYValues)
-  const xScale = linearScale(xExt, [0, plotW])
-  const yScale = linearScale(yExt, [plotH, 0])
+  const mode = ctx.attrs("mode", "filled")
+  const equal = ctx.attrs("aspect", raw.aspect === "equal" ? "equal" : null) === "equal"
+  const margin = { top: 12, right: 16, bottom: 32, left: 48 }
+  const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
+  const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
 
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
+  let xDomain = _paddedExtent(sites.map((site) => site.dataX))
+  let yDomain = _paddedExtent(sites.map((site) => site.dataY))
+  if (equal === true) {
+    /* One scale for both axes: widen the narrower domain to the box's ratio. */
+    const unit = Math.max((xDomain[1] - xDomain[0]) / plotW, (yDomain[1] - yDomain[0]) / plotH)
+    const xMid = (xDomain[0] + xDomain[1]) / 2
+    const yMid = (yDomain[0] + yDomain[1]) / 2
+    xDomain = [xMid - unit * plotW / 2, xMid + unit * plotW / 2]
+    yDomain = [yMid - unit * plotH / 2, yMid + unit * plotH / 2]
+  }
+  const xScale = linearScale(xDomain, [0, plotW])
+  const yScale = linearScale(yDomain, [plotH, 0])
+
+  const plot = svgEl("g", { transform: `translate(${margin.left},${margin.top})` }, [])
   root.appendChild(plot)
 
-  /* Axes */
-  const xTicks = niceTicks(xExt[0], xExt[1], 5)
+  /* Axes (decoration). */
+  const axes = svgEl("g", { "aria-hidden": "true" }, [])
+  plot.appendChild(axes)
+  const xTicks = niceTicks(xDomain[0], xDomain[1], Math.max(Math.min(Math.floor(plotW / 70), 6), 2))
   for (let t = 0; t < xTicks.length; t = t + 1) {
     const px = xScale(xTicks[t])
-    plot.appendChild(svgEl("line", {
-      x1: px, y1: 0, x2: px, y2: plotH,
-      stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
+    axes.appendChild(svgEl("line", {
+      x1: px, y1: 0, x2: px, y2: plotH, stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
     }, []))
-    plot.appendChild(svgEl("text", {
-      x: px, y: plotH + 14,
-      "text-anchor": "middle",
-      "font-size": 11,
-      fill: "var(--mj-text-muted, #6b7280)"
+    axes.appendChild(svgEl("text", {
+      x: px, y: plotH + 14, "text-anchor": "middle", "font-size": 11,
+      fill: "var(--mj-text-muted, #5f6673)"
     }, formatNumber(xTicks[t])))
   }
-
-  const yTicks = niceTicks(yExt[0], yExt[1], 5)
+  const yTicks = niceTicks(yDomain[0], yDomain[1], Math.max(Math.min(Math.floor(plotH / 40), 6), 2))
   for (let t = 0; t < yTicks.length; t = t + 1) {
     const py = yScale(yTicks[t])
-    plot.appendChild(svgEl("line", {
-      x1: 0, y1: py, x2: plotW, y2: py,
-      stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
+    axes.appendChild(svgEl("line", {
+      x1: 0, y1: py, x2: plotW, y2: py, stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
     }, []))
-    plot.appendChild(svgEl("text", {
-      x: -6, y: py + 4,
-      "text-anchor": "end",
-      "font-size": 11,
-      fill: "var(--mj-text-muted, #6b7280)"
+    axes.appendChild(svgEl("text", {
+      x: -6, y: py + 4, "text-anchor": "end", "font-size": 11, fill: "var(--mj-text-muted, #5f6673)"
     }, formatNumber(yTicks[t])))
   }
 
-  /* Build flat point list with pixel coords and series info */
-  const flatPoints = []
-  for (let s = 0; s < series.length; s = s + 1) {
-    const ser   = series[s]
-    const pts   = ser.points || []
-    const color = ctx.colorFor(ser.name)
-    for (let p = 0; p < pts.length; p = p + 1) {
-      const pt = pts[p]
-      if (typeof pt.x !== "number" || typeof pt.y !== "number") {
-        continue
-      }
-      flatPoints.push({
-        x: xScale(pt.x),
-        y: yScale(pt.y),
-        dataX: pt.x,
-        dataY: pt.y,
-        label: pt.label || ser.name,
-        seriesName: ser.name,
-        color: color
-      })
-    }
-  }
+  /* Cells in data units, drawn in pixels. */
+  const cells = _voronoiCells(
+    sites.map((site) => ({ x: site.dataX, y: site.dataY })),
+    { x0: xDomain[0], y0: yDomain[0], x1: xDomain[1], y1: yDomain[1] }
+  )
+  const fillOpacity = mode === "overlay" ? "0" : "0.25"
 
-  if (flatPoints.length === 0) {
-    return root
-  }
-
-  /* Compute Voronoi cells */
-  const pixelPoints = flatPoints.map((fp) => ({ x: fp.x, y: fp.y }))
-  const cells       = _voronoiCells(pixelPoints, plotW, plotH)
-
-  const isOverlay = mode === "overlay"
-  const fillOpacity = isOverlay ? "0" : "0.25"
-
-  /* Draw cells */
   for (let i = 0; i < cells.length; i = i + 1) {
     const cell = cells[i]
-    const pt   = flatPoints[i]
+    const site = sites[i]
     if (cell.length < 3) {
       continue
     }
-
-    const d       = _polygonPath(cell)
-    const cellEl  = svgEl("path", {
-      d: d,
-      fill: pt.color,
-      "fill-opacity": fillOpacity,
-      stroke: "var(--mj-border-strong, #c7ccd6)",
-      "stroke-width": 1
-    }, [])
-
-    cellEl.setAttribute("part", "cell")
-    cellEl.setAttribute("tabindex", "0")
-    cellEl.setAttribute("role", "img")
-    cellEl.setAttribute("aria-label",
-      `${pt.label} (${formatNumber(pt.dataX)}, ${formatNumber(pt.dataY)})`)
-    cellEl.appendChild(svgEl("title", null,
-      `${pt.label} (${formatNumber(pt.dataX)}, ${formatNumber(pt.dataY)})`))
-    const capturedPt = pt
+    const pixels = cell.map((vertex) => ({ x: xScale(vertex.x), y: yScale(vertex.y) }))
+    const name = site.labels.length > 0 ? site.labels.join(", ") : site.seriesName
+    const label = `${site.seriesName}, ${name} (${formatNumber(site.dataX)}, ${formatNumber(site.dataY)})`
+    const cellEl = svgEl("path", {
+      d: _polygonPath(pixels), fill: site.color, "fill-opacity": fillOpacity,
+      stroke: "var(--mj-border-strong, #878e9c)", "stroke-width": 1,
+      part: "cell", tabindex: "0", role: "img", "aria-label": label
+    }, [svgEl("title", null, label)])
+    const captured = site
     const handler = () => {
       ctx.emit("mj-chart-cell-click", {
-        series: capturedPt.seriesName,
-        label: capturedPt.label,
-        x: capturedPt.dataX,
-        y: capturedPt.dataY
+        series: captured.seriesName, label: captured.labels.join(", "), x: captured.dataX, y: captured.dataY
       })
     }
     cellEl.addEventListener("click", handler)
@@ -310,27 +311,25 @@ export function render(ctx) {
     plot.appendChild(cellEl)
   }
 
-  /* Seed point circles */
-  for (let i = 0; i < flatPoints.length; i = i + 1) {
-    const pt  = flatPoints[i]
-    const dot = svgEl("circle", {
-      cx: pt.x, cy: pt.y, r: 4,
-      fill: pt.color,
-      stroke: "var(--mj-surface, #ffffff)",
-      "stroke-width": 1.5,
-      "pointer-events": "none"
-    }, [])
-    dot.setAttribute("aria-hidden", "true")
-    plot.appendChild(dot)
-
-    /* Optional site label */
-    if (pt.label !== null && pt.label !== undefined && pt.label !== pt.seriesName) {
-      plot.appendChild(svgEl("text", {
-        x: pt.x + 6, y: pt.y - 4,
-        "font-size": 10,
-        fill: "var(--mj-text, #14181f)",
-        "pointer-events": "none"
-      }, escapeHtml(pt.label)))
+  /* Seeds and labels (flipped to the left near the right edge). */
+  const seeds = svgEl("g", { "aria-hidden": "true", "pointer-events": "none" }, [])
+  plot.appendChild(seeds)
+  for (let i = 0; i < sites.length; i = i + 1) {
+    const site = sites[i]
+    const x = xScale(site.dataX)
+    const y = yScale(site.dataY)
+    seeds.appendChild(svgEl("circle", {
+      cx: x.toFixed(2), cy: y.toFixed(2), r: 4, fill: site.color,
+      stroke: "var(--mj-surface, #ffffff)", "stroke-width": 1.5
+    }, []))
+    if (site.labels.length > 0) {
+      const text = site.labels.join(", ")
+      const flip = x + 6 + text.length * 6 > plotW
+      seeds.appendChild(svgEl("text", {
+        x: (flip === true ? x - 6 : x + 6).toFixed(2), y: (y - 5).toFixed(2),
+        "text-anchor": flip === true ? "end" : "start", "font-size": 10,
+        fill: "var(--mj-text, #14181f)"
+      }, text))
     }
   }
 

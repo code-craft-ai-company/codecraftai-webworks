@@ -415,3 +415,91 @@ def test_inflight_request_completes_within_shutdown_timeout():
 
     _run_async(_run())
     return
+
+
+# =============================================================================
+# Unit Tests for Shutdown With Open Connections
+# =============================================================================
+
+def _run_stop_with_open_connection(app, request_bytes, shutdown_timeout):
+    """
+        Start a server core, open a connection, send a request, read the
+        first response bytes and then stop the core while the client
+        keeps the connection open.
+
+        :returns: The seconds stop() took.
+    """
+    import time
+
+    async def scenario():
+        from ccai.webworks.devexp.server.asyncservercore import AsyncServerCore
+
+        core = AsyncServerCore(
+            app=app, host="127.0.0.1", port=0, shutdown_timeout=shutdown_timeout,
+        )
+        await core.start()
+
+        port = core.server.sockets[0].getsockname()[1]
+
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(request_bytes)
+        await writer.drain()
+        await reader.read(64)
+
+        started = time.monotonic()
+        await asyncio.wait_for(core.stop(), timeout=20.0)
+        elapsed = time.monotonic() - started
+
+        writer.close()
+
+        return elapsed
+
+    return asyncio.run(scenario())
+
+
+def test_stop_does_not_wait_for_idle_keepalive_connection():
+    """
+        Test that stop() closes an idle keep-alive connection at once
+        instead of waiting for the client or the keep-alive timer.
+    """
+    async def _app(scope, receive, send):
+        await receive()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    elapsed = _run_stop_with_open_connection(
+        _app, b"GET / HTTP/1.1\r\nHost: x\r\n\r\n", shutdown_timeout=5,
+    )
+
+    if elapsed > 2.0:
+        errmsg = "Expected stop() to return promptly with an idle connection, took {:.2f}s".format(elapsed)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_stop_force_closes_long_lived_stream_after_timeout():
+    """
+        Test that stop() closes a connection that is still streaming once
+        the shutdown timeout has passed, instead of hanging behind it.
+    """
+    async def _endless_stream(scope, receive, send):
+        await receive()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        try:
+            while True:
+                await send({"type": "http.response.body", "body": b"tick", "more_body": True})
+                await asyncio.sleep(0.05)
+        except OSError:
+            # The server closed the connection at shutdown.
+            return
+
+    elapsed = _run_stop_with_open_connection(
+        _endless_stream, b"GET /stream HTTP/1.1\r\nHost: x\r\n\r\n", shutdown_timeout=0.3,
+    )
+
+    if elapsed > 3.0:
+        errmsg = "Expected stop() to force-close the stream after the timeout, took {:.2f}s".format(elapsed)
+        raise AssertionError(errmsg)
+
+    return

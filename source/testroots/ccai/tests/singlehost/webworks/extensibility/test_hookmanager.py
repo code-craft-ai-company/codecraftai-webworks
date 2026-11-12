@@ -733,3 +733,337 @@ def test_property_16_hook_circular_constraints_raise_error():
             raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Unregistering bound methods and whole extensions
+# =============================================================================
+
+class _HookOwner:
+    """
+        An object whose bound method is registered as a hook callback.
+    """
+
+    def __init__(self):
+        self.calls = 0
+        return
+
+    def on_event(self) -> None:
+        """
+            Count the call.
+        """
+        self.calls += 1
+        return
+
+
+def test_unregister_removes_bound_method():
+    """
+        Test that a bound method can be unregistered even though each access
+        to it creates a new method object.
+    """
+    manager = HookManager()
+    owner = _HookOwner()
+
+    manager.register("on_event", owner.on_event)
+    manager.unregister("on_event", owner.on_event)
+    manager.execute("on_event")
+
+    if owner.calls != 0:
+        errmsg = "Expected the unregistered bound method not to be called, got {} calls".format(owner.calls)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_unregister_bound_method_leaves_other_instance_registered():
+    """
+        Test that unregistering one instance's method keeps the same method
+        of another instance registered.
+    """
+    manager = HookManager()
+    first = _HookOwner()
+    second = _HookOwner()
+
+    manager.register("on_event", first.on_event)
+    manager.register("on_event", second.on_event)
+    manager.unregister("on_event", first.on_event)
+    manager.execute("on_event")
+
+    if first.calls != 0 or second.calls != 1:
+        errmsg = "Expected 0 and 1 calls, got {} and {}".format(first.calls, second.calls)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_unregister_extension_removes_all_of_its_callbacks():
+    """
+        Test that unregister_extension() removes an extension's callbacks
+        from every hook and leaves the callbacks of others.
+    """
+    manager = HookManager()
+    call_log = []
+
+    manager.register("hook_one", _make_callback("a1"), extension_name="ext-a")
+    manager.register("hook_two", _make_callback("a2"), extension_name="ext-a")
+    manager.register("hook_one", _make_callback("b1"), extension_name="ext-b")
+
+    removed_count = manager.unregister_extension("ext-a")
+
+    manager.execute("hook_one", call_log)
+    manager.execute("hook_two", call_log)
+
+    if removed_count != 2:
+        errmsg = "Expected 2 registrations removed, got {}".format(removed_count)
+        raise AssertionError(errmsg)
+
+    if call_log != ["b1"]:
+        errmsg = "Expected only 'b1' to run, got {}".format(call_log)
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Suspending the callbacks of an extension
+# =============================================================================
+
+def test_suspended_extension_callbacks_are_skipped():
+    """
+        Test that execute() skips the callbacks of a suspended extension.
+    """
+    manager = HookManager()
+    call_log = []
+
+    manager.register("hook", _make_callback("a"), extension_name="ext-a")
+    manager.register("hook", _make_callback("b"), extension_name="ext-b")
+
+    manager.suspend_extension("ext-a")
+    results = manager.execute("hook", call_log)
+
+    if call_log != ["b"] or results != ["b"]:
+        errmsg = "Expected only 'b' to run, got {} with results {}".format(call_log, results)
+        raise AssertionError(errmsg)
+
+    if manager.is_suspended("ext-a") is not True:
+        errmsg = "Expected 'ext-a' to be reported as suspended"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_resumed_extension_callbacks_run_again():
+    """
+        Test that the callbacks of a resumed extension run again.
+    """
+    manager = HookManager()
+    call_log = []
+
+    manager.register("hook", _make_callback("a"), extension_name="ext-a")
+
+    manager.suspend_extension("ext-a")
+    manager.execute("hook", call_log)
+    manager.resume_extension("ext-a")
+    manager.execute("hook", call_log)
+
+    if call_log != ["a"]:
+        errmsg = "Expected 'a' to run once, after being resumed, got {}".format(call_log)
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# The manager's own error callback
+# =============================================================================
+
+def test_manager_error_callback_receives_hook_failures():
+    """
+        Test that the error callback given to the manager is told about a
+        failing callback when execute() is called without one.
+    """
+    failures = []
+
+    def on_error(extension_name, hook_name, exception, stack_trace):
+        failures.append((extension_name, hook_name, type(exception).__name__))
+        return
+
+    manager = HookManager(error_callback=on_error)
+    manager.register("hook", _make_failing_callback("a"), extension_name="ext-a")
+
+    manager.execute("hook", [])
+
+    if failures != [("ext-a", "hook", "RuntimeError")]:
+        errmsg = "Expected one reported failure for 'ext-a', got {}".format(failures)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_execute_error_callback_takes_priority_over_manager_error_callback():
+    """
+        Test that an error callback passed to execute() is used instead of
+        the manager's.
+    """
+    manager_failures = []
+    call_failures = []
+
+    manager = HookManager()
+    manager.set_error_callback(lambda *args: manager_failures.append(args))
+    manager.register("hook", _make_failing_callback("a"), extension_name="ext-a")
+
+    manager.execute("hook", [], error_callback=lambda *args: call_failures.append(args))
+
+    if len(manager_failures) != 0 or len(call_failures) != 1:
+        errmsg = "Expected only the execute() callback to be called, got {} and {}".format(
+            len(manager_failures), len(call_failures)
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Callback presence, strict execution, chained execution
+# =============================================================================
+
+from ccai.errors.exceptions import SemanticError
+from ccai.webworks.extensibility.exceptions import HookExecutionError
+
+
+def test_has_callbacks_and_has_any_callbacks():
+    """
+        Test that has_callbacks and has_any_callbacks report registrations.
+    """
+    manager = HookManager()
+
+    if manager.has_any_callbacks(["before_request", "after_request"]) is not False:
+        raise AssertionError("Expected no callbacks on an empty manager")
+
+    manager.register("after_request", lambda request, response: None, extension_name="ext-a")
+
+    if manager.has_callbacks("after_request") is not True:
+        raise AssertionError("Expected after_request to have a callback")
+
+    if manager.has_callbacks("before_request") is not False:
+        raise AssertionError("Expected before_request to have no callback")
+
+    if manager.has_any_callbacks(["before_request", "after_request"]) is not True:
+        raise AssertionError("Expected one of the hooks to have a callback")
+
+    return
+
+
+def test_execute_stop_on_error_reports_then_raises():
+    """
+        Test that stop_on_error reports the failure through the error callback,
+        skips the remaining callbacks and raises HookExecutionError from it.
+    """
+    reported = []
+    manager = HookManager(error_callback=lambda ext, hook, err, tb: reported.append((ext, hook, type(err).__name__)))
+
+    calls = []
+
+    def failing():
+        calls.append("failing")
+        raise ValueError("boom")
+
+    def later():
+        calls.append("later")
+        return None
+
+    manager.register("strict_hook", failing, priority=HookPriority.HIGH, extension_name="ext-bad")
+    manager.register("strict_hook", later, priority=HookPriority.LOW, extension_name="ext-good")
+
+    caught = None
+    try:
+        manager.execute("strict_hook", stop_on_error=True)
+    except HookExecutionError as err:
+        caught = err
+
+    if caught is None:
+        raise AssertionError("Expected HookExecutionError")
+
+    if caught.extension_name != "ext-bad" or not isinstance(caught.__cause__, ValueError):
+        raise AssertionError(f"Expected the failure of ext-bad chained from ValueError, got {caught!r}")
+
+    if calls != ["failing"]:
+        raise AssertionError(f"Expected the remaining callbacks to be skipped, got {calls}")
+
+    if reported != [("ext-bad", "strict_hook", "ValueError")]:
+        raise AssertionError(f"Expected the failure to be reported first, got {reported}")
+
+    return
+
+
+def test_execute_chain_passes_replacements_on():
+    """
+        Test that execute_chain hands each callback the value the previous one left.
+    """
+    manager = HookManager()
+
+    manager.register("chain", lambda prefix, value: value + 1, priority=HookPriority.HIGH, extension_name="a")
+    manager.register("chain", lambda prefix, value: None, priority=HookPriority.NORMAL, extension_name="b")
+    manager.register("chain", lambda prefix, value: value * 10, priority=HookPriority.LOW, extension_name="c")
+
+    result = manager.execute_chain("chain", 1, "prefix")
+
+    if result != 20:
+        raise AssertionError(f"Expected (1 + 1) * 10 = 20, got {result}")
+
+    return
+
+
+def test_execute_chain_isolates_a_failure_unless_strict():
+    """
+        Test that a failing chained callback is skipped by default and ends
+        the chain with stop_on_error.
+    """
+    manager = HookManager()
+
+    def failing(value):
+        raise RuntimeError("chain failure")
+
+    manager.register("chain", failing, priority=HookPriority.HIGH, extension_name="bad")
+    manager.register("chain", lambda value: value + "!", priority=HookPriority.LOW, extension_name="good")
+
+    result = manager.execute_chain("chain", "kept")
+
+    if result != "kept!":
+        raise AssertionError(f"Expected the failure to be skipped, got {result!r}")
+
+    caught = None
+    try:
+        manager.execute_chain("chain", "kept", stop_on_error=True)
+    except HookExecutionError as err:
+        caught = err
+
+    if caught is None or caught.hook_name != "chain":
+        raise AssertionError(f"Expected HookExecutionError for 'chain', got {caught!r}")
+
+    return
+
+
+def test_register_refuses_a_coroutine_function():
+    """
+        Test that a coroutine function can not be registered: callbacks are
+        called synchronously and its body would never run.
+    """
+    manager = HookManager()
+
+    async def async_callback():
+        return None
+
+    caught = None
+    try:
+        manager.register("any_hook", async_callback, extension_name="ext-async")
+    except SemanticError as err:
+        caught = err
+
+    if caught is None:
+        raise AssertionError("Expected SemanticError for a coroutine function callback")
+
+    if manager.has_callbacks("any_hook") is not False:
+        raise AssertionError("Expected the coroutine function not to be registered")
+
+    return

@@ -63,7 +63,7 @@ The feature enables developers to define REST resources with consistent CRUD ope
 4. THE system SHALL support dict schemas for untyped JSON payloads.
 5. WHEN deserialization fails due to malformed JSON, THE system SHALL raise a ValidationError with details about the parsing failure.
 6. WHEN deserialization fails due to type mismatches, THE system SHALL raise a ValidationError with field-level error details.
-7. THE deserialized object SHALL be passed to the handler as a parameter (e.g., `def create(self, payload: UserCreate)`).
+7. THE deserialized object SHALL be passed to the handler: `ResourceEndpoint` CRUD methods receive it as a parameter (e.g., `def create(self, payload: UserCreate)`); a handler declared with `attach_at` / `attach_route` receives the request and reads the validated payload with `get_rest_payload(request)`.
 
 ### Requirement 4: Response Serialization
 
@@ -123,6 +123,8 @@ The feature enables developers to define REST resources with consistent CRUD ope
 7. WHEN a method is not allowed, THE system SHALL return a 405 Method Not Allowed with error code `method_not_allowed` and an `Allow` header listing permitted methods.
 8. WHEN an unhandled exception occurs, THE system SHALL return a 500 Internal Server Error with error code `internal_error`.
 9. THE 500 response SHALL NOT expose internal error details in production mode.
+
+Note: on a route served through the REST processing, criteria 5 to 7 apply to the exceptions the handler raises. A 401 or 403 decided by the dispatcher's access policy check, and a 405 for a method the path is not registered for, are decided before the handler is reached and are answered with the dispatcher's `HTTPError` body (`detail`, `status_code`).
 
 ### Requirement 8: Error Mapping
 
@@ -190,3 +192,19 @@ The feature enables developers to define REST resources with consistent CRUD ope
 
 </content>
 </invoke>
+
+### Requirement 13: REST Processing of Declared Routes
+
+**User Story:** As an API developer, I want every route I declare with a request schema, a response schema or an error map to be served through the REST processing, so that validation, negotiation, serialization and the error model apply without wiring code.
+
+#### Acceptance Criteria
+
+1. WHEN a route declares REST metadata (`request_schema`, `response_schema` or `error_map`) through `Endpoint.attach_at`, `RestEndpoint.attach_at` and its CRUD helpers, `Blueprint.attach_at`, `RestBlueprint.attach_at` or `WebApplication.attach_route`, THE web application SHALL serve it through the REST processing (requirements 3 to 9): 406/415 content negotiation, deserialization and validation of the body (400 with field errors), the validated payload available through `get_rest_payload(request)`, serialization of the result with the status and `Location` the REST conventions select, and `RESTError` bodies for errors.
+2. THE REST processing SHALL be applied per route by wrapping the route's handler (`RESTMiddleware.wrap_handler`) once, when the route is added to the application's router; it SHALL NOT be a pipeline middleware, so the middleware contract of other routes is unchanged.
+3. THE declared descriptor SHALL NOT be modified; the route SHALL be served from a copy whose handler is the wrapper, attached to the wrapper as its `descriptor`.
+4. A handler that is a coroutine function SHALL get a coroutine wrapper and keep working.
+5. THE registration APIs SHALL accept `rest_processing=False` for a handler that parses the body and shapes the response itself; its schemas SHALL still document the route in OpenAPI. Endpoint classes SHALL provide a `rest_processing` class attribute (True) as the default.
+6. THE authentication blueprints SHALL opt out (`SecurityBlueprint.rest_processing = False`), so their wire behaviour is unchanged.
+7. Routes without REST metadata SHALL be served unchanged, and routes whose handler already runs the REST processing (`ResourceEndpoint`, `CollectionEndpoint`) SHALL NOT be wrapped a second time.
+8. A route served through the REST processing SHALL be marked `extras["rest"]["managed"] = True` and an opted-out route `extras["rest"]["processing"] = False`, so documentation describes the status codes and error bodies the route really returns.
+9. Client errors (4xx) answered by the REST processing SHALL be logged at debug level; server errors (5xx) SHALL be logged with their traceback.

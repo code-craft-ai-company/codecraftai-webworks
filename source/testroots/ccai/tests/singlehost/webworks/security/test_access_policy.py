@@ -714,3 +714,139 @@ def test_property_policy_evaluation():
             raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Merged policies keep every role requirement; expired contexts grant nothing
+# =============================================================================
+
+from datetime import datetime, timedelta, timezone
+
+from ccai.webworks.authentication.core import AuthenticationContext, Principal
+
+
+def test_merge_with_requires_a_role_from_each_policy():
+    """
+        A blueprint policy requiring 'admin' merged with a handler policy
+        requiring 'viewer' is not satisfied by a viewer alone.
+    """
+    blueprint_policy = AccessPolicy(roles=("admin",))
+    handler_policy = AccessPolicy(roles=("viewer",))
+
+    merged = blueprint_policy.merge_with(handler_policy)
+
+    viewer_only = SecurityContext(user_id="u1", roles=("viewer",))
+    admin_only = SecurityContext(user_id="u2", roles=("admin",))
+    both = SecurityContext(user_id="u3", roles=("admin", "viewer"))
+
+    assert merged.check(viewer_only) is False, "A viewer must not satisfy the inherited admin requirement"
+    assert merged.check(admin_only) is False, "An admin must still satisfy the handler's requirement"
+    assert merged.check(both) is True, "A subject holding both roles satisfies the merged policy"
+    return
+
+
+def test_merge_with_keeps_any_of_semantics_inside_one_policy():
+    """
+        Roles named by one policy stay alternatives after a merge.
+    """
+    policy = AccessPolicy(roles=("authenticated-user", "system-admin"))
+
+    merged = policy.merge_with(AccessPolicy(scopes=("read",)))
+
+    context = SecurityContext(user_id="u1", roles=("system-admin",), scopes=("read",))
+
+    assert merged.check(context) is True, "One of the alternative roles should be enough"
+    return
+
+
+def test_merge_with_reports_union_of_roles_and_groups_of_both():
+    """
+        The merged policy lists the union of the roles and keeps one role
+        group per merged policy.
+    """
+    merged = AccessPolicy(roles=("admin",)).merge_with(AccessPolicy(roles=("viewer", "auditor")))
+
+    assert merged.roles == ("admin", "viewer", "auditor"), f"Unexpected roles {merged.roles}"
+    assert merged.role_groups == (("admin",), ("viewer", "auditor")), f"Unexpected groups {merged.role_groups}"
+    return
+
+
+def test_merge_with_same_roles_requires_them_once():
+    """
+        Merging two policies that name the same roles yields one group.
+    """
+    merged = AccessPolicy(roles=("admin",)).merge_with(AccessPolicy(roles=("admin",)))
+
+    assert merged.role_groups == (("admin",),), f"Unexpected groups {merged.role_groups}"
+    assert merged == AccessPolicy(roles=("admin",)), "The merge should equal the single policy"
+    return
+
+
+def test_merge_with_replace_roles_drops_inherited_requirement():
+    """
+        replace_roles=True replaces the inherited role requirement.
+    """
+    merged = AccessPolicy(roles=("admin",)).merge_with(AccessPolicy(roles=("viewer",)), replace_roles=True)
+
+    assert merged.check(SecurityContext(user_id="u1", roles=("viewer",))) is True
+    assert merged.role_groups == (("viewer",),), f"Unexpected groups {merged.role_groups}"
+    return
+
+
+def test_merged_policy_is_enforced_for_authentication_context():
+    """
+        The merged role groups are enforced for an AuthenticationContext too.
+    """
+    merged = AccessPolicy(roles=("admin",)).merge_with(AccessPolicy(roles=("viewer",)))
+
+    viewer = AuthenticationContext(principal=Principal(identifier="u1", roles={"viewer"}), scheme="Test")
+    both = AuthenticationContext(principal=Principal(identifier="u2", roles={"viewer", "admin"}), scheme="Test")
+
+    assert merged.check(viewer) is False, "A viewer must not satisfy the merged policy"
+    assert merged.check(both) is True, "A subject with both roles satisfies the merged policy"
+    assert merged.check_roles(viewer) is False, "check_roles must apply the role groups"
+    return
+
+
+def test_explicit_roles_take_precedence_over_stale_role_groups():
+    """
+        Replacing the roles of a merged policy replaces what is enforced.
+    """
+    import dataclasses
+
+    merged = AccessPolicy(roles=("admin",)).merge_with(AccessPolicy(roles=("viewer",)))
+    replaced = dataclasses.replace(merged, roles=("operator",))
+
+    assert replaced.role_groups == (("operator",),), f"Unexpected groups {replaced.role_groups}"
+    assert replaced.check(SecurityContext(user_id="u1", roles=("operator",))) is True
+    return
+
+
+def test_check_denies_expired_security_context():
+    """
+        A SecurityContext whose expires_at has passed satisfies no policy
+        that requires authentication or roles.
+    """
+    expired_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    context = SecurityContext(user_id="u1", roles=("admin",), expires_at=expired_at)
+
+    assert AccessPolicy(roles=("admin",)).check(context) is False
+    assert AccessPolicy(require_auth=True).check(context) is False
+    assert AccessPolicy(roles=("admin",), require_auth=False).check(context) is False
+    return
+
+
+def test_check_denies_expired_authentication_context_without_require_auth():
+    """
+        The roles of an expired AuthenticationContext grant nothing, also
+        when the policy does not set require_auth.
+    """
+    expired_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    context = AuthenticationContext(
+        principal=Principal(identifier="u1", roles={"admin"}),
+        scheme="Test",
+        expires_at=expired_at
+    )
+
+    assert AccessPolicy(roles=("admin",), require_auth=False).check(context) is False
+    return

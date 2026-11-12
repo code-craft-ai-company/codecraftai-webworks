@@ -206,35 +206,51 @@ Each entry uses this format:
 
 ---
 
-### Dependency Graph  *(module graph, package graph)*
+### Dependency Graph  *(module graph, package graph, task network)*
 
-- **Renderer / `type`:** `depgraph` — **Primary renderer**
-- **Controller:** `<mj-chart type="depgraph" ...>`
-- **Purpose:** Visualise directed dependency relationships among software components, packages, or tasks.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
-- **JSON shape:** Flow / network family; directed edges; nodes may carry a `group` or `layer` field for hierarchical layout:
+- **Renderer / `type`:** `dependency-graph` — **Variant of `network`** (`charts/core/renderers/network.js`, layered layout by default). (An earlier draft of this entry named the type `depgraph`; the shipped key is `dependency-graph`.)
+- **Controller:** `<mj-chart type="dependency-graph" ...>`; `<mj-dependency-graph>` is a convenience wrapper for this type with the work-item data shape (see `../web-components/dependencygraph.md`, WW-1498).
+- **Purpose:** Visualise directed dependency relationships among software components, packages, or work items, with the critical path and cycles called out.
+- **Decomposition:** drawn by the renderer inside `<mj-chart>`; `mj-chart-legend` (one entry per node group, when nodes have groups), `mj-chart-title` and `mj-chart-data-table` bind as parts.
+- **JSON shape:** Flow / network family; directed links from `source` to `target`:
   ```json
   {
     "meta": { "title": "Package Dependencies" },
     "nodes": [
-      { "id": "app",     "label": "app" },
-      { "id": "core",    "label": "core" },
-      { "id": "utils",   "label": "utils" },
-      { "id": "lodash",  "label": "lodash" }
+      { "id": "app",    "label": "app",    "group": "ui" },
+      { "id": "core",   "label": "core",   "status": "done" },
+      { "id": "utils",  "label": "utils",  "status": "in-progress" },
+      { "id": "lodash", "label": "lodash", "status": "blocked" }
     ],
     "links": [
       { "source": "app",  "target": "core",   "value": 1 },
       { "source": "app",  "target": "utils",  "value": 1 },
       { "source": "core", "target": "lodash", "value": 1 }
-    ]
+    ],
+    "criticalPath": ["app", "core", "lodash"]
   }
   ```
-- **SVG primitives:** `<circle>` (nodes), `<line>` or `<path>` (directed edges with arrowheads), `<polygon>` (arrowheads), `<text>` (node labels), `<g>`
-- **Orientation:** `horizontal` (layers left-to-right) / `vertical` (layers top-to-bottom); controls the primary axis of the layered layout. `n/a` for force-directed mode.
-- **Variants / modes:**
-  - Force-directed layout — `layout="force"` attribute switches to a force-simulation layout instead of layered ranks; useful when the graph has no meaningful directionality.
-- **Phase:** P4
-- **Notes:** Default layout is layered (Sugiyama) producing a DAG layout; cycle detection emits `mj-chart-error` if the graph is cyclic (or falls back to force-directed). For `layout="force"`, a simple iterative spring-repulsion simulation is implemented in the renderer (no external physics library). Node sizing can encode a scalar (e.g. bundle size) via `nodes[].value` mapped to `<circle r>` through a `sqrt` scale.
+  `nodes[]`: `id` (required; a repeated id keeps its first node), `label` (else the id), `group`, `status` (`todo`, `planned`, `in-progress`, `done`, `completed`, `blocked`, or any text shown as given), `value`. `links[]`: `source`, `target` (links naming an unknown node are skipped), `value`, `label`. `criticalPath`: an ordered list of node ids.
+- **Drawing (changed from the earlier circle drawing):** each node is a **labelled box** — the name, and when the node has a `status` a second line with a status dot and the status text — whose border shows the status (todo / planned `--mj-text-muted`, in-progress `--mj-accent`, done / completed `--mj-color-success`, blocked `--mj-color-danger`), else the node's group colour, else a neutral border. Boxes are 64–160 px wide to fit the columns (30 px tall without statuses, 40 px with). Nodes are placed in longest-path columns (Sugiyama-style ranks with barycentre ordering); links are straight arrows from box edge to box edge, curved where a straight line would cross another box. Nodes in `criticalPath` get a thicker amber (`--mj-color-warning`) border on a warning-surface fill, and every link joining two consecutive path entries is amber and thicker. The link that closes a cycle (found by a DFS) is left out of the ranking and drawn as a dashed red (`--mj-color-danger`) curve; self-links are small loops on the box's corner; nodes on a cycle get a ⚠ badge.
+- **SVG primitives:** `<g>` per node (the focusable mark) with `<rect>`, `<text>` and a status `<circle>`; `<g>` per link with `<path>` and an arrowhead `<polygon>`; `<text>` badges.
+- **Orientation:** `horizontal` (registered default; ranks left to right) / `vertical` (ranks top to bottom).
+- **Options:**
+  | Option | Default | Effect |
+  |---|---|---|
+  | `layout` | `layered` | `force`, `arc`, `bundled`, `static` use the network drawing (circles) instead of the boxes |
+  | `orientation` | `horizontal` | direction of the ranks |
+  | `show-critical-path` | on | `"false"` draws critical-path nodes and links like the others |
+- **Height:** the renderer asks for the height its busiest column needs (`ctx.setContentHeight`), so a chart without a fixed height grows with it; the width is shared by the columns.
+- **Events:**
+  | Event | `detail` |
+  |---|---|
+  | `mj-chart-node-click` | `{ id, label, group, index }` |
+  | `mj-chart-edge-click` | `{ source, target, value, label }` |
+  | `mj-chart-cycle-detect` | `{ cycles: [[nodeId, ...]] }` — one array per link that closes a cycle; emitted once per data object, not on every redraw |
+- **Parts:** `plot`, `node` (`node critical-path-node` on the path), `edge` (`edge critical-path-edge`; a cycle link carries `data-cycle-edge`), `cycle-badge`; nodes carry `data-mark="node:<index>"`.
+- **Accessibility:** each node's accessible name gives its label, group, value, link count, status, "on the critical path" and "in a cycle". The accessible table lists every node: Node, Group, Value, Status, Critical path (each when present), Links to, Linked from; the caption counts nodes, links and cycles.
+- **Phase:** P4 — implemented.
+- **Notes:** Cycles never break the layout and never raise `mj-chart-error`. With `layout="force"` (or any non-layered layout) the type draws like `network` (value-sized circles), so the boxes, the critical-path highlighting and the cycle event apply to the layered layout only (the table's Critical path column is filled in every layout).
 
 ---
 
@@ -264,7 +280,7 @@ Each entry uses this format:
 - **Variants / modes:**
   - Arc diagram — `layout="arc"` places nodes on a single axis and draws edges as arcs above/below.
 - **Phase:** P4
-- **Notes:** Default layout is force-directed (iterative spring-repulsion, fully in-renderer, no external library). The `mj-chart-brush` part enables lasso selection of nodes. Node `group` drives the categorical color ramp (`ordinal-color` scale). `mj-chart-brush` reports selected node ids via `mj-chart-select`. Zoom/pan handled by updating the SVG `viewBox` on pointer events. Compare with Dependency Graph (`depgraph`) which uses a directed layered layout.
+- **Notes:** Default layout is force-directed (iterative spring-repulsion, fully in-renderer, no external library). The `mj-chart-brush` part enables lasso selection of nodes. Node `group` drives the categorical color ramp (`ordinal-color` scale). `mj-chart-brush` reports selected node ids via `mj-chart-select`. Zoom/pan handled by updating the SVG `viewBox` on pointer events. Compare with Dependency Graph (`dependency-graph`) which uses a directed layered layout of labelled boxes.
 
 ---
 

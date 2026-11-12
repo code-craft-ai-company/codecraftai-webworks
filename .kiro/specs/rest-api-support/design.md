@@ -828,6 +828,50 @@ class RESTMiddleware:
         pass
 ```
 
+### Applying the REST Processing to Routes
+
+A `WebApplication` serves its routes from a `RestProcessingRouter`
+(`endpoints/rest/restprocessingrouter.py`), a `Router` whose
+`add_endpoint` passes every descriptor through `apply_rest_processing` with
+the application's `RESTMiddleware` (`webapp.rest_middleware`, created with
+the application). Every way a route reaches the router -- `load_from_registry`,
+a blueprint's `register(router=...)`, `attach_route` -- goes through
+`add_endpoint`, so the processing is applied once per route, at
+registration.
+
+`needs_rest_processing(descriptor)` is true when the descriptor's
+`extras["rest"]` declares metadata (`request_schema`, `response_schema`,
+`error_map` or their `*_type` classes; an empty error map and
+`query_params` alone do not count), it did not opt out
+(`extras["rest"]["processing"] is False`), and its handler is not already a
+REST processing wrapper (`wrap_handler` marks its result with
+`__webworks_rest_processed__`; `ResourceEndpoint` routes carry it).
+`apply_rest_processing` then serves a copy of the descriptor whose handler
+is `middleware.wrap_handler(handler, descriptor=copy, endpoint=owner)`; the
+owner is the handler or the endpoint instance a bound handler belongs to,
+when it has an `error_map`, which the wrapper can not find through the
+copy. The declared descriptor -- the mark on the handler, possibly served
+by another application -- is left as it is.
+
+The declaration APIs record the decision: `record_rest_processing(rest_extras,
+rest_processing)` sets `managed: True` (served through the processing) or
+`processing: False` (opted out) when REST metadata is declared. The keyword
+is `rest_processing` everywhere (`attach_at`, the `RestEndpoint` helpers,
+`Blueprint` / `RestBlueprint`, `SecurityBlueprint` and its helpers,
+`WebApplication.attach_route`); `None` takes the class attribute
+`Endpoint.rest_processing` (True; `SecurityBlueprint.rest_processing` is
+False because the authentication handlers parse the body and shape the
+response themselves).
+
+`wrap_handler` returns a coroutine function for a coroutine handler, so the
+dispatcher runs it on the event loop; a synchronous handler gets a plain
+function, which the dispatcher runs on a worker thread together with the
+validation and serialization.
+
+A plain `Router` used without a web application serves the declared
+handler as it is; such code applies the processing with
+`apply_rest_processing` or uses a `RestProcessingRouter`.
+
 ## Data Models
 
 ### HTTP Method to CRUD Mapping

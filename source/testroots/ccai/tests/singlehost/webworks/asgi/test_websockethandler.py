@@ -1739,3 +1739,79 @@ def test_property_7_message_ordering_accept_before_send_before_close():
                 raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Tests for messages that carry both keys and for header decoding
+# =============================================================================
+
+def test_receive_message_returns_bytes_when_text_key_is_none():
+    """
+        Test that a binary frame is returned when the message also has a 'text' key set to None.
+    """
+    scope = create_websocket_scope()
+    receive = create_receive_callable([
+        {"type": MESSAGE_WEBSOCKET_RECEIVE, "text": None, "bytes": b"\x00\x01binary"},
+    ])
+    send, _ = create_send_callable()
+    
+    connection = WebSocketConnection(scope, receive, send)
+    
+    async def run_test():
+        await connection.accept()
+        message = await connection.receive_message()
+        return message
+    
+    message = asyncio.get_event_loop().run_until_complete(run_test())
+    
+    if message != b"\x00\x01binary":
+        errmsg = f"Expected the binary payload, got {message!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_receive_message_returns_text_when_bytes_key_is_none():
+    """
+        Test that a text frame is returned when the message also has a 'bytes' key set to None.
+    """
+    scope = create_websocket_scope()
+    receive = create_receive_callable([
+        {"type": MESSAGE_WEBSOCKET_RECEIVE, "text": "hello", "bytes": None},
+    ])
+    send, _ = create_send_callable()
+    
+    connection = WebSocketConnection(scope, receive, send)
+    
+    async def run_test():
+        await connection.accept()
+        message = await connection.receive_message()
+        return message
+    
+    message = asyncio.get_event_loop().run_until_complete(run_test())
+    
+    if message != "hello":
+        errmsg = f"Expected the text payload, got {message!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_headers_decode_bytes_that_are_not_utf8():
+    """
+        Test that a header value that is not valid UTF-8 does not raise.
+    """
+    scope = create_websocket_scope()
+    scope["headers"] = [(b"x-legacy", b"caf\xe9")]
+    receive = create_receive_callable([])
+    send, _ = create_send_callable()
+    
+    connection = WebSocketConnection(scope, receive, send)
+    
+    headers = connection.headers
+    
+    if headers.get("x-legacy") != "caf\xe9":
+        errmsg = f"Expected the header decoded as latin-1, got {headers.get('x-legacy')!r}"
+        raise AssertionError(errmsg)
+    
+    return

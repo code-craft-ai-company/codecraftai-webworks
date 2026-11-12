@@ -613,3 +613,223 @@ def test_property_1_http_method_to_crud_operation_mapping():
     
     return
 
+
+
+# =============================================================================
+# Routes registered with a real Router are served through the Dispatcher
+# =============================================================================
+
+import json
+
+from dataclasses import field
+from typing import Dict, List, Optional
+
+from ccai.webworks.endpoints.rest.models import ErrorMapping
+from ccai.webworks.routing.dispatcher import Dispatcher
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.router import Router
+
+
+@dataclass
+class GadgetIn:
+    """Request schema for the served-route tests."""
+    name: str
+    size: int = 1
+
+
+@dataclass
+class GadgetOut:
+    """Response schema for the served-route tests."""
+    id: int
+    name: str
+    size: int
+
+
+class GadgetMissing(Exception):
+    """Raised by the test resource for an unknown identifier."""
+
+
+class GadgetResource(ResourceEndpoint):
+    """A complete resource endpoint used through Router and Dispatcher."""
+
+    resource_name = "gadgets"
+    request_schema = GadgetIn
+    response_schema = GadgetOut
+    error_map = {GadgetMissing: ErrorMapping(status_code=404, error_code="not_found", message_template="No gadget {}")}
+
+    def get(self, id):
+        if id == 404:
+            raise GadgetMissing(id)
+        return GadgetOut(id=id, name="existing", size=2)
+
+    def create(self, payload):
+        return GadgetOut(id=7, name=payload.name, size=payload.size)
+
+    def update(self, id, payload):
+        return GadgetOut(id=id, name=payload.name, size=payload.size)
+
+    def partial_update(self, id, payload):
+        return GadgetOut(id=id, name=payload.get("name", "existing"), size=payload.get("size", 2))
+
+    def delete(self, id):
+        return None
+
+
+def _serve(endpoint_cls, method: str, path: str, body=None, headers: Optional[Dict[str, str]] = None, query: bytes = b""):
+    """Register ``endpoint_cls`` on a Router and dispatch one request to it."""
+    router = Router()
+    endpoint_cls.register(router)
+
+    request_headers = dict(headers) if headers is not None else {}
+    raw_body = b""
+    if body is not None:
+        raw_body = json.dumps(body).encode("utf-8")
+        request_headers.setdefault("Content-Type", "application/json")
+
+    request = Request(method, path, query_string=query, headers=request_headers, body=raw_body)
+    response = Dispatcher(router).dispatch(request)
+    return response
+
+
+def test_register_adds_routes_to_a_real_router():
+    """register(router) uses the Router protocol's add_endpoint, so a routing Router accepts the routes."""
+    router = Router()
+
+    descriptors = GadgetResource.register(router)
+
+    routes = sorted((descriptor.path, tuple(descriptor.methods)) for descriptor in descriptors)
+    expected = [("/gadgets", ("POST",)), ("/gadgets/{id:int}", ("GET", "PUT", "PATCH", "DELETE"))]
+    if routes != expected:
+        raise AssertionError(f"Expected {expected}, got {routes}")
+
+
+def test_served_get_returns_the_resource():
+    """GET /gadgets/5 calls get(5) with the converted path parameter and returns the serialized resource."""
+    response = _serve(GadgetResource, "GET", "/gadgets/5")
+
+    if response.status_code != 200:
+        raise AssertionError(f"Expected 200, got {response.status_code}: {response.body!r}")
+
+    if json.loads(response.body) != {"id": 5, "name": "existing", "size": 2}:
+        raise AssertionError(f"Unexpected body: {response.body!r}")
+
+
+def test_served_create_returns_201_with_location():
+    """POST /gadgets validates the body into the request schema and answers 201 with a Location header."""
+    response = _serve(GadgetResource, "POST", "/gadgets", body={"name": "new", "size": 4})
+
+    if response.status_code != 201:
+        raise AssertionError(f"Expected 201, got {response.status_code}: {response.body!r}")
+
+    if response.headers.get("Location") != "/gadgets/7":
+        raise AssertionError(f"Expected Location '/gadgets/7', got {response.headers.get('Location')!r}")
+
+    if json.loads(response.body) != {"id": 7, "name": "new", "size": 4}:
+        raise AssertionError(f"Unexpected body: {response.body!r}")
+
+
+def test_served_create_rejects_an_invalid_body():
+    """POST /gadgets with a body that does not fit the schema answers 400 with field errors."""
+    response = _serve(GadgetResource, "POST", "/gadgets", body={"name": 12})
+    body = json.loads(response.body)
+
+    if response.status_code != 400 or body["error"] != "validation_error":
+        raise AssertionError(f"Expected 400 validation_error, got {response.status_code} {body}")
+
+    if [field_error["field"] for field_error in body["field_errors"]] != ["name"]:
+        raise AssertionError(f"Expected a field error for 'name', got {body['field_errors']}")
+
+
+def test_served_update_passes_id_and_validated_payload():
+    """PUT /gadgets/5 calls update(5, payload) with the validated payload."""
+    response = _serve(GadgetResource, "PUT", "/gadgets/5", body={"name": "renamed", "size": 8})
+
+    if response.status_code != 200 or json.loads(response.body) != {"id": 5, "name": "renamed", "size": 8}:
+        raise AssertionError(f"Unexpected response: {response.status_code} {response.body!r}")
+
+
+def test_served_partial_update_accepts_a_subset_of_fields():
+    """PATCH /gadgets/5 validates partially and calls partial_update with only the fields sent."""
+    response = _serve(GadgetResource, "PATCH", "/gadgets/5", body={"size": 9})
+
+    if response.status_code != 200 or json.loads(response.body) != {"id": 5, "name": "existing", "size": 9}:
+        raise AssertionError(f"Unexpected response: {response.status_code} {response.body!r}")
+
+
+def test_served_delete_returns_204_without_a_body():
+    """DELETE /gadgets/5 answers 204 with an empty body."""
+    response = _serve(GadgetResource, "DELETE", "/gadgets/5")
+
+    if response.status_code != 204 or response.body != b"":
+        raise AssertionError(f"Expected 204 with no body, got {response.status_code} {response.body!r}")
+
+
+def test_served_error_uses_the_endpoint_error_map():
+    """An exception listed in the endpoint's error_map is answered with its mapped status and REST error body."""
+    response = _serve(GadgetResource, "GET", "/gadgets/404")
+    body = json.loads(response.body)
+
+    if response.status_code != 404 or body != {"error": "not_found", "message": "No gadget 404"}:
+        raise AssertionError(f"Expected 404 not_found 'No gadget 404', got {response.status_code} {body}")
+
+
+def test_served_unhandled_error_hides_details():
+    """An exception that is not mapped is answered 500 internal_error without the exception text."""
+
+    class BrokenResource(ResourceEndpoint):
+        resource_name = "broken"
+
+        def get(self, id):
+            raise RuntimeError("secret connection string")
+
+    response = _serve(BrokenResource, "GET", "/broken/1")
+    body = json.loads(response.body)
+
+    if response.status_code != 500 or body["error"] != "internal_error":
+        raise AssertionError(f"Expected 500 internal_error, got {response.status_code} {body}")
+
+    if "secret" in response.body.decode("utf-8"):
+        raise AssertionError("The exception text must not reach the client")
+
+
+def test_registered_routes_are_marked_as_managed_rest_endpoints():
+    """The route descriptors are stamped as REST endpoints whose handlers run the REST processing."""
+    descriptors = GadgetResource.register()
+
+    for descriptor in descriptors:
+        if descriptor.extras.get("endpoint_type") != "rest":
+            raise AssertionError(f"Expected endpoint_type 'rest' on {descriptor.path}")
+        if descriptor.extras["rest"].get("managed") is not True:
+            raise AssertionError(f"Expected the managed flag on {descriptor.path}")
+
+
+def test_register_respects_allowed_methods_on_a_real_router():
+    """Only the allowed methods are routed; another method on the same path is 405."""
+
+    class ReadOnlyResource(ResourceEndpoint):
+        resource_name = "readonly"
+        allowed_methods = ["GET"]
+
+        def get(self, id):
+            return {"id": id}
+
+    response = _serve(ReadOnlyResource, "DELETE", "/readonly/1")
+
+    if response.status_code != 405:
+        raise AssertionError(f"Expected 405 for a method that is not allowed, got {response.status_code}")
+
+
+def test_id_param_name_is_taken_from_the_id_param_pattern():
+    """The path parameter name is read from id_param, whatever converter it names."""
+
+    class SlugResource(ResourceEndpoint):
+        resource_name = "pages"
+        id_param = "{slug}"
+
+        def get(self, id):
+            return {"slug": id}
+
+    response = _serve(SlugResource, "GET", "/pages/about-us")
+
+    if response.status_code != 200 or json.loads(response.body) != {"slug": "about-us"}:
+        raise AssertionError(f"Unexpected response: {response.status_code} {response.body!r}")

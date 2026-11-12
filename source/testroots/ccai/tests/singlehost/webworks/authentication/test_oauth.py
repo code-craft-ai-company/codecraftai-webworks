@@ -706,3 +706,173 @@ def test_generate_oauth_nonce_emits_distinct_values():
         raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Discovery / JWKS document cache
+# =============================================================================
+
+
+class _CountingHttp:
+    """
+        Stand-in for ``requests.get`` that serves canned JSON documents
+        by URL and counts the fetches.
+    """
+
+    def __init__(self, documents: Dict[str, Any]):
+        self.documents = documents
+        self.calls: List[str] = []
+
+    def get(self, url, timeout=None):
+        self.calls.append(url)
+        payload = self.documents[url]
+
+        class _Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return payload
+
+        return _Response()
+
+
+def test_fetch_provider_document_is_fetched_once_within_ttl():
+    """
+        A discovery or JWKS document is fetched once and then served from
+        the cache, instead of costing a network round trip per login.
+    """
+    from ccai.webworks.authentication import oauth as oauth_module
+
+    oauth_module.clear_provider_document_cache()
+
+    url = "https://cache-once.example.com/.well-known/openid-configuration"
+    http = _CountingHttp({url: {"issuer": "https://cache-once.example.com"}})
+
+    with create_module_patch(oauth_module.http_requests, "get") as http_get:
+        http_get.configure(side_effect=http.get)
+
+        first = oauth_module.fetch_provider_document(url)
+        second = oauth_module.fetch_provider_document(url)
+
+    if first != second or first.get("issuer") != "https://cache-once.example.com":
+        errmsg = "Expected the same document twice, got {!r} and {!r}".format(first, second)
+        raise AssertionError(errmsg)
+
+    if len(http.calls) != 1:
+        errmsg = "Expected one fetch, got {}".format(len(http.calls))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_fetch_provider_document_force_refresh_fetches_again():
+    """
+        ``force_refresh`` bypasses a fresh cache entry.
+    """
+    from ccai.webworks.authentication import oauth as oauth_module
+
+    oauth_module.clear_provider_document_cache()
+
+    url = "https://cache-refresh.example.com/jwks.json"
+    http = _CountingHttp({url: {"keys": []}})
+
+    with create_module_patch(oauth_module.http_requests, "get") as http_get:
+        http_get.configure(side_effect=http.get)
+
+        oauth_module.fetch_provider_document(url)
+        oauth_module.fetch_provider_document(url, force_refresh=True)
+
+    if len(http.calls) != 2:
+        errmsg = "Expected two fetches, got {}".format(len(http.calls))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_server_metadata_is_shared_between_client_instances():
+    """
+        A client instance is built per request; the discovery document
+        must not be fetched again for each one.
+    """
+    from ccai.webworks.authentication import oauth as oauth_module
+
+    oauth_module.clear_provider_document_cache()
+
+    url = "https://cache-shared.example.com/.well-known/openid-configuration"
+    http = _CountingHttp({url: {"authorization_endpoint": "https://cache-shared.example.com/authorize"}})
+
+    config = {
+        "client_id": "id-1",
+        "client_secret": "secret-1",
+        "server_metadata_url": url,
+    }
+
+    with create_module_patch(oauth_module.http_requests, "get") as http_get:
+        http_get.configure(side_effect=http.get)
+
+        first_url = OAuthClient("provider", config)._resolve_authorize_url()
+        second_url = OAuthClient("provider", config)._resolve_authorize_url()
+
+    if first_url != "https://cache-shared.example.com/authorize" or second_url != first_url:
+        errmsg = "Expected the advertised authorize URL, got {!r} and {!r}".format(first_url, second_url)
+        raise AssertionError(errmsg)
+
+    if len(http.calls) != 1:
+        errmsg = "Expected one discovery fetch for two clients, got {}".format(len(http.calls))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_parse_id_token_refetches_jwks_after_provider_key_rotation():
+    """
+        When an id_token does not verify against the cached JWKS, the
+        JWKS is fetched again once, which picks up a rotated key.
+    """
+    import time
+
+    from ccai.webworks.authentication import oauth as oauth_module
+
+    oauth_module.clear_provider_document_cache()
+
+    issuer = "https://rotation.example.com"
+    jwks_uri = "https://rotation.example.com/jwks.json"
+    client_id = "id-12345"
+
+    claims = {
+        "iss": issuer,
+        "aud": client_id,
+        "sub": "subject-1",
+        "exp": int(time.time()) + 3600,
+        "iat": int(time.time()),
+    }
+
+    _, old_jwks = _make_rs256_id_token(claims, kid="old-key")
+    id_token_str, new_jwks = _make_rs256_id_token(claims, kid="new-key")
+
+    http = _CountingHttp({jwks_uri: old_jwks})
+
+    client = _make_client()
+    client._resolve_server_metadata = lambda: {"issuer": issuer, "jwks_uri": jwks_uri}
+
+    with create_module_patch(oauth_module.http_requests, "get") as http_get:
+        http_get.configure(side_effect=http.get)
+
+        # Prime the cache with the keys from before the rotation
+        oauth_module.fetch_provider_document(jwks_uri)
+
+        # The provider rotates its signing key
+        http.documents[jwks_uri] = new_jwks
+
+        decoded = client.parse_id_token({"id_token": id_token_str})
+
+    if decoded.get("sub") != "subject-1":
+        errmsg = "Expected the token signed with the rotated key to verify, got {!r}".format(decoded)
+        raise AssertionError(errmsg)
+
+    if len(http.calls) != 2:
+        errmsg = "Expected the JWKS to be fetched again once, got {} fetches".format(len(http.calls))
+        raise AssertionError(errmsg)
+
+    return

@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "server": {
+        "app": None,
         "host": "127.0.0.1",
         "port": 8000,
         "debug": True,
@@ -48,29 +49,50 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 ENV_PREFIX = "WEBWORKS_"
 
 
+class ConfigFileError(Exception):
+    """
+        Raised when a configuration file that was asked for cannot be used.
+
+        A configuration file is only ever read because its path was given
+        explicitly, so a missing, unreadable or malformed file is an error
+        the user must see. Falling back to defaults would run the command
+        with settings the user did not choose.
+    """
+
+
 def load_config_from_file(config_path: str) -> Dict[str, Any]:
     """
         Load configuration from a JSON file.
 
-        Reads the file at the given path and parses it as JSON. If the
-        file does not exist or cannot be parsed, an empty dictionary is
-        returned.
+        Reads the file at the given path and parses it as JSON. The file
+        must exist, be readable, and contain a JSON object.
 
         :param config_path: Path to the JSON configuration file.
 
         :returns: A dictionary of configuration values from the file.
+
+        :raises ConfigFileError: If the file does not exist, cannot be read,
+            is not valid JSON, or does not contain a JSON object.
     """
     if not os.path.isfile(config_path):
-        return {}
+        errmsg = "Configuration file '{}' does not exist.".format(config_path)
+        raise ConfigFileError(errmsg)
 
     try:
-        with open(config_path, "r") as config_file:
+        with open(config_path, "r", encoding="utf-8") as config_file:
             data = json.load(config_file)
-    except (json.JSONDecodeError, OSError):
-        return {}
+    except json.JSONDecodeError as err:
+        errmsg = "Configuration file '{}' is not valid JSON: {}".format(config_path, err)
+        raise ConfigFileError(errmsg) from err
+    except (OSError, UnicodeDecodeError) as err:
+        errmsg = "Configuration file '{}' could not be read: {}".format(config_path, err)
+        raise ConfigFileError(errmsg) from err
 
     if not isinstance(data, dict):
-        return {}
+        errmsg = "Configuration file '{}' must contain a JSON object, found {}.".format(
+            config_path, type(data).__name__
+        )
+        raise ConfigFileError(errmsg)
 
     return data
 
@@ -194,6 +216,9 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         :param config_path: Optional path to a JSON configuration file.
 
         :returns: The fully merged configuration dictionary.
+
+        :raises ConfigFileError: If *config_path* is given and the file is
+            missing, unreadable or malformed.
     """
     config = copy.deepcopy(DEFAULT_CONFIG)
 

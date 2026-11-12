@@ -741,3 +741,158 @@ def test_property_27_context_immutability_after_freeze():
                 raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# A shared service map
+# =============================================================================
+
+def test_service_is_visible_through_context_sharing_the_service_map():
+    """
+        Test that a service registered through one context is found through
+        another context that shares its service map.
+    """
+    app_ctx = _FakeAppContext()
+    services: Dict[str, Any] = {}
+
+    context_a = ExtensionContext(extension_name="ext-a", app_context=app_ctx, services=services)
+    context_b = ExtensionContext(extension_name="ext-b", app_context=app_ctx, services=services)
+
+    service = object()
+    context_a.register_service("db", service)
+
+    if context_b.get_service("db") is not service:
+        errmsg = "Expected the service registered by 'ext-a' to be found by 'ext-b'"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_contexts_without_shared_map_keep_services_private():
+    """
+        Test that a context created without a service map has its own.
+    """
+    app_ctx = _FakeAppContext()
+
+    context_a = ExtensionContext(extension_name="ext-a", app_context=app_ctx)
+    context_b = ExtensionContext(extension_name="ext-b", app_context=app_ctx)
+
+    context_a.register_service("db", object())
+
+    if context_b.get_service("db") is not None:
+        errmsg = "Expected a context with its own map not to see the service"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_frozen_property_reports_freeze():
+    """
+        Test that the frozen property is False until freeze() is called.
+    """
+    app_ctx = _FakeAppContext()
+    context = ExtensionContext(extension_name="ext-a", app_context=app_ctx)
+
+    before = context.frozen
+    context.freeze()
+    after = context.frozen
+
+    if before is not False or after is not True:
+        errmsg = "Expected frozen to go from False to True, got {} and {}".format(before, after)
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Hook and component registration through the context
+# =============================================================================
+
+from ccai.webworks.endpoints.registry import EndpointRegistry
+from ccai.webworks.extensibility.applicationcontext import ApplicationContext
+from ccai.webworks.extensibility.componenthooks import ComponentRegistrationHooks
+from ccai.webworks.extensibility.registry import ExtensionRegistry
+from ccai.webworks.routing.middlewareregistry import MiddlewareRegistry
+
+
+def _bound_application_context() -> ApplicationContext:
+    """
+        Create an ApplicationContext bound to a real ExtensionRegistry and
+        component hooks, the way an application binds it.
+
+        :returns: The bound context.
+    """
+    app_context = ApplicationContext(
+        logger_name="ctxapp",
+        endpoint_registry=EndpointRegistry(),
+        middleware_registry=MiddlewareRegistry()
+    )
+    registry = ExtensionRegistry(app_context=app_context)
+    component_hooks = ComponentRegistrationHooks(hook_manager=registry.hook_manager)
+    app_context.bind_extensions(registry, component_hooks)
+    return app_context
+
+
+def test_context_register_hook_registers_under_the_extension_name():
+    """
+        Test that register_hook registers the callback on the application's
+        hook manager under the extension's name.
+    """
+    app_context = _bound_application_context()
+    context = ExtensionContext(extension_name="ext-hooks", app_context=app_context)
+
+    calls = []
+    context.register_hook("before_request", lambda request: calls.append(request))
+
+    hook_manager = app_context.extension_registry.hook_manager
+
+    if hook_manager.get_execution_order("before_request") != ["ext-hooks"]:
+        raise AssertionError("Expected the callback under 'ext-hooks', got {}".format(
+            hook_manager.get_execution_order("before_request")))
+
+    hook_manager.execute("before_request", "request-1")
+
+    if calls != ["request-1"]:
+        raise AssertionError("Expected the callback to run, got {}".format(calls))
+
+    return
+
+
+def test_context_register_hook_raises_when_frozen():
+    """
+        Test that hooks can not be registered once the context is frozen.
+    """
+    app_context = _bound_application_context()
+    context = ExtensionContext(extension_name="ext-frozen", app_context=app_context)
+    context.freeze()
+
+    caught = None
+    try:
+        context.register_hook("before_request", lambda request: None)
+    except ExtensionContextFrozenError as err:
+        caught = err
+
+    if caught is None:
+        raise AssertionError("Expected ExtensionContextFrozenError")
+
+    return
+
+
+def test_context_component_hooks_and_logger_come_from_the_application_context():
+    """
+        Test that the context hands out the application's component hooks
+        and a logger namespaced under the application's logger.
+    """
+    app_context = _bound_application_context()
+    context = ExtensionContext(extension_name="audit", app_context=app_context)
+
+    if context.component_hooks is not app_context.component_hooks:
+        raise AssertionError("Expected the application's component hooks")
+
+    if context.logger.name != "ctxapp.extension.audit":
+        raise AssertionError("Expected the logger 'ctxapp.extension.audit', got {}".format(context.logger.name))
+
+    if context.middleware is not app_context.middleware:
+        raise AssertionError("Expected the application's middleware registry")
+
+    return

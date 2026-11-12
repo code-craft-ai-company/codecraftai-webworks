@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Type
 
 from ccai.webworks.configuration.core import (
     ConfigKeyDefinition,
+    SecretValue,
     ValidationError
 )
 
@@ -214,6 +215,11 @@ class ConfigSchema:
             - Values are within allowed choices (enum constraints)
             - Custom validators pass
             
+            A value may be given wrapped in a :class:`SecretValue`; it is
+            unwrapped to be checked. The errors for such a value, and for
+            the value of any key defined as sensitive, show
+            ``SecretValue.MASKED_VALUE`` instead of the value.
+            
             :param values: Configuration values to validate.
             
             :returns: List of ValidationError instances (empty if valid).
@@ -226,6 +232,15 @@ class ConfigSchema:
         # Check required keys and validate present values
         for key, definition in all_definitions.items():
             value = self._get_nested_value(values, key)
+            
+            # A value is secret when the schema marks its key as sensitive
+            # or when it arrives wrapped in a SecretValue. A secret is
+            # validated like any other value, but it is never copied into
+            # an error: the message and actual_value show the mask.
+            is_secret = definition.sensitive
+            if isinstance(value, SecretValue):
+                is_secret = True
+                value = value.get_secret_value()
             
             # Check required constraint
             if definition.required and value is None:
@@ -241,7 +256,7 @@ class ConfigSchema:
                 continue
             
             # Validate type (with coercion attempt)
-            type_error = self._validate_type(key, value, definition.type)
+            type_error = self._validate_type(key, value, definition.type, is_secret=is_secret)
             if type_error is not None:
                 errors.append(type_error)
                 continue
@@ -249,13 +264,22 @@ class ConfigSchema:
             # Coerce value for further validation
             coerced_value = coerce_value(value, definition.type)
             
+            # What an error may show of the value
+            reported_value = coerced_value
+            if is_secret:
+                reported_value = SecretValue.MASKED_VALUE
+            
             # Validate choices constraint
             if definition.choices is not None:
                 if coerced_value not in definition.choices:
+                    if is_secret:
+                        choices_message = f"Value '{reported_value}' is not in the allowed choices"
+                    else:
+                        choices_message = f"Value '{reported_value}' is not in allowed choices: {definition.choices}"
                     errors.append(ValidationError(
                         key=key,
-                        message=f"Value '{coerced_value}' is not in allowed choices: {definition.choices}",
-                        actual_value=coerced_value,
+                        message=choices_message,
+                        actual_value=reported_value,
                         constraint="choices"
                     ))
                     continue
@@ -267,17 +291,28 @@ class ConfigSchema:
                         errors.append(ValidationError(
                             key=key,
                             message=f"Custom validation failed for key '{key}'",
-                            actual_value=coerced_value,
+                            actual_value=reported_value,
                             constraint="custom"
                         ))
                 except Exception as e:
-                    logger.exception(
-                        "ConfigSchema: custom validator for key=%s raised", key
-                    )
+                    if is_secret:
+                        # The exception text and its traceback can quote the
+                        # value, so only the exception type is recorded.
+                        logger.error(
+                            "ConfigSchema: custom validator for sensitive key=%s raised %s",
+                            key,
+                            type(e).__name__,
+                        )
+                        validator_message = f"Custom validator raised {type(e).__name__}"
+                    else:
+                        logger.exception(
+                            "ConfigSchema: custom validator for key=%s raised", key
+                        )
+                        validator_message = f"Custom validator raised exception: {e}"
                     errors.append(ValidationError(
                         key=key,
-                        message=f"Custom validator raised exception: {e}",
-                        actual_value=coerced_value,
+                        message=validator_message,
+                        actual_value=reported_value,
                         constraint="custom"
                     ))
         
@@ -308,7 +343,8 @@ class ConfigSchema:
         self,
         key: str,
         value: Any,
-        expected_type: Type
+        expected_type: Type,
+        is_secret: bool = False
     ) -> Optional[ValidationError]:
         """
             Validate that a value can be coerced to the expected type.
@@ -316,6 +352,8 @@ class ConfigSchema:
             :param key: The configuration key.
             :param value: The value to validate.
             :param expected_type: The expected type.
+            :param is_secret: Whether the value is a secret. The error for a
+                              secret shows the mask in place of the value.
             
             :returns: ValidationError if type validation fails, None otherwise.
         """
@@ -323,11 +361,15 @@ class ConfigSchema:
             coerce_value(value, expected_type)
             return None
         except (ValueError, TypeError, json.JSONDecodeError):
+            reported_value = value
+            if is_secret:
+                reported_value = SecretValue.MASKED_VALUE
+            
             return ValidationError(
                 key=key,
-                message=f"Cannot coerce value '{value}' to type {expected_type.__name__}",
+                message=f"Cannot coerce value '{reported_value}' to type {expected_type.__name__}",
                 expected_type=expected_type,
-                actual_value=value,
+                actual_value=reported_value,
                 constraint="type"
             )
 

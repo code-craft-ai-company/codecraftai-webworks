@@ -242,6 +242,22 @@ Extend the `WebApplication` singleton to orchestrate the full lifecycle of a web
 - [x] 11. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [x] 12. Wire the extensions and the REST processing into the lifecycle (audit WW-0075, WW-0146, WW-0121)
+  - [x] 12.1 Constructor: MiddlewareRegistry, RESTMiddleware, ApplicationContext, ExtensionHost; properties and `add_extension`
+    - _Requirements: 10.1, 10.2_
+  - [x] 12.2 `setup_configuration` binds the configuration to the application context; `setup_infrastructure` starts the extensions, uses a RestProcessingRouter, passes the MiddlewareRegistry and the request hooks to the Dispatcher, registers the lifespan ready/stopping callbacks, fires `on_routes_registered`
+    - _Requirements: 10.3, 10.4, 10.5, 10.6, 10.7_
+  - [x] 12.3 `shutdown()` stops the extensions first, once
+    - _Requirements: 10.6_
+  - [x] 12.4 Tests: `extensibility/test_webapplication_extensions.py`, `rest/test_restprocessing.py`
+    - _Requirements: 10.1-10.7_
+
+- [x] 13. Serve the application over WSGI (audit WW-0175)
+  - [x] 13.1 `wsgi_app` property: one `ASGIBridge` per application around `asgi_app`, from `INFRASTRUCTURE_READY`
+    - _Requirements: 1.7_
+  - [x] 13.2 Tests: `wsgi/test_webapplication_serving.py` (served by the built-in WSGI server over real sockets, parity with `asgi_app`), `prodserver/test_productionserver.py`
+    - _Requirements: 1.7_
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP

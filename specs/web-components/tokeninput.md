@@ -33,7 +33,10 @@ which is a future extension.
 - **Container** (`part="container"`) — wraps all chips and the input; click anywhere to focus the input.
 - **Token chip** (`part="token"`) — individual chip for each committed value.
 - **Token label** (`part="token-label"`) — the text content of a chip.
-- **Token remove button** (`part="token-remove"`) — `×` button inside each chip; removes that token.
+- **Token remove control** (`part="token-remove"`) — `×` inside each chip; a click removes that token.
+  It is a pointer affordance, not a button: the chip is an `option`, which may not contain an
+  interactive element, so the control is `aria-hidden` and keyboard / screen reader users remove the
+  focused chip with Delete or Backspace (announced by the listbox description).
 - **Input** (`part="input"`) — `<input type="text">` for entering the next token.
 - **Suggestions popup** (`part="popup"`) — optional anchored listbox (same pattern as `<mj-search-input>`).
 - **Label** (`part="label"`), **Help text** (`part="help"`), **Error message** (`part="error"`).

@@ -8,17 +8,21 @@
     **Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8**
 """
 
+import asyncio
+import base64
 import time
 
 from ccai.webworks.authentication.blueprints.bearer import (
     BearerAuthBlueprint,
 )
 from ccai.webworks.authentication.bearer import (
+    BearerAuthenticator,
+    InMemoryTokenRevocationList,
     decode_jwt,
     encode_jwt,
     JWTError,
 )
-from ccai.webworks.authentication.core import Principal
+from ccai.webworks.authentication.core import AuthenticationStatus, Principal
 
 
 # =============================================================================
@@ -912,6 +916,540 @@ def test_no_jwt_secret_returns_server_error():
         errmsg = "Expected error 'server_error', got {!r}".format(
             body.get("error")
         )
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Client Credentials Grant Fails Closed
+# =============================================================================
+
+class MockClientStore:
+    """
+        A client store that knows one client, its secret and its scopes.
+    """
+
+    def __init__(self, client_id, client_secret, scopes=None):
+        self._client_id = client_id
+        self._client_secret = client_secret
+        self._scopes = scopes or []
+
+    async def validate_client_secret(self, client_id, client_secret):
+        return client_id == self._client_id and client_secret == self._client_secret
+
+    async def get_client(self, client_id):
+        if client_id != self._client_id:
+            return None
+        return {"client_id": client_id, "scopes": list(self._scopes)}
+
+
+def test_client_credentials_grant_refused_without_any_validator():
+    """
+        Verify that the client_credentials grant issues no token when
+        neither a client store nor an identity provider is configured:
+        nothing could have verified the client secret.
+    """
+    blueprint = _create_fresh_blueprint()
+
+    request = MockJsonRequest({
+        "grant_type": "client_credentials",
+        "client_id": "admin",
+        "client_secret": "x",
+    })
+
+    response = blueprint.token(request)
+
+    if response["status"] != 400:
+        errmsg = "Expected status 400, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    if "access_token" in response["body"]:
+        errmsg = "Expected no access token for unverified client credentials"
+        raise AssertionError(errmsg)
+
+    if response["body"].get("error") != "unauthorized_client":
+        errmsg = "Expected error 'unauthorized_client', got {!r}".format(
+            response["body"].get("error")
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_client_credentials_grant_validates_against_client_store():
+    """
+        Verify that a configured client store authenticates the client and
+        the token names the client as its subject.
+    """
+    blueprint = _create_fresh_blueprint()
+    blueprint.client_store = MockClientStore("service-a", "s3cret")
+
+    response = blueprint.token(MockJsonRequest({
+        "grant_type": "client_credentials",
+        "client_id": "service-a",
+        "client_secret": "s3cret",
+    }))
+
+    if response["status"] != 200:
+        errmsg = "Expected status 200, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    claims = decode_jwt(response["body"]["access_token"], JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    if claims.get("sub") != "service-a":
+        errmsg = "Expected sub 'service-a', got {!r}".format(claims.get("sub"))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_client_credentials_grant_rejects_wrong_secret_with_client_store():
+    """
+        Verify that a wrong client secret is refused by the client store.
+    """
+    blueprint = _create_fresh_blueprint()
+    blueprint.client_store = MockClientStore("service-a", "s3cret")
+
+    response = blueprint.token(MockJsonRequest({
+        "grant_type": "client_credentials",
+        "client_id": "service-a",
+        "client_secret": "wrong",
+    }))
+
+    if response["status"] != 401:
+        errmsg = "Expected status 401, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    if response["body"].get("error") != "invalid_client":
+        errmsg = "Expected error 'invalid_client', got {!r}".format(
+            response["body"].get("error")
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+class HeaderJsonRequest(MockJsonRequest):
+    """
+        A mock JSON request that also carries headers.
+    """
+
+    def __init__(self, data, headers):
+        super().__init__(data)
+        self.headers = headers
+
+
+def test_client_credentials_grant_accepts_http_basic_client_authentication():
+    """
+        Verify that client credentials sent in an HTTP Basic Authorization
+        header are accepted, as RFC 6749 clients send them.
+    """
+    blueprint = _create_fresh_blueprint()
+    blueprint.client_store = MockClientStore("service-a", "s3cret")
+
+    encoded = base64.b64encode(b"service-a:s3cret").decode("ascii")
+    request = HeaderJsonRequest(
+        {"grant_type": "client_credentials"},
+        {"Authorization": "Basic {}".format(encoded)}
+    )
+
+    response = blueprint.token(request)
+
+    if response["status"] != 200:
+        errmsg = "Expected status 200, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Scope Validation
+# =============================================================================
+
+def _blueprint_with_user(permissions):
+    """
+        Create a blueprint whose identity provider knows one user holding
+        the given permissions.
+    """
+    principal = Principal(identifier="user-123", permissions=set(permissions))
+    blueprint = _create_fresh_blueprint()
+    blueprint.identity_provider = MockIdentityProvider("testuser", "testpass", principal)
+    return blueprint
+
+
+def _password_grant(blueprint, scope=None):
+    """
+        Request tokens through the password grant.
+    """
+    data = {
+        "grant_type": "password",
+        "username": "testuser",
+        "password": "testpass",
+    }
+    if scope is not None:
+        data["scope"] = scope
+
+    response = blueprint.token(MockJsonRequest(data))
+    return response
+
+
+def test_password_grant_refuses_scope_the_user_does_not_hold():
+    """
+        Verify that a user cannot obtain a scope simply by asking for it.
+    """
+    blueprint = _blueprint_with_user({"read"})
+
+    response = _password_grant(blueprint, scope="admin")
+
+    if response["status"] != 400:
+        errmsg = "Expected status 400, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    if response["body"].get("error") != "invalid_scope":
+        errmsg = "Expected error 'invalid_scope', got {!r}".format(
+            response["body"].get("error")
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_password_grant_grants_only_scopes_the_user_holds():
+    """
+        Verify that a requested scope is reduced to the part the user holds
+        and that the response reports the granted scope.
+    """
+    blueprint = _blueprint_with_user({"read", "write"})
+
+    response = _password_grant(blueprint, scope="read admin")
+
+    if response["status"] != 200:
+        errmsg = "Expected status 200, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    if response["body"].get("scope") != "read":
+        errmsg = "Expected granted scope 'read', got {!r}".format(response["body"].get("scope"))
+        raise AssertionError(errmsg)
+
+    claims = decode_jwt(response["body"]["access_token"], JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    if claims.get("scope") != "read":
+        errmsg = "Expected token scope 'read', got {!r}".format(claims.get("scope"))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_refresh_grant_refuses_scope_wider_than_refresh_token():
+    """
+        Verify that a refresh request cannot name a scope the refresh token
+        does not carry.
+    """
+    blueprint = _blueprint_with_user({"read", "admin"})
+
+    issued = _password_grant(blueprint, scope="read")
+
+    response = blueprint.refresh(MockJsonRequest({
+        "refresh_token": issued["body"]["refresh_token"],
+        "scope": "read admin",
+    }))
+
+    if response["status"] != 400:
+        errmsg = "Expected status 400, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    if response["body"].get("error") != "invalid_scope":
+        errmsg = "Expected error 'invalid_scope', got {!r}".format(
+            response["body"].get("error")
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_refresh_grant_carries_scope_of_refresh_token():
+    """
+        Verify that a refresh without a scope keeps the scope the refresh
+        token was issued with.
+    """
+    blueprint = _blueprint_with_user({"read", "write"})
+
+    issued = _password_grant(blueprint, scope="read write")
+
+    response = blueprint.refresh(MockJsonRequest({
+        "refresh_token": issued["body"]["refresh_token"],
+    }))
+
+    if response["status"] != 200:
+        errmsg = "Expected status 200, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    claims = decode_jwt(response["body"]["access_token"], JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    if claims.get("scope") != "read write":
+        errmsg = "Expected token scope 'read write', got {!r}".format(claims.get("scope"))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_client_credentials_grant_limits_scope_to_client_registration():
+    """
+        Verify that a client is granted only scopes it is registered for.
+    """
+    blueprint = _create_fresh_blueprint()
+    blueprint.client_store = MockClientStore("service-a", "s3cret", scopes=["reports"])
+
+    response = blueprint.token(MockJsonRequest({
+        "grant_type": "client_credentials",
+        "client_id": "service-a",
+        "client_secret": "s3cret",
+        "scope": "admin",
+    }))
+
+    if response["status"] != 400 or response["body"].get("error") != "invalid_scope":
+        errmsg = "Expected 400 invalid_scope, got {} {!r}".format(
+            response["status"], response["body"]
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Revocation
+# =============================================================================
+
+def _isolated_revocation(blueprint):
+    """
+        Give a blueprint its own revocation list so tests do not see each
+        other's revocations.
+    """
+    blueprint.revocation_list = InMemoryTokenRevocationList()
+    return blueprint.revocation_list
+
+
+def test_issued_tokens_carry_distinct_jti():
+    """
+        Verify that access and refresh tokens carry a jti claim, which is
+        what a revocation names.
+    """
+    blueprint = _blueprint_with_user(set())
+
+    body = _password_grant(blueprint)["body"]
+
+    access_claims = decode_jwt(body["access_token"], JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    refresh_claims = decode_jwt(body["refresh_token"], JWT_SECRET, algorithms=[JWT_ALGORITHM])
+
+    if not access_claims.get("jti") or not refresh_claims.get("jti"):
+        errmsg = "Expected a jti claim on both tokens"
+        raise AssertionError(errmsg)
+
+    if access_claims["jti"] == refresh_claims["jti"]:
+        errmsg = "Expected the access and refresh tokens to have different jti values"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_revoked_access_token_is_rejected_by_bearer_authenticator():
+    """
+        Verify that an access token revoked at the revoke endpoint is no
+        longer accepted by a BearerAuthenticator that shares the
+        blueprint's revocation list, even without a token store.
+    """
+    blueprint = _blueprint_with_user(set())
+    _isolated_revocation(blueprint)
+
+    access_token = _password_grant(blueprint)["body"]["access_token"]
+
+    authenticator = BearerAuthenticator(
+        jwt_secret=JWT_SECRET,
+        revocation_list=blueprint.get_revocation_list()
+    )
+    request = {"headers": {"Authorization": "Bearer {}".format(access_token)}}
+
+    before = asyncio.run(authenticator.authenticate(request))
+    if before.status != AuthenticationStatus.SUCCESS:
+        errmsg = "Expected the fresh token to authenticate, got {}".format(before.status)
+        raise AssertionError(errmsg)
+
+    blueprint.revoke(MockJsonRequest({"token": access_token}))
+
+    after = asyncio.run(authenticator.authenticate(request))
+    if after.status != AuthenticationStatus.FAILURE:
+        errmsg = "Expected the revoked token to be rejected, got {}".format(after.status)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_revoked_refresh_token_cannot_be_refreshed():
+    """
+        Verify that a revoked refresh token no longer mints access tokens.
+    """
+    blueprint = _blueprint_with_user(set())
+    _isolated_revocation(blueprint)
+
+    refresh_token = _password_grant(blueprint)["body"]["refresh_token"]
+
+    blueprint.revoke(MockJsonRequest({"token": refresh_token}))
+
+    response = blueprint.refresh(MockJsonRequest({"refresh_token": refresh_token}))
+
+    if response["status"] != 401:
+        errmsg = "Expected status 401 for a revoked refresh token, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    if response["body"].get("error") != "invalid_grant":
+        errmsg = "Expected error 'invalid_grant', got {!r}".format(response["body"].get("error"))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_introspect_reports_revoked_token_inactive():
+    """
+        Verify that introspection reports a revoked token as inactive.
+    """
+    blueprint = _blueprint_with_user(set())
+    _isolated_revocation(blueprint)
+
+    access_token = _password_grant(blueprint)["body"]["access_token"]
+
+    blueprint.revoke(MockJsonRequest({"token": access_token}))
+
+    response = blueprint.introspect(MockJsonRequest({"token": access_token}))
+
+    if response["body"] != {"active": False}:
+        errmsg = "Expected {{'active': False}}, got {!r}".format(response["body"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_revoke_ignores_token_not_signed_by_this_server():
+    """
+        Verify that a string that is not one of this server's tokens does
+        not grow the revocation list.
+    """
+    blueprint = _create_fresh_blueprint()
+    revocation_list = _isolated_revocation(blueprint)
+
+    forged = encode_jwt({"sub": "x", "exp": int(time.time()) + 60}, "another-secret")
+    response = blueprint.revoke(MockJsonRequest({"token": forged}))
+
+    if response["status"] != 200:
+        errmsg = "Expected status 200, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    if revocation_list.get_entry_count() != 0:
+        errmsg = "Expected no revocation to be recorded for a foreign token"
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Request Body Parsing
+# =============================================================================
+
+class FormRequest:
+    """
+        A mock request with an application/x-www-form-urlencoded body.
+    """
+
+    def __init__(self, fields):
+        self.headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        self._fields = fields
+
+    def form(self):
+        return self._fields
+
+    def json(self):
+        errmsg = "body is not JSON"
+        raise ValueError(errmsg)
+
+
+def test_token_accepts_form_encoded_body():
+    """
+        Verify that the token endpoint reads a form-encoded body, which is
+        what OAuth 2.0 clients send.
+    """
+    blueprint = _blueprint_with_user(set())
+
+    response = blueprint.token(FormRequest({
+        "grant_type": "password",
+        "username": "testuser",
+        "password": "testpass",
+    }))
+
+    if response["status"] != 200:
+        errmsg = "Expected status 200, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_token_rejects_non_object_json_body():
+    """
+        Verify that a JSON body that is not an object is answered with 400
+        invalid_request instead of an unhandled error.
+    """
+    blueprint = _create_fresh_blueprint()
+
+    response = blueprint.token(MockJsonRequest([]))
+
+    if response["status"] != 400:
+        errmsg = "Expected status 400, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    if response["body"].get("error") != "invalid_request":
+        errmsg = "Expected error 'invalid_request', got {!r}".format(
+            response["body"].get("error")
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_introspect_rejects_unparseable_body():
+    """
+        Verify that a body that is not valid JSON is answered with 400.
+    """
+    class BrokenJsonRequest:
+        def json(self):
+            errmsg = "Expecting value"
+            raise ValueError(errmsg)
+
+    blueprint = _create_fresh_blueprint()
+
+    response = blueprint.introspect(BrokenJsonRequest())
+
+    if response["status"] != 400:
+        errmsg = "Expected status 400, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_default_bearer_authenticator_refuses_token_revoked_at_blueprint():
+    """
+        Verify that, with neither side configured with a revocation list,
+        a token revoked at the revoke endpoint is refused by a
+        BearerAuthenticator: both use the process-wide default list.
+    """
+    blueprint = _blueprint_with_user(set())
+    blueprint.revocation_list = None
+
+    access_token = _password_grant(blueprint)["body"]["access_token"]
+
+    authenticator = BearerAuthenticator(jwt_secret=JWT_SECRET)
+    request = {"headers": {"Authorization": "Bearer {}".format(access_token)}}
+
+    blueprint.revoke(MockJsonRequest({"token": access_token}))
+
+    result = asyncio.run(authenticator.authenticate(request))
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = "Expected the revoked token to be refused by default, got {}".format(result.status)
         raise AssertionError(errmsg)
 
     return

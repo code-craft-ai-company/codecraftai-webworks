@@ -116,18 +116,29 @@ use** for inline visible lists of options — use `<mj-listbox>`.
 
 ## 10. States
 - **closed** — `open` is `false`; popup is not in the DOM (or `display: none`).
-- **open** — popup is visible; first item (or previously focused item) receives `aria-activedescendant` focus.
-- **item-focused** — the keyboard-active item is highlighted; `aria-activedescendant` on `role="menu"` points to it.
+- **open** — popup is visible; the first enabled item receives DOM focus (the popup itself when no item is enabled).
+- **item-focused** — the keyboard-active item holds DOM focus and carries `data-active="true"` (highlight styling).
 - **item-disabled** — `aria-disabled="true"` on a menuitem; skipped in keyboard navigation.
 - **item-checked** — `aria-checked="true"` on `menuitemcheckbox` or `menuitemradio`.
 - **submenu-open** — the parent menuitem has `aria-expanded="true"`; submenu popup is visible.
 
 ## 11. Behavior & interactions
-- The menu uses `aria-activedescendant` on the `role="menu"` element to track
-  keyboard focus; the popup itself receives DOM focus, not individual items.
-- On open, focus moves to the menu popup element; the first enabled item is set
-  as `aria-activedescendant`.
-- On close, focus returns to the trigger element.
+- Keyboard focus is real DOM focus that roves over the slotted menu items.
+  `aria-activedescendant` is not used: the `role="menu"` element lives in the
+  shadow root and the items are light-DOM nodes, and an ID reference cannot
+  cross that boundary, so assistive technology would not resolve it.
+- Every registered item gets an `id` and `tabindex="-1"`: items are focusable by
+  script but the menu is not a Tab stop (Tab closes it). The active item is the
+  one holding focus and is marked `data-active="true"`; moving to another item
+  clears the mark, sets it on the new item and calls `focus()` on it
+  (`mj-menu-item-focus` fires when the active item changes).
+- On open, focus moves to the first enabled item; when no item is enabled, the
+  popup (`role="menu"`, `tabindex="-1"`) receives focus instead.
+- Pointer hover over an enabled item makes it the active item and moves focus
+  to it without scrolling the list.
+- On close, focus returns to the trigger element when focus was inside the menu;
+  a close while focus is elsewhere (for example a click outside) leaves focus
+  where it is.
 - Positioning is delegated to the Section 6 overlay engine with the `placement`
   attribute; the engine flips the menu to the opposite side if it would overflow
   the viewport.
@@ -149,7 +160,7 @@ use** for inline visible lists of options — use `<mj-listbox>`.
 ## 12. Keyboard interaction
 | Key | Action |
 |-----|--------|
-| `Enter` / `Space` (on trigger) | Opens the menu; focus moves to menu |
+| `Enter` / `Space` (on trigger) | Opens the menu; focus moves to the first enabled item |
 | `Arrow Down` | Moves focus to next enabled item (wraps) |
 | `Arrow Up` | Moves focus to previous enabled item (wraps) |
 | `Home` | Moves focus to first enabled item |
@@ -167,8 +178,10 @@ use** for inline visible lists of options — use `<mj-listbox>`.
   trigger's accessible name via `aria-labelledby`).
 - Individual items: `role="menuitem"`, `role="menuitemcheckbox"`, or
   `role="menuitemradio"`.
-- The menu uses `aria-activedescendant` on the `role="menu"` element; the
-  focused item has `id` referenced.
+- Focus management is roving focus: the active item itself holds DOM focus
+  (all items `tabindex="-1"`), so screen readers announce it directly. No
+  `aria-activedescendant` is set, because the `role="menu"` element is in the
+  shadow root and cannot reference light-DOM item IDs.
 - Trigger element (managed externally by `<mj-menu-button>`): must have
   `aria-haspopup="menu"` and `aria-expanded` reflecting `open`.
 - Disabled items: `aria-disabled="true"`; remain in DOM; not skippable but not
@@ -206,7 +219,7 @@ N/A — `<mj-menu>` is an actions/navigation component, not a form control.
 
 ## 17. Dependencies
 - Section 6: Registry + base element helper, design-token stylesheet, overlay/
-  positioning engine, focus utilities (`aria-activedescendant` helper),
+  positioning engine, focus utilities (`deepActiveElement` for focus restoration),
   localization hook.
 - `<mj-menu-item>` — companion element for individual action items.
 - `<mj-menu-separator>` — companion element for visual/semantic dividers.
@@ -216,8 +229,8 @@ N/A — `<mj-menu>` is an actions/navigation component, not a form control.
 ## 18. Edge cases & error handling
 - **Empty menu**: popup renders with a "No options" notice (localization key
   `mj.menu.empty`); close on Escape.
-- **All items disabled**: keyboard navigation finds no enabled item; focus stays
-  on the menu popup; Escape closes it.
+- **All items disabled**: keyboard navigation finds no enabled item; focus moves
+  to the menu popup itself (`tabindex="-1"`) and stays there; Escape closes it.
 - **Deeply nested submenus (> 3 levels)**: supported structurally; authors are
   advised in docs to limit nesting to 2 levels for usability.
 - **Menu taller than viewport**: `--mj-menu-max-height` caps height; overflow
@@ -230,7 +243,7 @@ N/A — `<mj-menu>` is an actions/navigation component, not a form control.
 
 ## 19. Acceptance criteria
 - [ ] Renders `role="menu"` popup anchored to the trigger element.
-- [ ] `aria-activedescendant` tracks keyboard-focused item.
+- [ ] DOM focus roves over the items (each `tabindex="-1"`); the focused item carries `data-active="true"`; no `aria-activedescendant` is set.
 - [ ] Arrow Down/Up navigation cycles through enabled items; disabled items skipped.
 - [ ] Home/End jump to first/last enabled item.
 - [ ] Enter activates item; `mj-menu-select` fires; menu closes if `close-on-select`.

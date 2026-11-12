@@ -28,7 +28,7 @@ When the application requires both a top bar and a side nav, compose them in
 `<mj-app-shell>`.
 
 ## 3. Anatomy
-- **Host / `<header>`** — landmark element with `role="banner"`.
+- **Root `<header>`** (`::part(root)`) — the bar row; the page's `banner` landmark (`role="banner"`), or `role="none"` when the bar is not the page banner (see Accessibility).
 - **Brand area** (`::part(brand)`) — logo + app name; wraps the `brand` slot.
 - **Nav area** (`::part(nav)`) — `<nav aria-label>` wrapping the `navigation` slot; hidden at breakpoint and moved into the mobile drawer.
 - **Actions area** (`::part(actions)`) — trailing slot for icon buttons, avatars, notifications.
@@ -134,8 +134,16 @@ When the application requires both a top bar and a side nav, compose them in
 | `Tab` (in open drawer) | Cycles focus within the drawer (trap active) |
 
 ## 13. Accessibility
-- The host renders as `<header role="banner">`; only one `<header>` with
-  `role="banner"` should exist per page.
+- The bar renders a `<header role="banner">` in its shadow root, holding the
+  brand, nav and actions. A page has one banner, so the header gets
+  `role="none"` instead when the bar is inside a landmark, a sectioning
+  element or a dialog (`article`, `aside`, `main`, `nav`, `section`, `header`,
+  `footer`, `dialog` or the matching roles, following slots and shadow roots
+  -- e.g. an `<mj-app-shell>` app-bar region the shell made the banner), when
+  the page's light DOM already has a page-level `<header>` / `role="banner"`,
+  or when another bar connected before it already is the banner. The decision
+  is made again when a bar is connected or removed and when an enclosing
+  shell's layout changes.
 - The desktop nav is `<nav aria-label="Main">` (overridable via `nav-label`).
 - The mobile toggle has `aria-expanded` reflecting `open`, `aria-controls`
   pointing to the drawer's `id`, and an accessible name ("Open navigation"
@@ -178,14 +186,15 @@ N/A — `<mj-app-bar>` is a navigation landmark, not a form control.
 - **Very long brand name**: brand area truncates with ellipsis at 50% of bar width.
 - **Many action items**: actions slot wraps; component does not auto-hide overflow
   — authors should use an overflow `<mj-menu>` for dense action sets.
-- **Nested `<header>` landmark**: if a second `<mj-app-bar>` is mounted (e.g.,
-  inside a story), it uses `role="navigation"` for the inner nav only to avoid
-  duplicate `banner` landmarks; a console warning is emitted.
+- **Second bar / nested `<header>` landmark**: a second `<mj-app-bar>` (or one
+  inside a landmark or section) renders its header with `role="none"`, so it
+  keeps only its inner navigation landmark and the page never gets a
+  duplicate or nested `banner`.
 - **`scroll-threshold` on a non-scrolling page**: the `scrolled` attribute never
   sets; no error thrown.
 
 ## 19. Acceptance criteria
-- [ ] Renders `<header role="banner">` containing `<nav aria-label>`.
+- [ ] Renders `<header role="banner">` containing `<nav aria-label>`; only one bar per page is the banner, and none inside a landmark or section.
 - [ ] Desktop: nav slot content is visible; toggle button hidden.
 - [ ] Mobile: nav slot hidden; toggle visible; toggle opens/closes the drawer.
 - [ ] `open` attribute toggles the drawer; `mj-app-bar-open` / `mj-app-bar-close` events fire.

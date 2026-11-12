@@ -19,6 +19,8 @@ import string
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Type
 
+from ccai.webworks.routing.response import Response
+
 from ccai.webworks.endpoints.rest import (
     RESTMiddleware,
     create_rest_middleware,
@@ -817,15 +819,15 @@ def test_middleware_handle_error():
     
     response = middleware._handle_error(request, exc)
     
-    if response["status_code"] != 400:
-        raise AssertionError(f"Expected status 400, got {response['status_code']}")
+    if response.status_code != 400:
+        raise AssertionError(f"Expected status 400, got {response.status_code}")
     
-    if response["content_type"] != "application/json":
-        raise AssertionError(f"Expected content type 'application/json', got '{response['content_type']}'")
+    if response.headers.get("Content-Type") != "application/json":
+        raise AssertionError(f"Expected content type 'application/json', got '{response.headers.get('Content-Type')}'")
 
 
 def test_middleware_create_response():
-    """Middleware should create response dict."""
+    """Middleware should create a routing Response the dispatcher can send."""
     middleware = create_rest_middleware()
     
     response = middleware._create_response(
@@ -834,16 +836,250 @@ def test_middleware_create_response():
         content_type="application/json",
         headers={"X-Custom": "value"}
     )
+
+    if not isinstance(response, Response):
+        raise AssertionError(f"Expected a routing Response, got {type(response).__name__}")
     
-    if response["body"] != b'{"test": true}':
+    if response.body != b'{"test": true}':
         raise AssertionError("Body should match")
     
-    if response["status_code"] != 200:
+    if response.status_code != 200:
         raise AssertionError("Status code should match")
     
-    if response["content_type"] != "application/json":
+    if response.headers.get("Content-Type") != "application/json":
         raise AssertionError("Content type should match")
     
-    if response["headers"]["X-Custom"] != "value":
+    if response.headers.get("X-Custom") != "value":
         raise AssertionError("Headers should match")
 
+
+# =============================================================================
+# The middleware against real routing requests and attach_at descriptors
+# =============================================================================
+
+import json
+
+from ccai.webworks.endpoints.registry import EndpointRegistry
+from ccai.webworks.endpoints.restendpoint import RestEndpoint
+from ccai.webworks.endpoints.rest.middleware import get_rest_payload
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.response import JSONResponse
+
+
+@dataclass
+class WidgetCreate:
+    """Request schema for the tests below."""
+    name: str
+    size: int = 1
+
+
+def _widget_descriptor():
+    """
+        Build a descriptor the way an application does: through
+        RestEndpoint.attach_at with a request schema.
+    """
+    @RestEndpoint.attach_at(leaf="widgets", methods=["POST", "PATCH"], request_schema=WidgetCreate)
+    def create_widget(request):
+        return {}
+
+    registry = EndpointRegistry()
+    registry.collect_from(create_widget)
+    return registry.collect()[0]
+
+
+def _json_request(method: str, body: Any, headers: Optional[Dict[str, str]] = None) -> Request:
+    """Build a routing Request carrying ``body`` as JSON."""
+    request_headers = {"Content-Type": "application/json"}
+    if headers is not None:
+        request_headers.update(headers)
+    return Request(method, "/widgets", headers=request_headers, body=json.dumps(body).encode("utf-8"))
+
+
+def test_middleware_accepts_valid_body_for_attach_at_dataclass_schema():
+    """A valid body for an endpoint declared with attach_at(request_schema=...) reaches the handler validated."""
+    middleware = create_rest_middleware()
+    descriptor = _widget_descriptor()
+    received = []
+
+    def handler(request):
+        received.append(get_rest_payload(request))
+        return {"ok": True}
+
+    response = middleware.process(_json_request("POST", {"name": "bolt", "size": 3}), handler, descriptor=descriptor)
+
+    if response.status_code != 201:
+        raise AssertionError(f"Expected 201, got {response.status_code}: {response.body!r}")
+
+    if received != [WidgetCreate(name="bolt", size=3)]:
+        raise AssertionError(f"Expected the handler to receive a WidgetCreate instance, got {received!r}")
+
+
+def test_middleware_rejects_invalid_body_with_field_errors():
+    """A body that does not fit the schema is answered with 400 and field errors; the handler is not called."""
+    middleware = create_rest_middleware()
+    descriptor = _widget_descriptor()
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return {}
+
+    response = middleware.process(_json_request("POST", {"size": "big"}), handler, descriptor=descriptor)
+    body = json.loads(response.body)
+
+    if response.status_code != 400 or body["error"] != "validation_error":
+        raise AssertionError(f"Expected 400 validation_error, got {response.status_code} {body}")
+
+    fields = sorted(field_error["field"] for field_error in body["field_errors"])
+    if fields != ["name", "size"]:
+        raise AssertionError(f"Expected field errors for 'name' and 'size', got {fields}")
+
+    if len(calls) != 0:
+        raise AssertionError("The handler must not be called for an invalid body")
+
+
+def test_middleware_patch_validates_partially_and_passes_a_dict():
+    """A PATCH body is validated partially: missing required fields are allowed and the payload is a dict."""
+    middleware = create_rest_middleware()
+    descriptor = _widget_descriptor()
+    received = []
+
+    def handler(request):
+        received.append(get_rest_payload(request))
+        return {}
+
+    response = middleware.process(_json_request("PATCH", {"size": 9}), handler, descriptor=descriptor)
+
+    if response.status_code != 200:
+        raise AssertionError(f"Expected 200, got {response.status_code}: {response.body!r}")
+
+    if received != [{"size": 9}]:
+        raise AssertionError(f"Expected the payload {{'size': 9}}, got {received!r}")
+
+
+def test_middleware_requires_a_body_when_a_request_schema_is_declared():
+    """A POST with no body to an endpoint that declares a request schema is a 400, not a call with no payload."""
+    middleware = create_rest_middleware()
+    descriptor = _widget_descriptor()
+
+    response = middleware.process(Request("POST", "/widgets"), lambda request: {}, descriptor=descriptor)
+
+    if response.status_code != 400:
+        raise AssertionError(f"Expected 400 for a missing body, got {response.status_code}")
+
+
+def test_middleware_passes_through_a_response_returned_by_call_next():
+    """A finished Response from the handler is returned as it is, not serialized as data."""
+    middleware = create_rest_middleware()
+    finished = JSONResponse({"made": "by handler"}, status_code=202)
+
+    response = middleware(Request("GET", "/widgets"), lambda request: finished)
+
+    if response is not finished:
+        raise AssertionError("Expected the handler's Response object to be passed through unchanged")
+
+
+def test_middleware_serializes_handler_data_into_a_routing_response():
+    """Plain data returned by the handler becomes a routing Response with a JSON body."""
+    middleware = create_rest_middleware()
+
+    response = middleware(Request("GET", "/widgets"), lambda request: {"name": "bolt"})
+
+    if not isinstance(response, Response):
+        raise AssertionError(f"Expected a routing Response, got {type(response).__name__}")
+
+    if response.status_code != 200 or json.loads(response.body) != {"name": "bolt"}:
+        raise AssertionError(f"Unexpected response: {response.status_code} {response.body!r}")
+
+
+def test_middleware_answers_unacceptable_accept_header_with_406():
+    """A request that accepts only a format the server lacks is answered 406 in the REST error shape."""
+    middleware = create_rest_middleware()
+    request = Request("GET", "/widgets", headers={"Accept": "text/xml"})
+
+    response = middleware(request, lambda req: {"name": "bolt"})
+    body = json.loads(response.body)
+
+    if response.status_code != 406 or body["error"] != "not_acceptable":
+        raise AssertionError(f"Expected 406 not_acceptable, got {response.status_code} {body}")
+
+
+def test_middleware_answers_unsupported_content_type_with_415():
+    """A body in a format the server cannot read is answered 415 in the REST error shape."""
+    middleware = create_rest_middleware()
+    request = Request("POST", "/widgets", headers={"Content-Type": "text/xml"}, body=b"<w/>")
+
+    response = middleware(request, lambda req: {})
+    body = json.loads(response.body)
+
+    if response.status_code != 415 or body["error"] != "unsupported_media_type":
+        raise AssertionError(f"Expected 415 unsupported_media_type, got {response.status_code} {body}")
+
+
+def test_middleware_reads_the_descriptor_from_the_request_middleware_context():
+    """The matched descriptor is found on a routing Request's middleware context."""
+    from ccai.webworks.routing.middlewarecontext import MiddlewareContext
+
+    middleware = create_rest_middleware()
+    descriptor = _widget_descriptor()
+
+    request = _json_request("POST", {"name": 5})
+    request.middleware_context = MiddlewareContext(endpoint_descriptor=descriptor)
+
+    response = middleware(request, lambda req: {})
+
+    if response.status_code != 400:
+        raise AssertionError(f"Expected the body to be validated against the descriptor's schema (400), got {response.status_code}")
+
+
+def test_wrap_handler_returns_a_request_handler_that_applies_rest_processing():
+    """wrap_handler gives a callable with the dispatcher's handler shape that validates and serializes."""
+    middleware = create_rest_middleware()
+    descriptor = _widget_descriptor()
+
+    def handler(request):
+        payload = get_rest_payload(request)
+        return {"name": payload.name.upper()}
+
+    rest_handler = middleware.wrap_handler(handler, descriptor=descriptor)
+    response = rest_handler(_json_request("POST", {"name": "bolt"}))
+
+    if response.status_code != 201 or json.loads(response.body) != {"name": "BOLT"}:
+        raise AssertionError(f"Unexpected response: {response.status_code} {response.body!r}")
+
+    if rest_handler.__name__ != "handler":
+        raise AssertionError(f"Expected the wrapped handler to keep its name, got {rest_handler.__name__!r}")
+
+
+def test_middleware_awaits_an_asynchronous_handler():
+    """An async handler's result is serialized once awaited."""
+    import asyncio
+
+    middleware = create_rest_middleware()
+
+    async def handler(request):
+        return {"name": "bolt"}
+
+    pending = middleware(Request("GET", "/widgets"), handler)
+    response = asyncio.run(pending)
+
+    if response.status_code != 200 or json.loads(response.body) != {"name": "bolt"}:
+        raise AssertionError(f"Unexpected response: {response.status_code} {response.body!r}")
+
+
+def test_middleware_error_response_carries_exception_headers():
+    """Headers carried by an HTTP exception, such as Allow on a 405, are sent with the error response."""
+    from ccai.webworks.routing.exceptions import MethodNotAllowed
+
+    middleware = create_rest_middleware()
+
+    def handler(request):
+        raise MethodNotAllowed(allowed=["GET", "POST"])
+
+    response = middleware(Request("DELETE", "/widgets"), handler)
+
+    if response.status_code != 405:
+        raise AssertionError(f"Expected 405, got {response.status_code}")
+
+    if "GET" not in response.headers.get("Allow", ""):
+        raise AssertionError(f"Expected an Allow header listing GET, got {dict(response.headers)}")

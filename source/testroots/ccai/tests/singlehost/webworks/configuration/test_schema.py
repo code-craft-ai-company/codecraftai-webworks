@@ -1530,3 +1530,124 @@ def test_property_11_deeply_nested_schema_validation():
             raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# Secrets are kept out of validation errors
+# =============================================================================
+
+def test_config_schema_validate_masks_sensitive_value_in_type_error():
+    """
+        Test that the type error for a sensitive key shows the mask, not the
+        value.
+    """
+    from ccai.webworks.configuration import SecretValue
+    
+    schema = ConfigSchema()
+    schema.define("db.password", int, sensitive=True)
+    
+    errors = schema.validate({"db": {"password": "hunter2"}})
+    
+    if len(errors) != 1:
+        errmsg = f"Expected 1 error, got {len(errors)}"
+        raise AssertionError(errmsg)
+    
+    error = errors[0]
+    if "hunter2" in error.message or error.actual_value != SecretValue.MASKED_VALUE:
+        errmsg = f"The secret is visible in the error: {error}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_schema_validate_masks_sensitive_value_in_choices_error():
+    """
+        Test that the choices error for a sensitive key shows neither the
+        value nor the allowed choices.
+    """
+    from ccai.webworks.configuration import SecretValue
+    
+    schema = ConfigSchema()
+    schema.define("api.mode", str, sensitive=True, choices=["alpha-secret", "beta-secret"])
+    
+    errors = schema.validate({"api": {"mode": "gamma-secret"}})
+    
+    error = errors[0]
+    if "gamma-secret" in error.message or "alpha-secret" in error.message:
+        errmsg = f"A secret is visible in the message: {error.message}"
+        raise AssertionError(errmsg)
+    
+    if error.actual_value != SecretValue.MASKED_VALUE or error.constraint != "choices":
+        errmsg = f"Expected a masked choices error, got {error}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_schema_validate_masks_sensitive_value_in_validator_errors():
+    """
+        Test that a failing or raising custom validator of a sensitive key
+        does not put the value in the error.
+    """
+    def rejecting(value: Any) -> bool:
+        return False
+    
+    def raising(value: Any) -> bool:
+        raise ValueError(f"bad value {value}")
+    
+    schema = ConfigSchema()
+    schema.define("first", str, sensitive=True, validator=rejecting)
+    schema.define("second", str, sensitive=True, validator=raising)
+    
+    errors = schema.validate({"first": "hunter2", "second": "hunter3"})
+    
+    if len(errors) != 2:
+        errmsg = f"Expected 2 errors, got {len(errors)}"
+        raise AssertionError(errmsg)
+    
+    for error in errors:
+        shown = f"{error.message} {error.actual_value}"
+        if "hunter" in shown:
+            errmsg = f"A secret is visible in the error: {shown}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_schema_validate_unwraps_secret_value():
+    """
+        Test that a value given as a SecretValue is validated by its content.
+    """
+    from ccai.webworks.configuration import SecretValue
+    
+    schema = ConfigSchema()
+    schema.define("db.port", int)
+    
+    valid = schema.validate({"db": {"port": SecretValue(value="5432", key="db.port")}})
+    invalid = schema.validate({"db": {"port": SecretValue(value="not-a-number", key="db.port")}})
+    
+    if len(valid) != 0:
+        errmsg = f"Expected no errors for a valid secret, got {valid}"
+        raise AssertionError(errmsg)
+    
+    if len(invalid) != 1 or "not-a-number" in invalid[0].message:
+        errmsg = f"Expected one masked error for an invalid secret, got {invalid}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_schema_validate_shows_value_of_key_that_is_not_sensitive():
+    """
+        Test that the error for an ordinary key still shows the value.
+    """
+    schema = ConfigSchema()
+    schema.define("server.port", int)
+    
+    errors = schema.validate({"server": {"port": "abc"}})
+    
+    if "abc" not in errors[0].message or errors[0].actual_value != "abc":
+        errmsg = f"Expected the value in the error, got {errors[0]}"
+        raise AssertionError(errmsg)
+    
+    return

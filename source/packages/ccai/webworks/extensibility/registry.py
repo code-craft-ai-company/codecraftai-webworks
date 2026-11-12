@@ -13,6 +13,7 @@ import traceback
 
 from collections import defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ccai.webworks.extensibility.configuration import apply_config_defaults
@@ -25,9 +26,11 @@ from ccai.webworks.extensibility.datastructures import ExtensionPointDefinition
 from ccai.webworks.extensibility.datastructures import ExtensionState
 from ccai.webworks.extensibility.exceptions import ExtensionAlreadyRegisteredError
 from ccai.webworks.extensibility.exceptions import ExtensionDependencyError
+from ccai.webworks.extensibility.exceptions import ExtensionError
 from ccai.webworks.extensibility.exceptions import ExtensionNotFoundError
 from ccai.webworks.extensibility.exceptions import ExtensionPointError
 from ccai.webworks.extensibility.hookmanager import HookManager
+from ccai.webworks.extensibility.loader import ExtensionLoader
 
 if TYPE_CHECKING:
     from ccai.webworks.extensibility.extension import Extension
@@ -45,19 +48,30 @@ class ExtensionRegistry:
         activate, deactivate, reload), state tracking, capability querying,
         and error tracking with quarantine support.
 
+        The registry owns the HookManager and one service map. Every
+        ExtensionContext it creates shares that map, so a service one
+        extension registers is found by every other extension, and the
+        contexts are frozen when initialize_all() completes. The hook
+        callbacks of an extension that is disabled or quarantined are
+        suspended, and a hook callback that raises counts as an error of
+        its extension, so repeated failures lead to quarantine.
+
         :param app_context: The application context for creating extension contexts.
+        :param safe_mode: When True, only core extensions are initialized.
     """
 
     def __init__(self, app_context: Any, safe_mode: bool = False):
         self._app_context = app_context
         self._extensions: Dict[str, 'Extension'] = {}
         self._extension_states: Dict[str, ExtensionState] = {}
-        self._hook_manager: HookManager = HookManager()
+        self._hook_manager: HookManager = HookManager(error_callback=self._record_hook_error)
         self._extension_points: Dict[str, ExtensionPointDefinition] = {}
         self._contributions: Dict[str, List[Any]] = {}
         self._error_counts: Dict[str, int] = {}
         self._error_threshold: int = 5
         self._safe_mode: bool = safe_mode
+        self._services: Dict[str, Any] = {}
+        self._contexts: Dict[str, ExtensionContext] = {}
         return
 
     def register(self, extension: 'Extension') -> None:
@@ -82,6 +96,50 @@ class ExtensionRegistry:
         self._error_counts[ext_name] = 0
 
         return
+
+    def discover(self, paths: List[Path], allowed_packages: Optional[List[str]] = None) -> List[str]:
+        """
+            Discover and register extensions from the given paths.
+
+            Each path, and each directory directly inside it, is searched
+            for an extension manifest. The extension a valid manifest
+            describes is loaded with an ExtensionLoader, which attaches the
+            manifest to the instance, and is registered. An extension that
+            cannot be loaded, or whose name is already registered, is logged
+            and skipped so the others are still discovered.
+
+            :param paths: List of directory paths to search for extensions.
+            :param allowed_packages: The packages an extension's entry point
+                may be in; see ExtensionLoader. None allows any module.
+
+            :returns: The names of the extensions that were registered.
+        """
+        discovered_names: List[str] = []
+
+        loader = ExtensionLoader(self, allowed_packages=allowed_packages)
+        manifests = loader.discover_from_paths(paths)
+
+        for manifest in manifests:
+            if manifest.name in self._extensions:
+                logger.warning(
+                    "Skipping discovered extension '%s': an extension with that name is already registered",
+                    manifest.name
+                )
+                continue
+
+            try:
+                extension = loader.load_extension(manifest)
+                self.register(extension)
+            except ExtensionError as err:
+                logger.warning(
+                    "Skipping discovered extension '%s': %s",
+                    manifest.name, err
+                )
+                continue
+
+            discovered_names.append(extension.name)
+
+        return discovered_names
 
     def get(self, name: str) -> Optional['Extension']:
         """
@@ -262,11 +320,15 @@ class ExtensionRegistry:
             # Validate configuration against schema
             validate_extension_config(ext_name, ext_config, config_schema)
 
+            # Every context shares the registry's service map, so a
+            # service registered by one extension is found by the others.
             context = ExtensionContext(
                 extension_name=ext_name,
                 app_context=self._app_context,
-                config=ext_config
+                config=ext_config,
+                services=self._services
             )
+            self._contexts[ext_name] = context
 
             try:
                 extension.initialize(context)
@@ -281,7 +343,69 @@ class ExtensionRegistry:
                 self.record_error(ext_name)
                 self._fire_on_extension_error(ext_name, "initialize", err, tb_str)
 
+        # Initialization is complete: the contexts become immutable.
+        for ext_name in ordered_names:
+            context = self._contexts[ext_name]
+            context.freeze()
+
         return
+
+    def initialized_names(self) -> List[str]:
+        """
+            Get the names of the extensions initialize_all() initialized
+            (whether their initialize() succeeded or failed), in dependency
+            order.
+
+            :returns: The extension names, dependencies first.
+        """
+        ordered_names = self._resolve_dependencies()
+
+        rtnval: List[str] = []
+        for ext_name in ordered_names:
+            if ext_name in self._contexts:
+                rtnval.append(ext_name)
+
+        return rtnval
+
+    def shutdown_all(self) -> List[str]:
+        """
+            Shut down every extension initialize_all() initialized, in
+            reverse dependency order: an extension shuts down before the
+            extensions it depends on.
+
+            An extension whose shutdown() raises is logged with its name,
+            recorded as an error of the extension and reported through the
+            ``on_extension_error`` hook, and the remaining extensions are
+            still shut down: every extension gets its shutdown. Once an
+            extension has been shut down its hook callbacks are suspended,
+            so nothing calls into it any more.
+
+            ``ConfigurationError`` and ``SemanticError`` are not caught.
+
+            :returns: The names of the extensions whose shutdown() raised.
+        """
+        failed_names: List[str] = []
+
+        started_names = self.initialized_names()
+
+        for ext_name in reversed(started_names):
+            extension = self._extensions[ext_name]
+
+            try:
+                extension.shutdown()
+            except Exception as err:
+                tb_str = traceback.format_exc()
+                logger.error(
+                    "Extension '%s' failed during shutdown: %s\n%s",
+                    ext_name, err, tb_str
+                )
+                self.record_error(ext_name)
+                self._fire_on_extension_error(ext_name, "shutdown", err, tb_str)
+                failed_names.append(ext_name)
+
+            self._hook_manager.suspend_extension(ext_name)
+
+        return failed_names
 
     def enable(self, name: str) -> None:
         """
@@ -324,6 +448,8 @@ class ExtensionRegistry:
         try:
             extension.activate()
             self._extension_states[name] = ExtensionState.ACTIVE
+            # The hook callbacks of the extension run (again)
+            self._hook_manager.resume_extension(name)
         except Exception as err:
             tb_str = traceback.format_exc()
             logger.error(
@@ -341,7 +467,9 @@ class ExtensionRegistry:
             Disable an active extension.
 
             Calls the extension's deactivate() method and updates the
-            state to DISABLED.
+            state to DISABLED. The hook callbacks the extension registered
+            stop running; they stay registered and run again when the
+            extension is enabled.
 
             :param name: The extension name.
 
@@ -351,6 +479,9 @@ class ExtensionRegistry:
             raise ExtensionNotFoundError(name)
 
         extension = self._extensions[name]
+
+        # Whatever deactivate() does, a disabled extension's hooks do not run
+        self._hook_manager.suspend_extension(name)
 
         try:
             extension.deactivate()
@@ -421,6 +552,9 @@ class ExtensionRegistry:
 
         extension = self._extensions[name]
 
+        # The extension's hooks do not run while it is being reloaded
+        self._hook_manager.suspend_extension(name)
+
         # Step 1: Deactivate
         try:
             extension.deactivate()
@@ -452,6 +586,7 @@ class ExtensionRegistry:
         try:
             extension.activate()
             self._extension_states[name] = ExtensionState.ACTIVE
+            self._hook_manager.resume_extension(name)
         except Exception as err:
             tb_str = traceback.format_exc()
             logger.error(
@@ -468,7 +603,8 @@ class ExtensionRegistry:
 
             Increments the error count for the named extension. If the
             error count exceeds the configured threshold, the extension
-            is quarantined and its state is set to QUARANTINED.
+            is quarantined: its state is set to QUARANTINED and its hook
+            callbacks stop running.
 
             :param name: The extension name.
         """
@@ -481,10 +617,43 @@ class ExtensionRegistry:
 
         if current_count >= self._error_threshold:
             self._extension_states[name] = ExtensionState.QUARANTINED
+            self._hook_manager.suspend_extension(name)
             logger.warning(
                 "Extension '%s' has been quarantined after %d errors (threshold: %d)",
                 name, current_count, self._error_threshold
             )
+
+        return
+
+    def _record_hook_error(
+        self,
+        extension_name: str,
+        hook_name: str,
+        exception: Exception,
+        stack_trace: str
+    ) -> None:
+        """
+            Record the failure of a hook callback against its extension.
+
+            The HookManager calls this for every callback that raises, so a
+            hook that keeps failing quarantines its extension like any other
+            repeated error. The on_extension_error hook is told about the
+            failure, except when the failing callback is itself an
+            on_extension_error callback.
+
+            :param extension_name: The extension the callback was registered
+                for, or the manager's label for a callback without one.
+            :param hook_name: The hook that was being executed.
+            :param exception: The exception the callback raised.
+            :param stack_trace: The formatted stack trace string.
+        """
+        if extension_name not in self._extensions:
+            return
+
+        self.record_error(extension_name)
+
+        if hook_name != "on_extension_error":
+            self._fire_on_extension_error(extension_name, hook_name, exception, stack_trace)
 
         return
 

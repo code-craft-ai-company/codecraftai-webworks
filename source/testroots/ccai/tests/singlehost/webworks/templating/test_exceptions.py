@@ -672,3 +672,41 @@ def test_property_error_message_completeness_not_found_error():
             )
 
     return
+
+
+# =============================================================================
+# UndefinedVariableError template location
+# =============================================================================
+
+def test_undefined_variable_error_without_location():
+    """
+        Test that UndefinedVariableError works with the variable name only.
+    """
+    exc = UndefinedVariableError("user")
+    
+    if exc.variable_name != "user":
+        raise AssertionError(f"Expected variable_name 'user', got {exc.variable_name!r}")
+    
+    if exc.template_name is not None or exc.line_number is not None:
+        raise AssertionError("template_name and line_number should default to None")
+    
+    return
+
+
+def test_undefined_variable_error_with_location():
+    """
+        Test that UndefinedVariableError reports the template and line.
+    """
+    exc = UndefinedVariableError("user", template_name="page.html", line_number=7)
+    
+    if exc.template_name != "page.html":
+        raise AssertionError(f"Expected template_name 'page.html', got {exc.template_name!r}")
+    
+    if exc.line_number != 7:
+        raise AssertionError(f"Expected line_number 7, got {exc.line_number!r}")
+    
+    message = str(exc)
+    if "page.html" not in message or "line 7" not in message:
+        raise AssertionError(f"Message should name the template and line, got {message!r}")
+    
+    return

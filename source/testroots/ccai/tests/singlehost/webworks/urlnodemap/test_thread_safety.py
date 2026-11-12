@@ -742,3 +742,106 @@ def test_property_10_frozen_immutability_get_or_create_new_path_raises():
             raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Node mutators share the map lock
+# =============================================================================
+
+import threading
+
+from ccai.webworks.urlnodemap.exceptions import NodeConflictError
+
+
+def test_nodes_share_the_lock_of_their_map():
+    """
+        Every node of a map is guarded by the map's lock.
+    """
+    url_map = URLNodeMap()
+    node = url_map.get_or_create_node("/a/b")
+
+    assert url_map.root._lock is url_map._lock, "The root must use the map lock"
+    assert node._lock is url_map._lock, "A created node must use the map lock"
+    return
+
+
+def test_concurrent_add_child_of_same_segment_creates_one_node():
+    """
+        When several threads add the same child, exactly one succeeds and
+        the others receive NodeConflictError; no subtree is replaced.
+    """
+    url_map = URLNodeMap()
+    parent = url_map.get_or_create_node("/parent")
+
+    created = []
+    conflicts = []
+    start = threading.Barrier(8)
+
+    def add_child():
+        start.wait()
+        try:
+            created.append(parent.add_child("child"))
+        except NodeConflictError:
+            conflicts.append(True)
+
+    threads = [threading.Thread(target=add_child) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(created) == 1, f"Expected one thread to create the child, got {len(created)}"
+    assert len(conflicts) == 7, f"Expected 7 conflicts, got {len(conflicts)}"
+    assert parent.get_child("child") is created[0], "The created child must be the one in the tree"
+    return
+
+
+def test_iterate_nodes_tolerates_concurrent_additions():
+    """
+        Walking an unfrozen tree while another thread adds nodes does not
+        raise.
+    """
+    url_map = URLNodeMap()
+    for index in range(50):
+        url_map.get_or_create_node(f"/seed/n{index}")
+
+    errors = []
+    stop = threading.Event()
+
+    def add_nodes():
+        for index in range(400):
+            url_map.get_or_create_node(f"/seed/extra{index}")
+        stop.set()
+
+    writer = threading.Thread(target=add_nodes)
+    writer.start()
+
+    try:
+        while not stop.is_set():
+            for _node in url_map.iterate_nodes():
+                pass
+    except RuntimeError as exc:
+        errors.append(exc)
+
+    writer.join()
+
+    assert len(errors) == 0, f"Iteration failed during concurrent additions: {errors}"
+    return
+
+
+def test_freeze_blocks_node_level_mutation():
+    """
+        After freeze, mutating a node raises FrozenTreeError.
+    """
+    url_map = URLNodeMap()
+    node = url_map.get_or_create_node("/a")
+    url_map.freeze()
+
+    raised = False
+    try:
+        node.set_metadata("k", "v")
+    except FrozenTreeError:
+        raised = True
+
+    assert raised, "Expected FrozenTreeError after freeze"
+    return

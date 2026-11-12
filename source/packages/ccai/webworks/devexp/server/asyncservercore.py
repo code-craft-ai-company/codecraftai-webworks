@@ -19,6 +19,10 @@ from typing import Any, Optional, Set
 logger = logging.getLogger(__name__)
 
 
+WAIT_CLOSED_TIMEOUT_SECONDS: float = 2.0
+"""Seconds to wait for the listening server to report closed once every connection was closed."""
+
+
 # =============================================================================
 # AsyncServerCore
 # =============================================================================
@@ -44,6 +48,8 @@ class AsyncServerCore:
             Defaults to False.
         :param request_logger: Optional request logger instance to pass
             through to protocol handlers.
+        :param max_body_bytes: The largest request body accepted, in bytes.
+            ``None`` uses the protocol handler's default.
     """
 
     def __init__(
@@ -55,6 +61,7 @@ class AsyncServerCore:
         keepalive_timeout: float = 30,
         debug: bool = False,
         request_logger: Any = None,
+        max_body_bytes: Optional[int] = None,
     ) -> None:
         """
             Construct an AsyncServerCore.
@@ -67,6 +74,8 @@ class AsyncServerCore:
             :param keepalive_timeout: Seconds to keep idle connections open.
             :param debug: Whether debug mode is enabled for error reporting.
             :param request_logger: Optional request logger instance.
+            :param max_body_bytes: The largest request body accepted, in
+                bytes. ``None`` uses the protocol handler's default.
         """
         self._app = app
         self._host = host
@@ -75,6 +84,7 @@ class AsyncServerCore:
         self._keepalive_timeout = keepalive_timeout
         self._debug = debug
         self._request_logger = request_logger
+        self._max_body_bytes = max_body_bytes
 
         self._server: Optional[asyncio.AbstractServer] = None
         self._connections: Set[Any] = set()
@@ -178,6 +188,8 @@ class AsyncServerCore:
             debug=self._debug,
             on_close=lambda h=None: self.unregister_connection(handler),
             request_logger=self._request_logger,
+            max_body_bytes=self._max_body_bytes,
+            keepalive_timeout=self._keepalive_timeout,
         )
 
         self.register_connection(handler)
@@ -219,21 +231,32 @@ class AsyncServerCore:
         """
             Stop accepting new connections and gracefully shut down.
 
-            Calls ``server.close()`` to stop accepting, then waits up to
-            ``shutdown_timeout`` seconds for active connections to drain.
-            Any connections still open after the timeout are forcibly closed
-            by closing their transports.
+            Calls ``server.close()`` to stop accepting, closes idle
+            keep-alive connections at once, then waits up to
+            ``shutdown_timeout`` seconds for requests that are in flight to
+            finish. Any connections still open after the timeout are
+            forcibly closed by closing their transports.
+
+            ``server.wait_closed()`` is awaited last. Since Python 3.12.1 it
+            returns only once every accepted connection has closed, so
+            awaiting it before the connections are drained would make
+            shutdown wait on an idle browser tab or a long-lived stream.
         """
         if self._server is None:
             return
 
+        server = self._server
+
         # Stop accepting new connections.
-        self._server.close()
-        await self._server.wait_closed()
+        server.close()
 
         logger.info("Server stopped accepting new connections.")
 
-        # Wait for active connections to drain.
+        # An idle keep-alive connection has no work to lose.
+        self._close_connections(idle_only=True)
+
+        # Wait for requests that are in flight to finish. A connection that
+        # becomes idle while we wait is closed on the next pass.
         if len(self._connections) > 0:
             logger.info(
                 "Waiting up to %s seconds for %d active connection(s) to drain.",
@@ -247,6 +270,7 @@ class AsyncServerCore:
             while len(self._connections) > 0 and elapsed < self._shutdown_timeout:
                 await asyncio.sleep(interval)
                 elapsed += interval
+                self._close_connections(idle_only=True)
 
             # Forcibly close remaining connections.
             if len(self._connections) > 0:
@@ -255,17 +279,35 @@ class AsyncServerCore:
                     len(self._connections),
                 )
 
-                remaining = set(self._connections)
-                for handler in remaining:
-                    transport = getattr(handler, "_transport", None)
-                    if transport is not None and not transport.is_closing():
-                        transport.close()
+                self._close_connections(idle_only=False)
 
-                # Give the event loop a moment to process the close callbacks.
-                await asyncio.sleep(0.05)
+        # Every transport has been asked to close; give the event loop the
+        # chance to run the close callbacks, but never wait on a peer.
+        try:
+            await asyncio.wait_for(server.wait_closed(), timeout=WAIT_CLOSED_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "The listening server did not finish closing within %s seconds.",
+                WAIT_CLOSED_TIMEOUT_SECONDS,
+            )
 
         self._server = None
 
         logger.info("AsyncServerCore stopped.")
+
+        return
+
+    def _close_connections(self, idle_only: bool) -> None:
+        """
+            Close tracked connections.
+
+            :param idle_only: When ``True``, close only connections that
+                are between requests; when ``False``, close all of them.
+        """
+        for handler in set(self._connections):
+            if idle_only and not getattr(handler, "is_idle", False):
+                continue
+
+            handler.close()
 
         return

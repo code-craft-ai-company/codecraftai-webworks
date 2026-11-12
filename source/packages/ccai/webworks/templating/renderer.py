@@ -8,16 +8,18 @@
     automatic context building.
     
     The TemplateRenderer handles:
-    - Building the final context by merging context processor output,
-      passed context, and keyword arguments
+    - Building the final context by merging the global context
+      variables, context processor output, passed context, and keyword
+      arguments
     - Locating templates with an optional TemplateLoader and keeping their
       compiled form in an optional TemplateCache
     - Delegating rendering to the underlying template engine
     - Supporting synchronous, asynchronous, string, and streaming rendering
     
     Context processors are functions that receive the current context
-    dictionary and return additional variables to merge. They are applied
-    before the passed context and keyword arguments, allowing overrides.
+    dictionary and return additional variables to merge. They see the
+    global context variables and the variables the caller passed, and
+    what they return never replaces a variable the caller passed.
     
     When a TemplateLoader is supplied, rendering a template by name follows
     the flow ``template_name -> Loader -> Cache -> Engine``: the loader
@@ -33,6 +35,7 @@ import os
 from typing import Any, Callable, Dict, Iterator, Optional
 
 from ccai.webworks.templating.cache import TemplateCache
+from ccai.webworks.templating.context import ContextProcessorRegistry, GlobalContext
 from ccai.webworks.templating.engine import TemplateEngine
 from ccai.webworks.templating.exceptions import TemplateNotFoundError
 from ccai.webworks.templating.loader import TemplateLoader
@@ -48,10 +51,17 @@ class TemplateRenderer:
         and return additional variables to merge into every render call.
         
         The context building order is:
-        1. Start with an empty dictionary
-        2. Apply context processors (each receives current state, returns additions)
+        1. Start with the :class:`GlobalContext` variables
+        2. Apply context processors (each receives the globals, the caller's
+           variables and what earlier processors added, and returns additions)
         3. Merge the passed context dictionary
         4. Merge keyword arguments (highest priority, overrides context)
+        
+        The processors are held in a :class:`ContextProcessorRegistry`,
+        available as :attr:`processor_registry`. Pass an existing registry
+        as ``processor_registry`` to share one set of processors between
+        renderers; ``renderer.processor_registry.register(...)`` and
+        :meth:`add_context_processor` are equivalent.
         
         Template loading and caching are optional. With a ``loader``, named
         templates are located and read by the loader and compiled by the
@@ -84,7 +94,8 @@ class TemplateRenderer:
         engine: TemplateEngine,
         context_processors: Optional[list] = None,
         loader: Optional[TemplateLoader] = None,
-        cache: Optional[TemplateCache] = None
+        cache: Optional[TemplateCache] = None,
+        processor_registry: Optional[ContextProcessorRegistry] = None
     ) -> None:
         """
             Construct a template renderer.
@@ -99,6 +110,10 @@ class TemplateRenderer:
                 the engine unchanged.
             :param cache: Optional TemplateCache that keeps templates the
                 engine compiled from the loader's source. Requires a loader.
+            :param processor_registry: Optional ContextProcessorRegistry
+                holding the context processors to run on every render. When
+                None, the renderer creates its own. The processors in
+                ``context_processors`` are registered with it.
             
             :raises ValueError: If a cache is given without a loader.
         """
@@ -113,13 +128,16 @@ class TemplateRenderer:
             raise ValueError(errmsg)
         
         self._engine = engine
-        self._context_processors: list = []
         self._loader = loader
         self._cache = cache
         
+        if processor_registry is None:
+            processor_registry = ContextProcessorRegistry()
+        self._processor_registry = processor_registry
+        
         if context_processors is not None:
             for processor in context_processors:
-                self._context_processors.append(processor)
+                self._processor_registry.register(processor)
         
         return
     
@@ -159,7 +177,18 @@ class TemplateRenderer:
             
             :returns: A copy of the context processors list.
         """
-        return list(self._context_processors)
+        return self._processor_registry.processors
+    
+    @property
+    def processor_registry(self) -> ContextProcessorRegistry:
+        """
+            Get the registry holding this renderer's context processors.
+            
+            A processor registered with it runs on every later render.
+            
+            :returns: The ContextProcessorRegistry used by this renderer.
+        """
+        return self._processor_registry
     
     def _build_context(
         self,
@@ -167,15 +196,21 @@ class TemplateRenderer:
         kwargs: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-            Build the final context by merging processor output, passed context,
-            and keyword arguments.
+            Build the final context by merging the global context, processor
+            output, passed context, and keyword arguments.
             
             The merge order is:
-            1. Start with an empty dictionary
-            2. Apply each context processor in order (each receives the current
-               state and returns additional variables to merge)
+            1. Start with the :class:`GlobalContext` variables
+            2. Apply each context processor in order
             3. Merge the passed context dictionary
             4. Merge keyword arguments (highest priority)
+            
+            A context processor receives everything known about the render
+            so far: the global variables, the variables the caller passed
+            (context and keyword arguments) and what earlier processors
+            added. That is what lets a processor act on request data, such
+            as the CSRF processor reading ``session_id``. A variable the
+            caller passed is never replaced by a processor.
             
             :param context: Optional dictionary of variables passed by the caller.
             :param kwargs: Additional keyword arguments to merge with highest priority.
@@ -183,20 +218,34 @@ class TemplateRenderer:
             :returns: The final merged context dictionary.
         """
         result: Dict[str, Any] = {}
+        result.update(GlobalContext.to_dict())
+        
+        # The caller's variables: context first, then kwargs on top
+        caller_context: Dict[str, Any] = {}
+        if context is not None:
+            caller_context.update(context)
+        if len(kwargs) > 0:
+            caller_context.update(kwargs)
+        
+        # What the processors are shown: the result so far with the caller's
+        # variables laid over it, as the final context will have them.
+        processor_view: Dict[str, Any] = dict(result)
+        processor_view.update(caller_context)
         
         # Apply context processors
-        for processor in self._context_processors:
-            additional = processor(result)
-            if additional is not None:
-                result.update(additional)
+        for processor in self._processor_registry.processors:
+            additional = processor(processor_view)
+            if additional is None:
+                continue
+            
+            result.update(additional)
+            
+            for key, value in additional.items():
+                if key not in caller_context:
+                    processor_view[key] = value
         
-        # Merge passed context
-        if context is not None:
-            result.update(context)
-        
-        # Merge kwargs (highest priority)
-        if kwargs:
-            result.update(kwargs)
+        # Merge the caller's variables (context, then kwargs with highest priority)
+        result.update(caller_context)
         
         return result
     
@@ -406,11 +455,12 @@ class TemplateRenderer:
             
             Context processors are functions that receive the current context
             dictionary and return a dictionary of additional variables to merge.
-            Processors are applied in the order they are added, before the
-            passed context and keyword arguments.
+            Processors are applied in the order they are added. Each sees
+            the global context variables and the caller's variables; the
+            caller's variables still take priority over what it returns.
             
             :param processor: A callable that receives a context dictionary
                 and returns a dictionary of additional variables.
         """
-        self._context_processors.append(processor)
+        self._processor_registry.register(processor)
         return

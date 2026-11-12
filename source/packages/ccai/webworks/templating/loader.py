@@ -19,6 +19,11 @@
     recognized extensions, each recognized extension is appended in
     order, so ``"index"`` finds ``"index.html"``.
     
+    A template name is always relative to the configured directories. An
+    absolute name, a name with a ``..`` segment, and a name that resolves
+    (through a symbolic link) to a file outside the directory it was found
+    in are treated as templates that do not exist.
+    
     Example:
         loader = TemplateLoader(
             directories=["/app/templates", "/shared/templates"],
@@ -241,6 +246,11 @@ class TemplateLoader:
             :meth:`_candidate_names`; for each candidate the directories are
             searched in priority order.
             
+            A name that is absolute or contains a ``..`` segment is not
+            looked up at all, and a file that resolves to a location outside
+            the directory it was found in is skipped, so a template name can
+            never read a file outside the template directories.
+            
             :param template_name: Name/path of the template.
             
             :returns: A ``(resolved_name, full_path)`` tuple, or
@@ -249,20 +259,98 @@ class TemplateLoader:
         resolved_name: Optional[str] = None
         full_path: Optional[str] = None
         
+        # A name that could address a file outside the template directories
+        # is never looked up: it is reported as not found.
+        if self._is_confined_name(template_name) is False:
+            return resolved_name, full_path
+        
         candidate_names = self._candidate_names(template_name)
         for candidate_name in candidate_names:
             for _, directory in self._directories:
                 candidate_path = os.path.join(directory, candidate_name)
                 
-                if os.path.isfile(candidate_path):
-                    resolved_name = candidate_name
-                    full_path = candidate_path
-                    break
+                if os.path.isfile(candidate_path) is False:
+                    continue
+                
+                if self._is_inside_directory(directory, candidate_path) is False:
+                    continue
+                
+                resolved_name = candidate_name
+                full_path = candidate_path
+                break
             
             if full_path is not None:
                 break
         
         return resolved_name, full_path
+    
+    def _is_confined_name(self, template_name: str) -> bool:
+        """
+            Check that a template name can only address a file below a
+            template directory.
+            
+            Template names are often built from request data, so a name is
+            refused when it is not a string, is empty, contains a NUL
+            character, is absolute (a leading ``/`` or ``\\``, or a drive),
+            or has a ``..`` segment. Both ``/`` and ``\\`` are treated as
+            separators so the check does not depend on the platform.
+            
+            :param template_name: Name/path of the template.
+            
+            :returns: True if the name stays below a template directory.
+        """
+        if isinstance(template_name, str) is False:
+            return False
+        
+        if len(template_name) == 0:
+            return False
+        
+        if "\x00" in template_name:
+            return False
+        
+        normalized_name = template_name.replace("\\", "/")
+        
+        if normalized_name.startswith("/"):
+            return False
+        
+        if os.path.isabs(template_name):
+            return False
+        
+        drive, _ = os.path.splitdrive(template_name)
+        if len(drive) > 0:
+            return False
+        
+        segments = normalized_name.split("/")
+        for segment in segments:
+            if segment == os.path.pardir:
+                return False
+        
+        return True
+    
+    def _is_inside_directory(self, directory: str, candidate_path: str) -> bool:
+        """
+            Check that a file really lies below a template directory.
+            
+            Both paths are resolved with ``os.path.realpath`` first, so a
+            symbolic link inside the directory that points outside it does
+            not pass.
+            
+            :param directory: The template directory being searched.
+            :param candidate_path: Path of the file found for a template name.
+            
+            :returns: True if the resolved file is below the resolved directory.
+        """
+        real_directory = os.path.realpath(directory)
+        real_candidate = os.path.realpath(candidate_path)
+        
+        try:
+            common_path = os.path.commonpath([real_directory, real_candidate])
+        except ValueError:
+            # Paths on different drives have no common path.
+            return False
+        
+        is_inside = common_path == real_directory
+        return is_inside
     
     def get_mtime(self, template_name: str) -> Optional[float]:
         """

@@ -155,7 +155,16 @@ def test_property_method_not_allowed_consistency():
         path_allowed_methods[path].add(method)
 
     for path, allowed_methods in path_allowed_methods.items():
-        disallowed_methods = [m for m in ALL_HTTP_METHODS if m not in allowed_methods]
+        # HEAD is answered from the GET handler and OPTIONS with the Allow
+        # set of the path, so neither is refused where GET is registered.
+        answered_automatically = ["OPTIONS"]
+        if "GET" in allowed_methods:
+            answered_automatically.append("HEAD")
+
+        disallowed_methods = [
+            m for m in ALL_HTTP_METHODS
+            if m not in allowed_methods and m not in answered_automatically
+        ]
 
         for method in disallowed_methods:
             request = Request(method=method, path=path)

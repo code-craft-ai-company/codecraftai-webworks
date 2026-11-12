@@ -149,6 +149,11 @@ class CachedOpenAPIGenerator(OpenAPIGenerator):
         if cached is not None:
             return cached
 
+        # This cache decided the specification must be rebuilt (it expired,
+        # was invalidated, or was never filled), so the parent generator's
+        # own cached copy must not be handed back in its place.
+        super().refresh()
+
         spec = super().generate()
         self._spec_cache.set(spec)
         self._last_endpoint_count = self._get_endpoint_count()
@@ -161,6 +166,7 @@ class CachedOpenAPIGenerator(OpenAPIGenerator):
             The next call to :meth:`generate` will rebuild the specification
             from the current registry state.
         """
+        super().refresh()
         self._spec_cache.invalidate()
         self._last_endpoint_count = None
         return

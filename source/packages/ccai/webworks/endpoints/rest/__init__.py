@@ -70,6 +70,14 @@ from ccai.webworks.endpoints.rest.collectionendpoint import (
 from ccai.webworks.endpoints.rest.middleware import (
     RESTMiddleware,
     create_rest_middleware,
+    get_rest_payload,
+    is_rest_processed_handler,
+)
+
+from ccai.webworks.endpoints.rest.restprocessingrouter import (
+    RestProcessingRouter,
+    apply_rest_processing,
+    needs_rest_processing,
 )
 
 __all__ = [
@@ -115,4 +123,10 @@ __all__ = [
     # Middleware
     "RESTMiddleware",
     "create_rest_middleware",
+    "get_rest_payload",
+    "is_rest_processed_handler",
+    # REST processing of declared routes
+    "RestProcessingRouter",
+    "apply_rest_processing",
+    "needs_rest_processing",
 ]

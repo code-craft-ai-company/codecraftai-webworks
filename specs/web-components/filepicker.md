@@ -4,7 +4,7 @@
 - **Class / file:** `MjFilePicker` / `mjfilepicker.js`
 - **Category:** Selection & dropdown-style controls
 - **Primary or Variant:** Primary
-- **Synonyms covered:** Image picker, Upload button
+- **Synonyms covered:** Image picker
 - **Phase:** P1
 - **Status:** Planned
 

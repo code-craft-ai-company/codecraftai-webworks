@@ -8,130 +8,164 @@
 ---
 
 ### Gantt Chart  *(project bar chart, schedule chart)*
-- **Renderer / `type`:** `gantt` — **Primary renderer**
-- **Controller:** `<mj-chart type="gantt" ...>`
-- **Purpose:** Display project tasks as horizontal bars along a time axis, showing start dates, durations, dependencies, and resource assignments at a glance.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, top; category/task, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-brush`, `mj-chart-annotation`, `mj-chart-data-table`
+- **Renderer / `type`:** `gantt` — **Primary renderer** (`charts/core/renderers/gantt.js`, shared with `roadmap`)
+- **Controller:** `<mj-chart type="gantt" ...>`; `<mj-gantt-chart>` is a convenience wrapper for this type with its own data shape (see `../web-components/ganttchart.md`)
+- **Purpose:** Display project tasks as horizontal bars along a time axis, showing start dates, durations, progress, dependencies, milestones and phases at a glance.
+- **Decomposition:** drawn by the renderer inside `<mj-chart>`; `mj-chart-legend` (one entry per group), `mj-chart-title` and `mj-chart-data-table` bind as parts.
 - **JSON shape:**
   ```json
   {
     "meta": { "title": "Website Redesign – Sprint 3" },
+    "groups": [ { "id": "design", "label": "Design" } ],
     "tasks": [
-      {
-        "id": "t1",
-        "label": "Wireframes",
-        "start": "2025-03-01",
-        "end":   "2025-03-08",
-        "progress": 1.0,
-        "assignee": "Alice",
-        "group": "Design",
-        "depends": []
-      },
-      {
-        "id": "t2",
-        "label": "Visual Design",
-        "start": "2025-03-09",
-        "end":   "2025-03-22",
-        "progress": 0.6,
-        "assignee": "Alice",
-        "group": "Design",
-        "depends": ["t1"]
-      }
-    ]
+      { "id": "t1", "label": "Wireframes", "start": "2025-03-01", "end": "2025-03-08",
+        "progress": 1.0, "assignee": "Alice", "group": "design", "depends": [] },
+      { "id": "t2", "label": "Visual Design", "start": "2025-03-09", "end": "2025-03-22",
+        "progress": 0.6, "assignee": "Alice", "group": "design", "depends": ["t1"] },
+      { "id": "t3", "label": "Support rotation", "start": "2025-03-03" },
+      { "id": "t4", "label": "Sign-off", "start": "2025-03-24", "milestone": true }
+    ],
+    "markers": [ { "label": "Design review", "date": "2025-03-14" } ],
+    "phases":  [ { "label": "Discovery", "start": "2025-03-01", "end": "2025-03-08" } ]
   }
   ```
-  Fields: `id` (unique key); `label` (display name); `start`/`end` (ISO-8601 date); `progress` (0–1, optional); `assignee` (string, optional); `group` (swimlane label, optional); `depends` (array of `id` strings for dependency arrows, optional).
-- **SVG primitives:** `<rect>` (task bar), `<rect>` (progress fill within bar), `<line>` / `<path>` (dependency arrows with arrowhead markers), `<text>` (task label, date ticks), `<g>` (per-task and per-group groups)
-- **Orientation:** `horizontal` only — task bars run left-to-right along the time axis; this is the defining characteristic of a Gantt chart.
-- **Variants / modes:** `group` field enables swimlane rows with group-header separators. `progress` field enables a filled sub-bar. Dependency arrows rendered only when `depends` arrays are present.
-- **Phase:** P3
-- **Notes:** Uses `time` scale on the horizontal axis and `band` scale on the vertical (task/row) axis. The `band` scale accommodates variable row heights for group headers. `mj-chart-annotation kind="line"` marks today's date. `mj-chart-brush` enables horizontal time-range zoom. Dependency arrows are SVG `<path>` elements with an `<marker>` arrowhead defined in the `<defs>` block; arrow routing avoids bar overlaps with a simple right-angle elbow layout.
+  Fields:
+  - `tasks[]`: `id` (key used by `depends`; else the index); `label` (else the id); `start` / `end` — `YYYY-MM-DD` (a local calendar day; an end day is inclusive), `YYYY-MM` (whole month), `YYYY-Qn` (whole quarter), ISO date-time or epoch ms; `progress` (0–1); `assignee` (drawn beside the bar when there is room); `group` (a group id or label); `depends` (predecessor ids, finish-to-start arrows); `status` (shown in the accessible name and table); `milestone` (`true` draws a diamond).
+  - `groups[]` (optional): `{ id, label }` — the order and names of the group header rows (empty groups included). With `groups`, a task naming any other group is ungrouped; without it, the groups are the ones the tasks name, in order of first appearance.
+  - `markers[]` (optional): `{ label, date }` milestone lines. `phases[]` (optional): `{ label, start, end }` background bands (end inclusive).
+- **Drawing:** one row per task; ungrouped tasks first, then a header row per group with its tasks indented. A task with `start` and `end` is a bar (with a darker progress fill); a task with only a `start` is an **open-ended bar that runs to the right edge of the chart with a dashed outline**; `milestone: true`, a zero-length span or an end only is a diamond; a task without a usable date keeps its row with a dashed "No dates" placeholder; a task entirely outside the `start-date` / `end-date` window shows an arrow at the edge it lies beyond. Markers are a dashed amber (`--mj-color-warning`) line with a diamond on the axis and the name beside it; phases are translucent bands coloured by position (`--mj-chart-series-*`); a dashed accent line labelled "Today" marks the current date when it is in range. Bars are coloured by group (`ctx.colorFor(group)`), else series 1.
+- **SVG primitives:** `<g>` per task mark holding `<rect>` (bar, progress fill) or `<polygon>` (diamond, edge arrow); `<g role="button">` per group header; `<path>` dependency arrows (right-angle elbow routing, `<marker>` arrowhead in `<defs>`); `<rect>` phase bands; `<g>` markers with `<line>`, `<polygon>`, `<text>`; `<line>` / `<text>` axis ticks and the today line.
+- **Orientation:** `horizontal` only (registered default).
+- **Options (attributes on `<mj-chart>`):**
+  | Option | Default | Effect |
+  |---|---|---|
+  | `variant` | type key | `roadmap` draws the roadmap layout from the same data |
+  | `today` | on | `"false"` hides the today line |
+  | `start-date`, `end-date` | data range + 2 % | fix the window (same date forms as the tasks; a calendar end is inclusive) |
+  | `scale` | automatic | `day` / `week` (Mondays) / `month` / `quarter` tick unit; the step still grows when labels would collide |
+  | `show-progress` | on | `"false"` hides the progress fills |
+  | `show-dependencies` | on | `"false"` hides the dependency arrows |
+  | `density` | `normal` | `compact` shortens the rows |
+  | `row-height` | 32 (24 compact) | minimum row height in px; rows stretch up to 1.5x to fill a taller chart |
+  | `collapsed-groups` | — | JSON array (or comma list) of collapsed group ids; activating a header updates it |
+- **Height:** the renderer asks for `32 + rows × row-height + 14` px (`ctx.setContentHeight`), so a chart without a fixed height grows with its rows; registered `minHeight` is **120** (was the 280 px default). With a fixed height taller rows stretch, shorter ones scroll.
+- **Interaction & accessibility:** bars, group headers and markers are the focusable marks (one tab stop, arrow keys, Home / End; Enter / Space activates). A group header is `role="button"` with `aria-expanded`; activating it collapses or expands its tasks (the table keeps them and the axis does not rescale). The accessible table lists every task: Task, Group, Start, End ("Open-ended" for a start-only task), Progress, Status, Assignee, Depends on.
+- **Events:**
+  | Event | `detail` |
+  |---|---|
+  | `mj-chart-bar-click` | `{ id, label, start, end, index }` |
+  | `mj-chart-marker-click` | `{ label, date, index }` |
+  | `mj-chart-group-toggle` | `{ group, collapsed, collapsedGroups }` |
+- **Parts:** `plot`; `bar task-bar` (each task mark); `bar-fill task-bar-fill`; `dependency dependency-arrow`; `group-row`; `task-label task-list-panel`; `milestone-marker`; `phase-band`; `time-axis` (tick labels); `today-marker`; `today-label`. Marks carry `data-mark` keys (`task:<index>`, `group:<n>`, `marker:<index>`).
+- **Phase:** P3 — implemented.
+- **Notes:** Uses a `time` scale on the horizontal axis; rows are laid out by the renderer (no band scale). `<mj-gantt-chart>` maps `name`, `percentComplete`, `groupId` and `dependencies` onto this shape and adds a toolbar and detail panel (WW-1498).
 
 ---
 
 ### Timeline  *(event timeline, horizontal timeline)*
-- **Renderer / `type`:** `timeline` — **Primary renderer**
+- **Renderer / `type`:** `timeline` — **Primary renderer** (`charts/core/renderers/timeline.js`, shared with `milestone`)
 - **Controller:** `<mj-chart type="timeline" ...>`
 - **Purpose:** Plot discrete events or milestones at their dates along a time axis; shows sequence, clustering, and temporal gaps without duration bars.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, bottom), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-annotation`, `mj-chart-data-table`
+- **Decomposition:** drawn by the renderer inside `<mj-chart>`; `mj-chart-legend` (statuses, else kinds, else lanes), `mj-chart-title` and `mj-chart-data-table` bind as parts.
 - **JSON shape:**
   ```json
   {
     "meta": { "title": "Product Launch Timeline" },
     "events": [
-      { "id": "e1", "label": "Alpha Release", "date": "2025-04-01", "group": "Engineering", "icon": "rocket" },
-      { "id": "e2", "label": "Beta Launch",   "date": "2025-06-15", "group": "Marketing",   "icon": "flag" }
-    ]
+      { "id": "e1", "label": "Alpha Release", "date": "2025-04-01", "group": "Engineering", "kind": "tag" },
+      { "id": "e2", "label": "Beta Launch",   "date": "2025-06-15", "group": "Marketing",   "status": "planned",
+        "icon": "★", "description": "Public beta with the press release." }
+    ],
+    "phases": [ { "label": "Hardening", "start": "2025-05-01", "end": "2025-06-14" } ]
   }
   ```
-  Fields: `id`; `label`; `date` (ISO-8601); `group` (lane, optional); `icon` (optional icon key from token set); `description` (optional long text shown in tooltip).
-- **SVG primitives:** `<circle>` (event marker), `<line>` (stem connecting marker to axis), `<text>` (event label), `<path>` (axis spine), `<g>` (per-event group)
-- **Orientation:** `horizontal` (time → x) and `vertical` (time → y) — both are conventional for timelines.
-- **Variants / modes:** Multi-lane timelines (using `group`) stack event rows above the axis spine. Single-lane timelines alternate label positions above/below the spine to reduce overlap.
-- **Phase:** P3
-- **Notes:** Uses `time` scale. Label collision avoidance is performed after initial placement by shifting overlapping labels along the time axis. The optional `icon` renders as a small `<text>` glyph using the design-token icon font, or is omitted if icons are not loaded.
+  Fields: `id`; `label`; `date` (Date, epoch ms or ISO; `YYYY-MM-DD` is a local day); `group` (one lane per distinct group, optional); `status` (`completed`, `active`, `planned` — hollow marker —, `at-risk`; sets the colour); `kind` (`release` diamond, `freeze` triangle, `tag` / `milestone` circle — sets the shape and, without a `status`, the colour: success, warning, info, accent); `icon` (a short glyph, at most 4 characters, before the label); `description` (tooltip and table); `phases[]` background bands (end inclusive).
+- **Drawing:** a spine per lane with markers on it; labels are placed in tiers above and below the spine (horizontal) or to the right (vertical) so they never overlap — a label with no free slot stays in the tooltip; events on (nearly) the same date are nudged apart so none hides another. Phase bands are drawn behind the markers (coloured by position); a dashed accent line labelled "Today" marks the current date when it is in range. With `dim-past`, events more than a day before now are drawn at 55 % opacity.
+- **SVG primitives:** `<circle>` / `<polygon>` (marker — the focusable mark), `<line>` (stem to the label), `<text>` (labels, ticks), `<rect>` (phase bands), `<line>` (spine, today line), `<g>` layers.
+- **Orientation:** `horizontal` (registered default; time → x) and `vertical` (time → y).
+- **Options:**
+  | Option | Default | Effect |
+  |---|---|---|
+  | `variant` | type key | `timeline` circles / `milestone` diamonds for events without a `kind` |
+  | `orientation` | `horizontal` | `vertical` runs time down the page |
+  | `today` | on | `"false"` hides the today line |
+  | `start-date`, `end-date` | data range + 5 % | fix the window; events outside it are listed in the table but not drawn (a `YYYY-MM-DD` end is inclusive) |
+  | `dim-past` | off | fade past events and add "past" / "today" / "upcoming" to each marker's accessible name |
+  | `density` | `normal` | `compact`: 10 px labels cut at about 12 characters |
+- **Events:** `mj-chart-event-click` `{ id, label, date, group, status, kind, index }`.
+- **Parts:** `plot`, `marker`, `marker-label`, `phase-band`, `time-axis`, `today-marker`, `today-label`; markers carry `data-mark="event:<index>"`.
+- **Accessible table:** Event, Date, Group, Status, Kind (when any event has one), Description.
+- **Phase:** P3 — implemented.
+- **Notes:** Uses a `time` scale; lanes share the cross axis equally. Events without a usable date are listed in the table but not drawn.
 
 ---
 
 ### Roadmap Chart  *(product roadmap, initiative map)*
-- **Renderer / `type`:** `gantt` — **Variant of `gantt`**
-- **Controller:** `<mj-chart type="gantt" style="roadmap" ...>`
-- **Purpose:** Display product or project initiatives as horizontal bars grouped by theme or team across quarters, emphasising planning horizons rather than precise task durations.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, top; category, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`
+- **Renderer / `type`:** `roadmap` — **Variant of `gantt`** (same renderer module; `<mj-chart type="gantt" variant="roadmap">` draws the same)
+- **Controller:** `<mj-chart type="roadmap" ...>`; `<mj-roadmap-chart>` is a convenience wrapper for this type with the initiative data shape (see `../web-components/roadmapchart.md`)
+- **Purpose:** Display product or project initiatives grouped by theme or team across calendar periods or Now / Next / Later buckets, emphasising planning horizons rather than precise task durations.
+- **Decomposition:** drawn by the renderer inside `<mj-chart>`; `mj-chart-legend` (one entry per status seen, with its icon), `mj-chart-title` and `mj-chart-data-table` bind as parts.
 - **JSON shape:**
   ```json
   {
     "meta": { "title": "2025–2026 Product Roadmap" },
+    "groups":  [ { "id": "mobile", "label": "Mobile" }, { "id": "platform", "label": "Platform" } ],
+    "buckets": [ { "id": "now", "label": "Now" }, { "id": "next", "label": "Next" } ],
     "tasks": [
-      {
-        "id": "i1",
-        "label": "Mobile App v2",
-        "start": "2025-Q1",
-        "end":   "2025-Q3",
-        "group": "Mobile",
-        "status": "in-progress"
-      },
-      {
-        "id": "i2",
-        "label": "API Gateway",
-        "start": "2025-Q2",
-        "end":   "2026-Q1",
-        "group": "Platform",
-        "status": "planned"
-      }
-    ]
+      { "id": "i1", "label": "Mobile App v2", "start": "2025-Q1", "end": "2025-Q3",
+        "group": "mobile", "status": "in-progress", "progress": 0.4, "bucket": "now" },
+      { "id": "i2", "label": "API Gateway", "start": "2025-Q2", "end": "2026-Q1",
+        "group": "platform", "status": "planned", "description": "Replaces the v1 proxy." }
+    ],
+    "markers": [ { "label": "GA", "date": "2025-09-15" } ],
+    "phases":  [ { "label": "Planning", "start": "2025-01-06", "end": "2025-01-31" } ]
   }
   ```
-  `start`/`end` accept quarter strings (`YYYY-Qn`) in addition to ISO dates — the renderer normalises these to the first and last day of the quarter before passing to the `time` scale. `status` maps to bar colour tokens (`in-progress`, `planned`, `completed`, `at-risk`).
-- **SVG primitives:** `<rect>` (initiative bar, rounded corners via `rx`), `<text>`, `<g>` — same as Gantt.
+  `tasks`, `groups`, `markers` and `phases` as in the Gantt chart (`start` / `end` accept `YYYY-Qn` and `YYYY-MM`); `status`: `planned`, `in-progress` / `active`, `completed` / `done`, `at-risk`, `blocked` (any other text shows as given with the planned look); `bucket` names a column in `mode="bucket"`; `description` goes to the tooltip and the table; `progress` to the table.
+- **Drawing (changed from the earlier one-row-per-task variant):** **one lane per group**; inside a lane, bars that do not overlap share a row and overlapping bars stack in sub-rows. **Columns** are calendar periods with a header cell each (`scale` quarter — default —, month or half-year) covering the tasks, or, with `mode="bucket"` and `buckets` given, the named buckets (equal widths; a task spans the column its `bucket` names). Each bar is a surface-filled rounded rectangle with a status-coloured border and tint, a **status icon** (○ planned, ◎ in progress, ✓ done, ⚠ at risk, ⊘ blocked) and its label. Status colours: planned `--mj-text-muted`, in-progress `--mj-accent`, done `--mj-color-success`, **at-risk `--mj-color-warning` (amber; was danger red)**, blocked `--mj-color-danger`. Tasks naming no known group go to an "Unassigned" lane (unlabelled when no group exists at all). Tasks that cannot be placed (no dates in the range, unknown bucket) are counted in a note under the lanes and listed in the table as "Not placed". In calendar mode markers (dashed amber line and diamond), phase bands with their names in a row under the lanes, and the today line with its "Today" label in a row of its own are drawn. Progress fills and dependency arrows are not drawn.
+- **SVG primitives:** `<rect>` (column header cells, bars, lane label column, phase bands), `<text>` (headers, lane labels, icons, bar labels, phase / today labels, note), `<line>` (column and lane rules, today line), `<g>` per bar mark and marker.
 - **Orientation:** `horizontal` only.
-- **Variants / modes:** `style="roadmap"` suppresses dependency arrows and progress fills, uses rounded bar corners, and renders quarter/year tick marks instead of day/week ticks. No additional renderer code beyond the `gantt` renderer.
-- **Phase:** P3
-- **Notes:** The `gantt` renderer's `style` attribute selects a sub-mode that adjusts tick granularity and bar styling. Quarter-string normalisation is handled in the `chartmodel.js` normalisation step before the `time` scale receives domain values.
+- **Options:**
+  | Option | Default | Effect |
+  |---|---|---|
+  | `variant` | type key | `gantt` draws the gantt layout from the same data |
+  | `mode` | `calendar` | `bucket` places tasks in the `buckets` columns (falls back to calendar without buckets) |
+  | `scale` | `quarter` | `month` / `half-year` calendar columns |
+  | `start-date`, `end-date` | the tasks' range | fix the calendar range |
+  | `today` | on | `"false"` hides the today line (calendar mode) |
+  | `density` | `normal` | `compact`: 24 px bars instead of 32 px |
+- **Height:** the renderer asks for the height of its header, lanes and footer rows (`ctx.setContentHeight`); registered `minHeight` 120. The columns share the chart's width.
+- **Events:** `mj-chart-bar-click` `{ id, label, start, end, index }`, `mj-chart-marker-click` `{ label, date, index }`.
+- **Parts:** `plot`, `column-header`, `swimlane-label`, `bar initiative-bar`, `initiative-label`, `milestone-marker`, `phase-band`, `phase-label`, `today-marker`, `today-label`, `unplaced-note`; bars carry `data-mark="task:<index>"`.
+- **Accessible table:** Initiative, Group, Timeframe ("Not placed" when unplaced), Status, Progress, Description.
+- **Phase:** P3 — implemented.
+- **Notes:** Quarter and month strings are read by the renderer's `parseScheduleDate` (a calendar end covers the whole period). `<mj-roadmap-chart>` maps `swimlanes`, `initiatives` (`name`, `swimlaneId`, `startDate` / `endDate`, `columnId`, `percentComplete`) onto this shape (WW-1498).
 
 ---
 
 ### Milestone Chart  *(key-date chart, diamond chart)*
-- **Renderer / `type`:** `timeline` — **Variant of `timeline`**
-- **Controller:** `<mj-chart type="timeline" style="milestone" ...>`
-- **Purpose:** Highlight key project dates (deadlines, deliverables, go-live dates) as prominent diamond or flag markers on a time axis, with no duration bars.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, bottom), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-annotation`, `mj-chart-data-table`
+- **Renderer / `type`:** `milestone` — **Variant of `timeline`** (same renderer module; `<mj-chart type="timeline" variant="milestone">` draws the same)
+- **Controller:** `<mj-chart type="milestone" ...>`; `<mj-milestone-timeline>` is a convenience wrapper for this type with `dim-past` on and its own data shape (see `../web-components/milestonetimeline.md`)
+- **Purpose:** Highlight key project dates (deadlines, deliverables, go-live dates) as prominent markers on a time axis, with no duration bars.
+- **Decomposition:** as Timeline.
 - **JSON shape:**
   ```json
   {
     "meta": { "title": "Q3 Milestones" },
     "events": [
-      { "id": "m1", "label": "Beta Freeze",    "date": "2025-07-31", "status": "completed" },
-      { "id": "m2", "label": "GA Release",     "date": "2025-09-15", "status": "planned" }
-    ]
+      { "id": "m1", "label": "Beta Freeze", "date": "2025-07-31", "kind": "freeze" },
+      { "id": "m2", "label": "GA Release",  "date": "2025-09-15", "status": "planned", "kind": "release" }
+    ],
+    "phases": [ { "label": "Hardening", "start": "2025-08-01", "end": "2025-09-12" } ]
   }
   ```
-  Same `events` shape as Timeline; `status` maps to marker colour tokens.
-- **SVG primitives:** `<polygon>` (diamond marker — four-point rotated square), `<line>` (stem), `<text>` (label), `<g>`
-- **Orientation:** `horizontal` and `vertical` — same as Timeline.
-- **Variants / modes:** `style="milestone"` selects diamond/flag markers instead of circle markers; otherwise uses the `timeline` renderer unchanged.
-- **Phase:** P3
-- **Notes:** The `timeline` renderer switches marker shape based on `style`. No separate renderer module is needed.
+  Same `events` / `phases` shape as Timeline; `status` maps to the marker colour, `kind` to its shape (and colour without a status).
+- **Drawing:** the Timeline layout with **diamond** markers for events without a `kind`; `kind` picks triangle (freeze) or circle (tag, milestone) instead. Phases, the today line, the window, `dim-past` and `density` work as on the Timeline.
+- **SVG primitives:** `<polygon>` (diamond / triangle marker), `<circle>` (tag / milestone kinds), `<line>` (stem), `<text>` (label), `<rect>` (phase bands), `<g>`.
+- **Orientation:** `horizontal` (default) and `vertical` — same as Timeline.
+- **Options, events, parts, table:** as Timeline (`variant="timeline"` switches the default shape back to circles).
+- **Phase:** P3 — implemented.
+- **Notes:** The `timeline` renderer dispatches on `ctx.type` (and the `variant` option); no separate module.
 
 ---
 

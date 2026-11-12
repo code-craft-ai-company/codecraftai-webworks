@@ -216,12 +216,13 @@ portal_bp.attach_child(PortalEndpoint, leaf="magic/portals")
   - Any duck-typed *User* with ``is_authenticated`` / ``roles`` / ``scopes`` attributes — used by tooling and tests that don't construct full security contexts.
 - Discrimination is performed by attribute presence at call time (``hasattr(subject, 'principal')`` → AuthenticationContext, ``hasattr(subject, 'user_id')`` → SecurityContext, otherwise User). Adding a new subject shape is a matter of routing inside ``check`` — no consumer changes required.
 - Named convenience methods preserved from the legacy endpoints implementation: ``check_authentication_context(ctx)``, ``check_roles(ctx)``, ``check_permissions(ctx)``. ``get_denial_reason(subject)`` is similarly polymorphic.
-- ``merge_with(other, replace_roles=False, replace_scopes=False)`` returns a new ``AccessPolicy`` combining constraints. Roles and scopes default to deduplicated union; ``require_auth`` is the logical OR; the custom ``constraints`` dict is shallow-merged with ``other`` precedence.
+- ``merge_with(other, replace_roles=False, replace_scopes=False)`` returns a new ``AccessPolicy`` that a subject satisfies only if it satisfies both policies (logical AND). Roles are any-of *within* one policy, so they are not pooled: the merged policy keeps one role group per merged policy in ``role_groups`` (a group both policies name is kept once), and a subject needs a role from *each* group. ``roles`` of the result is the deduplicated union of both policies' roles and serves reporting only; ``role_groups`` is what ``check``, ``check_roles`` and the :class:`AuthorizationEngine` enforce. Scopes are all-of, so the merged scopes are the deduplicated union. ``replace_roles`` / ``replace_scopes`` make ``other``'s roles (with its groups) or scopes replace this policy's. ``require_auth`` is the logical OR; the custom ``constraints`` dict is shallow-merged with ``other`` precedence.
+- Example: a blueprint restricted to ``roles=("admin",)`` merged with a handler's ``@require_roles("viewer")`` gives ``role_groups == (("admin",), ("viewer",))``; a subject holding only ``viewer`` is refused, one holding ``admin`` and ``viewer`` is admitted.
 - :class:`ccai.webworks.endpoints.constraints.EndpointConstraints` retains its list-typed ``roles`` and ``scopes`` fields. Its ``__post_init__`` coerces incoming iterables (commonly tuples handed off from an ``AccessPolicy``) to lists so consumer code continues to receive the list shape it has always seen.
 
 ### Decorator wire-through (`Endpoint.attach_at` / `RestEndpoint.attach_at`)
 - Security decorators (``@require_auth``, ``@require_roles``, ``@require_scopes``, ``@public_endpoint``) attach an :class:`AccessPolicy` to the handler function under the ``_access_policy`` attribute. When the function is then registered via :meth:`Endpoint.attach_at` (or any subclass that inherits this behavior — :class:`RestEndpoint`, :class:`Blueprint`, :class:`RestBlueprint`), the registration logic reads ``_access_policy`` and merges it into the descriptor's effective policy alongside any explicit ``access_policy=`` kwarg and the class-level default.
-- Merge order: ``cls.access_policy`` (class default) → explicit ``access_policy=`` kwarg → handler-attached ``_access_policy``. Each step uses :meth:`AccessPolicy.merge_with`, so roles and scopes accumulate as a deduplicated union; ``require_auth`` is the logical OR.
+- Merge order: ``cls.access_policy`` (class default) → explicit ``access_policy=`` kwarg → handler-attached ``_access_policy``. Each step uses :meth:`AccessPolicy.merge_with`, so every merged policy contributes its own role group (a role from each is required), scopes accumulate as a deduplicated union, and ``require_auth`` is the logical OR. :meth:`WebApplication.attach_route` merges an explicit ``access_policy=`` with the handler-attached policy the same way.
 
 ```python
 class DashboardBlueprint(RestBlueprint):
@@ -233,7 +234,11 @@ def internal_dashboard(request):
     ...
 ```
 
-The handler's effective policy is ``AccessPolicy(roles=("authenticated-user", "system-admin"), require_auth=True)`` and the :class:`SecurityMiddleware` / :class:`AuthenticationMiddleware` reads it from the descriptor.
+The handler's effective policy is ``AccessPolicy(roles=("authenticated-user", "system-admin"), require_auth=True)`` -- one role group, so either role admits the subject.
+
+### Enforcement
+- The policy is enforced by the :class:`Dispatcher` for the matched route: after routing, it reads the access policy from the matched :class:`EndpointDescriptor` (never looks it up by request path) and checks it against the request's authentication (``request.auth`` / ``scope["auth"]`` set by :class:`AuthenticationMiddleware`, or a :class:`SecurityContext`). A request without the required authentication is answered ``401`` with a ``WWW-Authenticate`` challenge; an authenticated subject that does not satisfy the policy is answered ``403``. The handler is not called in either case.
+- :class:`AuthenticationMiddleware` path policies (``path_policies``, ``policy_patterns``, ``default_policy``) are a second, path-keyed check in front of the application. Both must allow a request. The middleware compares the canonical form of the path, the form the router matches (``//admin//users`` is decided as ``/admin/users``), and redirects a path with ``.`` segments with ``308``.
 ## Flash Messaging
 
 ### `ccai.webworks.flash`

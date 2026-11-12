@@ -5,11 +5,21 @@
  * Satisfies WCAG 2.4.1 Bypass Blocks. Must be the first focusable element.
  * On activation moves focus to the target landmark element.
  *
+ * `target` is the id of the destination, written as "#main" or "main"; a CSS
+ * selector is accepted as well. The anchor always carries a fragment href, so
+ * it can never navigate to another document.
+ *
  * WAI-ARIA: native <a> provides link role. No ARIA landmark on host.
  */
 
 import { MjElement } from "../core/mjelement.js";
+import { html } from "../core/html.js";
 import { t } from "../core/intl.js";
+
+const DEFAULT_TARGET = "#main";
+
+/* A target written as a bare id ("main-content") rather than a selector ("#main-content"). */
+const BARE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 const STYLES = `
 :host { display: block; }
@@ -57,25 +67,24 @@ export class MjSkipLink extends MjElement {
   static watched = ["target", "label", "variant"];
 
   render() {
-    const target = this.getAttribute("target") || "#main";
-    const label = this.getAttribute("label") || t("mj.skipLink.label") || "Skip to main content";
-    const variant = this.getAttribute("variant") || "default";
-
-    const markup = `
-      <a class="anchor" part="anchor" href="${target}">
+    /* href and the label text are applied by `_syncAnchor`, never parsed as markup. */
+    const markup = html`
+      <a class="anchor" part="anchor" href="#">
         <span class="label" part="label">
-          <slot>${label}</slot>
+          <slot></slot>
         </span>
       </a>
-    `;
+    `
     return markup
   }
 
   afterRender() {
-    this._anchor = this.$(".anchor");
-    this.listen(this._anchor, "click", this._onActivate.bind(this));
-    this.listen(this._anchor, "keydown", this._onKeydown.bind(this));
-    this._syncAnchor();
+    this._anchor = this.$(".anchor")
+    this._labelSlot = this.$("slot")
+
+    /* Enter on the anchor produces a click, so one listener covers keyboard and pointer. */
+    this.listen(this._anchor, "click", this._onActivate.bind(this))
+    this._syncAnchor()
     return
   }
 
@@ -83,58 +92,109 @@ export class MjSkipLink extends MjElement {
     if (this._anchor === undefined || this._anchor === null) {
       return
     }
-    this._syncAnchor();
+    this._syncAnchor()
     return
   }
 
+  _target() {
+    let target = this.getAttribute("target")
+    if (target === null || target.trim().length === 0) {
+      target = DEFAULT_TARGET
+    }
+    return target.trim()
+  }
+
+  /*
+   * Find the destination element: `#id` and a bare id are looked up by id;
+   * anything else (or an id that does not exist) is tried as a CSS selector.
+   * Returns null when nothing matches or the selector is invalid.
+   */
+  _resolveTarget() {
+    const target = this._target()
+    let element = null
+
+    if (target.charAt(0) === "#") {
+      element = document.getElementById(target.slice(1))
+    } else if (BARE_ID_PATTERN.test(target) === true) {
+      element = document.getElementById(target)
+    }
+
+    if (element === null) {
+      try {
+        element = document.querySelector(target)
+      } catch (error) {
+        element = null
+      }
+    }
+    return element
+  }
+
+  /* The fragment the anchor points at: "#id" for id targets, else the matched element's id. */
+  _fragmentHref() {
+    const target = this._target()
+    let href = "#"
+
+    if (target.charAt(0) === "#") {
+      href = target
+    } else if (BARE_ID_PATTERN.test(target) === true) {
+      href = `#${target}`
+    } else {
+      const element = this._resolveTarget()
+      if (element !== null && element.id !== "") {
+        href = `#${element.id}`
+      }
+    }
+    return href
+  }
+
   _syncAnchor() {
-    const target = this.getAttribute("target") || "#main";
-    const label = this.getAttribute("label") || t("mj.skipLink.label") || "Skip to main content";
-    this._anchor.setAttribute("href", target);
+    let label = this.getAttribute("label")
+    if (label === null || label.length === 0) {
+      label = t("mj.skipLink.label")
+    }
+
+    /* The label is the fallback content of the slot; slotted content replaces it. */
+    this._labelSlot.textContent = label
+    this._anchor.setAttribute("href", this._fragmentHref())
     return
   }
 
   _onActivate(event) {
-    const target = this.getAttribute("target") || "#main";
+    const target = this._target()
     const proceed = this.emit("mj-skip-link-activate", {
       target: target,
       originalEvent: event
-    }, { cancelable: true });
+    }, { cancelable: true })
+
+    /*
+     * The component moves focus itself. The native jump is always suppressed:
+     * a canceled event means the application handles it, and an unresolved
+     * target must not send the browser anywhere.
+     */
+    event.preventDefault()
 
     if (proceed === false) {
-      event.preventDefault();
       return
     }
 
-    const targetEl = document.querySelector(target);
+    const targetEl = this._resolveTarget()
     if (targetEl === null) {
-      console.error(`<mj-skip-link>: target "${target}" not found in DOM`);
+      console.error(`<mj-skip-link>: target "${target}" not found in DOM`)
       return
     }
 
-    event.preventDefault();
+    const isFocusable = targetEl.hasAttribute("tabindex") === true || targetEl.tabIndex >= 0
 
-    const isNativelyFocusable = typeof targetEl.focus === "function" &&
-      targetEl.getAttribute("tabindex") !== null ||
-      ["a", "button", "input", "select", "textarea"].indexOf(targetEl.tagName.toLowerCase()) !== -1;
-
-    if (isNativelyFocusable === false) {
-      targetEl.tabIndex = -1;
+    if (isFocusable === false) {
+      targetEl.tabIndex = -1
       const onBlur = function() {
-        targetEl.removeAttribute("tabindex");
-        targetEl.removeEventListener("blur", onBlur);
-      };
-      targetEl.addEventListener("blur", onBlur);
+        targetEl.removeAttribute("tabindex")
+        targetEl.removeEventListener("blur", onBlur)
+      }
+      targetEl.addEventListener("blur", onBlur)
     }
 
-    targetEl.focus();
-    return
-  }
-
-  _onKeydown(event) {
-    if (event.key === "Enter") {
-      this._onActivate(event);
-    }
+    targetEl.focus()
     return
   }
 

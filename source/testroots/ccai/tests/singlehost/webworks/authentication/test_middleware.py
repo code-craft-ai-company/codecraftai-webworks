@@ -9,6 +9,7 @@
 import asyncio
 import random
 import string
+import time
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional, Set
 
@@ -18,11 +19,74 @@ from ccai.webworks.authentication import (
     Principal,
     AuthenticationContext
 )
+from ccai.webworks.authentication.basic import (
+    BasicAuthenticator,
+    create_basic_auth_header
+)
+from ccai.webworks.authentication.digest import DigestAuthenticator
+from ccai.webworks.authentication.hmac_auth import (
+    HMACAuthenticator,
+    compute_hmac_signature,
+    create_hmac_auth_header
+)
 from ccai.webworks.authentication.middleware import (
     AuthenticationMiddleware,
     create_authentication_middleware
 )
+from ccai.webworks.authentication.session import (
+    InMemorySessionStore,
+    SessionAuthenticator
+)
 from ccai.webworks.authentication.system import AuthenticationSystem
+from ccai.webworks.endpoints.accesspolicy import AccessPolicy
+from ccai.webworks.routing.request import Request
+
+
+KNOWN_USERNAME = "alice"
+KNOWN_PASSWORD = "correct horse"
+
+
+class StaticIdentityProvider:
+    """
+        An identity provider that knows a single username and password.
+    """
+    
+    async def validate_credentials(self, username: str, password: str) -> Optional[Principal]:
+        if username == KNOWN_USERNAME and password == KNOWN_PASSWORD:
+            return Principal(identifier=username)
+        return None
+    
+    async def get_principal(self, identifier: str) -> Optional[Principal]:
+        if identifier == KNOWN_USERNAME:
+            return Principal(identifier=identifier)
+        return None
+
+
+class StaticDigestIdentityProvider:
+    """
+        A Digest identity provider that knows no users.
+    """
+    
+    async def get_ha1(self, username: str, realm: str, algorithm: str = "MD5") -> Optional[str]:
+        return None
+    
+    async def get_principal(self, username: str, realm: str) -> Optional[Principal]:
+        return None
+
+
+class StaticHMACKeyStore:
+    """
+        An HMAC key store backed by a dictionary of key id to secret.
+    """
+    
+    def __init__(self, secrets_by_key_id: Dict[str, str]):
+        self._secrets = secrets_by_key_id
+    
+    async def get_secret(self, key_id: str) -> Optional[str]:
+        return self._secrets.get(key_id)
+    
+    async def get_principal(self, key_id: str) -> Optional[Principal]:
+        return None
 
 
 # =============================================================================
@@ -398,23 +462,544 @@ def test_middleware_custom_optional_paths():
     return
 
 
-def test_middleware_passes_non_http_requests():
+def test_middleware_passes_lifespan_scope():
     """
-        Test that middleware passes non-HTTP requests directly to app.
+        Test that middleware passes scopes that carry no request (lifespan)
+        directly to the app without authenticating them.
     """
     app = MockASGIApp()
     auth_system = AuthenticationSystem()
     middleware = AuthenticationMiddleware(app=app, auth_system=auth_system)
     
-    # WebSocket scope
-    scope = {"type": "websocket", "path": "/ws"}
+    scope = {"type": "lifespan", "asgi": {"version": "3.0"}}
     receive = MockReceive()
     send = MockSend()
     
     run_async(middleware(scope, receive, send))
     
     if not app.was_called:
-        errmsg = "Expected app to be called for non-HTTP request"
+        errmsg = "Expected app to be called for lifespan scope"
+        raise AssertionError(errmsg)
+    
+    if "auth" in scope:
+        errmsg = "Expected no 'auth' key on a lifespan scope"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def create_websocket_scope(
+    path: str = "/ws",
+    headers: Optional[List[tuple]] = None
+) -> Dict[str, Any]:
+    """
+        Create a mock WebSocket ASGI scope.
+    """
+    return {
+        "type": "websocket",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "scheme": "ws",
+        "path": path,
+        "query_string": b"",
+        "root_path": "",
+        "headers": headers or [],
+        "server": ("localhost", 8000),
+        "subprotocols": [],
+    }
+
+
+def test_middleware_rejects_websocket_without_credentials():
+    """
+        Test that a WebSocket handshake to a protected path is closed before
+        it is accepted when it carries no credentials.
+    """
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    auth_system.register(BasicAuthenticator(StaticIdentityProvider()))
+    middleware = AuthenticationMiddleware(app=app, auth_system=auth_system)
+    
+    scope = create_websocket_scope()
+    send = MockSend()
+    
+    run_async(middleware(scope, MockReceive(), send))
+    
+    if app.was_called:
+        errmsg = "Expected app NOT to be called for an unauthenticated WebSocket"
+        raise AssertionError(errmsg)
+    
+    if len(send.messages) != 1:
+        errmsg = f"Expected exactly one message, got {send.messages}"
+        raise AssertionError(errmsg)
+    
+    message = send.messages[0]
+    if message.get("type") != "websocket.close":
+        errmsg = f"Expected websocket.close, got {message}"
+        raise AssertionError(errmsg)
+    
+    if message.get("code") != 1008:
+        errmsg = f"Expected close code 1008, got {message.get('code')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_middleware_authenticates_websocket_scope():
+    """
+        Test that a WebSocket handshake with valid credentials reaches the
+        app with the authentication context on the scope.
+    """
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    auth_system.register(BasicAuthenticator(StaticIdentityProvider()))
+    middleware = AuthenticationMiddleware(app=app, auth_system=auth_system)
+    
+    header_value = create_basic_auth_header(KNOWN_USERNAME, KNOWN_PASSWORD)
+    scope = create_websocket_scope(
+        headers=[(b"authorization", header_value.encode("latin-1"))]
+    )
+    
+    run_async(middleware(scope, MockReceive(), MockSend()))
+    
+    if not app.was_called:
+        errmsg = "Expected app to be called for an authenticated WebSocket"
+        raise AssertionError(errmsg)
+    
+    context = app.captured_scope.get("auth")
+    if context is None or context.principal.identifier != KNOWN_USERNAME:
+        errmsg = f"Expected auth context for {KNOWN_USERNAME}, got {context}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_middleware_closes_websocket_failing_access_policy():
+    """
+        Test that an authenticated WebSocket handshake that fails the path's
+        access policy is closed before accept.
+    """
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    auth_system.register(BasicAuthenticator(StaticIdentityProvider()))
+    middleware = AuthenticationMiddleware(
+        app=app,
+        auth_system=auth_system,
+        path_policies={"/ws": AccessPolicy(roles=["admin"])}
+    )
+    
+    header_value = create_basic_auth_header(KNOWN_USERNAME, KNOWN_PASSWORD)
+    scope = create_websocket_scope(
+        headers=[(b"authorization", header_value.encode("latin-1"))]
+    )
+    send = MockSend()
+    
+    run_async(middleware(scope, MockReceive(), send))
+    
+    if app.was_called:
+        errmsg = "Expected app NOT to be called when the policy denies access"
+        raise AssertionError(errmsg)
+    
+    if send.messages[0].get("type") != "websocket.close":
+        errmsg = f"Expected websocket.close, got {send.messages}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_middleware_authenticates_basic_header_from_asgi_scope():
+    """
+        Test that a shipped authenticator works behind the middleware when
+        the credentials arrive as real ASGI headers (a list of byte pairs).
+    """
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    auth_system.register(BasicAuthenticator(StaticIdentityProvider()))
+    middleware = AuthenticationMiddleware(app=app, auth_system=auth_system)
+    
+    header_value = create_basic_auth_header(KNOWN_USERNAME, KNOWN_PASSWORD)
+    scope = create_http_scope(
+        path="/protected",
+        headers=[
+            (b"host", b"localhost:8000"),
+            (b"authorization", header_value.encode("latin-1")),
+        ]
+    )
+    send = MockSend()
+    
+    run_async(middleware(scope, MockReceive(), send))
+    
+    if not app.was_called:
+        errmsg = f"Expected app to be called, middleware sent {send.messages}"
+        raise AssertionError(errmsg)
+    
+    context = app.captured_scope.get("auth")
+    if context is None or context.principal.identifier != KNOWN_USERNAME:
+        errmsg = f"Expected auth context for {KNOWN_USERNAME}, got {context}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_middleware_authenticates_session_cookie_from_asgi_scope():
+    """
+        Test that the session authenticator finds its cookie when it arrives
+        in the ASGI cookie header.
+    """
+    session_store = InMemorySessionStore()
+    principal = Principal(identifier="cookie-user")
+    session = run_async(session_store.create_session(principal))
+    
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    auth_system.register(SessionAuthenticator(session_store, renew_on_access=False))
+    middleware = AuthenticationMiddleware(app=app, auth_system=auth_system)
+    
+    cookie_header = f"theme=dark; session_id={session.session_id}"
+    scope = create_http_scope(
+        path="/protected",
+        headers=[(b"cookie", cookie_header.encode("latin-1"))]
+    )
+    send = MockSend()
+    
+    run_async(middleware(scope, MockReceive(), send))
+    
+    if not app.was_called:
+        errmsg = f"Expected app to be called, middleware sent {send.messages}"
+        raise AssertionError(errmsg)
+    
+    context = app.captured_scope.get("auth")
+    if context is None or context.principal.identifier != "cookie-user":
+        errmsg = f"Expected auth context for cookie-user, got {context}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_middleware_passes_request_object_to_authenticators():
+    """
+        Test that authenticators receive the framework Request, with the raw
+        ASGI scope reachable through it.
+    """
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    authenticator = MockAuthenticator("Mock")
+    auth_system.register(authenticator)
+    middleware = AuthenticationMiddleware(app=app, auth_system=auth_system)
+    
+    scope = create_http_scope(path="/protected", headers=[(b"x-test", b"1")])
+    
+    run_async(middleware(scope, MockReceive(), MockSend()))
+    
+    request = authenticator._last_request
+    if not isinstance(request, Request):
+        errmsg = f"Expected a Request, got {type(request).__name__}"
+        raise AssertionError(errmsg)
+    
+    if request.headers.get("X-Test") != "1":
+        errmsg = "Expected the ASGI header to be readable from the Request"
+        raise AssertionError(errmsg)
+    
+    if request.scope is not scope:
+        errmsg = "Expected request.scope to be the ASGI scope"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def get_response_header(messages: List[Dict[str, Any]], name: bytes) -> Optional[bytes]:
+    """
+        Find a header in the http.response.start message a middleware sent.
+    """
+    for message in messages:
+        if message.get("type") == "http.response.start":
+            for header_name, header_value in message.get("headers", []):
+                if header_name == name:
+                    return header_value
+    return None
+
+
+def test_middleware_sends_basic_challenge_without_credentials():
+    """
+        Test that a request without credentials gets a 401 that carries the
+        Basic challenge, so a browser prompts for credentials.
+    """
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    auth_system.register(BasicAuthenticator(StaticIdentityProvider(), realm="Site"))
+    middleware = AuthenticationMiddleware(app=app, auth_system=auth_system)
+    
+    send = MockSend()
+    run_async(middleware(create_http_scope(path="/protected"), MockReceive(), send))
+    
+    if send.messages[0].get("status") != 401:
+        errmsg = f"Expected 401, got {send.messages[0]}"
+        raise AssertionError(errmsg)
+    
+    challenge = get_response_header(send.messages, b"www-authenticate")
+    if challenge != b'Basic realm="Site"':
+        errmsg = f"Expected Basic challenge, got {challenge}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_middleware_sends_digest_challenge_with_nonce_without_credentials():
+    """
+        Test that a request without credentials gets a Digest challenge with
+        a nonce, which is how a Digest client starts the exchange.
+    """
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    auth_system.register(DigestAuthenticator(StaticDigestIdentityProvider()))
+    middleware = AuthenticationMiddleware(app=app, auth_system=auth_system)
+    
+    send = MockSend()
+    run_async(middleware(create_http_scope(path="/protected"), MockReceive(), send))
+    
+    challenge = get_response_header(send.messages, b"www-authenticate")
+    if challenge is None or not challenge.startswith(b"Digest ") or b"nonce=" not in challenge:
+        errmsg = f"Expected a Digest challenge with a nonce, got {challenge}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_middleware_sends_challenge_when_credentials_are_wrong():
+    """
+        Test that a 401 for rejected credentials also carries
+        WWW-Authenticate.
+    """
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    auth_system.register(BasicAuthenticator(StaticIdentityProvider()))
+    middleware = AuthenticationMiddleware(app=app, auth_system=auth_system)
+    
+    header_value = create_basic_auth_header(KNOWN_USERNAME, "wrong")
+    scope = create_http_scope(
+        path="/protected",
+        headers=[(b"authorization", header_value.encode("latin-1"))]
+    )
+    send = MockSend()
+    run_async(middleware(scope, MockReceive(), send))
+    
+    if send.messages[0].get("status") != 401:
+        errmsg = f"Expected 401, got {send.messages[0]}"
+        raise AssertionError(errmsg)
+    
+    if get_response_header(send.messages, b"www-authenticate") is None:
+        errmsg = "Expected WWW-Authenticate on the 401 for wrong credentials"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_middleware_401_names_registered_schemes_without_challenge_source():
+    """
+        Test that a 401 carries WWW-Authenticate even when no registered
+        authenticator can produce a challenge.
+    """
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    auth_system.register(MockAuthenticator("Custom", can_handle_result=False))
+    middleware = AuthenticationMiddleware(app=app, auth_system=auth_system, realm="Site")
+    
+    send = MockSend()
+    run_async(middleware(create_http_scope(path="/protected"), MockReceive(), send))
+    
+    challenge = get_response_header(send.messages, b"www-authenticate")
+    if challenge != b'Custom realm="Site"':
+        errmsg = f"Expected fallback challenge naming the scheme, got {challenge}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_middleware_add_exclude_pattern_excludes_matching_paths():
+    """
+        Test that a glob registered with add_exclude_pattern excludes the
+        paths it matches.
+    """
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    auth_system.register(BasicAuthenticator(StaticIdentityProvider()))
+    middleware = AuthenticationMiddleware(app=app, auth_system=auth_system)
+    middleware.add_exclude_pattern("/auth/session/*")
+    
+    run_async(middleware(
+        create_http_scope(path="/auth/session/login"), MockReceive(), MockSend()
+    ))
+    
+    if not app.was_called:
+        errmsg = "Expected the path matching the exclude pattern to reach the app"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_middleware_answers_429_when_authenticator_reports_throttling():
+    """
+        Test that a throttling failure from an authenticator becomes a 429
+        with the Retry-After header the authenticator supplied.
+    """
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    auth_system.register(MockAuthenticator(
+        "Mock",
+        auth_result=AuthenticationResult(
+            status=AuthenticationStatus.FAILURE,
+            error_code="rate_limit_exceeded",
+            error_description="Too many authentication attempts",
+            response_headers={"Retry-After": "30"}
+        )
+    ))
+    middleware = AuthenticationMiddleware(app=app, auth_system=auth_system)
+    
+    send = MockSend()
+    run_async(middleware(create_http_scope(path="/protected"), MockReceive(), send))
+    
+    if send.messages[0].get("status") != 429:
+        errmsg = f"Expected 429, got {send.messages[0]}"
+        raise AssertionError(errmsg)
+    
+    if get_response_header(send.messages, b"retry-after") != b"30":
+        errmsg = "Expected Retry-After: 30 on the 429"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_middleware_adds_authenticator_response_headers_on_success():
+    """
+        Test that headers an authenticator asks for on success (a renewed
+        session cookie) are added to the application's response.
+    """
+    context = generate_random_authentication_context()
+    auth_system = AuthenticationSystem()
+    auth_system.register(MockAuthenticator(
+        "Mock",
+        auth_result=AuthenticationResult(
+            status=AuthenticationStatus.SUCCESS,
+            context=context,
+            response_headers={"Set-Cookie": "session_id=abc; Max-Age=60"}
+        )
+    ))
+    
+    async def responding_app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+    
+    middleware = AuthenticationMiddleware(app=responding_app, auth_system=auth_system)
+    
+    send = MockSend()
+    run_async(middleware(create_http_scope(path="/protected"), MockReceive(), send))
+    
+    cookie = get_response_header(send.messages, b"set-cookie")
+    if cookie != b"session_id=abc; Max-Age=60":
+        errmsg = f"Expected the renewed cookie on the response, got {cookie}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+class BodyReceive:
+    """
+        A receive callable that delivers a request body in two chunks.
+    """
+    
+    def __init__(self, chunks: List[bytes]):
+        self._chunks = list(chunks)
+    
+    async def __call__(self) -> Dict[str, Any]:
+        chunk = self._chunks.pop(0)
+        return {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": len(self._chunks) > 0
+        }
+
+
+def test_middleware_buffers_and_replays_body_for_signing_authenticator():
+    """
+        Test that the middleware hands the whole body to an HMAC
+        authenticator and replays it to the application.
+    """
+    secret = "signing-secret"
+    body = b'{"amount": 10}'
+    timestamp = str(time.time())
+    headers = {"host": "localhost:8000"}
+    signature = compute_hmac_signature(
+        secret=secret,
+        method="POST",
+        path="/payments",
+        timestamp=timestamp,
+        headers=headers,
+        signed_headers=["host"],
+        query_string="",
+        body=body
+    )
+    auth_header = create_hmac_auth_header(
+        "key-1", signature, timestamp, signed_headers=["host"]
+    )
+    
+    received_bodies = []
+    
+    async def reading_app(scope, receive, send):
+        message = await receive()
+        received_bodies.append(message.get("body"))
+    
+    auth_system = AuthenticationSystem()
+    auth_system.register(HMACAuthenticator(
+        StaticHMACKeyStore({"key-1": secret}), signed_headers=["host"]
+    ))
+    middleware = AuthenticationMiddleware(app=reading_app, auth_system=auth_system)
+    
+    scope = create_http_scope(
+        path="/payments",
+        method="POST",
+        headers=[
+            (b"host", b"localhost:8000"),
+            (b"authorization", auth_header.encode("latin-1")),
+        ]
+    )
+    send = MockSend()
+    
+    run_async(middleware(scope, BodyReceive([body[:5], body[5:]]), send))
+    
+    if received_bodies != [body]:
+        errmsg = (
+            f"Expected the app to receive the replayed body, got "
+            f"{received_bodies}; middleware sent {send.messages}"
+        )
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_middleware_refuses_body_over_limit_for_signing_authenticator():
+    """
+        Test that a body larger than max_body_bytes is refused with 413
+        instead of being buffered.
+    """
+    app = MockASGIApp()
+    auth_system = AuthenticationSystem()
+    auth_system.register(HMACAuthenticator(StaticHMACKeyStore({})))
+    middleware = AuthenticationMiddleware(
+        app=app, auth_system=auth_system, max_body_bytes=4
+    )
+    
+    send = MockSend()
+    run_async(middleware(
+        create_http_scope(path="/payments", method="POST"),
+        BodyReceive([b"0123456789"]),
+        send
+    ))
+    
+    if app.was_called:
+        errmsg = "Expected app NOT to be called for an oversized body"
+        raise AssertionError(errmsg)
+    
+    if send.messages[0].get("status") != 413:
+        errmsg = f"Expected 413, got {send.messages[0]}"
         raise AssertionError(errmsg)
     
     return
@@ -1259,4 +1844,115 @@ def test_create_authentication_middleware_with_policies():
         errmsg = "Expected default_policy to be set via factory"
         raise AssertionError(errmsg)
     
+    return
+
+
+# =============================================================================
+# Path canonicalisation in the middleware itself
+# =============================================================================
+
+def _create_user_middleware(app, path_policies=None, exclude_paths=None):
+    """
+        Create an AuthenticationMiddleware whose authenticator signs in a
+        user with the role 'user' on every request.
+    """
+    auth_system = AuthenticationSystem()
+    principal = Principal(identifier="testuser", roles={"user"})
+    context = AuthenticationContext(principal=principal, scheme="Basic")
+    auth_system.register(MockAuthenticator(
+        scheme_name="Basic",
+        can_handle_result=True,
+        auth_result=AuthenticationResult(status=AuthenticationStatus.SUCCESS, context=context)
+    ))
+
+    middleware = AuthenticationMiddleware(
+        app=app,
+        auth_system=auth_system,
+        path_policies=path_policies,
+        exclude_paths=exclude_paths
+    )
+    return middleware
+
+
+def test_middleware_applies_path_policy_to_repeated_slash_spelling():
+    """
+        Test that a policy keyed on '/admin/users' also refuses
+        '//admin//users', which the router serves from the same handler.
+    """
+    app = MockASGIApp()
+    middleware = _create_user_middleware(app, path_policies={"/admin/users": AccessPolicy(roles=["admin"])})
+
+    send = MockSend()
+    run_async(middleware(create_http_scope(path="//admin//users"), MockReceive(), send))
+
+    if app.was_called:
+        raise AssertionError("Expected the policy to refuse the repeated-slash spelling")
+
+    if send.messages[0].get("status") != 403:
+        errmsg = f"Expected status 403, got {send.messages[0].get('status')}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_middleware_hands_the_canonical_path_to_the_application():
+    """
+        Test that the application receives the canonical path the policy
+        was decided on.
+    """
+    app = MockASGIApp()
+    middleware = _create_user_middleware(app, exclude_paths={"/health"})
+
+    run_async(middleware(create_http_scope(path="//health"), MockReceive(), MockSend()))
+
+    if not app.was_called or app.captured_scope["path"] != "/health":
+        errmsg = f"Expected the app to see '/health', got {app.captured_scope}"
+        raise AssertionError(errmsg)
+
+    if app.captured_scope.get("auth", "missing") is not None:
+        raise AssertionError("Expected '//health' to be treated as the excluded '/health'")
+
+    return
+
+
+def test_middleware_redirects_paths_with_dot_segments():
+    """
+        Test that a path with '.' segments is answered with a 308 redirect
+        to the path without them, keeping the query string.
+    """
+    app = MockASGIApp()
+    middleware = _create_user_middleware(app, path_policies={"/admin/users": AccessPolicy(roles=["admin"])})
+
+    scope = create_http_scope(path="/admin/./users")
+    scope["query_string"] = b"page=2"
+    send = MockSend()
+    run_async(middleware(scope, MockReceive(), send))
+
+    if app.was_called:
+        raise AssertionError("Expected the dot-segment request not to reach the app")
+
+    start = send.messages[0]
+    location = dict(start.get("headers", [])).get(b"location")
+    if start.get("status") != 308 or location != b"/admin/users?page=2":
+        errmsg = f"Expected 308 to /admin/users?page=2, got {start.get('status')} {location!r}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_middleware_closes_websocket_with_dot_segments():
+    """
+        Test that a WebSocket handshake on a path with '.' segments is
+        closed instead of redirected.
+    """
+    app = MockASGIApp()
+    middleware = _create_user_middleware(app)
+
+    send = MockSend()
+    run_async(middleware(create_websocket_scope(path="/ws/./chat"), MockReceive(), send))
+
+    if app.was_called or send.messages[0].get("type") != "websocket.close":
+        errmsg = f"Expected the handshake to be closed, got {send.messages}"
+        raise AssertionError(errmsg)
+
     return

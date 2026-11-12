@@ -810,3 +810,172 @@ def test_config_watcher_default_behavior_reloads_registry():
         temp_path.unlink()
     
     return
+
+
+# =============================================================================
+# Default reload: validated, staged, notifying and retried
+# =============================================================================
+
+def _write_and_touch(path: Path, content: str, seconds_ahead: float) -> None:
+    """
+        Write a file and move its modification time forward, so the change
+        is seen whatever the resolution of the file system's timestamps.
+        
+        :param path: The file to write.
+        :param content: The new content.
+        :param seconds_ahead: How far ahead of now to set the time.
+    """
+    import os
+    
+    path.write_text(content)
+    stamp = time.time() + seconds_ahead
+    os.utime(path, (stamp, stamp))
+    return
+
+
+def _watched_json_registry(directory: str, schema: ConfigSchema = None):
+    """
+        Create a registry loaded from a JSON file and a watcher on that file.
+        
+        :param directory: Directory to create the file in.
+        :param schema: Optional schema for the registry.
+        
+        :returns: A ``(registry, watcher, path)`` tuple.
+    """
+    from ccai.webworks.configuration import FileSource
+    
+    path = Path(directory) / "settings.json"
+    path.write_text('{"server": {"port": 8080}}')
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(FileSource(paths=[path]))
+    registry.load()
+    
+    watcher = ConfigWatcher(registry)
+    watcher.watch(path)
+    
+    return registry, watcher, path
+
+
+def test_config_watcher_reload_applies_a_valid_change():
+    """
+        Test that a changed file is reloaded into the registry.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        registry, watcher, path = _watched_json_registry(directory)
+        
+        _write_and_touch(path, '{"server": {"port": 9090}}', 5)
+        watcher.check_now()
+        
+        if registry.get("server.port") != 9090:
+            errmsg = f"Expected 9090 after the change, got {registry.get('server.port')!r}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_watcher_malformed_file_keeps_live_configuration():
+    """
+        Test that a file caught half written does not empty the registry.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        registry, watcher, path = _watched_json_registry(directory)
+        
+        _write_and_touch(path, '{"server": {"port": ', 5)
+        watcher.check_now()
+        
+        if registry.items() != [("server.port", 8080)]:
+            errmsg = f"Expected the previous configuration to stay live, got {registry.items()}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_watcher_retries_a_failed_reload():
+    """
+        Test that after a failed reload the file is loaded on a later check
+        even though its modification time does not change again.
+    """
+    import os
+    
+    with tempfile.TemporaryDirectory() as directory:
+        registry, watcher, path = _watched_json_registry(directory)
+        
+        _write_and_touch(path, '{"server": {"port": ', 5)
+        watcher.check_now()
+        
+        # The writer finishes the file; the modification time is put back to
+        # the one the watcher has already seen.
+        seen_stat = path.stat()
+        path.write_text('{"server": {"port": 9090}}')
+        os.utime(path, (seen_stat.st_atime, seen_stat.st_mtime))
+        
+        changed = watcher.check_now()
+        
+        if len(changed) != 0:
+            errmsg = f"Expected no change to be detected, got {changed}"
+            raise AssertionError(errmsg)
+        
+        if registry.get("server.port") != 9090:
+            errmsg = f"Expected the retried reload to load 9090, got {registry.get('server.port')!r}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_watcher_reload_validates_against_schema():
+    """
+        Test that an edit that violates the schema does not go live.
+    """
+    schema = ConfigSchema()
+    schema.define("server.port", int)
+    
+    with tempfile.TemporaryDirectory() as directory:
+        registry, watcher, path = _watched_json_registry(directory, schema=schema)
+        
+        _write_and_touch(path, '{"server": {"port": "abc"}}', 5)
+        watcher.check_now()
+        
+        if registry.get("server.port") != 8080:
+            errmsg = f"Expected 8080 to stay live, got {registry.get('server.port')!r}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_watcher_reload_notifies_change_callbacks():
+    """
+        Test that the registry's on_change callbacks hear about a file change.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        registry, watcher, path = _watched_json_registry(directory)
+        
+        received: List[tuple] = []
+        registry.on_change(lambda event: received.append((event.key, event.old_value, event.new_value)))
+        
+        _write_and_touch(path, '{"server": {"port": 9090}}', 5)
+        watcher.check_now()
+        
+        if received != [("server.port", 8080, 9090)]:
+            errmsg = f"Expected one change event for server.port, got {received}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+def test_config_watcher_does_not_reload_a_frozen_registry():
+    """
+        Test that a file change leaves a frozen registry as it is.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        registry, watcher, path = _watched_json_registry(directory)
+        registry.freeze()
+        
+        _write_and_touch(path, '{"server": {"port": 9090}}', 5)
+        watcher.check_now()
+        
+        if registry.get("server.port") != 8080:
+            errmsg = f"Expected the frozen value 8080, got {registry.get('server.port')!r}"
+            raise AssertionError(errmsg)
+    
+    return

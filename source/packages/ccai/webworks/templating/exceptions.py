@@ -122,6 +122,8 @@ class UndefinedVariableError(TemplateError):
         to strict mode.
 
         :ivar variable_name: The name of the undefined variable.
+        :ivar template_name: The template that accessed it, or None.
+        :ivar line_number: The template line that accessed it, or None.
 
         Example:
             try:
@@ -132,18 +134,32 @@ class UndefinedVariableError(TemplateError):
 
     def __init__(
         self,
-        variable_name: str
+        variable_name: str,
+        template_name: str = None,
+        line_number: int = None
     ):
         """
             Construct an UndefinedVariableError.
 
             :param variable_name: The name of the variable that was not found.
+            :param template_name: The name of the template that accessed the
+                variable, if known.
+            :param line_number: The template line that accessed the variable,
+                if known.
         """
         self.variable_name = variable_name
+        self.template_name = template_name
+        self.line_number = line_number
 
         message = (
             f"Undefined variable '{variable_name}' accessed in strict mode"
         )
+
+        if template_name is not None:
+            message = f"{message} in '{template_name}'"
+
+        if line_number is not None:
+            message = f"{message} at line {line_number}"
 
         super().__init__(message)
         return

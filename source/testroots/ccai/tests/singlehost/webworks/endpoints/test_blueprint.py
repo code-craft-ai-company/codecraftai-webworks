@@ -550,3 +550,233 @@ def test_blueprint_endpoint_can_override_version():
         raise AssertionError(f"Expected version='v3', got {desc.version}")
     
     return
+
+
+# =============================================================================
+# absolute=True and register() membership
+# =============================================================================
+
+def test_blueprint_attach_at_honours_absolute():
+    """Blueprint.attach_at(absolute=True) uses the path as written, without the blueprint prefix."""
+
+    class FreeBlueprint(Blueprint):
+        base_path = "/free"
+
+    @FreeBlueprint.attach_at(path="/abs", methods=["GET"], absolute=True)
+    def absolute_handler(request):
+        return {}
+
+    paths = [descriptor.path for descriptor in FreeBlueprint.register()]
+
+    if paths != ["/abs"]:
+        raise AssertionError(f"Expected ['/abs'], got {paths}")
+
+    return
+
+
+def test_blueprint_register_returns_absolute_and_prefixed_routes_together():
+    """register() returns a blueprint's absolute route alongside its prefixed ones."""
+
+    class MixedBlueprint(Blueprint):
+        base_path = "/mixed"
+
+    @MixedBlueprint.attach_at(leaf="inside", methods=["GET"])
+    def inside(request):
+        return {}
+
+    @MixedBlueprint.attach_at(path="/outside", methods=["GET"], absolute=True)
+    def outside(request):
+        return {}
+
+    paths = sorted(descriptor.path for descriptor in MixedBlueprint.register())
+
+    if paths != ["/mixed/inside", "/outside"]:
+        raise AssertionError(f"Expected ['/mixed/inside', '/outside'], got {paths}")
+
+    return
+
+
+def test_blueprint_instance_method_handler_is_bound_when_registered():
+    """A handler declared ``def thing(self, request)`` in a Blueprint body is called on an instance."""
+
+    class GreetingBlueprint(Blueprint):
+        base_path = "/greeting"
+        word = "hi"
+
+        @Blueprint.attach_at(leaf="say", methods=["GET"])
+        def say(self, request):
+            return {"word": self.word}
+
+    descriptor = GreetingBlueprint.register()[0]
+
+    if descriptor.handler(None) != {"word": "hi"}:
+        raise AssertionError("Expected the handler to run bound to a blueprint instance")
+
+    return
+
+
+# =============================================================================
+# Blueprint name recorded for blueprint scoped middleware
+# =============================================================================
+
+def test_blueprint_records_its_name_on_free_function_routes():
+    """Test that a route attached through a blueprint names the blueprint in its extras."""
+
+    class NamedFreeBlueprint(Blueprint):
+        base_path = "/named"
+
+    @NamedFreeBlueprint.attach_at(leaf="items", methods=["GET"])
+    def list_items(request):
+        return {}
+
+    descriptors = NamedFreeBlueprint.register()
+
+    names = [descriptor.extras.get("blueprint") for descriptor in descriptors]
+    if names != ["NamedFreeBlueprint"]:
+        raise AssertionError(f"Expected the blueprint name on the route, got {names}")
+
+    return
+
+
+def test_blueprint_claims_routes_declared_in_its_body():
+    """Test that a handler decorated in the class body through the base class names the subclass."""
+
+    class NamedBodyBlueprint(Blueprint):
+        base_path = "/body"
+
+        @Blueprint.attach_at(leaf="items", methods=["GET"])
+        def list_items(self, request):
+            return {}
+
+    descriptors = NamedBodyBlueprint.register()
+
+    names = [descriptor.extras.get("blueprint") for descriptor in descriptors]
+    if names != ["NamedBodyBlueprint"]:
+        raise AssertionError(f"Expected the subclass name on the route, got {names}")
+
+    return
+
+
+def test_blueprint_keeps_an_explicit_blueprint_name():
+    """Test that attach_at(blueprint=...) chooses the name recorded on the route."""
+
+    class ExplicitNameBlueprint(Blueprint):
+        base_path = "/explicit"
+
+    @ExplicitNameBlueprint.attach_at(leaf="items", methods=["GET"], blueprint="shop")
+    def list_items(request):
+        return {}
+
+    descriptors = ExplicitNameBlueprint.register()
+
+    names = [descriptor.extras.get("blueprint") for descriptor in descriptors]
+    if names != ["shop"]:
+        raise AssertionError(f"Expected the explicit name on the route, got {names}")
+
+    return
+
+
+def test_blueprint_names_the_routes_of_an_attached_child():
+    """Test that the handlers of an attached plain endpoint belong to the attaching blueprint."""
+
+    class NamedChildEndpoint(Endpoint):
+        pass
+
+    @NamedChildEndpoint.attach_at(path="/child", methods=["GET"])
+    def child_handler(request):
+        return {}
+
+    class NamedParentBlueprint(Blueprint):
+        base_path = "/parent"
+
+    NamedParentBlueprint.attach_child(NamedChildEndpoint)
+
+    descriptors = NamedParentBlueprint.register()
+
+    names = [descriptor.extras.get("blueprint") for descriptor in descriptors]
+    if names != ["NamedParentBlueprint"]:
+        raise AssertionError(f"Expected the parent blueprint name on the child route, got {names}")
+
+    return
+
+
+def test_blueprint_scoped_middleware_runs_for_the_blueprint_routes():
+    """Test that middleware registered at scope='blueprint' under the class name runs for its routes."""
+    from ccai.webworks.routing.dispatcher import Dispatcher
+    from ccai.webworks.routing.middlewareregistry import MiddlewareRegistry
+    from ccai.webworks.routing.request import Request
+    from ccai.webworks.routing.router import Router
+
+    class MiddlewareShopBlueprint(Blueprint):
+        base_path = "/mwshop"
+
+    @MiddlewareShopBlueprint.attach_at(leaf="items", methods=["GET"])
+    def list_items(request):
+        return {"ok": True}
+
+    seen = []
+
+    def blueprint_middleware(request, call_next):
+        seen.append(request.path)
+        return call_next(request)
+
+    registry = MiddlewareRegistry()
+    registry.register(blueprint_middleware, scope="blueprint", scope_key="MiddlewareShopBlueprint")
+
+    router = Router()
+    MiddlewareShopBlueprint.register(router=router)
+    dispatcher = Dispatcher(router, registry=registry)
+
+    response = dispatcher.dispatch(Request(method="GET", path="/mwshop/items"))
+
+    if response.status_code != 200 or seen != ["/mwshop/items"]:
+        raise AssertionError(f"Expected the blueprint middleware to run, got {response.status_code} {seen}")
+
+    return
+
+
+# =============================================================================
+# rest_processing on Blueprint.attach_at
+# =============================================================================
+
+from dataclasses import dataclass as _rest_dataclass
+
+from ccai.webworks.endpoints.descriptor import REST_MANAGED_EXTRA, REST_PROCESSING_EXTRA
+
+
+@_rest_dataclass
+class _BlueprintSchema:
+    """Request schema of the rest_processing tests."""
+    name: str
+
+
+def test_blueprint_attach_at_records_rest_processing_and_class_default():
+    """
+        Test that Blueprint routes record REST processing, and that a
+        blueprint class setting rest_processing = False opts its routes out.
+    """
+    class _ManagedBlueprint(Blueprint):
+        base_path = "/rp/bp"
+
+    class _RawBlueprint(Blueprint):
+        base_path = "/rp/rawbp"
+        rest_processing = False
+
+    @_ManagedBlueprint.attach_at(leaf="managed", methods=["POST"], request_schema=_BlueprintSchema)
+    def managed(request):
+        return None
+
+    @_RawBlueprint.attach_at(leaf="raw", methods=["POST"], request_schema=_BlueprintSchema)
+    def raw(request):
+        return None
+
+    managed_descriptor = Endpoint._find_descriptors_for_handler(managed)[0]
+    raw_descriptor = Endpoint._find_descriptors_for_handler(raw)[0]
+
+    if managed_descriptor.extras["rest"].get(REST_MANAGED_EXTRA) is not True:
+        raise AssertionError(f"Expected a REST managed route, got {managed_descriptor.extras['rest']}")
+
+    if raw_descriptor.extras["rest"].get(REST_PROCESSING_EXTRA) is not False:
+        raise AssertionError(f"Expected the class default to opt out, got {raw_descriptor.extras['rest']}")
+
+    return

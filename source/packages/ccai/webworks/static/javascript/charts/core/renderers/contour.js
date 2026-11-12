@@ -1,460 +1,439 @@
 /*
  * contour.js
  *
- * 2-D contour and surface renderers.
+ * 3-D surface renderer (a shaded 2-D projection of z = f(x, y)).
  *
  * Registered types:
- *   "contour"  - iso-value contour lines / filled contour bands (marching squares)
- *   "surface"  - shaded 2-D projection of a z=f(x,y) surface (isometric/oblique)
+ *   "surface"  - shaded or wireframe projection of a height field
+ *
+ * The grid contour plot (`type="contour"`) is drawn by density.js, which
+ * owns that type key; this file used to carry a second, unreachable
+ * contour renderer and no longer registers it.
+ *
+ * Data:
+ *   {
+ *     grid: { x: [x0, x1, ...], y: [y0, y1, ...], z: [[z(row 0)], ...] },
+ *     projection: "isometric" | "oblique",     (also the `projection` attribute)
+ *     style: "shaded" | "wireframe" | "both",  (also the `variant` attribute)
+ *     meta: { xLabel, yLabel, zLabel }
+ *   }
+ *   z[row][col] is the height at (x[col], y[row]). A cell that is not a
+ *   finite number is a hole: the faces that touch it are not drawn.
+ *
+ * Drawing: faces are painted far to near (painter's algorithm on grid
+ * depth), the projected bounding box is fitted inside the plot, the three
+ * floor-level axis legs carry ticks and labels, and a colour bar explains
+ * the height colours.
+ *
+ * Events: mj-chart-surface-click { row, col, x0, x1, y0, y1, corners, zAvg }
  *
  * Renderer contract: render(ctx) -> SVGElement  (a <g> within [0..width]x[0..height])
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber } from "../svgdraw.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
 import { linearScale, niceTicks } from "../scales.js";
 
-
-/* ── color ramp ───────────────────────────────────────────────── */
+const MARGIN = 24;
+const LEGEND_WIDTH = 64;
 
 /*
- * Map a normalised value [0,1] to a sequential blue-to-red color token
- * gradient using CSS interpolation via opacity on layered tokens.
+ * Sequential height ramp built from theme tokens: a faint accent tint over
+ * the surface, the accent itself, then the accent mixed toward the text
+ * colour, so the scale reads in the light and the dark theme.
  */
-function _sequentialColor(t) {
+const RAMP_STOPS = [
+  "color-mix(in oklab, var(--mj-accent, #2563eb) 14%, var(--mj-surface, #ffffff))",
+  "color-mix(in oklab, var(--mj-accent, #2563eb) 55%, var(--mj-surface, #ffffff))",
+  "var(--mj-accent, #2563eb)",
+  "color-mix(in oklab, var(--mj-accent, #2563eb) 50%, var(--mj-text, #14181f))"
+];
+
+
+/* ── helpers ──────────────────────────────────────────────────── */
+
+function _isNumber(value) {
   /*
-   * Return an interpolated sequential hex color for t in [0,1].
-   * Uses a simple blue-white-red ramp readable on white backgrounds.
+   * True for a finite number.
    */
-  const stops = [
-    [37,  99, 235],   /* --mj-color-accent-500 blue */
-    [34, 197,  94],   /* green mid */
-    [234, 179,   8],  /* yellow */
-    [239,  68,  68]   /* red */
-  ]
-  const scaled = Math.max(0, Math.min(1, t)) * (stops.length - 1)
-  const lo = Math.floor(scaled)
-  const hi = Math.min(lo + 1, stops.length - 1)
-  const frac = scaled - lo
-  const r = Math.round(stops[lo][0] + frac * (stops[hi][0] - stops[lo][0]))
-  const g = Math.round(stops[lo][1] + frac * (stops[hi][1] - stops[lo][1]))
-  const b = Math.round(stops[lo][2] + frac * (stops[hi][2] - stops[lo][2]))
-  const hex = "#" +
-    r.toString(16).padStart(2, "0") +
-    g.toString(16).padStart(2, "0") +
-    b.toString(16).padStart(2, "0")
-  return hex
+  const numeric = typeof value === "number" && Number.isFinite(value) === true
+  return numeric
 }
 
 
-/* ── marching squares ─────────────────────────────────────────── */
-
-/*
- * Marching-squares edge interpolation.
- * Returns a pixel point on the edge between two grid corners.
- */
-function _interpolate(ax, ay, az, bx, by, bz, level) {
-  const t = (az === bz) ? 0.5 : (level - az) / (bz - az)
-  return { x: ax + t * (bx - ax), y: ay + t * (by - ay) }
+function _rampColor(t) {
+  /*
+   * The ramp colour of a normalised value t in [0, 1].
+   */
+  const clamped = _isNumber(t) === true ? Math.max(0, Math.min(1, t)) : 0
+  const scaled = clamped * (RAMP_STOPS.length - 1)
+  const lo = Math.min(Math.floor(scaled), RAMP_STOPS.length - 2)
+  const share = Math.round((scaled - lo) * 100)
+  let color = RAMP_STOPS[lo]
+  if (share >= 100) {
+    color = RAMP_STOPS[lo + 1]
+  } else if (share > 0) {
+    color = `color-mix(in oklab, ${RAMP_STOPS[lo + 1]} ${share}%, ${RAMP_STOPS[lo]})`
+  }
+  return color
 }
 
 
-/*
- * Trace one isoline at `level` through the z grid.
- * Returns an array of { x, y } pixel-point arrays (one per line segment).
- */
-function _marchingSquares(xVals, yVals, zGrid, level, xScale, yScale) {
-  const rows = yVals.length
-  const cols = xVals.length
-  const segments = []
-
-  for (let row = 0; row < rows - 1; row = row + 1) {
-    for (let col = 0; col < cols - 1; col = col + 1) {
-      /* Four corners: tl, tr, br, bl */
-      const x0 = xScale(xVals[col])
-      const x1 = xScale(xVals[col + 1])
-      const y0 = yScale(yVals[row])
-      const y1 = yScale(yVals[row + 1])
-      const ztl = zGrid[row][col]
-      const ztr = zGrid[row][col + 1]
-      const zbr = zGrid[row + 1][col + 1]
-      const zbl = zGrid[row + 1][col]
-
-      /* Compute 4-bit case index */
-      let idx = 0
-      if (ztl >= level) { idx = idx | 8 }
-      if (ztr >= level) { idx = idx | 4 }
-      if (zbr >= level) { idx = idx | 2 }
-      if (zbl >= level) { idx = idx | 1 }
-
-      if (idx === 0 || idx === 15) {
-        continue
-      }
-
-      /* Edge midpoints */
-      const top    = _interpolate(x0, y0, ztl, x1, y0, ztr, level)
-      const right  = _interpolate(x1, y0, ztr, x1, y1, zbr, level)
-      const bottom = _interpolate(x0, y1, zbl, x1, y1, zbr, level)
-      const left   = _interpolate(x0, y0, ztl, x0, y1, zbl, level)
-
-      /* Lookup table: pairs of edges to connect */
-      const table = {
-        1:  [[left, bottom]],
-        2:  [[bottom, right]],
-        3:  [[left, right]],
-        4:  [[top, right]],
-        5:  [[left, top], [bottom, right]],
-        6:  [[top, bottom]],
-        7:  [[left, top]],
-        8:  [[left, top]],
-        9:  [[top, bottom]],
-        10: [[left, bottom], [top, right]],
-        11: [[top, right]],
-        12: [[left, right]],
-        13: [[bottom, right]],
-        14: [[left, bottom]]
-      }
-      const pairs = table[idx]
-      if (pairs === undefined) {
-        continue
-      }
-      for (let p = 0; p < pairs.length; p = p + 1) {
-        segments.push(pairs[p])
-      }
+function _numberList(value) {
+  /*
+   * The array when it is a non-empty list of finite numbers, else null.
+   */
+  if (Array.isArray(value) === false || value.length === 0) {
+    return null
+  }
+  for (let index = 0; index < value.length; index = index + 1) {
+    if (_isNumber(value[index]) === false) {
+      return null
     }
   }
-  return segments
+  return value
 }
 
 
-/* ── axes ─────────────────────────────────────────────────────── */
-
-function _drawAxes(plot, plotW, plotH, xScale, yScale, meta) {
-  const xTicks = xScale.ticks(5)
-  for (let i = 0; i < xTicks.length; i = i + 1) {
-    const px = xScale(xTicks[i])
-    plot.appendChild(svgEl("line", {
-      x1: px, y1: 0, x2: px, y2: plotH,
-      stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-    }, []))
-    plot.appendChild(svgEl("text", {
-      x: px, y: plotH + 14, "text-anchor": "middle",
-      "font-size": 10, fill: "var(--mj-text-muted, #6b7280)"
-    }, formatNumber(xTicks[i])))
+function _cell(zGrid, row, col) {
+  /*
+   * A height cell, or null when the row is missing or the value is a hole.
+   */
+  const line = zGrid[row]
+  if (Array.isArray(line) === false) {
+    return null
   }
+  const value = line[col]
+  return _isNumber(value) === true ? value : null
+}
 
-  const yTicks = yScale.ticks(5)
-  for (let i = 0; i < yTicks.length; i = i + 1) {
-    const py = yScale(yTicks[i])
-    plot.appendChild(svgEl("line", {
-      x1: 0, y1: py, x2: plotW, y2: py,
-      stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-    }, []))
-    plot.appendChild(svgEl("text", {
-      x: -6, y: py + 4, "text-anchor": "end",
-      "font-size": 10, fill: "var(--mj-text-muted, #6b7280)"
-    }, formatNumber(yTicks[i])))
-  }
 
-  /* Axis labels */
-  if (meta !== null && meta !== undefined) {
-    if (meta.xLabel) {
-      plot.appendChild(svgEl("text", {
-        x: plotW / 2, y: plotH + 30, "text-anchor": "middle",
-        "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-      }, escapeHtml(meta.xLabel)))
+function _attachActivation(element, ctx, eventName, detail) {
+  /*
+   * Emit an interaction event on click and on Enter / Space.
+   */
+  const handler = () => { ctx.emit(eventName, detail) }
+  element.addEventListener("click", handler)
+  element.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault()
+      handler()
     }
-    if (meta.yLabel) {
-      plot.appendChild(svgEl("text", {
-        transform: `rotate(-90) translate(${-plotH / 2}, -36)`,
-        "text-anchor": "middle",
-        "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-      }, escapeHtml(meta.yLabel)))
-    }
-  }
+  })
   return
 }
 
 
-/* ── contour renderer ─────────────────────────────────────────── */
+/* ── projection ───────────────────────────────────────────────── */
 
-function _renderContour(ctx) {
+function _projector(projection) {
   /*
-   * Render a contour / filled-contour chart using marching squares.
+   * Unit-space projection of normalised (nx, ny, nz) in [0, 1]^3 to an
+   * unscaled 2-D point, and the depth key used to paint far faces first
+   * (a larger key is nearer the viewer).
+   *
+   *   isometric: x' = (nx - ny) cos30,  y' = (nx + ny) sin30 - 0.8 nz
+   *              viewer at +x +y, so depth = nx + ny
+   *   oblique:   x' = nx + 0.5 ny,      y' = 0.35 ny - 0.8 nz
+   *              viewer in front (+y), slightly to the -x side
    */
-  const raw = ctx.raw
+  const cos30 = Math.cos(Math.PI / 6)
+  const sin30 = Math.sin(Math.PI / 6)
+  let result = null
+  if (projection === "oblique") {
+    result = {
+      point: (nx, ny, nz) => ({ x: nx + ny * 0.5, y: ny * 0.35 - nz * 0.8 }),
+      depth: (nx, ny) => ny - nx * 0.5
+    }
+  } else {
+    result = {
+      point: (nx, ny, nz) => ({ x: (nx - ny) * cos30, y: (nx + ny) * sin30 - nz * 0.8 }),
+      depth: (nx, ny) => nx + ny
+    }
+  }
+  return result
+}
+
+
+/* ── surface renderer ─────────────────────────────────────────── */
+
+function _renderSurface(ctx) {
+  /*
+   * Render a projected surface as shaded quadrilateral faces with axes and
+   * a height colour bar.
+   */
+  const raw = ctx.raw !== null && ctx.raw !== undefined ? ctx.raw : {}
   const root = svgEl("g", { part: "plot" }, [])
+  const meta = ctx.model.meta
 
-  const grid = (raw !== null && raw !== undefined) ? raw.grid : null
-  if (grid === null || grid === undefined ||
-      grid.x === null || grid.y === null || grid.z === null) {
+  const grid = raw.grid !== null && typeof raw.grid === "object" ? raw.grid : null
+  const xVals = grid !== null ? _numberList(grid.x) : null
+  const yVals = grid !== null ? _numberList(grid.y) : null
+  const zGrid = grid !== null && Array.isArray(grid.z) === true ? grid.z : null
+  if (xVals === null || yVals === null || zGrid === null ||
+      xVals.length < 2 || yVals.length < 2) {
     return root
   }
 
-  const xVals = grid.x
-  const yVals = grid.y
-  const zGrid = grid.z
+  const projectionAttr = ctx.attrs("projection", null)
+  const projectionName = projectionAttr !== null ? projectionAttr : raw.projection
+  const projection = projectionName === "oblique" ? "oblique" : "isometric"
+  const styleAttr = ctx.attrs("style", null)
+  const styleName = styleAttr !== null ? styleAttr : raw.style
+  const style = styleName === "wireframe" || styleName === "both" ? styleName : "shaded"
 
-  if (xVals.length < 2 || yVals.length < 2 || zGrid.length < 2) {
-    return root
-  }
-
-  const margin = { top: 16, right: 16, bottom: 44, left: 56 }
-  const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
-  const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
-
-  const xScale = linearScale([xVals[0], xVals[xVals.length - 1]], [0, plotW])
-  const yScale = linearScale([yVals[0], yVals[yVals.length - 1]], [plotH, 0])
-
-  /* Find z extent */
+  /* Extents (holes ignored). */
+  const xMin = Math.min(...xVals)
+  const xMax = Math.max(...xVals)
+  const yMin = Math.min(...yVals)
+  const yMax = Math.max(...yVals)
   let zMin = Infinity
   let zMax = -Infinity
-  for (let row = 0; row < zGrid.length; row = row + 1) {
-    for (let col = 0; col < zGrid[row].length; col = col + 1) {
-      const z = zGrid[row][col]
-      if (typeof z !== "number") {
-        continue
+  for (let row = 0; row < yVals.length; row = row + 1) {
+    for (let col = 0; col < xVals.length; col = col + 1) {
+      const z = _cell(zGrid, row, col)
+      if (z !== null) {
+        zMin = Math.min(zMin, z)
+        zMax = Math.max(zMax, z)
       }
-      if (z < zMin) { zMin = z }
-      if (z > zMax) { zMax = z }
     }
   }
   if (zMin === Infinity) {
     return root
   }
   if (zMin === zMax) {
-    zMax = zMin + 1
+    zMin = zMin - 0.5
+    zMax = zMax + 0.5
   }
-
-  /* Levels */
-  const levels = (raw.levels !== null && raw.levels !== undefined && raw.levels.length > 0)
-    ? raw.levels : niceTicks(zMin, zMax, 8)
-
-  const doFill = raw.fill === true
-
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
-  root.appendChild(plot)
-
-  _drawAxes(plot, plotW, plotH, xScale, yScale, raw.meta)
-
-  /* Filled bands: draw a rect for each cell colored by cell-center z */
-  if (doFill === true) {
-    for (let row = 0; row < yVals.length - 1; row = row + 1) {
-      for (let col = 0; col < xVals.length - 1; col = col + 1) {
-        const ztl = zGrid[row][col]
-        const ztr = zGrid[row][col + 1]
-        const zbl = zGrid[row + 1][col]
-        const zbr = zGrid[row + 1][col + 1]
-        const zCenter = (ztl + ztr + zbl + zbr) / 4
-        const t = (zCenter - zMin) / (zMax - zMin)
-        const fillColor = _sequentialColor(t)
-        const px0 = xScale(xVals[col])
-        const px1 = xScale(xVals[col + 1])
-        const py0 = yScale(yVals[row])
-        const py1 = yScale(yVals[row + 1])
-        const rx = Math.min(px0, px1)
-        const ry = Math.min(py0, py1)
-        const rw = Math.abs(px1 - px0)
-        const rh = Math.abs(py1 - py0)
-        const zLabel = escapeHtml("z=" + formatNumber(zCenter))
-        const cell = svgEl("rect", {
-          x: rx, y: ry, width: rw, height: rh,
-          fill: fillColor,
-          part: "contour-band",
-          tabindex: "0",
-          role: "img",
-          "aria-label": zLabel
-        }, [])
-        cell.appendChild(svgEl("title", null, zLabel))
-        plot.appendChild(cell)
-      }
-    }
-  }
-
-  /* Isolines */
-  for (let lev = 0; lev < levels.length; lev = lev + 1) {
-    const level = levels[lev]
-    const t = (level - zMin) / (zMax - zMin)
-    const strokeColor = doFill === true
-      ? "var(--mj-surface, #fff)"
-      : _sequentialColor(t)
-    const segments = _marchingSquares(xVals, yVals, zGrid, level, xScale, yScale)
-    const levelGroup = svgEl("g", { part: "isoline" }, [])
-
-    for (let seg = 0; seg < segments.length; seg = seg + 1) {
-      const p0 = segments[seg][0]
-      const p1 = segments[seg][1]
-      const line = svgEl("line", {
-        x1: p0.x.toFixed(2), y1: p0.y.toFixed(2),
-        x2: p1.x.toFixed(2), y2: p1.y.toFixed(2),
-        stroke: strokeColor,
-        "stroke-width": doFill === true ? 0.5 : 1.5
-      }, [])
-      levelGroup.appendChild(line)
-    }
-    plot.appendChild(levelGroup)
-
-    /* Contour label on first segment */
-    if (doFill === false && segments.length > 0) {
-      const mid = segments[Math.floor(segments.length / 2)]
-      const lx = (mid[0].x + mid[1].x) / 2
-      const ly = (mid[0].y + mid[1].y) / 2
-      plot.appendChild(svgEl("text", {
-        x: lx, y: ly - 3,
-        "text-anchor": "middle",
-        "font-size": 9,
-        fill: strokeColor
-      }, formatNumber(level)))
-    }
-  }
-
-  return root
-}
-
-
-/* ── surface renderer (2-D projection) ───────────────────────── */
-
-function _renderSurface(ctx) {
-  /*
-   * Render a 2-D projected surface as shaded quadrilateral faces.
-   * Uses a parallel-oblique or isometric projection.
-   */
-  const raw = ctx.raw
-  const root = svgEl("g", { part: "plot" }, [])
-
-  const grid = (raw !== null && raw !== undefined) ? raw.grid : null
-  if (grid === null || grid === undefined) {
-    return root
-  }
-
-  const xVals = grid.x
-  const yVals = grid.y
-  const zGrid = grid.z
-
-  if (xVals === null || yVals === null || zGrid === null ||
-      xVals.length < 2 || yVals.length < 2) {
-    return root
-  }
-
-  const projection = (raw.projection === "oblique") ? "oblique" : "isometric"
-  const style = (raw.style !== null && raw.style !== undefined)
-    ? raw.style : "shaded"
-
-  const margin = 30
-  const drawW = ctx.width - margin * 2
-  const drawH = ctx.height - margin * 2
-
-  /* Find extents */
-  let xMin = xVals[0]; let xMax = xVals[xVals.length - 1]
-  let yMin = yVals[0]; let yMax = yVals[yVals.length - 1]
-  let zMin = Infinity; let zMax = -Infinity
-  for (let row = 0; row < zGrid.length; row = row + 1) {
-    for (let col = 0; col < zGrid[row].length; col = col + 1) {
-      const z = zGrid[row][col]
-      if (typeof z !== "number") { continue }
-      if (z < zMin) { zMin = z }
-      if (z > zMax) { zMax = z }
-    }
-  }
-  if (zMin === Infinity) { zMin = 0; zMax = 1 }
-  if (zMin === zMax) { zMax = zMin + 1 }
 
   const xNorm = linearScale([xMin, xMax], [0, 1])
   const yNorm = linearScale([yMin, yMax], [0, 1])
   const zNorm = linearScale([zMin, zMax], [0, 1])
+  const projector = _projector(projection)
 
-  /*
-   * 3-D -> 2-D projection.
-   * Isometric: x' = (x-y)*cos30, y' = (x+y)*sin30 - z
-   * Oblique:   x' = x + y*0.5, y' = y*0.25 - z
-   */
-  const project = (nx, ny, nz) => {
-    if (projection === "oblique") {
-      const px = (nx + ny * 0.5) * drawW * 0.7 + margin
-      const py = (1 - nz) * drawH * 0.6 + ny * drawH * 0.2 + margin
-      return { x: px, y: py }
+  /* Fit the projected bounding box of the whole cube inside the plot. */
+  const corners = []
+  for (const nx of [0, 1]) {
+    for (const ny of [0, 1]) {
+      for (const nz of [0, 1]) {
+        corners.push(projector.point(nx, ny, nz))
+      }
     }
-    const cos30 = Math.cos(Math.PI / 6)
-    const sin30 = Math.sin(Math.PI / 6)
-    const px = ((nx - ny) * cos30) * drawW * 0.5 + ctx.width / 2
-    const py = ((nx + ny) * sin30 - nz * 0.8) * drawH * 0.5 + ctx.height * 0.65
-    return { x: px, y: py }
+  }
+  const boxX0 = Math.min(...corners.map((p) => p.x))
+  const boxX1 = Math.max(...corners.map((p) => p.x))
+  const boxY0 = Math.min(...corners.map((p) => p.y))
+  const boxY1 = Math.max(...corners.map((p) => p.y))
+
+  const legendSpace = ctx.width > 260 ? LEGEND_WIDTH : 0
+  const availW = Math.max(ctx.width - MARGIN * 2 - legendSpace - 40, 20)
+  const availH = Math.max(ctx.height - MARGIN * 2 - 20, 20)
+  const unit = Math.min(availW / (boxX1 - boxX0), availH / (boxY1 - boxY0))
+  const offsetX = MARGIN + 30 + (availW - (boxX1 - boxX0) * unit) / 2 - boxX0 * unit
+  const offsetY = MARGIN + (availH - (boxY1 - boxY0) * unit) / 2 - boxY0 * unit
+
+  const project = (nx, ny, nz) => {
+    const p = projector.point(nx, ny, nz)
+    return { x: p.x * unit + offsetX, y: p.y * unit + offsetY }
   }
 
-  /* Build face list for painter's algorithm */
+  /* Back walls and floor outline (decoration). */
+  const decor = svgEl("g", { "aria-hidden": "true", part: "grid" }, [])
+  const floor = [project(0, 0, 0), project(1, 0, 0), project(1, 1, 0), project(0, 1, 0)]
+  decor.appendChild(svgEl("polygon", {
+    points: floor.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" "),
+    fill: "none",
+    stroke: "var(--mj-border, #e0e3e9)",
+    "stroke-width": 1
+  }, []))
+  root.appendChild(decor)
+
+  /* Faces, with their grid position kept for events and the table. */
   const faces = []
   for (let row = 0; row < yVals.length - 1; row = row + 1) {
     for (let col = 0; col < xVals.length - 1; col = col + 1) {
-      const z00 = typeof zGrid[row][col] === "number" ? zGrid[row][col] : 0
-      const z10 = typeof zGrid[row][col + 1] === "number" ? zGrid[row][col + 1] : 0
-      const z01 = typeof zGrid[row + 1][col] === "number" ? zGrid[row + 1][col] : 0
-      const z11 = typeof zGrid[row + 1][col + 1] === "number" ? zGrid[row + 1][col + 1] : 0
-      const zAvg = (z00 + z10 + z01 + z11) / 4
-
-      const p00 = project(xNorm(xVals[col]),     yNorm(yVals[row]),     zNorm(z00))
-      const p10 = project(xNorm(xVals[col + 1]), yNorm(yVals[row]),     zNorm(z10))
-      const p11 = project(xNorm(xVals[col + 1]), yNorm(yVals[row + 1]), zNorm(z11))
-      const p01 = project(xNorm(xVals[col]),     yNorm(yVals[row + 1]), zNorm(z01))
-
+      const z00 = _cell(zGrid, row, col)
+      const z10 = _cell(zGrid, row, col + 1)
+      const z11 = _cell(zGrid, row + 1, col + 1)
+      const z01 = _cell(zGrid, row + 1, col)
+      if (z00 === null || z10 === null || z11 === null || z01 === null) {
+        continue
+      }
+      const nx0 = xNorm(xVals[col])
+      const nx1 = xNorm(xVals[col + 1])
+      const ny0 = yNorm(yVals[row])
+      const ny1 = yNorm(yVals[row + 1])
       faces.push({
-        corners: [p00, p10, p11, p01],
-        sortY: (p00.y + p10.y + p11.y + p01.y) / 4,
-        zAvg: zAvg
+        row: row,
+        col: col,
+        corners: [
+          project(nx0, ny0, zNorm(z00)),
+          project(nx1, ny0, zNorm(z10)),
+          project(nx1, ny1, zNorm(z11)),
+          project(nx0, ny1, zNorm(z01))
+        ],
+        values: [z00, z10, z11, z01],
+        depth: projector.depth((nx0 + nx1) / 2, (ny0 + ny1) / 2),
+        zAvg: (z00 + z10 + z11 + z01) / 4
       })
     }
   }
 
-  /* Painter's sort: farthest (largest y) first */
-  faces.sort((a, b) => b.sortY - a.sortY)
+  /* Painter's algorithm: the farthest faces first. */
+  faces.sort((a, b) => a.depth - b.depth)
 
-  const g = svgEl("g", { transform: `translate(0,0)` }, [])
-  root.appendChild(g)
+  const faceGroup = svgEl("g", { part: "surface" }, [])
+  root.appendChild(faceGroup)
 
   for (let f = 0; f < faces.length; f = f + 1) {
     const face = faces[f]
-    const t = zNorm(face.zAvg)
-    const fillColor = _sequentialColor(t)
-    const pts = face.corners
-    const pointsStr = pts.map((p) => p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" ")
-    const zLabel = escapeHtml("z=" + formatNumber(face.zAvg))
+    const pointsStr = face.corners.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")
+    const x0 = xVals[face.col]
+    const x1 = xVals[face.col + 1]
+    const y0 = yVals[face.row]
+    const y1 = yVals[face.row + 1]
+    const label = `x ${formatNumber(x0)}–${formatNumber(x1)}, ` +
+      `y ${formatNumber(y0)}–${formatNumber(y1)}: z ${formatNumber(face.zAvg, { maximumFractionDigits: 3 })}`
 
-    if (style === "shaded" || style === "both") {
-      const poly = svgEl("polygon", {
-        points: pointsStr,
-        fill: fillColor,
-        stroke: style === "both" ? "var(--mj-border, #e0e3e9)" : fillColor,
-        "stroke-width": style === "both" ? 0.3 : 0,
-        part: "surface-face",
-        tabindex: "0",
-        role: "img",
-        "aria-label": zLabel
-      }, [])
-      poly.appendChild(svgEl("title", null, zLabel))
-      const detail = { row: f, zAvg: face.zAvg }
-      const handler = () => { ctx.emit("mj-chart-surface-click", detail) }
-      poly.addEventListener("click", handler)
-      poly.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          handler()
-        }
-      })
-      g.appendChild(poly)
-    }
-
+    let fill = _rampColor(zNorm(face.zAvg))
+    let stroke = fill
+    let strokeWidth = 0.4
     if (style === "wireframe") {
-      const poly = svgEl("polygon", {
-        points: pointsStr,
-        fill: "none",
-        stroke: "var(--mj-border-strong, #c7ccd6)",
-        "stroke-width": 0.5
-      }, [])
-      g.appendChild(poly)
+      /* Hidden lines are removed by an opaque surface-coloured face. */
+      fill = "var(--mj-surface, #ffffff)"
+      stroke = "var(--mj-text-muted, #5f6673)"
+      strokeWidth = 0.7
+    } else if (style === "both") {
+      stroke = "var(--mj-surface, #ffffff)"
+      strokeWidth = 0.4
     }
+
+    const poly = svgEl("polygon", {
+      points: pointsStr,
+      fill: fill,
+      stroke: stroke,
+      "stroke-width": strokeWidth,
+      "stroke-linejoin": "round",
+      part: "surface-face",
+      tabindex: "0",
+      role: "img",
+      "aria-label": label
+    }, [svgEl("title", null, label)])
+    _attachActivation(poly, ctx, "mj-chart-surface-click", {
+      row: face.row, col: face.col, x0: x0, x1: x1, y0: y0, y1: y1,
+      corners: face.values.slice(), zAvg: face.zAvg
+    })
+    faceGroup.appendChild(poly)
   }
 
+  /* Axis legs on the floor: x along the front-left edge, y along the
+   * front-right edge, z up the left-most corner. */
+  const axes = svgEl("g", { "aria-hidden": "true", part: "axes" }, [])
+  const axisStroke = "var(--mj-border-strong, #878e9c)"
+  const textFill = "var(--mj-text-muted, #5f6673)"
+
+  const leg = (from, to, ticks, toNorm, labelOffset, anchor, title, titleOffset) => {
+    axes.appendChild(svgEl("line", {
+      x1: from.x, y1: from.y, x2: to.x, y2: to.y, stroke: axisStroke, "stroke-width": 1
+    }, []))
+    for (let i = 0; i < ticks.length; i = i + 1) {
+      const t = toNorm(ticks[i])
+      if (_isNumber(t) === false || t < -1e-6 || t > 1 + 1e-6) {
+        continue
+      }
+      const px = from.x + (to.x - from.x) * t
+      const py = from.y + (to.y - from.y) * t
+      axes.appendChild(svgEl("line", {
+        x1: px, y1: py, x2: px + labelOffset.x * 0.35, y2: py + labelOffset.y * 0.35,
+        stroke: axisStroke, "stroke-width": 1
+      }, []))
+      axes.appendChild(svgEl("text", {
+        x: px + labelOffset.x, y: py + labelOffset.y + 3,
+        "text-anchor": anchor, "font-size": 9, fill: textFill
+      }, formatNumber(ticks[i])))
+    }
+    if (typeof title === "string" && title.length > 0) {
+      axes.appendChild(svgEl("text", {
+        x: (from.x + to.x) / 2 + titleOffset.x, y: (from.y + to.y) / 2 + titleOffset.y,
+        "text-anchor": anchor, "font-size": 10, fill: textFill
+      }, title))
+    }
+    return
+  }
+
+  const metaText = (key) => (meta !== null && typeof meta[key] === "string" ? meta[key] : "")
+
+  if (projection === "oblique") {
+    leg(project(0, 1, 0), project(1, 1, 0), niceTicks(xMin, xMax, 5), xNorm,
+      { x: 0, y: 14 }, "middle", metaText("xLabel"), { x: 0, y: 30 })
+    leg(project(1, 1, 0), project(1, 0, 0), niceTicks(yMin, yMax, 4), (v) => 1 - yNorm(v),
+      { x: 8, y: 4 }, "start", metaText("yLabel"), { x: 22, y: 14 })
+  } else {
+    leg(project(0, 1, 0), project(1, 1, 0), niceTicks(xMin, xMax, 5), xNorm,
+      { x: -6, y: 12 }, "end", metaText("xLabel"), { x: -22, y: 28 })
+    leg(project(1, 1, 0), project(1, 0, 0), niceTicks(yMin, yMax, 4), (v) => 1 - yNorm(v),
+      { x: 6, y: 12 }, "start", metaText("yLabel"), { x: 22, y: 28 })
+  }
+  leg(project(0, 1, 0), project(0, 1, 1), niceTicks(zMin, zMax, 6), zNorm,
+    { x: -8, y: 0 }, "end", "", { x: 0, y: 0 })
+  const zTop = project(0, 1, 1)
+  if (metaText("zLabel").length > 0) {
+    axes.appendChild(svgEl("text", {
+      x: zTop.x, y: zTop.y - 8, "text-anchor": "middle", "font-size": 10, fill: textFill
+    }, metaText("zLabel")))
+  }
+  root.appendChild(axes)
+
+  /* Height colour bar. */
+  if (legendSpace > 0) {
+    /* Just right of the drawn box, inside the chart. */
+    const boxRight = boxX1 * unit + offsetX
+    const barX = Math.min(boxRight + 28, ctx.width - legendSpace + 8)
+    const barTop = MARGIN + 6
+    const barH = Math.max(Math.min(ctx.height - MARGIN * 2 - 12, 180), 40)
+    const steps = 24
+    const legend = svgEl("g", { "aria-hidden": "true", part: "legend" }, [])
+    for (let i = 0; i < steps; i = i + 1) {
+      legend.appendChild(svgEl("rect", {
+        x: barX, y: barTop + barH - ((i + 1) / steps) * barH,
+        width: 12, height: barH / steps + 0.5,
+        fill: _rampColor((i + 0.5) / steps)
+      }, []))
+    }
+    const zScaleBar = linearScale([zMin, zMax], [barTop + barH, barTop])
+    const zTicks = niceTicks(zMin, zMax, 6)
+    for (let i = 0; i < zTicks.length; i = i + 1) {
+      const y = zScaleBar(zTicks[i])
+      if (y < barTop - 0.5 || y > barTop + barH + 0.5) {
+        continue
+      }
+      legend.appendChild(svgEl("text", {
+        x: barX + 16, y: y + 3, "font-size": 9, fill: textFill
+      }, formatNumber(zTicks[i])))
+    }
+    if (metaText("zLabel").length > 0) {
+      legend.appendChild(svgEl("text", {
+        x: barX, y: barTop - 6, "font-size": 9, fill: textFill
+      }, metaText("zLabel")))
+    }
+    root.appendChild(legend)
+  }
+
+  /* Accessible table: the grid itself, one row per y value. */
+  const columns = [`y \\ x`]
+  for (let col = 0; col < xVals.length; col = col + 1) {
+    columns.push(formatNumber(xVals[col]))
+  }
+  const rows = []
+  for (let row = 0; row < yVals.length; row = row + 1) {
+    const record = [formatNumber(yVals[row])]
+    for (let col = 0; col < xVals.length; col = col + 1) {
+      const z = _cell(zGrid, row, col)
+      record.push(z === null ? "" : z)
+    }
+    rows.push(record)
+  }
+  ctx.setTable({ columns: columns, rows: rows, caption: "Surface heights z by y (rows) and x (columns)" })
   return root
 }
 
@@ -463,18 +442,14 @@ function _renderSurface(ctx) {
 
 export function render(ctx) {
   /*
-   * Dispatch to contour or surface sub-renderer.
+   * Render the surface type.
    *
    * :param ctx: The renderer context.
    * :returns: An <g> SVGElement.
    */
-  const chartType = ctx.attrs("type", "contour")
-  if (chartType === "surface") {
-    return _renderSurface(ctx)
-  }
-  return _renderContour(ctx)
+  const root = _renderSurface(ctx)
+  return root
 }
 
 
-registerRenderer("contour", render)
-registerRenderer("surface", render)
+registerRenderer("surface", render, { legend: "none" })

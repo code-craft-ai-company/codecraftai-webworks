@@ -16,11 +16,19 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
+import copy
 import json
 import re
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from ccai.webworks.endpoints.descriptor import (
+    REST_ERROR_MAP_TYPES_EXTRA,
+    REST_MANAGED_EXTRA,
+    REST_QUERY_PARAMS_EXTRA,
+    REST_REQUEST_SCHEMA_TYPE_EXTRA,
+    REST_RESPONSE_SCHEMA_TYPE_EXTRA,
+)
 from ccai.webworks.openapi.configuration import (
     ExternalDocs,
     OpenAPIInfo,
@@ -78,51 +86,136 @@ REST_ERROR_SCHEMA: Dict[str, Any] = {
         },
     },
     "required": ["error", "message"],
+    "example": {
+        "error": "validation_error",
+        "message": "Request validation failed",
+        "field_errors": [
+            {"field": "email", "code": "required", "message": "Field 'email' is required"},
+        ],
+    },
 }
 
-# Standard error responses included in every operation.
-STANDARD_ERROR_RESPONSES: Dict[str, Dict[str, Any]] = {
-    "400": {
-        "description": "Bad Request - Invalid input",
-        "content": {
-            "application/json": {
-                "schema": {"$ref": "#/components/schemas/RESTError"},
-            },
+# Error body the dispatcher sends for an HTTP error raised by routing or by
+# a handler: ``{"detail": ..., "status_code": ...}``.
+HTTP_ERROR_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "detail": {
+            "type": "string",
+            "description": "Human-readable description of the error",
+        },
+        "status_code": {
+            "type": "integer",
+            "description": "The HTTP status code of the response",
         },
     },
-    "401": {
-        "description": "Unauthorized - Authentication required",
-        "content": {
-            "application/json": {
-                "schema": {"$ref": "#/components/schemas/RESTError"},
-            },
-        },
-    },
-    "403": {
-        "description": "Forbidden - Insufficient permissions",
-        "content": {
-            "application/json": {
-                "schema": {"$ref": "#/components/schemas/RESTError"},
-            },
-        },
-    },
-    "404": {
-        "description": "Not Found - Resource does not exist",
-        "content": {
-            "application/json": {
-                "schema": {"$ref": "#/components/schemas/RESTError"},
-            },
-        },
-    },
-    "500": {
-        "description": "Internal Server Error",
-        "content": {
-            "application/json": {
-                "schema": {"$ref": "#/components/schemas/RESTError"},
-            },
-        },
+    "required": ["detail", "status_code"],
+    "example": {
+        "detail": "Not Found",
+        "status_code": 404,
     },
 }
+
+# Names of the error schemas in components/schemas.
+REST_ERROR_SCHEMA_NAME = "RESTError"
+HTTP_ERROR_SCHEMA_NAME = "HTTPError"
+
+# Descriptions of the standard error responses included in every operation.
+STANDARD_ERROR_DESCRIPTIONS: Dict[str, str] = {
+    "400": "Bad Request - Invalid input",
+    "401": "Unauthorized - Authentication required",
+    "403": "Forbidden - Insufficient permissions",
+    "404": "Not Found - Resource does not exist",
+    "500": "Internal Server Error",
+}
+
+# Success status code by HTTP method for endpoints whose handler runs the
+# REST request/response processing. Every other endpoint answers 200 unless
+# its handler builds a response itself.
+REST_SUCCESS_STATUS_CODES: Dict[str, str] = {
+    "get": "200",
+    "post": "201",
+    "put": "200",
+    "patch": "200",
+    "delete": "204",
+}
+
+# Vendor extensions carrying the parts of an access policy that an OpenAPI
+# security requirement cannot express.
+REQUIRED_ROLES_EXTENSION = "x-required-roles"
+REQUIRED_SCOPES_EXTENSION = "x-required-scopes"
+
+# Key in descriptor extras naming the security schemes an endpoint accepts.
+SECURITY_SCHEMES_EXTRA = "security_schemes"
+
+
+def build_standard_error_responses(schema_name: str) -> Dict[str, Dict[str, Any]]:
+    """
+        Build the standard error responses (400, 401, 403, 404, 500) whose
+        body is the named component schema.
+
+        Every call returns new dictionaries all the way down. The responses
+        used to be shared between operations, which made a YAML export full
+        of ``&id001`` anchors and ``*id001`` aliases.
+
+        :param schema_name: Name of the error schema in components/schemas.
+
+        :returns: Mapping of status code string to OpenAPI response object.
+    """
+    responses: Dict[str, Dict[str, Any]] = {}
+
+    for status_code, description in STANDARD_ERROR_DESCRIPTIONS.items():
+        responses[status_code] = {
+            "description": description,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": f"#/components/schemas/{schema_name}"},
+                },
+            },
+        }
+
+    return responses
+
+
+def dump_yaml(spec: Dict[str, Any]) -> str:
+    """
+        Serialize a specification to YAML without anchors or aliases.
+
+        PyYAML writes an object that appears twice as an anchor and an
+        alias. Some OpenAPI tools reject those and they make a diff of two
+        exports unreadable, so every occurrence is written out in full.
+
+        :param spec: The specification dictionary.
+
+        :returns: A YAML string with deterministic key ordering.
+
+        :raises ImportError: If the PyYAML library is not installed.
+    """
+    try:
+        import yaml
+    except ImportError as exc:
+        errmsg = (
+            "PyYAML is required for YAML export. "
+            "Install it with: pip install pyyaml"
+        )
+        raise ImportError(errmsg) from exc
+
+    class AliasFreeDumper(yaml.SafeDumper):
+        """
+            A YAML dumper that never emits anchors or aliases.
+        """
+
+        def ignore_aliases(self, data: Any) -> bool:
+            return True
+
+    yaml_str = yaml.dump(spec, Dumper=AliasFreeDumper, default_flow_style=False, sort_keys=True)
+    return yaml_str
+
+
+# Standard error responses included in every operation that is not served by
+# the REST request/response processing. Kept for callers that read it; the
+# generator builds a fresh copy for each operation.
+STANDARD_ERROR_RESPONSES: Dict[str, Dict[str, Any]] = build_standard_error_responses(HTTP_ERROR_SCHEMA_NAME)
 
 
 def strip_path_type_annotations(path: str) -> str:
@@ -228,6 +321,8 @@ class OpenAPIGenerator:
         self.rest_only = rest_only
         self._schema_converter = SchemaConverter()
         self._cache: Optional[Dict[str, Any]] = None
+        self._cache_key: Optional[Tuple[Any, ...]] = None
+        self._operation_ids: Dict[Tuple[int, str], str] = {}
         return
 
     def generate(self) -> Dict[str, Any]:
@@ -238,8 +333,18 @@ class OpenAPIGenerator:
             them into OpenAPI path items, operations, parameters, request bodies,
             responses, and security requirements.
 
+            The result is cached: until :meth:`refresh` is called, or the
+            set of registered endpoints changes, later calls return a copy
+            of the same specification without rebuilding it. Each call
+            returns its own copy, so a caller may modify what it receives.
+
             :returns: A complete OpenAPI specification dictionary.
         """
+        cache_key = self._build_cache_key()
+        if self._cache is not None and self._cache_key == cache_key:
+            cached = copy.deepcopy(self._cache)
+            return cached
+
         spec: Dict[str, Any] = {
             "openapi": "3.0.3",
             "info": self.info.to_dict(),
@@ -262,8 +367,49 @@ class OpenAPIGenerator:
         if self.external_docs is not None:
             spec["externalDocs"] = self.external_docs.to_dict()
 
-        self._cache = spec
+        self._cache = copy.deepcopy(spec)
+        self._cache_key = cache_key
         return spec
+
+    def _build_cache_key(self) -> Tuple[Any, ...]:
+        """
+            Build a value that changes whenever the generated specification
+            would: the registered endpoints (which descriptors, at which
+            paths, for which methods) and the generator's own settings.
+
+            :returns: A tuple to compare against the key of the cached
+                      specification.
+        """
+        endpoint_keys: List[Tuple[Any, ...]] = []
+        for descriptor in self.registry.collect():
+            endpoint_keys.append((
+                id(descriptor),
+                descriptor.path,
+                descriptor.leaf,
+                tuple(descriptor.methods),
+                tuple(descriptor.tags or ()),
+            ))
+
+        external_docs_key = None
+        if self.external_docs is not None:
+            external_docs_key = repr(self.external_docs.to_dict())
+
+        settings_key = (
+            repr(self.info.to_dict()),
+            tuple(repr(server.to_dict()) for server in self.servers),
+            tuple((name, repr(scheme.to_dict())) for name, scheme in self.security_schemes.items()),
+            tuple(sorted(self.tag_descriptions.items())),
+            external_docs_key,
+            self.derive_tags_from_path,
+            tuple(self.include_paths) if self.include_paths is not None else None,
+            tuple(self.exclude_paths) if self.exclude_paths is not None else None,
+            tuple(self.include_tags) if self.include_tags is not None else None,
+            tuple(self.exclude_tags) if self.exclude_tags is not None else None,
+            self.rest_only,
+        )
+
+        rtnval = (tuple(endpoint_keys), settings_key)
+        return rtnval
 
     def validate(self, strict: bool = False) -> List[ValidationIssue]:
         """
@@ -311,17 +457,8 @@ class OpenAPIGenerator:
 
             :raises ImportError: If the PyYAML library is not installed.
         """
-        try:
-            import yaml
-        except ImportError as exc:
-            errmsg = (
-                "PyYAML is required for YAML export. "
-                "Install it with: pip install pyyaml"
-            )
-            raise ImportError(errmsg) from exc
-
         spec = self.generate()
-        yaml_str = yaml.dump(spec, default_flow_style=False, sort_keys=True)
+        yaml_str = dump_yaml(spec)
         return yaml_str
 
     def export(self, path: str, format: Optional[str] = None) -> None:
@@ -369,6 +506,7 @@ class OpenAPIGenerator:
             Invalidate the cached specification.
         """
         self._cache = None
+        self._cache_key = None
         return
 
     def _build_paths(self) -> Dict[str, Any]:
@@ -384,20 +522,20 @@ class OpenAPIGenerator:
         paths: Dict[str, Any] = {}
         descriptors = self.registry.collect()
 
+        included: List[Tuple[Any, str]] = []
         for descriptor in descriptors:
-            raw_path = descriptor.path
-            if raw_path is None:
-                leaf = descriptor.leaf
-                if leaf is not None:
-                    raw_path = f"/{leaf}"
-                else:
-                    raw_path = "/"
-
-            openapi_path = strip_path_type_annotations(raw_path)
+            openapi_path = strip_path_type_annotations(self._get_raw_path(descriptor))
 
             if not self._should_include_descriptor(descriptor, openapi_path):
                 continue
 
+            included.append((descriptor, openapi_path))
+
+        # operationId must be unique across the whole document, so the ids
+        # are assigned with every included operation in view.
+        self._operation_ids = self._assign_operation_ids(included)
+
+        for descriptor, openapi_path in included:
             if openapi_path not in paths:
                 paths[openapi_path] = {}
 
@@ -407,6 +545,88 @@ class OpenAPIGenerator:
                 paths[openapi_path][method_lower] = operation
 
         return paths
+
+    @staticmethod
+    def _get_raw_path(descriptor) -> str:
+        """
+            Get the URL path of a descriptor, from its ``path`` or its
+            ``leaf``.
+
+            :param descriptor: The endpoint descriptor.
+
+            :returns: The path as declared, with any type annotations.
+        """
+        raw_path = descriptor.path
+        if raw_path is None:
+            leaf = descriptor.leaf
+            if leaf is not None:
+                raw_path = f"/{leaf}"
+            else:
+                raw_path = "/"
+
+        return raw_path
+
+    def _assign_operation_ids(self, included: List[Tuple[Any, str]]) -> Dict[Tuple[int, str], str]:
+        """
+            Choose a unique operationId for every operation in the document.
+
+            An operation is named after its handler function whenever that
+            name is used by no other operation, so the ids of an existing
+            API do not change. When a name is shared -- one handler serving
+            several methods (``RestEndpoint.update`` registers PUT and
+            PATCH), or handlers of the same name in different modules --
+            each of those operations gets the handler name followed by its
+            method (``update_item_put``), and if that is still shared, the
+            method, path and handler name together, which cannot collide
+            because a path and method identify one operation.
+
+            :param included: The ``(descriptor, openapi_path)`` pairs that
+                             appear in the document.
+
+            :returns: Mapping of ``(id(descriptor), lowercase method)`` to
+                      the operationId.
+        """
+        operations: List[Tuple[Any, str, str, str]] = []
+        for descriptor, openapi_path in included:
+            handler_name = getattr(descriptor.handler, "__name__", "operation")
+            for method in descriptor.methods:
+                operations.append((descriptor, method.lower(), openapi_path, handler_name))
+
+        name_counts: Dict[str, int] = {}
+        for _, _, _, handler_name in operations:
+            name_counts[handler_name] = name_counts.get(handler_name, 0) + 1
+
+        with_method_counts: Dict[str, int] = {}
+        for _, method, _, handler_name in operations:
+            with_method = f"{handler_name}_{method}"
+            with_method_counts[with_method] = with_method_counts.get(with_method, 0) + 1
+
+        assigned: Dict[Tuple[int, str], str] = {}
+        used: List[str] = []
+        for descriptor, method, openapi_path, handler_name in operations:
+            with_method = f"{handler_name}_{method}"
+
+            if name_counts[handler_name] == 1 and with_method_counts.get(handler_name, 0) == 0:
+                operation_id = handler_name
+            elif with_method_counts[with_method] == 1 and name_counts.get(with_method, 0) == 0:
+                operation_id = with_method
+            else:
+                path_part = re.sub(r"[^0-9A-Za-z]+", "_", openapi_path).strip("_")
+                if len(path_part) == 0:
+                    path_part = "root"
+                operation_id = f"{method}_{path_part}_{handler_name}"
+
+            # Last resort: a number, should two ids still coincide
+            candidate = operation_id
+            suffix = 2
+            while candidate in used:
+                candidate = f"{operation_id}_{suffix}"
+                suffix += 1
+
+            used.append(candidate)
+            assigned[(id(descriptor), method)] = candidate
+
+        return assigned
 
     def _should_include_descriptor(self, descriptor, openapi_path: str) -> bool:
         """
@@ -485,17 +705,19 @@ class OpenAPIGenerator:
         """
             Build an operation object for a single endpoint method.
 
-            Generates the operationId from the handler function name, includes
-            summary and description from the doc attribute, includes tags,
-            and assembles parameters, request body, and responses.
+            Uses the operationId assigned by :meth:`_assign_operation_ids`
+            (the handler function name, made unique), includes summary and
+            description from the doc attribute, includes tags, and assembles
+            parameters, request body, and responses.
 
             :param descriptor: The endpoint descriptor.
             :param method: The HTTP method in lowercase.
 
             :returns: An OpenAPI operation object dictionary.
         """
-        handler_name = descriptor.handler.__name__
-        operation_id = handler_name
+        operation_id = self._operation_ids.get((id(descriptor), method))
+        if operation_id is None:
+            operation_id = getattr(descriptor.handler, "__name__", "operation")
 
         operation: Dict[str, Any] = {
             "operationId": operation_id,
@@ -527,19 +749,25 @@ class OpenAPIGenerator:
         if len(parameters) > 0:
             operation["parameters"] = parameters
 
-        # Build request body
-        request_body = self._build_request_body(descriptor=descriptor)
-        if request_body is not None:
-            operation["requestBody"] = request_body
+        # Build request body. GET, HEAD and DELETE requests carry none, so
+        # an endpoint that serves several methods documents it only on the
+        # methods that take one.
+        if method not in ("get", "head", "delete", "options"):
+            request_body = self._build_request_body(descriptor=descriptor)
+            if request_body is not None:
+                operation["requestBody"] = request_body
 
         # Build responses
-        responses = self._build_responses(descriptor=descriptor)
+        responses = self._build_responses(descriptor=descriptor, method=method)
         operation["responses"] = responses
 
         # Build security
         security = self._build_security(descriptor=descriptor)
         if security is not None:
             operation["security"] = security
+
+        # The parts of the access policy a security requirement cannot say
+        operation.update(self._build_security_extensions(descriptor=descriptor, security=security))
 
         return operation
 
@@ -572,7 +800,7 @@ class OpenAPIGenerator:
         extras = descriptor.extras
         if extras is not None and "rest" in extras:
             rest_extras = extras["rest"]
-            query_params = rest_extras.get("query_params")
+            query_params = rest_extras.get(REST_QUERY_PARAMS_EXTRA)
             if query_params is not None:
                 for param_name, param_type in query_params.items():
                     schema = self._convert_query_param_type(param_type=param_type)
@@ -621,7 +849,11 @@ class OpenAPIGenerator:
             return None
 
         rest_extras = extras["rest"]
-        request_schema = rest_extras.get("request_schema")
+        request_schema = self._get_declared_schema(
+            rest_extras=rest_extras,
+            type_key=REST_REQUEST_SCHEMA_TYPE_EXTRA,
+            schema_key="request_schema"
+        )
         if request_schema is None:
             return None
 
@@ -638,15 +870,69 @@ class OpenAPIGenerator:
 
         return result
 
-    def _build_responses(self, descriptor) -> Dict[str, Any]:
+    @staticmethod
+    def _get_declared_schema(rest_extras: Dict[str, Any], type_key: str, schema_key: str) -> Any:
+        """
+            Get a schema an endpoint declared, in the best form available.
+
+            ``attach_at`` stores the schema class under ``type_key`` and the
+            JSON Schema it inspected from that class under ``schema_key``.
+            The class is preferred: the converter turns it into a named
+            component and a ``$ref``. A descriptor that carries only the
+            inspected dict, or a hand-built one that holds the class under
+            ``schema_key``, is used as it is -- the converter accepts both.
+
+            :param rest_extras: The descriptor's ``extras["rest"]`` mapping.
+            :param type_key: Key holding the schema class.
+            :param schema_key: Key holding the inspected schema.
+
+            :returns: The schema class, the JSON Schema dict, or None.
+        """
+        declared = rest_extras.get(type_key)
+        if declared is None:
+            declared = rest_extras.get(schema_key)
+
+        return declared
+
+    @staticmethod
+    def _is_rest_managed(descriptor) -> bool:
+        """
+            Whether an endpoint's handler runs the REST request/response
+            processing, which decides the success status by method and
+            reports errors as ``RESTError``.
+
+            :param descriptor: The endpoint descriptor.
+
+            :returns: True when the endpoint is marked as REST managed.
+        """
+        extras = descriptor.extras
+        if extras is None or "rest" not in extras:
+            return False
+
+        rest_extras = extras["rest"]
+        if not isinstance(rest_extras, dict):
+            return False
+
+        rtnval = rest_extras.get(REST_MANAGED_EXTRA) is True
+        return rtnval
+
+    def _build_responses(self, descriptor, method: str = "get") -> Dict[str, Any]:
         """
             Build the responses object for an operation.
 
-            Includes a success response (200) from the descriptor's
+            Includes the success response from the descriptor's
             ``response_schema``, standard error responses (400, 401, 403,
             404, 500), and any custom error responses from the ``error_map``.
 
+            The status codes and error bodies documented are the ones the
+            server sends. An endpoint served by the REST request/response
+            processing answers 201 to a POST, 204 with no body to a DELETE
+            and 200 otherwise, and reports errors as ``RESTError``. Any
+            other endpoint answers 200, and its routing errors are the
+            dispatcher's ``HTTPError`` body.
+
             :param descriptor: The endpoint descriptor.
+            :param method: The HTTP method in lowercase.
 
             :returns: An OpenAPI responses dictionary.
         """
@@ -659,12 +945,30 @@ class OpenAPIGenerator:
 
         if extras is not None and "rest" in extras:
             rest_extras = extras["rest"]
-            response_schema = rest_extras.get("response_schema")
-            error_map = rest_extras.get("error_map")
+            response_schema = self._get_declared_schema(
+                rest_extras=rest_extras,
+                type_key=REST_RESPONSE_SCHEMA_TYPE_EXTRA,
+                schema_key="response_schema"
+            )
+            error_map = rest_extras.get(REST_ERROR_MAP_TYPES_EXTRA)
+            if error_map is None:
+                error_map = rest_extras.get("error_map")
 
-        if response_schema is not None:
+        rest_managed = self._is_rest_managed(descriptor)
+
+        success_status = "200"
+        error_schema_name = HTTP_ERROR_SCHEMA_NAME
+        if rest_managed:
+            success_status = REST_SUCCESS_STATUS_CODES.get(method, "200")
+            error_schema_name = REST_ERROR_SCHEMA_NAME
+
+        if success_status == "204":
+            responses[success_status] = {
+                "description": "Successful response with no content",
+            }
+        elif response_schema is not None:
             json_schema = self._schema_converter.convert(python_type=response_schema)
-            responses["200"] = {
+            responses[success_status] = {
                 "description": "Successful response",
                 "content": {
                     "application/json": {
@@ -673,17 +977,22 @@ class OpenAPIGenerator:
                 },
             }
         else:
-            responses["200"] = {
+            responses[success_status] = {
                 "description": "Successful response",
             }
 
         # Add standard error responses
-        for status_code, error_response in STANDARD_ERROR_RESPONSES.items():
-            responses[status_code] = dict(error_response)
+        for status_code, error_response in build_standard_error_responses(error_schema_name).items():
+            responses[status_code] = error_response
 
         # Add custom error responses from error_map
         if error_map is not None:
             for status_code, error_type in error_map.items():
+                if not isinstance(status_code, (int, str)) or isinstance(status_code, bool):
+                    # A resource endpoint's error_map maps exception types
+                    # to error mappings; that is runtime configuration, not
+                    # a documented response.
+                    continue
                 status_str = str(status_code)
                 error_schema = self._schema_converter.convert(python_type=error_type)
                 responses[status_str] = {
@@ -697,22 +1006,15 @@ class OpenAPIGenerator:
 
         return responses
 
-    def _build_security(self, descriptor) -> Optional[List[Dict[str, List[str]]]]:
+    def _get_required_access_policy(self, descriptor) -> Any:
         """
-            Build security requirements from the descriptor's access_policy.
-
-            Extracts authentication requirements from the endpoint constraints
-            and maps them to security scheme references. For OAuth2 schemes,
-            scopes from the access_policy are included. For non-OAuth2 schemes
-            (apiKey, http), empty scope arrays are used per the OpenAPI
-            specification.
-
-            When no security_schemes are configured on the generator, falls
-            back to a generic "oauth2" reference with the access_policy scopes.
+            Get the access policy of a descriptor when it requires
+            authentication.
 
             :param descriptor: The endpoint descriptor.
 
-            :returns: A list of security requirement objects, or None.
+            :returns: The AccessPolicy, or None when the endpoint has no
+                      policy or its policy does not require authentication.
         """
         constraints = descriptor.constraints
         if constraints is None:
@@ -725,19 +1027,125 @@ class OpenAPIGenerator:
         if not access_policy.require_auth:
             return None
 
+        return access_policy
+
+    def _get_applicable_scheme_names(self, descriptor) -> List[str]:
+        """
+            Get the names of the configured security schemes an endpoint
+            accepts.
+
+            An endpoint names the schemes it accepts with a
+            ``security_schemes`` entry in its extras
+            (``attach_at(..., security_schemes=["bearer"])``); names that
+            are not configured on the generator are left out, since a
+            requirement must not reference an undefined scheme. An endpoint
+            that names none accepts every configured scheme.
+
+            :param descriptor: The endpoint descriptor.
+
+            :returns: Scheme names, in the generator's configuration order.
+        """
+        configured_names = list(self.security_schemes.keys())
+
+        extras = descriptor.extras
+        accepted = None
+        if extras is not None:
+            accepted = extras.get(SECURITY_SCHEMES_EXTRA)
+
+        if accepted is None:
+            return configured_names
+
+        if isinstance(accepted, str):
+            accepted = [accepted]
+
+        rtnval = [name for name in configured_names if name in accepted]
+        return rtnval
+
+    def _build_security(self, descriptor) -> Optional[List[Dict[str, List[str]]]]:
+        """
+            Build security requirements from the descriptor's access_policy.
+
+            Extracts authentication requirements from the endpoint constraints
+            and maps them to security scheme references. For OAuth2 schemes,
+            scopes from the access_policy are included. For non-OAuth2 schemes
+            (apiKey, http), empty scope arrays are used per the OpenAPI
+            specification.
+
+            Only schemes that are configured on the generator and that the
+            endpoint accepts (see :meth:`_get_applicable_scheme_names`) are
+            referenced, each as an alternative. When there is none -- no
+            scheme is configured, or none of the configured ones applies --
+            no requirement is written: a requirement naming a scheme that
+            ``components.securitySchemes`` does not define makes the
+            document invalid.
+
+            :param descriptor: The endpoint descriptor.
+
+            :returns: A list of security requirement objects, or None.
+        """
+        access_policy = self._get_required_access_policy(descriptor)
+        if access_policy is None:
+            return None
+
+        scheme_names = self._get_applicable_scheme_names(descriptor)
+        if len(scheme_names) == 0:
+            return None
+
         security: List[Dict[str, List[str]]] = []
         scopes = list(access_policy.scopes) if access_policy.scopes else []
 
-        if len(self.security_schemes) > 0:
-            for scheme_name, scheme_obj in self.security_schemes.items():
-                if isinstance(scheme_obj, OAuth2SecurityScheme):
-                    security.append({scheme_name: scopes})
-                else:
-                    security.append({scheme_name: []})
-        else:
-            security.append({"oauth2": scopes})
+        for scheme_name in scheme_names:
+            scheme_obj = self.security_schemes[scheme_name]
+            if isinstance(scheme_obj, OAuth2SecurityScheme):
+                security.append({scheme_name: list(scopes)})
+            else:
+                security.append({scheme_name: []})
 
         return security
+
+    def _build_security_extensions(
+        self,
+        descriptor,
+        security: Optional[List[Dict[str, List[str]]]]
+    ) -> Dict[str, Any]:
+        """
+            Build the vendor extensions that record what an access policy
+            requires beyond what the security requirements express.
+
+            - ``x-required-roles``: the roles the caller must hold. OpenAPI
+              has no place for roles.
+            - ``x-required-scopes``: the scopes the caller must hold, when
+              they are not all carried by an OAuth2 requirement (no scheme
+              is configured, or an accepted scheme is not OAuth2).
+
+            :param descriptor: The endpoint descriptor.
+            :param security: The security requirements built for the
+                             operation, or None.
+
+            :returns: Extension name to value; empty when nothing is needed.
+        """
+        extensions: Dict[str, Any] = {}
+
+        access_policy = self._get_required_access_policy(descriptor)
+        if access_policy is None:
+            return extensions
+
+        roles = list(access_policy.roles) if access_policy.roles else []
+        if len(roles) > 0:
+            extensions[REQUIRED_ROLES_EXTENSION] = roles
+
+        scopes = list(access_policy.scopes) if access_policy.scopes else []
+        if len(scopes) > 0:
+            scopes_expressed = security is not None and len(security) > 0
+            if scopes_expressed:
+                for requirement in security:
+                    for requirement_scopes in requirement.values():
+                        if len(requirement_scopes) == 0:
+                            scopes_expressed = False
+            if not scopes_expressed:
+                extensions[REQUIRED_SCOPES_EXTENSION] = scopes
+
+        return extensions
 
     def _collect_tags(self) -> List[Dict[str, str]]:
         """
@@ -822,16 +1230,17 @@ class OpenAPIGenerator:
             Build the components object with schemas and security schemes.
 
             Collects all schemas from the schema converter cache and adds
-            the standard RESTError schema. Also includes security scheme
-            definitions.
+            the standard error schemas, ``RESTError`` and ``HTTPError``.
+            Also includes security scheme definitions.
 
             :returns: An OpenAPI components dictionary.
         """
         components: Dict[str, Any] = {}
 
         # Build schemas section
-        schemas = dict(self._schema_converter.get_all_schemas())
-        schemas["RESTError"] = dict(REST_ERROR_SCHEMA)
+        schemas = copy.deepcopy(self._schema_converter.get_all_schemas())
+        schemas[REST_ERROR_SCHEMA_NAME] = copy.deepcopy(REST_ERROR_SCHEMA)
+        schemas[HTTP_ERROR_SCHEMA_NAME] = copy.deepcopy(HTTP_ERROR_SCHEMA)
 
         components["schemas"] = schemas
 

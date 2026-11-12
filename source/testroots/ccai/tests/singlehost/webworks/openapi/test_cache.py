@@ -544,3 +544,48 @@ def test_cached_generator_with_ttl():
         raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# refresh() reaches the generator's own cache
+# =============================================================================
+
+def test_cached_generator_refresh_rebuilds_after_a_descriptor_is_edited_in_place():
+    """
+        Verify that refresh() makes the next generate() rebuild the
+        specification even when the set of endpoints is unchanged, so a
+        change made to a registered descriptor is picked up.
+    """
+    from ccai.webworks.endpoints.descriptor import EndpointDescriptor
+    from ccai.webworks.endpoints.doc import Doc
+    from ccai.webworks.endpoints.registry import EndpointRegistry
+
+    def get_status(request):
+        return {}
+
+    descriptor = EndpointDescriptor(
+        handler=get_status,
+        module=__name__,
+        path="/status",
+        methods=["GET"],
+        doc=Doc(summary="Before"),
+        extras={"endpoint_type": "rest"},
+    )
+    registry = EndpointRegistry()
+    registry.register(descriptor)
+
+    generator = CachedOpenAPIGenerator(registry=registry, info=OpenAPIInfo(title="Cached API", version="1.0.0"))
+
+    first = generator.generate()
+    descriptor.doc = Doc(summary="After")
+    generator.refresh()
+    second = generator.generate()
+
+    if first["paths"]["/status"]["get"]["summary"] != "Before":
+        raise AssertionError("Expected the first specification to carry the original summary")
+
+    if second["paths"]["/status"]["get"]["summary"] != "After":
+        errmsg = f"Expected the rebuilt specification to carry the new summary, got {second['paths']['/status']['get']['summary']!r}"
+        raise AssertionError(errmsg)
+
+    return

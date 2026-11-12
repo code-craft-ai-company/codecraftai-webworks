@@ -686,41 +686,102 @@ class WSGIMiddlewareWrapper:
         pass
 ```
 
-### Application Factory
+### Application Factory and Resolution
 
 ```python
-def get_wsgi_application() -> WSGIApplication:
+def get_wsgi_application() -> Callable:
     """
-    Get the WSGI application callable.
-    
-    This is the main entry point for WSGI servers.
-    
-    Returns:
-        Configured WSGIApplication instance.
+    The entry point of external WSGI servers.
+
+    Found once, in this order: the application set with
+    set_wsgi_application(); the import target in WEBWORKS_SERVER_APP; the
+    established web application persona. Raises ConfigurationError when there
+    is nothing to serve.
+
+        WEBWORKS_SERVER_APP=mysite.app:webapp \
+            gunicorn 'ccai.webworks.wsgi.application:get_wsgi_application()'
     """
-    pass
 
+def resolve_wsgi_application(target: Optional[str] = None) -> Callable:
+    """Import the target (or take the persona) and return its WSGI callable."""
 
-def create_wsgi_application(
-    config: Optional[Dict[str, Any]] = None
-) -> WSGIApplication:
+def as_wsgi_application(candidate: Any) -> Callable:
     """
-    Application factory for creating WSGI applications.
-    
-    Each call creates a new application instance.
-    
-    Args:
-        config: Optional configuration dict.
-    
-    Returns:
-        New WSGIApplication instance.
+    WebApplication            -> candidate.wsgi_app
+    the persona's asgi_app    -> persona.wsgi_app (one lifespan per process)
+    other ASGI application    -> ASGIBridge(asgi_app=candidate)
+    other callable            -> candidate (a WSGI application)
+    anything else             -> ConfigurationError
     """
-    pass
 
+def create_wsgi_application(config: Optional[Dict[str, Any]] = None) -> WSGIApplication:
+    """A new WSGIApplication around a synchronous handler, per call."""
 
-# Module-level application variable for WSGI servers
-application: Optional[WSGIApplication] = None
+def __getattr__(name: str) -> Any:
+    """'application' resolves to get_wsgi_application() (uWSGI convention)."""
 ```
+
+### ASGIBridge Class
+
+`ccai.webworks.wsgi.asgibridge.ASGIBridge` serves an ASGI application to a WSGI
+server. `WebApplication.wsgi_app` returns one, built with
+`app_provider=lambda: webapp.asgi_app`.
+
+```python
+class ASGIBridge:
+    def __init__(self, asgi_app=None, app_provider=None, request_timeout=None,
+                 startup_timeout=60.0, shutdown_timeout=30.0, body_chunk_size=65536): ...
+    def __call__(self, environ, start_response) -> Iterable[bytes]: ...
+    def startup(self) -> bool: ...          # start in this process, run the lifespan startup
+    def shutdown(self) -> None: ...         # drain requests, lifespan shutdown, stop the loop
+    def on_worker_start(self, worker): ...  # = startup(), called by the built-in Worker
+    def on_worker_exit(self, worker): ...   # = shutdown()
+    can_serve: bool; lifespan_status: str; failure_message: Optional[str]
+```
+
+```
+WSGI server thread                         bridge loop thread (one per process)
+------------------                         ------------------------------------
+__call__(environ, start_response)
+  build HTTP scope from environ
+  run_coroutine_threadsafe(app(scope, receive, send))  ->  app task
+  wait on the exchange queue  <-- ("read", fut) ------  receive()
+  read wsgi.input chunk, resolve fut  -------------->     gets http.request chunk
+                              <-- ("start", status, headers) send(start)
+  start_response(...)
+  return _ResponseBody
+  __next__: wait on the queue <-- ("body", data, more, ack)  send(body) awaits ack
+  yield data; next __next__ resolves ack  ---------->     send() returns
+  close(): early close = disconnect -> pending ack fails with ClientDisconnected,
+           receive() returns http.disconnect
+                              <-- ("done", future)        task ends
+```
+
+- All blocking socket I/O stays on the server's thread; the loop never waits
+  for a socket. The calling thread's contextvars are copied into the request
+  task (run_coroutine_threadsafe does that), so a request ID a WSGI
+  middleware sets is visible to the handlers.
+- The runtime (loop, thread, lifespan state) is per process: `os.register_at_fork`
+  resets every bridge in a forked child, which starts its own loop and lifespan.
+- The lifespan protocol is driven like the development server's
+  LifespanManager: an application that never reads the startup event does not
+  support lifespan and is served; one that read it and raised, answered
+  `lifespan.startup.failed`, or did not answer in time failed (503).
+- The ASGI lifespan `state` (spec 2.3) is copied into every request scope.
+- `path` is PATH_INFO and `root_path` SCRIPT_NAME (as text), `raw_path` the
+  request target as received.
+- A request timeout bounds the time until the response starts; the task is
+  cancelled and 504 answered.
+
+### Worker Lifecycle Methods
+
+The built-in Worker calls `app.on_worker_start(worker)` before it accepts
+connections and `app.on_worker_exit(worker)` after it stopped serving, when the
+application object defines them. Middleware that wraps an application passes the
+calls on (the production middleware does). A raising `on_worker_start` becomes
+`WorkerBootError`; the forked worker ends with `WORKER_BOOT_ERROR_EXIT_CODE`
+(3), the WorkerManager records `boot_failed`, starts no replacement, and the
+WSGIServer main loop stops (`WSGIServer.boot_failed`).
 
 ### WSGIServer Class
 
@@ -887,7 +948,20 @@ class SocketListener:
         pass
 ```
 
+### WSGIServer Hooks
+
+`serve_forever()` calls overridable steps, which the production server uses:
+`_setup_ssl()` (install TLS on the bound listener), `_after_bind()` (PID file,
+privilege drop, application loading: after bind, before any worker),
+`_create_worker_manager()` and `_after_spawn()`.
+
 ### WorkerManager Class
+
+Besides spawn/monitor/shutdown it offers `replace_workers()` (rolling
+replacement for a reload), `boot_failed`, an `exit_callback(pid, worker_id,
+exit_code)` and `prepare_worker_process(config)`, which patches the standard
+library with gevent in a new worker of the `gevent` worker class before the
+Worker is created. Workers recycle themselves after `max_requests` (+ jitter).
 
 ```python
 class WorkerManager:

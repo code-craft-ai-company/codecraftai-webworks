@@ -11,7 +11,11 @@ from ccai.webworks.asgi.httphandler import HTTPHandler
 from ccai.webworks.asgi.scopeparser import ScopeParser
 from ccai.webworks.asgi.bodyreader import BodyReader
 from ccai.webworks.asgi.responsesender import ResponseSender
+from ccai.webworks.asgi.errorhandler import ErrorHandler, ErrorResponse, HTTPException
+from ccai.webworks.asgi.exceptions import RequestEntityTooLarge
+from ccai.webworks.routing.response import StreamingResponse
 from ccai.webworks.asgi.constants import (
+    DEFAULT_MAX_REQUEST_BODY_SIZE,
     SCOPE_REQUEST,
     MESSAGE_HTTP_REQUEST,
     MESSAGE_HTTP_RESPONSE_START,
@@ -1089,6 +1093,244 @@ def test_httphandler_background_task_error_does_not_affect_response():
     start_message = sent_messages[0]
     if start_message.get("status") != 200:
         errmsg = f"Expected status 200, got {start_message.get('status')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Tests for error routing, the body size limit and errors after the response started
+# =============================================================================
+
+def run_handler(handler: HTTPHandler, body: bytes = b"", headers: Optional[List[tuple]] = None) -> List[Dict[str, Any]]:
+    """
+        Run one request through a handler and return the messages it sent.
+    """
+    scope = create_http_scope(method="POST", headers=headers)
+    receive = create_receive_callable(body=body)
+    send, sent_messages = create_send_callable()
+    
+    asyncio.get_event_loop().run_until_complete(handler.handle(scope, receive, send))
+    
+    return sent_messages
+
+
+def test_httphandler_calls_custom_error_handler_for_handler_exception():
+    """
+        Test that a handler registered for an exception type answers that exception.
+    """
+    class TeapotError(Exception):
+        pass
+    
+    async def handle_teapot(exc: Exception) -> ErrorResponse:
+        return ErrorResponse(status_code=418, body=b"teapot")
+    
+    async def failing_handler(request: Request) -> Response:
+        raise TeapotError("short and stout")
+    
+    error_handler = ErrorHandler()
+    error_handler.register_handler(TeapotError, handle_teapot)
+    
+    handler = HTTPHandler(error_handler=error_handler)
+    handler.set_handler(failing_handler)
+    
+    sent_messages = run_handler(handler)
+    
+    if sent_messages[0].get("status") != 418:
+        errmsg = f"Expected the status of the custom handler (418), got {sent_messages[0].get('status')}"
+        raise AssertionError(errmsg)
+    
+    if sent_messages[1].get("body") != b"teapot":
+        errmsg = f"Expected the body of the custom handler, got {sent_messages[1].get('body')!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_httphandler_maps_http_exception_to_its_status():
+    """
+        Test that raising HTTPException(404) is answered with 404 and not 500.
+    """
+    async def failing_handler(request: Request) -> Response:
+        raise HTTPException(404, "no such item")
+    
+    handler = HTTPHandler(error_handler=ErrorHandler())
+    handler.set_handler(failing_handler)
+    
+    sent_messages = run_handler(handler)
+    
+    if sent_messages[0].get("status") != 404:
+        errmsg = f"Expected status 404, got {sent_messages[0].get('status')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_httphandler_custom_handler_takes_precedence_for_body_too_large():
+    """
+        Test that a custom handler is reached for the errors the HTTP handler answers itself.
+    """
+    async def handle_too_large(exc: Exception) -> ErrorResponse:
+        return ErrorResponse(status_code=413, body=b"custom too large")
+    
+    async def ok_handler(request: Request) -> Response:
+        return Response(status_code=200, body=b"ok")
+    
+    error_handler = ErrorHandler()
+    error_handler.register_handler(RequestEntityTooLarge, handle_too_large)
+    
+    handler = HTTPHandler(error_handler=error_handler, max_body_size=4)
+    handler.set_handler(ok_handler)
+    
+    sent_messages = run_handler(handler, body=b"more than four bytes")
+    
+    if sent_messages[1].get("body") != b"custom too large":
+        errmsg = f"Expected the body of the custom handler, got {sent_messages[1].get('body')!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_httphandler_answers_unhandled_exception_with_500_without_error_handler():
+    """
+        Test that a handler exception is answered with 500 when no error handler is set.
+    """
+    async def failing_handler(request: Request) -> Response:
+        raise ValueError("broken")
+    
+    handler = HTTPHandler()
+    handler.set_handler(failing_handler)
+    
+    sent_messages = run_handler(handler)
+    
+    if sent_messages[0].get("status") != 500:
+        errmsg = f"Expected status 500, got {sent_messages[0].get('status')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_httphandler_reports_handler_timeout_error_as_500():
+    """
+        Test that a TimeoutError raised by the handler itself is not a gateway timeout.
+    """
+    async def failing_handler(request: Request) -> Response:
+        raise asyncio.TimeoutError("a call made by the handler timed out")
+    
+    handler = HTTPHandler(request_timeout=5.0)
+    handler.set_handler(failing_handler)
+    
+    sent_messages = run_handler(handler)
+    
+    if sent_messages[0].get("status") != 500:
+        errmsg = f"Expected status 500 for the handler's own TimeoutError, got {sent_messages[0].get('status')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_httphandler_reports_request_timeout_as_504():
+    """
+        Test that a handler that runs past the request timeout is answered with 504.
+    """
+    async def slow_handler(request: Request) -> Response:
+        await asyncio.sleep(5.0)
+        return Response(status_code=200, body=b"late")
+    
+    handler = HTTPHandler(request_timeout=0.05)
+    handler.set_handler(slow_handler)
+    
+    sent_messages = run_handler(handler)
+    
+    if sent_messages[0].get("status") != 504:
+        errmsg = f"Expected status 504, got {sent_messages[0].get('status')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_httphandler_limits_body_size_by_default():
+    """
+        Test that the body reader of a default handler has a size limit.
+    """
+    handler = HTTPHandler()
+    
+    if handler.body_reader.max_size != DEFAULT_MAX_REQUEST_BODY_SIZE:
+        errmsg = (
+            f"Expected the default body limit {DEFAULT_MAX_REQUEST_BODY_SIZE}, "
+            f"got {handler.body_reader.max_size}"
+        )
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_httphandler_refuses_body_over_configured_limit_with_413():
+    """
+        Test that a body over the configured limit is answered with 413.
+    """
+    async def ok_handler(request: Request) -> Response:
+        return Response(status_code=200, body=b"ok")
+    
+    handler = HTTPHandler(max_body_size=4)
+    handler.set_handler(ok_handler)
+    
+    sent_messages = run_handler(handler, body=b"more than four bytes")
+    
+    if sent_messages[0].get("status") != 413:
+        errmsg = f"Expected status 413, got {sent_messages[0].get('status')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_httphandler_sends_no_second_start_when_stream_fails():
+    """
+        Test that an error in the middle of a streamed body does not start a second response.
+    """
+    async def failing_stream():
+        yield b"partial"
+        raise RuntimeError("the stream broke")
+    
+    async def streaming_handler(request: Request) -> Response:
+        return StreamingResponse(failing_stream(), media_type="text/plain")
+    
+    handler = HTTPHandler(error_handler=ErrorHandler())
+    handler.set_handler(streaming_handler)
+    
+    sent_messages = run_handler(handler)
+    
+    start_messages = [msg for msg in sent_messages if msg.get("type") == MESSAGE_HTTP_RESPONSE_START]
+    
+    if len(start_messages) != 1:
+        errmsg = f"Expected exactly one response start, got {len(start_messages)}: {sent_messages}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_httphandler_leaves_failed_stream_incomplete():
+    """
+        Test that a stream that failed is not ended as if it were complete.
+    """
+    async def failing_stream():
+        yield b"partial"
+        raise RuntimeError("the stream broke")
+    
+    async def streaming_handler(request: Request) -> Response:
+        return StreamingResponse(failing_stream(), media_type="text/plain")
+    
+    handler = HTTPHandler()
+    handler.set_handler(streaming_handler)
+    
+    sent_messages = run_handler(handler)
+    
+    last_message = sent_messages[-1]
+    
+    # The server closes a connection whose response was not completed,
+    # which is how the client learns that the body was cut short.
+    if last_message.get("more_body") is not True:
+        errmsg = f"Expected the last message to leave the body open, got {last_message}"
         raise AssertionError(errmsg)
     
     return

@@ -7,6 +7,15 @@
  */
 
 import { MjElement, nextId } from "../core/mjelement.js";
+import { announce } from "../core/announcer.js";
+import { html } from "../core/html.js";
+import { t } from "../core/intl.js";
+
+/* Emoji offered by the built-in picker (shown unless `mj-emoji-request` is canceled). */
+const EMOJI_CHOICES = [
+  "\u{1F600}", "\u{1F602}", "\u{1F60A}", "\u{1F60D}", "\u{1F914}", "\u{1F62E}",
+  "\u{1F622}", "\u{1F44D}", "\u{1F64F}", "\u{1F389}", "\u{2764}\u{FE0F}", "\u{1F525}"
+];
 
 const STYLES = `
 :host {
@@ -85,8 +94,15 @@ const STYLES = `
 
 :host([disabled]) .input-textarea,
 :host([loading]) .input-textarea {
-  pointer-events: none;
   opacity: 0.55;
+}
+
+:host([disabled]) .composer-root {
+  cursor: not-allowed;
+}
+
+.composer-root[data-drag-over="true"] {
+  border-color: var(--mj-accent);
 }
 
 .attachment-bar {
@@ -110,14 +126,86 @@ const STYLES = `
   border-radius: var(--mj-radius-sm);
   font-size: var(--mj-font-size-xs);
   color: var(--mj-text);
-  max-width: var(--mj-composer-attachment-size, 56px);
+  max-width: var(--mj-composer-attachment-max-width, 240px);
+  min-width: 0;
+}
+
+.attachment-item.is-error {
+  border-color: var(--mj-color-danger);
+  background: var(--mj-color-danger-surface);
+}
+
+.attachment-thumb {
+  width: var(--mj-composer-attachment-size, 56px);
+  height: var(--mj-composer-attachment-size, 56px);
+  object-fit: cover;
+  border-radius: var(--mj-radius-sm);
+  flex-shrink: 0;
 }
 
 .attachment-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 80px;
+  min-width: 0;
+}
+
+.attachment-reason {
+  color: var(--mj-color-danger);
+  white-space: nowrap;
+}
+
+.attachment-progress {
+  width: 40px;
+  height: 4px;
+  background: var(--mj-border);
+  border-radius: var(--mj-radius-pill);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.attachment-progress-bar {
+  height: 100%;
+  background: var(--mj-accent);
+  transition: width var(--mj-motion-fast) linear;
+}
+
+.emoji-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mj-space-1);
+  padding: var(--mj-space-2) var(--mj-space-3);
+  border-top: 1px solid var(--mj-border);
+}
+
+.emoji-panel[hidden] { display: none; }
+
+.emoji-option {
+  background: transparent;
+  border: none;
+  border-radius: var(--mj-radius-sm);
+  cursor: pointer;
+  font-size: var(--mj-font-size-md);
+  line-height: 1;
+  padding: var(--mj-space-1);
+}
+
+.emoji-option:hover { background: var(--mj-bg-muted); }
+.emoji-option:focus-visible {
+  outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.file-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
 }
 
 .attachment-remove {
@@ -225,76 +313,103 @@ function formatSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/* True when `file` satisfies an `accept` list of MIME types, MIME groups and extensions. */
+function fileMatchesAccept(file, accept) {
+  const patterns = accept.split(",").map((part) => part.trim()).filter((part) => part.length > 0)
+  let matches = patterns.length === 0
+
+  for (let i = 0; i < patterns.length && matches === false; i = i + 1) {
+    const pattern = patterns[i].toLowerCase()
+    if (pattern === "*/*") {
+      matches = true
+    } else if (pattern.endsWith("/*") === true) {
+      matches = file.type.toLowerCase().startsWith(pattern.slice(0, -1))
+    } else if (pattern.startsWith(".") === true) {
+      matches = file.name.toLowerCase().endsWith(pattern)
+    } else {
+      matches = file.type.toLowerCase() === pattern
+    }
+  }
+  return matches
+}
+
 export class MjChatComposer extends MjElement {
   static tagName = "mj-chat-composer";
   static styles = STYLES;
   static watched = [
     "placeholder", "max-length", "send-key", "allow-attachments",
-    "allow-emoji", "disabled", "loading", "accept"
+    "allow-emoji", "disabled", "loading", "accept", "label", "max-attachment-size"
   ];
 
   constructor() {
     super()
+
+    /* Everything the user entered lives in fields so a reconnect restores it. */
+    this._draft = ""
     this._attachments = []
+    this._rejected = []
     this._replyTo = null
+    this._emojiOpen = false
     this._mentionSource = null
+
+    this._emojiPanelId = nextId("mj-cc-emoji")
+
+    this._root = null
     this._textarea = null
     this._fileInput = null
     this._attachmentBar = null
     this._sendBtn = null
     this._replyPreview = null
+    this._replyPreviewText = null
     this._counter = null
+    this._attachBtn = null
+    this._emojiBtn = null
+    this._emojiPanel = null
   }
 
   render() {
-    const placeholder = this.getAttribute("placeholder") || "Type a message…"
-    const label = this.getAttribute("label") || "Message composer"
-    const maxLength = parseInt(this.getAttribute("max-length") || "0", 10)
-    const counterHtml = maxLength > 0
-      ? `<div class="counter" part="counter" aria-live="polite" hidden></div>`
-      : ""
-
-    const markup = `
-      <div class="composer-root" role="form" part="root" aria-label="${label}">
+    const markup = html`
+      <div class="composer-root" role="form" part="root">
         <div class="reply-preview" part="reply-preview" hidden role="note"
-             aria-label="Replying to message">
+             aria-label="${t("mj.chatComposer.replyPreviewLabel")}">
           <span class="reply-preview-text" part="reply-preview-text"></span>
           <button class="reply-cancel-btn" part="reply-cancel" type="button"
-                  aria-label="Cancel reply">&#x2715;</button>
+                  aria-label="${t("mj.chatComposer.cancelReply")}">&#x2715;</button>
         </div>
         <ul class="attachment-bar" part="attachment-bar"
-            aria-label="Attachments" hidden></ul>
+            aria-label="${t("mj.chatComposer.attachmentsLabel")}" hidden></ul>
         <div class="input-area">
-          <textarea class="input-textarea" part="input"
-                    placeholder="${placeholder}"
-                    aria-label="${label}"
-                    aria-multiline="true"
-                    rows="1"></textarea>
+          <textarea class="input-textarea" part="input" rows="1"></textarea>
         </div>
-        ${counterHtml}
+        <div class="counter" part="counter" aria-live="polite" hidden></div>
+        <div class="emoji-panel" role="group" aria-label="${t("mj.chatComposer.emojiPanelLabel")}" id="${this._emojiPanelId}" hidden>
+          ${EMOJI_CHOICES.map((emoji) => html`
+            <button class="emoji-option" type="button" data-emoji="${emoji}" aria-label="${t("mj.chatComposer.insertEmojiOption", { emoji: emoji })}">${emoji}</button>
+          `)}
+        </div>
         <div class="toolbar-row" part="toolbar">
           <slot name="toolbar-start"></slot>
           <button class="toolbar-btn attach-btn" part="attach-button" type="button"
-                  aria-label="Attach file" title="Attach file">&#128206;</button>
+                  aria-label="${t("mj.chatComposer.attachFile")}" title="${t("mj.chatComposer.attachFile")}">&#128206;</button>
           <button class="toolbar-btn emoji-btn" part="emoji-button" type="button"
-                  aria-label="Insert emoji" title="Insert emoji">&#128512;</button>
+                  aria-label="${t("mj.chatComposer.insertEmoji")}" title="${t("mj.chatComposer.insertEmoji")}"
+                  aria-expanded="false" aria-controls="${this._emojiPanelId}">&#128512;</button>
           <slot name="toolbar-end"></slot>
           <div class="spacer"></div>
           <button class="send-btn" part="send-button" type="button"
-                  aria-label="Send message" aria-disabled="true">
+                  aria-label="${t("mj.chatComposer.sendMessage")}" aria-disabled="true">
             <span class="spinner" aria-hidden="true"></span>
-            <span class="send-label">Send</span>
+            <span class="send-label">${t("mj.chatComposer.send")}</span>
           </button>
         </div>
       </div>
-      <input type="file" aria-hidden="true" tabindex="-1"
-             style="position:absolute;opacity:0;pointer-events:none;width:1px;height:1px;"
-             ${this.getAttribute("accept") !== null ? `accept="${this.getAttribute("accept")}"` : ""}>
+      <input class="file-input" type="file" multiple aria-hidden="true" tabindex="-1">
     `
     return markup
   }
 
   afterRender() {
+    this._root = this.$(".composer-root")
     this._textarea = this.$(".input-textarea")
     this._fileInput = this.$("input[type=file]")
     this._attachmentBar = this.$(".attachment-bar")
@@ -304,69 +419,205 @@ export class MjChatComposer extends MjElement {
     this._counter = this.$(".counter")
     this._attachBtn = this.$(".attach-btn")
     this._emojiBtn = this.$(".emoji-btn")
-    this._replyCancelBtn = this.$(".reply-cancel-btn")
+    this._emojiPanel = this.$(".emoji-panel")
 
     this.listen(this._textarea, "input", this._onTextInput.bind(this))
     this.listen(this._textarea, "keydown", this._onKeydown.bind(this))
+    this.listen(this._textarea, "paste", this._onPaste.bind(this))
     this.listen(this._sendBtn, "click", this._onSend.bind(this))
     this.listen(this._attachBtn, "click", this._onAttachClick.bind(this))
     this.listen(this._fileInput, "change", this._onFilesSelected.bind(this))
-    this.listen(this._replyCancelBtn, "click", this._onReplyCancel.bind(this))
+    this.listen(this.$(".reply-cancel-btn"), "click", this._onReplyCancel.bind(this))
+    this.listen(this._emojiBtn, "click", this._onEmojiClick.bind(this))
+    this.listen(this._emojiPanel, "click", this._onEmojiPanelClick.bind(this))
+    this.listen(this._emojiPanel, "keydown", this._onEmojiPanelKeydown.bind(this))
+    this.listen(this._attachmentBar, "click", this._onAttachmentBarClick.bind(this))
+    this.listen(this._attachmentBar, "keydown", this._onAttachmentBarKeydown.bind(this))
+    this.listen(this._root, "dragover", this._onDragOver.bind(this))
+    this.listen(this._root, "dragleave", this._onDragLeave.bind(this))
+    this.listen(this._root, "drop", this._onDrop.bind(this))
 
-    if (this._emojiBtn !== null) {
-      this.listen(this._emojiBtn, "click", () => {
-        // Emoji picker integration placeholder — inserts a sample emoji
-        // In production this would open an emoji picker popover
-      })
-    }
+    this.onTeardown(() => {
+      this._releasePreviews()
+    })
 
+    /* Rebuild the view from the fields: draft, attachments, reply target. */
+    this._textarea.value = this._draft
+    this._syncAttributes()
+    this._renderAttachments()
+    this._syncReplyPreview()
+    this._syncEmojiPanel()
+    this._syncText()
     return
   }
 
-  _onTextInput() {
-    const maxLength = parseInt(this.getAttribute("max-length") || "0", 10)
-    const text = this._textarea.value
+  onAttributeChanged(name, oldValue, newValue) {
+    if (this._textarea === undefined || this._textarea === null) {
+      return
+    }
+    this._syncAttributes()
+    this._syncText()
+    return
+  }
 
-    if (maxLength > 0 && this._counter !== null) {
-      this._counter.hidden = false
-      this._counter.textContent = `${text.length} / ${maxLength}`
-      this._counter.setAttribute("data-over-limit", text.length > maxLength ? "true" : "false")
+  /* ----- state helpers ----- */
+
+  _maxLength() {
+    const parsed = parseInt(this.getAttribute("max-length") || "0", 10)
+    const maxLength = Number.isFinite(parsed) === true && parsed > 0 ? parsed : 0
+    return maxLength
+  }
+
+  _isBusy() {
+    const busy = this.hasAttribute("disabled") === true || this.hasAttribute("loading") === true
+    return busy
+  }
+
+  _attachmentsAllowed() {
+    const allowed = this.getAttribute("allow-attachments") !== "false"
+    return allowed
+  }
+
+  /* Apply every attribute-derived piece of state to the shadow DOM. */
+  _syncAttributes() {
+    const placeholder = this.getAttribute("placeholder") || t("mj.chatComposer.placeholder")
+    const label = this.getAttribute("label") || t("mj.chatComposer.label")
+    const accept = this.getAttribute("accept")
+    const maxLength = this._maxLength()
+    const disabled = this.hasAttribute("disabled")
+    const loading = this.hasAttribute("loading")
+    const busy = disabled === true || loading === true
+
+    this._root.setAttribute("aria-label", label)
+    this._root.setAttribute("aria-busy", loading === true ? "true" : "false")
+    this._textarea.setAttribute("placeholder", placeholder)
+    this._textarea.setAttribute("aria-label", label)
+
+    if (accept !== null && accept.length > 0) {
+      this._fileInput.setAttribute("accept", accept)
+    } else {
+      this._fileInput.removeAttribute("accept")
     }
 
-    // Auto-grow textarea
+    /* The native limit stops typing and pasting beyond max-length. */
+    if (maxLength > 0) {
+      this._textarea.setAttribute("maxlength", String(maxLength))
+    } else {
+      this._textarea.removeAttribute("maxlength")
+    }
+
+    /*
+     * disabled takes the textarea out of the tab order; loading keeps focus
+     * where it is but makes the text read-only until the send completes.
+     */
+    this._textarea.disabled = disabled
+    this._textarea.readOnly = loading
+    this._attachBtn.disabled = busy
+    this._emojiBtn.disabled = busy
+    this._fileInput.disabled = busy
+    this._sendBtn.setAttribute("aria-label", loading === true ? t("mj.chatComposer.sending") : t("mj.chatComposer.sendMessage"))
+
+    const chipButtons = this._attachmentBar.querySelectorAll(".attachment-remove")
+    for (let i = 0; i < chipButtons.length; i = i + 1) {
+      chipButtons[i].disabled = busy
+    }
+
+    if (busy === true && this._emojiOpen === true) {
+      this._emojiOpen = false
+      this._syncEmojiPanel()
+    }
+    return
+  }
+
+  /* Counter, textarea height and send-button state, from the current text. */
+  _syncText() {
+    if (this._textarea === null) {
+      return
+    }
+
+    const maxLength = this._maxLength()
+    const length = this._textarea.value.length
+
+    this._counter.hidden = maxLength <= 0
+    if (maxLength > 0) {
+      this._counter.textContent = `${length} / ${maxLength}`
+      this._counter.setAttribute("data-over-limit", length > maxLength ? "true" : "false")
+    }
+
+    /* Auto-grow the textarea. */
     this._textarea.style.height = "auto"
     this._textarea.style.height = `${this._textarea.scrollHeight}px`
 
     this._updateSendState()
+    return
+  }
 
+  _canSend() {
+    const maxLength = this._maxLength()
+    const value = this.value
+    const hasContent = value.trim().length > 0 || this._attachments.length > 0
+    const overLimit = maxLength > 0 && value.length > maxLength
+    const sendable = hasContent === true && overLimit === false && this._isBusy() === false
+    return sendable
+  }
+
+  _updateSendState() {
+    if (this._sendBtn === null) {
+      return
+    }
+    this._sendBtn.setAttribute("aria-disabled", this._canSend() === true ? "false" : "true")
+    return
+  }
+
+  /* ----- text ----- */
+
+  _onTextInput() {
+    this._draft = this._textarea.value
+    this._syncText()
     this.emit("mj-input", { value: this.value, mentions: this.mentions })
     return
   }
 
   _onKeydown(event) {
     const sendKey = this.getAttribute("send-key") || "enter"
+    /* The Enter that confirms an IME composition must not send. */
+    const composing = event.isComposing === true || event.keyCode === 229
+    const modifier = event.ctrlKey === true || event.metaKey === true
 
-    if (sendKey === "enter" && event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault()
-      this._onSend()
-    } else if (sendKey === "ctrl+enter" && event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-      event.preventDefault()
-      this._onSend()
-    } else if (event.key === "Escape" && this._replyTo !== null) {
-      this._onReplyCancel()
+    if (event.key === "Enter" && composing === false) {
+      if (sendKey === "enter" && event.shiftKey === false) {
+        event.preventDefault()
+        this._onSend()
+      } else if (sendKey === "ctrl+enter" && modifier === true) {
+        event.preventDefault()
+        this._onSend()
+      }
+    } else if (event.key === "Escape") {
+      if (this._emojiOpen === true) {
+        event.preventDefault()
+        this._emojiOpen = false
+        this._syncEmojiPanel()
+      } else if (this._replyTo !== null) {
+        this._onReplyCancel()
+      }
     }
     return
   }
 
   _onSend() {
-    if (this.hasAttribute("loading") || this.hasAttribute("disabled")) {
+    if (this._isBusy() === true) {
       return
     }
 
     const value = this.value
+    const maxLength = this._maxLength()
     const hasContent = value.trim().length > 0 || this._attachments.length > 0
 
     if (hasContent === false) {
+      return
+    }
+    if (maxLength > 0 && value.length > maxLength) {
+      announce(t("mj.chatComposer.tooLong", { count: maxLength }), "assertive")
       return
     }
 
@@ -385,8 +636,73 @@ export class MjChatComposer extends MjElement {
     return
   }
 
+  /* ----- emoji ----- */
+
+  /*
+   * The emoji button first asks the host: `mj-emoji-request` is cancelable,
+   * and a host that cancels it shows its own picker and calls `insertText()`.
+   * Otherwise the built-in panel of common emoji is toggled.
+   */
+  _onEmojiClick() {
+    if (this._isBusy() === true) {
+      return
+    }
+    if (this._emojiOpen === true) {
+      this._emojiOpen = false
+      this._syncEmojiPanel()
+      return
+    }
+
+    const proceed = this.emit("mj-emoji-request", {}, { cancelable: true })
+    if (proceed !== false) {
+      this._emojiOpen = true
+      this._syncEmojiPanel()
+      this._emojiPanel.querySelector(".emoji-option").focus()
+    }
+    return
+  }
+
+  _syncEmojiPanel() {
+    this._emojiPanel.hidden = this._emojiOpen === false
+    this._emojiBtn.setAttribute("aria-expanded", this._emojiOpen === true ? "true" : "false")
+    return
+  }
+
+  _onEmojiPanelClick(event) {
+    const option = event.target.closest(".emoji-option")
+    if (option === null) {
+      return
+    }
+    this.insertText(option.getAttribute("data-emoji"))
+    this._emojiOpen = false
+    this._syncEmojiPanel()
+    this._textarea.focus()
+    return
+  }
+
+  _onEmojiPanelKeydown(event) {
+    const options = Array.from(this._emojiPanel.querySelectorAll(".emoji-option"))
+    const current = options.indexOf(this.shadowRoot.activeElement)
+
+    if (event.key === "Escape") {
+      event.preventDefault()
+      event.stopPropagation()
+      this._emojiOpen = false
+      this._syncEmojiPanel()
+      this._emojiBtn.focus()
+    } else if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+      event.preventDefault()
+      const step = event.key === "ArrowRight" ? 1 : -1
+      const next = (current + step + options.length) % options.length
+      options[next].focus()
+    }
+    return
+  }
+
+  /* ----- attachments ----- */
+
   _onAttachClick() {
-    if (this.hasAttribute("disabled")) {
+    if (this._isBusy() === true) {
       return
     }
     this._fileInput.click()
@@ -395,24 +711,109 @@ export class MjChatComposer extends MjElement {
 
   _onFilesSelected(event) {
     const rawFiles = Array.from(event.target.files || [])
+    this._fileInput.value = ""
+    this._addFiles(rawFiles)
+    return
+  }
+
+  /* Files pasted into the text (a screenshot, a copied file) become attachments. */
+  _onPaste(event) {
+    const files = event.clipboardData !== null && event.clipboardData !== undefined
+      ? Array.from(event.clipboardData.files || [])
+      : []
+    if (files.length > 0 && this._attachmentsAllowed() === true && this._isBusy() === false) {
+      event.preventDefault()
+      this._addFiles(files)
+    }
+    return
+  }
+
+  _dragHasFiles(event) {
+    const dt = event.dataTransfer
+    const hasFiles = dt !== null && dt !== undefined && dt.types !== undefined &&
+      Array.from(dt.types).indexOf("Files") >= 0
+    return hasFiles
+  }
+
+  _onDragOver(event) {
+    if (this._dragHasFiles(event) === true && this._attachmentsAllowed() === true && this._isBusy() === false) {
+      event.preventDefault()
+      this._root.setAttribute("data-drag-over", "true")
+    }
+    return
+  }
+
+  _onDragLeave() {
+    this._root.removeAttribute("data-drag-over")
+    return
+  }
+
+  _onDrop(event) {
+    this._root.removeAttribute("data-drag-over")
+    if (this._dragHasFiles(event) === true && this._attachmentsAllowed() === true && this._isBusy() === false) {
+      event.preventDefault()
+      this._addFiles(Array.from(event.dataTransfer.files))
+    }
+    return
+  }
+
+  /*
+   * Queue files as attachments. A file that fails the `accept` list or
+   * `max-attachment-size` is not dropped silently: it is reported with
+   * `mj-attachment-reject` and shown as a dismissible error chip.
+   */
+  _addFiles(rawFiles) {
     const maxSize = parseInt(this.getAttribute("max-attachment-size") || "0", 10)
+    const accept = this.getAttribute("accept") || ""
     const newEntries = []
+    const rejected = []
 
     for (let i = 0; i < rawFiles.length; i = i + 1) {
       const file = rawFiles[i]
-      if (maxSize > 0 && file.size > maxSize) {
-        continue
+      let reason = null
+
+      if (fileMatchesAccept(file, accept) === false) {
+        reason = t("mj.chatComposer.typeNotAllowed")
+      } else if (maxSize > 0 && file.size > maxSize) {
+        reason = t("mj.chatComposer.tooLarge", { size: formatSize(maxSize) })
       }
-      newEntries.push({ id: `mj-att-${Date.now()}-${i}`, file: file, status: "queued", progress: 0 })
+
+      if (reason !== null) {
+        rejected.push({ id: nextId("mj-att-rejected"), file: file, reason: reason })
+      } else {
+        newEntries.push({
+          id: nextId("mj-att"), file: file, status: "queued", progress: 0, error: undefined, previewUrl: null
+        })
+      }
     }
 
     this._attachments = this._attachments.concat(newEntries)
-    this._fileInput.value = ""
+    this._rejected = this._rejected.concat(rejected)
     this._renderAttachments()
     this._updateSendState()
 
     if (newEntries.length > 0) {
       this.emit("mj-attachment-add", { files: newEntries })
+    }
+    if (rejected.length > 0) {
+      this.emit("mj-attachment-reject", { rejectedFiles: rejected })
+      announce(t("mj.chatComposer.notAttached", { count: rejected.length }), "assertive")
+    }
+    return
+  }
+
+  /* Object URLs for image thumbnails are released when no longer shown. */
+  _releasePreview(entry) {
+    if (entry.previewUrl !== null && entry.previewUrl !== undefined) {
+      URL.revokeObjectURL(entry.previewUrl)
+      entry.previewUrl = null
+    }
+    return
+  }
+
+  _releasePreviews() {
+    for (let i = 0; i < this._attachments.length; i = i + 1) {
+      this._releasePreview(this._attachments[i])
     }
     return
   }
@@ -422,76 +823,221 @@ export class MjChatComposer extends MjElement {
       return
     }
 
-    if (this._attachments.length === 0) {
-      this._attachmentBar.hidden = true
-      this._attachmentBar.innerHTML = ""
-      return
-    }
-
-    this._attachmentBar.hidden = false
-    this._attachmentBar.innerHTML = ""
+    this._attachmentBar.textContent = ""
+    this._attachmentBar.hidden = this._attachments.length === 0 && this._rejected.length === 0
+    const busy = this._isBusy()
 
     for (let i = 0; i < this._attachments.length; i = i + 1) {
       const att = this._attachments[i]
       const li = document.createElement("li")
       li.className = "attachment-item"
       li.setAttribute("part", "attachment-item")
-      li.innerHTML = `
-        <span class="attachment-name" title="${att.file.name}">${att.file.name}</span>
-        <button class="attachment-remove" part="attachment-remove" type="button"
-                aria-label="Remove attachment ${att.file.name}"
-                data-att-id="${att.id}">&#x2715;</button>
-      `
-      const removeBtn = li.querySelector(".attachment-remove")
-      if (removeBtn !== null) {
-        this.listen(removeBtn, "click", this._onAttachmentRemove.bind(this, att.id, att.file.name))
+      li.setAttribute("data-att-id", att.id)
+
+      if (att.file.type.startsWith("image/") === true) {
+        if (att.previewUrl === null || att.previewUrl === undefined) {
+          att.previewUrl = URL.createObjectURL(att.file)
+        }
+        const thumb = document.createElement("img")
+        thumb.className = "attachment-thumb"
+        thumb.alt = ""
+        thumb.src = att.previewUrl
+        li.appendChild(thumb)
       }
+
+      const nameEl = document.createElement("span")
+      nameEl.className = "attachment-name"
+      nameEl.title = att.file.name
+      nameEl.textContent = att.file.name
+      li.appendChild(nameEl)
+
+      const statusEl = document.createElement("span")
+      statusEl.className = "attachment-status"
+      li.appendChild(statusEl)
+
+      const removeBtn = document.createElement("button")
+      removeBtn.className = "attachment-remove"
+      removeBtn.type = "button"
+      removeBtn.setAttribute("part", "attachment-remove")
+      removeBtn.setAttribute("aria-label", t("mj.chatComposer.removeAttachment", { name: att.file.name }))
+      removeBtn.textContent = "✕"
+      removeBtn.disabled = busy
+      li.appendChild(removeBtn)
+
+      this._attachmentBar.appendChild(li)
+      this._updateAttachmentChip(att)
+    }
+
+    for (let i = 0; i < this._rejected.length; i = i + 1) {
+      const rejection = this._rejected[i]
+      const li = document.createElement("li")
+      li.className = "attachment-item is-error"
+      li.setAttribute("part", "attachment-item")
+      li.setAttribute("data-rejected-id", rejection.id)
+      li.innerHTML = String(html`
+        <span class="attachment-name" title="${rejection.file.name}">${rejection.file.name}</span>
+        <span class="attachment-reason">${rejection.reason}</span>
+        <button class="attachment-remove" part="attachment-remove" type="button"
+                aria-label="${t("mj.chatComposer.dismissRejected", { name: rejection.file.name, reason: rejection.reason })}">&#x2715;</button>
+      `)
       this._attachmentBar.appendChild(li)
     }
     return
   }
 
-  _onAttachmentRemove(attId, filename) {
-    this._attachments = this._attachments.filter((a) => a.id !== attId)
+  /* Reflect one attachment's upload state (progress bar or error) on its chip. */
+  _updateAttachmentChip(att) {
+    const chips = this._attachmentBar.querySelectorAll("[data-att-id]")
+    let chip = null
+    for (let i = 0; i < chips.length; i = i + 1) {
+      if (chips[i].getAttribute("data-att-id") === att.id) {
+        chip = chips[i]
+      }
+    }
+    if (chip === null) {
+      return
+    }
+
+    const statusEl = chip.querySelector(".attachment-status")
+    chip.classList.toggle("is-error", att.status === "error")
+
+    if (att.status === "uploading") {
+      const progress = Math.max(0, Math.min(100, Math.round(Number(att.progress) || 0)))
+      let progressEl = statusEl.querySelector(".attachment-progress")
+      if (progressEl === null) {
+        statusEl.textContent = ""
+        progressEl = document.createElement("span")
+        progressEl.className = "attachment-progress"
+        progressEl.setAttribute("role", "progressbar")
+        progressEl.setAttribute("aria-valuemin", "0")
+        progressEl.setAttribute("aria-valuemax", "100")
+        progressEl.setAttribute("aria-label", t("mj.chatComposer.uploading", { name: att.file.name }))
+        const barEl = document.createElement("span")
+        barEl.className = "attachment-progress-bar"
+        barEl.style.display = "block"
+        progressEl.appendChild(barEl)
+        statusEl.appendChild(progressEl)
+      }
+      progressEl.setAttribute("aria-valuenow", String(progress))
+      progressEl.querySelector(".attachment-progress-bar").style.width = `${progress}%`
+    } else if (att.status === "error") {
+      statusEl.textContent = ""
+      const reasonEl = document.createElement("span")
+      reasonEl.className = "attachment-reason"
+      reasonEl.textContent = att.error || t("mj.chatComposer.uploadError")
+      statusEl.appendChild(reasonEl)
+    } else {
+      statusEl.textContent = ""
+    }
+    return
+  }
+
+  /* Remove the chip a remove button belongs to and keep focus in the bar. */
+  _removeChip(button) {
+    const chip = button.closest(".attachment-item")
+    const buttons = Array.from(this._attachmentBar.querySelectorAll(".attachment-remove"))
+    const position = buttons.indexOf(button)
+    const attId = chip.getAttribute("data-att-id")
+
+    if (attId !== null) {
+      const removed = this._attachments.filter((att) => att.id === attId)
+      for (let i = 0; i < removed.length; i = i + 1) {
+        this._releasePreview(removed[i])
+      }
+      this._attachments = this._attachments.filter((att) => att.id !== attId)
+    } else {
+      const rejectedId = chip.getAttribute("data-rejected-id")
+      this._rejected = this._rejected.filter((rejection) => rejection.id !== rejectedId)
+    }
+
     this._renderAttachments()
     this._updateSendState()
-    this.emit("mj-attachment-remove", { fileId: attId })
+
+    /* Focus the chip that took the removed one's place, else the text. */
+    const remaining = this._attachmentBar.querySelectorAll(".attachment-remove")
+    if (remaining.length > 0) {
+      remaining[Math.min(position, remaining.length - 1)].focus()
+    } else {
+      this._textarea.focus()
+    }
+
+    if (attId !== null) {
+      this.emit("mj-attachment-remove", { fileId: attId })
+    }
+    return
+  }
+
+  _onAttachmentBarClick(event) {
+    const button = event.target.closest(".attachment-remove")
+    if (button !== null && this._isBusy() === false) {
+      this._removeChip(button)
+    }
+    return
+  }
+
+  _onAttachmentBarKeydown(event) {
+    if (event.key !== "Delete" && event.key !== "Backspace") {
+      return
+    }
+    const button = event.target.closest(".attachment-remove")
+    if (button !== null && this._isBusy() === false) {
+      event.preventDefault()
+      this._removeChip(button)
+    }
+    return
+  }
+
+  /* ----- reply ----- */
+
+  _syncReplyPreview() {
+    if (this._replyPreview === null) {
+      return
+    }
+    const replyTo = this._replyTo
+    if (replyTo !== null) {
+      const preview = replyTo.preview !== undefined && replyTo.preview !== null ? String(replyTo.preview) : ""
+      this._replyPreview.hidden = false
+      this._replyPreviewText.textContent = t("mj.chatComposer.replyingTo", { preview: preview })
+      this._replyPreview.setAttribute("aria-label", t("mj.chatComposer.replyingTo", { preview: preview.length > 0 ? preview : t("mj.chatComposer.replyTargetFallback") }))
+    } else {
+      this._replyPreview.hidden = true
+    }
     return
   }
 
   _onReplyCancel() {
+    const cancelHadFocus = this.shadowRoot.activeElement !== null &&
+      this._replyPreview.contains(this.shadowRoot.activeElement) === true
     this._replyTo = null
-    if (this._replyPreview !== null) {
-      this._replyPreview.hidden = true
+    this._syncReplyPreview()
+    if (cancelHadFocus === true) {
+      this._textarea.focus()
     }
     this.emit("mj-reply-cancel", {})
     return
   }
 
-  _updateSendState() {
-    if (this._sendBtn === null) {
-      return
-    }
-    const hasContent = this.value.trim().length > 0 || this._attachments.length > 0
-    this._sendBtn.setAttribute("aria-disabled", hasContent ? "false" : "true")
-    return
-  }
+  /* ----- public API ----- */
 
   get value() {
-    return this._textarea !== null ? this._textarea.value : ""
+    const text = this._textarea !== null ? this._textarea.value : this._draft
+    return text
   }
 
   set value(text) {
+    this._draft = text !== null && text !== undefined ? String(text) : ""
     if (this._textarea !== null) {
-      this._textarea.value = text || ""
-      this._updateSendState()
+      this._textarea.value = this._draft
+      this._syncText()
     }
     return
   }
 
+  /*
+   * Mention tokens are not produced yet: the composer edits plain text.
+   * The property is kept so `mj-send` / `mj-input` payloads have a stable shape.
+   */
   get mentions() {
-    // When using raw textarea there are no structured tokens
-    // This would integrate with MjMentionInput in production
     return []
   }
 
@@ -504,19 +1050,8 @@ export class MjChatComposer extends MjElement {
   }
 
   set replyTo(value) {
-    this._replyTo = value
-    if (this._replyPreview !== null) {
-      if (value !== null && value !== undefined) {
-        this._replyPreview.hidden = false
-        if (this._replyPreviewText !== null) {
-          const preview = value.preview || ""
-          this._replyPreviewText.textContent = `Replying to: ${preview}`
-        }
-        this._replyPreview.setAttribute("aria-label", `Replying to: ${value.preview || "message"}`)
-      } else {
-        this._replyPreview.hidden = true
-      }
-    }
+    this._replyTo = value !== undefined ? value : null
+    this._syncReplyPreview()
     return
   }
 
@@ -529,25 +1064,90 @@ export class MjChatComposer extends MjElement {
     return
   }
 
-  clear() {
-    if (this._textarea !== null) {
-      this._textarea.value = ""
-      this._textarea.style.height = "auto"
+  /*
+   * Insert text (an emoji, a canned reply) at the caret, replacing the
+   * selection. Text beyond `max-length` is cut off. Emits `mj-input`.
+   */
+  insertText(text) {
+    const insertion = text !== null && text !== undefined ? String(text) : ""
+    if (insertion.length === 0) {
+      return
     }
-    this._attachments = []
-    this._renderAttachments()
-    this._replyTo = null
-    if (this._replyPreview !== null) {
-      this._replyPreview.hidden = true
+
+    if (this._textarea === null) {
+      this._draft = this._draft + insertion
+      return
     }
-    this._updateSendState()
+
+    const start = this._textarea.selectionStart
+    const end = this._textarea.selectionEnd
+    const maxLength = this._maxLength()
+    let allowed = insertion
+    if (maxLength > 0) {
+      const room = Math.max(0, maxLength - (this._textarea.value.length - (end - start)))
+      allowed = Array.from(insertion).slice(0, room).join("")
+      if (allowed.length > room) {
+        allowed = ""
+      }
+    }
+
+    if (allowed.length > 0) {
+      this._textarea.setRangeText(allowed, start, end, "end")
+      this._draft = this._textarea.value
+      this._syncText()
+      this.emit("mj-input", { value: this.value, mentions: this.mentions })
+    }
     return
   }
 
-  onAttributeChanged(name, oldValue, newValue) {
-    if (name === "loading" && this._sendBtn !== null) {
-      const loading = newValue !== null
-      this._sendBtn.setAttribute("aria-label", loading ? "Sending…" : "Send message")
+  /* Report an attachment's upload state: { status, progress, error }. */
+  updateAttachment(attachmentId, updates) {
+    let entry = null
+    for (let i = 0; i < this._attachments.length; i = i + 1) {
+      if (this._attachments[i].id === attachmentId) {
+        entry = this._attachments[i]
+      }
+    }
+
+    if (entry !== null && updates !== null && updates !== undefined) {
+      if (updates.status !== undefined) {
+        entry.status = updates.status
+      }
+      if (updates.progress !== undefined) {
+        entry.progress = updates.progress
+      }
+      if (updates.error !== undefined) {
+        entry.error = updates.error
+      }
+      if (this._attachmentBar !== null) {
+        this._updateAttachmentChip(entry)
+      }
+    }
+    return
+  }
+
+  clear() {
+    this._draft = ""
+    this._releasePreviews()
+    this._attachments = []
+    this._rejected = []
+    this._replyTo = null
+    this._emojiOpen = false
+
+    if (this._textarea !== null) {
+      this._textarea.value = ""
+      this._renderAttachments()
+      this._syncReplyPreview()
+      this._syncEmojiPanel()
+      this._syncText()
+    }
+    return
+  }
+
+  /* The text field is the composer's focus target. */
+  focus(options) {
+    if (this._textarea !== null) {
+      this._textarea.focus(options)
     }
     return
   }

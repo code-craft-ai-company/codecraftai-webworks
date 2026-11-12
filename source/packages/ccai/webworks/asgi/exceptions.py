@@ -230,3 +230,34 @@ class BadRequestBody(ASGIError):
         """
         return self._detail
 
+
+
+class RequestTimeout(ASGIError, TimeoutError):
+    """
+        The handler did not produce a response within the request timeout.
+        
+        Raised by the HTTP handler when the timeout it enforces runs out. It is
+        a TimeoutError, so code that expects one keeps working, but it is a
+        type of its own so that a TimeoutError raised inside a handler, by the
+        code of the application, is not mistaken for it.
+    """
+    
+    def __init__(self, timeout: float):
+        """
+            Construct a RequestTimeout exception.
+            
+            :param timeout: The timeout in seconds that ran out.
+        """
+        self._timeout = timeout
+        message = f"Request processing timed out after {timeout} seconds"
+        super().__init__(message)
+        return
+    
+    @property
+    def timeout(self) -> float:
+        """
+            Get the timeout that ran out.
+            
+            :returns: Timeout in seconds.
+        """
+        return self._timeout

@@ -44,6 +44,19 @@ them out of the store they are removed, so a subsequent render does not
 duplicate them. Subclasses that want a "peek without clear" pass
 through the store's :meth:`peek_all` method.
 
+Bounds
+------
+
+The in-memory store is bounded so that messages nobody ever reads -- an
+abandoned login, a client that drops the redirect, session ids rotated by
+an attacker -- cannot grow the process without limit. A message expires
+after :data:`DEFAULT_FLASH_TTL_SECONDS`; a session keeps at most
+:data:`DEFAULT_MAX_MESSAGES_PER_SESSION` messages and the store at most
+:data:`DEFAULT_MAX_SESSIONS` sessions, the oldest being dropped to make
+room; and a message longer than :data:`DEFAULT_MAX_MESSAGE_LENGTH`
+characters is cut short. Every limit can be changed when the store is
+constructed.
+
 Concurrency
 -----------
 
@@ -59,12 +72,33 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 
+import collections
 import threading
+import time
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 
 DEFAULT_FLASH_CATEGORY = "info"
+
+# Limits applied by :class:`InMemoryFlashStore` unless overridden.
+
+#: Seconds a message stays in the store when it is not read.
+DEFAULT_FLASH_TTL_SECONDS = 3600.0
+
+#: Messages kept for one session; the oldest is dropped to admit a new one.
+DEFAULT_MAX_MESSAGES_PER_SESSION = 32
+
+#: Sessions kept in the store; the one idle longest is dropped to admit a
+#: new one.
+DEFAULT_MAX_SESSIONS = 10000
+
+#: Characters kept of a message, and of a category.
+DEFAULT_MAX_MESSAGE_LENGTH = 2000
+DEFAULT_MAX_CATEGORY_LENGTH = 64
+
+# Appended to a message that was cut to the length limit.
+TRUNCATION_MARK = "..."
 
 # A single flash message is represented as a (category, message) tuple.
 # The list returned to templates preserves insertion order so the UI can
@@ -150,13 +184,75 @@ class InMemoryFlashStore(FlashStore):
         threads adding messages for the same session do not interleave
         list mutations. The lock does *not* protect against multi-process
         races; that's the deployment's responsibility.
+
+        The store is bounded. Messages leave it when their session reads
+        them, and also when they expire, when their session holds more than
+        its share, or when the store holds too many sessions -- so a session
+        that never renders again cannot hold memory forever.
+
+        :param ttl_seconds: Seconds an unread message is kept. ``None``
+                            disables expiry.
+        :param max_messages_per_session: Messages kept for one session.
+                                         Adding one more drops the oldest.
+        :param max_sessions: Sessions kept. Adding a message for one more
+                             drops the session that has gone longest
+                             without a new message.
+        :param max_message_length: Characters kept of a message; a longer
+                                   one is cut and marked with ``...``.
+        :param max_category_length: Characters kept of a category.
+        :param time_source: Callable returning the current time in seconds,
+                            as :func:`time.monotonic` does. For tests.
+
+        :raises FlashError: When a limit is not a positive number.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        ttl_seconds: Optional[float] = DEFAULT_FLASH_TTL_SECONDS,
+        max_messages_per_session: int = DEFAULT_MAX_MESSAGES_PER_SESSION,
+        max_sessions: int = DEFAULT_MAX_SESSIONS,
+        max_message_length: int = DEFAULT_MAX_MESSAGE_LENGTH,
+        max_category_length: int = DEFAULT_MAX_CATEGORY_LENGTH,
+        time_source: Optional[Callable[[], float]] = None
+    ) -> None:
         """
             Construct an empty in-memory store.
+
+            :param ttl_seconds: Seconds an unread message is kept, or
+                                ``None`` for no expiry.
+            :param max_messages_per_session: Messages kept for one session.
+            :param max_sessions: Sessions kept.
+            :param max_message_length: Characters kept of a message.
+            :param max_category_length: Characters kept of a category.
+            :param time_source: Callable returning the current time in
+                                seconds. Defaults to :func:`time.monotonic`.
+
+            :raises FlashError: When a limit is not a positive number.
         """
-        self._messages: Dict[str, List[FlashMessage]] = {}
+        if ttl_seconds is not None and ttl_seconds <= 0:
+            raise FlashError("ttl_seconds must be greater than zero, or None")
+
+        limits = {
+            "max_messages_per_session": max_messages_per_session,
+            "max_sessions": max_sessions,
+            "max_message_length": max_message_length,
+            "max_category_length": max_category_length,
+        }
+        for limit_name, limit_value in limits.items():
+            if not isinstance(limit_value, int) or isinstance(limit_value, bool) or limit_value < 1:
+                raise FlashError("{} must be an integer of at least 1".format(limit_name))
+
+        self._ttl_seconds = ttl_seconds
+        self._max_messages_per_session = max_messages_per_session
+        self._max_sessions = max_sessions
+        self._max_message_length = max_message_length
+        self._max_category_length = max_category_length
+        self._time_source: Callable[[], float] = time_source if time_source is not None else time.monotonic
+
+        # Session id -> [(added_at, category, message), ...], oldest first.
+        # The mapping is kept in order of each session's latest addition,
+        # so the first entry is always the session idle longest.
+        self._messages: "collections.OrderedDict[str, List[Tuple[float, str, str]]]" = collections.OrderedDict()
         self._lock = threading.RLock()
         return
 
@@ -164,14 +260,38 @@ class InMemoryFlashStore(FlashStore):
         """
             Append a message for the given session.
 
+            The message and category are cut to the store's length limits,
+            expired messages are discarded, and the oldest message of the
+            session -- or the session idle longest -- is dropped when a
+            limit would otherwise be exceeded.
+
             :param session_id: Identifier of the target session.
             :param category: Category string.
             :param message: Plain-text message body.
         """
+        stored_category = self._truncate(category, self._max_category_length, mark="")
+        stored_message = self._truncate(message, self._max_message_length, mark=TRUNCATION_MARK)
+
         with self._lock:
-            if session_id not in self._messages:
-                self._messages[session_id] = []
-            self._messages[session_id].append((category, message))
+            now = self._time_source()
+            self._discard_expired(now)
+
+            pending = self._messages.get(session_id)
+            if pending is None:
+                # Make room for the new session by dropping the ones that
+                # have gone longest without a message.
+                while len(self._messages) >= self._max_sessions:
+                    self._messages.popitem(last=False)
+                pending = []
+                self._messages[session_id] = pending
+            else:
+                self._messages.move_to_end(session_id)
+
+            pending.append((now, stored_category, stored_message))
+
+            while len(pending) > self._max_messages_per_session:
+                pending.pop(0)
+
         return
 
     def consume_all(self, session_id: str) -> List[FlashMessage]:
@@ -181,16 +301,18 @@ class InMemoryFlashStore(FlashStore):
             :param session_id: Identifier of the target session.
 
             :returns: List of ``(category, message)`` tuples in insertion
-                      order.
+                      order. Expired messages are not returned.
         """
         with self._lock:
+            now = self._time_source()
             pending = self._messages.pop(session_id, None)
+            self._discard_expired(now)
 
         if pending is None:
             return []
 
         # Return a fresh list so callers cannot mutate internal state.
-        rtnval = list(pending)
+        rtnval = self._live_messages(pending, now)
         return rtnval
 
     def peek_all(self, session_id: str) -> List[FlashMessage]:
@@ -201,13 +323,102 @@ class InMemoryFlashStore(FlashStore):
             :param session_id: Identifier of the target session.
 
             :returns: List of ``(category, message)`` tuples in insertion
-                      order.
+                      order. Expired messages are not returned.
         """
         with self._lock:
+            now = self._time_source()
             pending = self._messages.get(session_id)
             if pending is None:
                 return []
-            rtnval = list(pending)
+            rtnval = self._live_messages(pending, now)
+        return rtnval
+
+    def session_count(self) -> int:
+        """
+            The number of sessions that currently hold messages.
+
+            :returns: The session count.
+        """
+        with self._lock:
+            rtnval = len(self._messages)
+        return rtnval
+
+    def _is_expired(self, added_at: float, now: float) -> bool:
+        """
+            Whether a message added at ``added_at`` has outlived the TTL.
+
+            :param added_at: When the message was added.
+            :param now: The current time from the store's time source.
+
+            :returns: True when the message has expired.
+        """
+        if self._ttl_seconds is None:
+            return False
+
+        rtnval = (now - added_at) >= self._ttl_seconds
+        return rtnval
+
+    def _live_messages(self, pending: List[Tuple[float, str, str]], now: float) -> List[FlashMessage]:
+        """
+            The messages of a session that have not expired.
+
+            :param pending: The stored entries of one session.
+            :param now: The current time from the store's time source.
+
+            :returns: List of ``(category, message)`` tuples, oldest first.
+        """
+        rtnval: List[FlashMessage] = []
+        for added_at, category, message in pending:
+            if self._is_expired(added_at, now):
+                continue
+            rtnval.append((category, message))
+        return rtnval
+
+    def _discard_expired(self, now: float) -> None:
+        """
+            Remove the sessions whose every message has expired. The caller
+            holds the lock.
+
+            Sessions are ordered by their latest addition, so the scan stops
+            at the first session that still has a live message: every
+            session after it received a message more recently.
+
+            :param now: The current time from the store's time source.
+        """
+        if self._ttl_seconds is None:
+            return
+
+        while len(self._messages) > 0:
+            oldest_session_id = next(iter(self._messages))
+            pending = self._messages[oldest_session_id]
+            latest_added_at = pending[-1][0] if len(pending) > 0 else None
+            if latest_added_at is not None and not self._is_expired(latest_added_at, now):
+                break
+            del self._messages[oldest_session_id]
+
+        return
+
+    @staticmethod
+    def _truncate(text: str, limit: int, mark: str) -> str:
+        """
+            Cut text to a length limit.
+
+            :param text: The text to bound.
+            :param limit: The most characters to keep, mark included.
+            :param mark: Text appended to show that a cut was made.
+
+            :returns: ``text`` when it fits, otherwise its beginning followed
+                      by ``mark``, ``limit`` characters in all.
+        """
+        if len(text) <= limit:
+            return text
+
+        keep = limit - len(mark)
+        if keep < 0:
+            keep = limit
+            mark = ""
+
+        rtnval = text[:keep] + mark
         return rtnval
 
 
@@ -350,6 +561,138 @@ class FlashManager:
         return rtnval
 
 
+class LazyFlashMessages(list):
+    """
+        The pending flash messages of one session, read from the store only
+        when something actually looks at them.
+
+        The flash context processor runs for every render that knows the
+        session, including ones that never show a message -- an error page,
+        an HTML fragment, an email. Reading the store there and then drained
+        the queue, and the page meant to show the message found it empty.
+        This object is what the processor injects instead. It is the list of
+        ``(category, message)`` tuples, filled in late: iterating it,
+        indexing it, taking its length or its truth value, or comparing it
+        to a list reads the messages, once, and keeps them for the rest of
+        the render. A render that never touches it leaves the store alone.
+
+        It is a ``list`` so that code which expects one -- a template that
+        writes ``flash_messages.0``, say -- keeps working. It is also
+        callable, returning a plain list, so a template engine that calls
+        what it finds in the context hands the template an ordinary list.
+
+        :param manager: Manager whose store the messages are read from.
+        :param session_id: Identifier of the session being rendered.
+        :param consume: When ``True`` the messages are removed from the
+                        store as they are read; when ``False`` they are only
+                        peeked at.
+    """
+
+    def __init__(self, manager: "FlashManager", session_id: str, consume: bool = True) -> None:
+        """
+            Construct the lazy list. Nothing is read from the store yet.
+
+            :param manager: Manager whose store the messages are read from.
+            :param session_id: Identifier of the session being rendered.
+            :param consume: Remove the messages from the store when read.
+        """
+        super().__init__()
+        self._manager = manager
+        self._session_id = session_id
+        self._consume = consume
+        self._loaded = False
+        self._lock = threading.Lock()
+        return
+
+    @property
+    def loaded(self) -> bool:
+        """
+            Whether the messages have been read from the store.
+
+            :returns: True once anything has looked at the messages.
+        """
+        return self._loaded
+
+    def _load(self) -> None:
+        """
+            Read the messages from the store, the first time only.
+        """
+        with self._lock:
+            if not self._loaded:
+                if self._consume:
+                    messages = self._manager.consume_all(self._session_id)
+                else:
+                    messages = self._manager.peek_all(self._session_id)
+                super().extend(messages)
+                self._loaded = True
+        return
+
+    def get_messages(self) -> List[FlashMessage]:
+        """
+            The pending messages as a plain list, read from the store on
+            the first use and remembered afterwards.
+
+            :returns: List of ``(category, message)`` tuples in insertion
+                      order.
+        """
+        self._load()
+        rtnval = super().copy()
+        return rtnval
+
+    def __call__(self) -> List[FlashMessage]:
+        return self.get_messages()
+
+    def __getitem__(self, index: Any) -> Any:
+        self._load()
+        return super().__getitem__(index)
+
+    def __len__(self) -> int:
+        self._load()
+        return super().__len__()
+
+    def __iter__(self) -> Iterator[FlashMessage]:
+        self._load()
+        return super().__iter__()
+
+    def __reversed__(self) -> Iterator[FlashMessage]:
+        self._load()
+        return super().__reversed__()
+
+    def __contains__(self, item: object) -> bool:
+        self._load()
+        return super().__contains__(item)
+
+    def __eq__(self, other: object) -> bool:
+        self._load()
+        if isinstance(other, LazyFlashMessages):
+            other._load()
+        return super().__eq__(other)
+
+    def __ne__(self, other: object) -> bool:
+        self._load()
+        if isinstance(other, LazyFlashMessages):
+            other._load()
+        return super().__ne__(other)
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __repr__(self) -> str:
+        if not self._loaded:
+            return "LazyFlashMessages(<not read>)"
+        return "LazyFlashMessages({})".format(super().__repr__())
+
+    def copy(self) -> List[FlashMessage]:
+        return self.get_messages()
+
+    def count(self, value: Any) -> int:
+        self._load()
+        return super().count(value)
+
+    def index(self, value: Any, *args: Any) -> int:
+        self._load()
+        return super().index(value, *args)
+
+
 def make_flash_context_processor(
     manager: FlashManager,
     session_id_key: str = "session_id",
@@ -362,20 +705,23 @@ def make_flash_context_processor(
 
         The returned callable expects the rendering context to include
         the session identifier under ``session_id_key``. When the key
-        is present and non-empty, the processor reads pending messages
-        for that session and returns them under ``messages_key`` as a
-        list of ``(category, message)`` tuples. When ``consume`` is
-        ``True`` (the default) the messages are removed from the store
-        after reading so a subsequent render does not duplicate them.
+        is present and non-empty, the processor returns, under
+        ``messages_key``, a :class:`LazyFlashMessages` for that session:
+        a sequence of ``(category, message)`` tuples that reads the store
+        only when the template uses it. A render that never shows the
+        messages therefore leaves them for the page that does. When
+        ``consume`` is ``True`` (the default) the messages are removed from
+        the store as they are read, so a subsequent render does not
+        duplicate them.
 
         :param manager: Manager whose store the processor reads from.
         :param session_id_key: Key under which the caller stores the
                                session identifier in the rendering
                                context.
         :param messages_key: Key under which the processor exposes the
-                             list of pending messages.
-        :param consume: When ``True``, drain the store as part of
-                        rendering. When ``False``, peek without removing
+                             pending messages.
+        :param consume: When ``True``, drain the store when the messages
+                        are read. When ``False``, peek without removing
                         — useful for admin tools or test introspection.
 
         :returns: A callable suitable for registration with
@@ -394,10 +740,7 @@ def make_flash_context_processor(
         if len(session_id) == 0:
             return {}
 
-        if consume:
-            messages = manager.consume_all(session_id)
-        else:
-            messages = manager.peek_all(session_id)
+        messages = LazyFlashMessages(manager, session_id, consume=consume)
 
         return {messages_key: messages}
 

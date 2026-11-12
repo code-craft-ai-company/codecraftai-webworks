@@ -38,6 +38,7 @@ import json
 import time
 
 from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qsl, urlsplit
 
 from ccai.webworks.authentication.blueprints.oauthclient import (
     DEFAULT_STATE_COOKIE_NAME,
@@ -406,7 +407,13 @@ def test_kickoff_success_redirects_with_signed_cookie():
     # Replace OAuthClient construction with the stub.
     blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
-    request = MockRequest(query_params={"provider": "google", "register": "1"})
+    # A registration kickoff carries the ticket POST /register issues
+    # once the captcha has been verified.
+    request = MockRequest(query_params={
+        "provider": "google",
+        "register": "1",
+        "ticket": blueprint._issue_registration_ticket("google"),
+    })
 
     response = blueprint.kickoff(request)
 
@@ -540,7 +547,13 @@ def test_kickoff_invokes_provider_extras_resolver():
 
     blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
 
-    request = MockRequest(query_params={"provider": "google", "register": "1"})
+    # A registration kickoff carries the ticket POST /register issues
+    # once the captcha has been verified.
+    request = MockRequest(query_params={
+        "provider": "google",
+        "register": "1",
+        "ticket": blueprint._issue_registration_ticket("google"),
+    })
 
     blueprint.kickoff(request)
 
@@ -669,10 +682,10 @@ def test_register_success_returns_kickoff_url():
     return
 
 
-def test_register_no_verifier_skips_captcha_check():
+def test_register_without_verifier_is_refused():
     blueprint = _make_oauth_blueprint(
         provider_resolver=_provider_resolver,
-        captcha_verifier=None,  # dev mode
+        captcha_verifier=None,
     )
 
     request = MockRequest(
@@ -681,8 +694,224 @@ def test_register_no_verifier_skips_captcha_check():
 
     response = blueprint.register_intent(request)
 
-    if response.status_code != 200:
-        errmsg = "Expected 200, got {}".format(response.status_code)
+    # Without a verifier any non-empty string would pass, so the
+    # endpoint refuses rather than pretend the captcha was checked.
+    if response.status_code != 500:
+        errmsg = "Expected 500, got {}".format(response.status_code)
+        raise AssertionError(errmsg)
+
+    body = json.loads(response.body)
+    if body.get("error") != "captcha_not_configured":
+        errmsg = "Expected captcha_not_configured, got {!r}".format(body)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def _kickoff_location(blueprint, query_params):
+    """
+        Run a kickoff against a stub provider client and return the
+        Location the browser is redirected to.
+    """
+    stub_client = StubOAuthClient()
+    blueprint._resolve_oauth_client = classmethod(lambda cls, provider: stub_client).__get__(None, blueprint)
+
+    response = blueprint.kickoff(MockRequest(query_params=query_params))
+    return response.headers["Location"], stub_client
+
+
+def test_kickoff_register_without_ticket_is_refused():
+    blueprint = _make_oauth_blueprint(
+        provider_resolver=_provider_resolver,
+        provider_name_lister=_provider_name_lister,
+    )
+
+    location, stub_client = _kickoff_location(
+        blueprint, {"provider": "google", "register": "1"}
+    )
+
+    if "error=registration_ticket_invalid" not in location:
+        errmsg = "Expected registration_ticket_invalid, got {!r}".format(location)
+        raise AssertionError(errmsg)
+
+    if len(stub_client.calls["build"]) != 0:
+        errmsg = "Expected no authorization URL to be built without a ticket"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_kickoff_register_rejects_ticket_for_other_provider():
+    blueprint = _make_oauth_blueprint(
+        provider_resolver=_provider_resolver,
+        provider_name_lister=_provider_name_lister,
+    )
+
+    location, _ = _kickoff_location(blueprint, {
+        "provider": "google",
+        "register": "1",
+        "ticket": blueprint._issue_registration_ticket("github"),
+    })
+
+    if "error=registration_ticket_invalid" not in location:
+        errmsg = "Expected registration_ticket_invalid, got {!r}".format(location)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_kickoff_register_rejects_forged_ticket():
+    blueprint = _make_oauth_blueprint(
+        provider_resolver=_provider_resolver,
+        provider_name_lister=_provider_name_lister,
+    )
+
+    location, _ = _kickoff_location(blueprint, {
+        "provider": "google",
+        "register": "1",
+        "ticket": "not-a-signed-ticket",
+    })
+
+    if "error=registration_ticket_invalid" not in location:
+        errmsg = "Expected registration_ticket_invalid, got {!r}".format(location)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_register_redirect_url_carries_ticket_accepted_by_kickoff():
+    blueprint = _make_oauth_blueprint(
+        provider_resolver=_provider_resolver,
+        provider_name_lister=_provider_name_lister,
+        captcha_verifier=lambda token: True,
+    )
+
+    register_response = blueprint.register_intent(MockRequest(
+        json_body={"provider": "google", "captcha_response": "valid-token"},
+    ))
+    redirect_url = json.loads(register_response.body)["redirect_url"]
+
+    query = dict(parse_qsl(urlsplit(redirect_url).query))
+
+    location, _ = _kickoff_location(blueprint, query)
+
+    if location != "https://provider.example.com/o/authorize?ok=1":
+        errmsg = "Expected the provider authorization URL, got {!r}".format(location)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_kickoff_login_needs_no_ticket():
+    blueprint = _make_oauth_blueprint(
+        provider_resolver=_provider_resolver,
+        provider_name_lister=_provider_name_lister,
+    )
+
+    location, _ = _kickoff_location(blueprint, {"provider": "google"})
+
+    if location != "https://provider.example.com/o/authorize?ok=1":
+        errmsg = "Expected the provider authorization URL, got {!r}".format(location)
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Callback URL origin
+# =============================================================================
+
+
+class HostHeaderRequest:
+    """
+        Request stand-in shaped like one built from an ASGI scope: ``host``
+        is the address the server is bound to and the ``Host`` header is
+        what the browser used.
+    """
+
+    def __init__(self, headers: Dict[str, str], scheme: str = "http"):
+        self.headers = headers
+        self.scheme = scheme
+        self.host = "127.0.0.1"
+        self.port = 8000
+
+
+def test_callback_url_uses_host_header_with_port():
+    blueprint = _make_oauth_blueprint(provider_resolver=_provider_resolver)
+
+    request = HostHeaderRequest({"Host": "app.example.com:8443"}, scheme="https")
+    callback_url = blueprint._build_callback_url(request=request, provider_name="google")
+
+    expected = "https://app.example.com:8443/auth/oauth/callback?provider=google"
+    if callback_url != expected:
+        errmsg = "Expected {!r}, got {!r}".format(expected, callback_url)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_callback_url_prefers_configured_public_base_url():
+    blueprint = _make_oauth_blueprint(provider_resolver=_provider_resolver)
+    blueprint.public_base_url = "https://www.example.com/"
+
+    request = HostHeaderRequest({"Host": "10.0.0.5:8000"})
+    callback_url = blueprint._build_callback_url(request=request, provider_name="google")
+
+    expected = "https://www.example.com/auth/oauth/callback?provider=google"
+    if callback_url != expected:
+        errmsg = "Expected {!r}, got {!r}".format(expected, callback_url)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_callback_url_ignores_forwarded_headers_unless_trusted():
+    blueprint = _make_oauth_blueprint(provider_resolver=_provider_resolver)
+
+    request = HostHeaderRequest({
+        "Host": "app.internal:8000",
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "evil.example.net",
+    })
+    callback_url = blueprint._build_callback_url(request=request, provider_name="google")
+
+    expected = "http://app.internal:8000/auth/oauth/callback?provider=google"
+    if callback_url != expected:
+        errmsg = "Expected {!r}, got {!r}".format(expected, callback_url)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_callback_url_uses_forwarded_headers_when_trusted():
+    blueprint = _make_oauth_blueprint(provider_resolver=_provider_resolver)
+    blueprint.trust_forwarded_headers = True
+
+    request = HostHeaderRequest({
+        "Host": "app.internal:8000",
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "www.example.com",
+    })
+    callback_url = blueprint._build_callback_url(request=request, provider_name="google")
+
+    expected = "https://www.example.com/auth/oauth/callback?provider=google"
+    if callback_url != expected:
+        errmsg = "Expected {!r}, got {!r}".format(expected, callback_url)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_callback_url_rejects_malformed_host_header():
+    blueprint = _make_oauth_blueprint(provider_resolver=_provider_resolver)
+
+    request = HostHeaderRequest({"Host": "evil.example.net/path?x="}, scheme="http")
+    callback_url = blueprint._build_callback_url(request=request, provider_name="google")
+
+    # Falls back to the address and port the server reports
+    expected = "http://127.0.0.1:8000/auth/oauth/callback?provider=google"
+    if callback_url != expected:
+        errmsg = "Expected {!r}, got {!r}".format(expected, callback_url)
         raise AssertionError(errmsg)
 
     return

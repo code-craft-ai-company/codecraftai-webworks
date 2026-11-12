@@ -161,9 +161,18 @@ two states.
 
 ## 14. Form participation
 
-N/A. `<mj-toggle-button>` is an action button, not a form input. Its `pressed`
-state is not submitted in form data. Use a checkbox for form-associated boolean
-input.
+`<mj-toggle-button>` is form-associated (ElementInternals) so a form such as
+`<mj-form>` validates, submits and resets it like any other control:
+
+- With a `name`, it submits its `value` (attribute and property, default `"on"`)
+  while pressed and contributes nothing while not pressed -- checkbox semantics.
+- `required` makes an unpressed button invalid (`valueMissing`).
+- Form reset restores the pressed state the button had when it was first
+  connected; form state restore presses it when a value was saved.
+- A disabled `<fieldset>` or form disables it (`formDisabledCallback`).
+
+It is still an action button; prefer a checkbox when the state is primarily a
+form input value.
 
 ## 15. Internationalization & RTL
 

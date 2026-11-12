@@ -3,9 +3,17 @@
  *
  * <mj-empty-state> -- displays a meaningful no-content message with an optional
  * illustration, heading, description, and action buttons.
+ *
+ * Each region is shown only when it has content: the illustration when
+ * something is slotted into it (and `show-illustration` is not "false"), the
+ * heading when the `heading` attribute or the `heading` slot provides text,
+ * the description and the actions when something is slotted into them. An
+ * empty region takes no room, so the gap between the regions stays even.
  */
 
 import { MjElement } from "../core/mjelement.js";
+
+const DEFAULT_HEADING_LEVEL = 3;
 
 const STYLES = `
 :host {
@@ -70,7 +78,7 @@ const STYLES = `
   justify-content: center;
 }
 
-.actions.empty {
+.empty {
   display: none;
 }
 `;
@@ -80,21 +88,25 @@ export class MjEmptyState extends MjElement {
   static styles = STYLES;
   static watched = ["heading", "heading-level", "compact", "show-illustration"];
 
+  constructor() {
+    super()
+    this._headingEl = null
+    this._headingText = null
+  }
+
   render() {
-    const headingLevel = this.getAttribute("heading-level") || "3"
-    const heading = this.getAttribute("heading") || ""
     const markup = `
       <div class="root" part="root">
-        <div class="illustration" part="illustration">
+        <div class="illustration empty" part="illustration">
           <slot name="illustration"></slot>
         </div>
-        <h${headingLevel} class="heading-el" part="heading">
-          <slot name="heading">${heading}</slot>
-        </h${headingLevel}>
-        <div class="description" part="description">
+        <h3 class="heading-el" part="heading">
+          <slot name="heading"><span class="heading-text"></span></slot>
+        </h3>
+        <div class="description empty" part="description">
           <slot name="description"></slot>
         </div>
-        <div class="actions" part="actions">
+        <div class="actions empty" part="actions">
           <slot name="actions"></slot>
         </div>
       </div>
@@ -103,61 +115,97 @@ export class MjEmptyState extends MjElement {
   }
 
   afterRender() {
-    this._actionsSlot = this.shadowRoot.querySelector("slot[name='actions']")
-    if (this._actionsSlot !== null) {
-      this.listen(this._actionsSlot, "slotchange", this._onActionsSlotChange.bind(this))
-    }
-    this._checkActions()
+    this._headingEl = this.$(".heading-el")
+    this._headingText = this.$(".heading-text")
+
+    /* slotchange bubbles to the shadow root; it survives a heading-level swap. */
+    this.listen(this.shadowRoot, "slotchange", this._syncRegions.bind(this))
+
+    this._updateHeading()
+    this._syncRegions()
     return
   }
 
   onAttributeChanged(name, oldValue, newValue) {
+    if (this._headingEl === undefined || this._headingEl === null) {
+      return
+    }
     if (name === "heading" || name === "heading-level") {
       this._updateHeading()
     }
     return
   }
 
-  _onActionsSlotChange() {
-    this._checkActions()
+  /*
+   * True when something is assigned to the named slot. Not flattened: a
+   * flattened unassigned slot reports its fallback content instead.
+   */
+  _slotHasContent(name) {
+    const slot = this.$(`slot[name='${name}']`)
+    const hasContent = slot !== null && slot.assignedNodes().length > 0
+    return hasContent
+  }
+
+  /* Show each region only while it has content. */
+  _syncRegions() {
+    const illustration = this.$(".illustration")
+    const description = this.$(".description")
+    const actions = this.$(".actions")
+
+    if (illustration !== null) {
+      illustration.classList.toggle("empty", this._slotHasContent("illustration") === false)
+    }
+    if (description !== null) {
+      description.classList.toggle("empty", this._slotHasContent("description") === false)
+    }
+    if (actions !== null) {
+      actions.classList.toggle("empty", this._slotHasContent("actions") === false)
+    }
+
+    if (this._headingEl !== null) {
+      const heading = this.getAttribute("heading") || ""
+      const present = heading.length > 0 || this._slotHasContent("heading") === true
+      this._headingEl.hidden = present === false
+    }
     return
   }
 
-  _checkActions() {
-    const actionsEl = this.$(".actions")
-    if (actionsEl === null) {
-      return
+  /* The heading level from `heading-level`, limited to 1-6. */
+  _headingLevel() {
+    const parsed = parseInt(this.getAttribute("heading-level") || "", 10)
+    let level = DEFAULT_HEADING_LEVEL
+    if (Number.isNaN(parsed) === false && parsed >= 1 && parsed <= 6) {
+      level = parsed
     }
-    const slot = actionsEl.querySelector("slot")
-    const hasContent = slot !== null && slot.assignedElements().length > 0
-    if (hasContent === true) {
-      actionsEl.classList.remove("empty")
-    } else {
-      actionsEl.classList.add("empty")
-    }
-    return
+    return level
   }
 
+  /*
+   * Bring the heading element in line with `heading-level` (replacing it,
+   * and moving its slot across, when the level changes) and the `heading`
+   * text, which is the fallback content of the heading slot.
+   */
   _updateHeading() {
-    const headingEl = this.$(".heading-el")
-    if (headingEl === null) {
-      return
+    const tagName = `h${this._headingLevel()}`
+
+    if (this._headingEl.localName !== tagName) {
+      const replacement = document.createElement(tagName)
+      replacement.className = "heading-el"
+      replacement.setAttribute("part", "heading")
+      while (this._headingEl.firstChild !== null) {
+        replacement.appendChild(this._headingEl.firstChild)
+      }
+      this._headingEl.replaceWith(replacement)
+      this._headingEl = replacement
     }
-    const level = this.getAttribute("heading-level") || "3"
-    const heading = this.getAttribute("heading") || ""
-    const slot = headingEl.querySelector("slot[name='heading']")
-    if (slot !== null) {
-      slot.textContent = heading
-    }
+
+    this._headingText.textContent = this.getAttribute("heading") || ""
+    this._syncRegions()
     return
   }
 
   get hasActions() {
-    const actionsEl = this.$(".actions")
-    if (actionsEl === null) {
-      return false
-    }
-    const slot = actionsEl.querySelector("slot")
-    return slot !== null && slot.assignedElements().length > 0
+    const hasActions = this._slotHasContent("actions")
+    return hasActions
   }
 }

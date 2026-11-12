@@ -10,14 +10,30 @@
     The inspector supports configurable body size limits with truncation,
     JSON and form data parsing, path pattern filtering, and a debug
     endpoint for reviewing captured requests.
+
+    Credentials are masked when a request is captured, not when it is
+    shown: ``Authorization`` and ``Cookie`` headers, and password or token
+    fields in query parameters and bodies, are never stored. The debug
+    endpoint only answers when the inspector was created in debug mode and
+    the caller presents the inspector's secret.
 """
 
+import hmac
 import json
 import re
+import secrets
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs
+
+from ccai.webworks.devexp.debug.redaction import redact_body
+from ccai.webworks.devexp.debug.redaction import redact_data
+from ccai.webworks.devexp.debug.redaction import redact_headers
+
+
+INSPECTOR_SECRET_BYTES = 24
+"""Number of random bytes in a generated inspector secret."""
 
 
 # =============================================================================
@@ -202,6 +218,10 @@ class RequestInspector:
         :param max_body_size: Maximum body size in bytes before truncation.
         :param path_filter: Optional regex pattern to filter which paths
             are captured.
+        :param debug: Whether debug mode is enabled. The debug endpoint
+            refuses to answer unless it is.
+        :param secret: The secret a caller must present to the debug
+            endpoint. A random secret is generated when ``None``.
     """
 
     def __init__(
@@ -209,6 +229,8 @@ class RequestInspector:
         max_requests: int = 100,
         max_body_size: int = 10240,
         path_filter: Optional[str] = None,
+        debug: bool = False,
+        secret: Optional[str] = None,
     ):
         """
             Construct a RequestInspector.
@@ -216,10 +238,20 @@ class RequestInspector:
             :param max_requests: Maximum number of requests to store.
             :param max_body_size: Maximum body size in bytes before truncation.
             :param path_filter: Optional regex pattern for path filtering.
+            :param debug: Whether debug mode is enabled.
+            :param secret: The secret required by the debug endpoint. A
+                random one is generated when ``None`` or empty.
         """
         self._max_requests = max_requests
         self._max_body_size = max_body_size
         self._path_filter = path_filter
+        self._debug = debug
+
+        if isinstance(secret, str) and len(secret) > 0:
+            self._secret = secret
+        else:
+            self._secret = secrets.token_urlsafe(INSPECTOR_SECRET_BYTES)
+
         self._requests: List[RequestInfo] = []
         return
 
@@ -254,6 +286,27 @@ class RequestInspector:
         """
         return self._path_filter
 
+    @property
+    def debug(self) -> bool:
+        """
+            Whether debug mode is enabled for this inspector.
+
+            :returns: True if the debug endpoint may answer.
+        """
+        return self._debug
+
+    @property
+    def secret(self) -> str:
+        """
+            The secret a caller must present to the debug endpoint.
+
+            Show it to the developer on the console; never put it in a
+            response.
+
+            :returns: The secret string.
+        """
+        return self._secret
+
     # -------------------------------------------------------------------------
     # Capture
     # -------------------------------------------------------------------------
@@ -268,6 +321,10 @@ class RequestInspector:
             when applicable. If a path_filter is set, only requests
             matching the pattern are captured.
 
+            Credentials are masked before anything is stored: sensitive
+            headers, sensitive query parameters, and sensitive fields of
+            JSON and form bodies (in both the raw and the parsed body).
+
             :param request: The incoming request object or dictionary.
         """
         method, path, query_params, headers, raw_body = self._extract_request_data(request)
@@ -278,18 +335,23 @@ class RequestInspector:
             if match is None:
                 return
 
-        # Apply body size limiting and truncation
-        body, body_truncated = self._apply_body_limit(raw_body)
+        # Parse JSON or form data, then mask credential fields by name.
+        parsed_body = redact_data(self._parse_body(raw_body, headers))
 
-        # Parse JSON or form data
-        parsed_body = self._parse_body(raw_body, headers)
+        # Mask credentials in the raw body before it is truncated, so a
+        # field cannot escape redaction by being cut in half.
+        content_type = self._get_content_type(headers)
+        redacted_body = redact_body(raw_body, content_type)
+
+        # Apply body size limiting and truncation
+        body, body_truncated = self._apply_body_limit(redacted_body)
 
         request_info = RequestInfo(
             timestamp=datetime.now(),
             method=method,
             path=path,
-            query_params=query_params,
-            headers=headers,
+            query_params=redact_data(query_params),
+            headers=redact_headers(headers),
             body=body,
             body_truncated=body_truncated,
             parsed_body=parsed_body,
@@ -350,6 +412,7 @@ class RequestInspector:
         self,
         limit: Optional[int] = None,
         path_filter: Optional[str] = None,
+        secret: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
             Handle a debug endpoint request for reviewing captured requests.
@@ -357,12 +420,44 @@ class RequestInspector:
             Returns a response dictionary suitable for serving at a debug
             endpoint such as ``/_debug/requests``.
 
+            Captured requests belong to every user of the application, so
+            the endpoint is closed unless both conditions hold: the
+            inspector was created with ``debug=True``, and the caller
+            presents the inspector's :attr:`secret`. Outside debug mode
+            the answer is ``404``, as if the endpoint did not exist; a
+            missing or wrong secret is answered with ``403``.
+
             :param limit: Maximum number of requests to return.
             :param path_filter: Optional path filter for the response.
+            :param secret: The secret presented by the caller.
 
             :returns: A dictionary with ``status_code``, ``headers``, and
                 ``body`` keys. The body is a JSON string of captured requests.
         """
+        json_headers = {"Content-Type": "application/json; charset=utf-8"}
+
+        if self._debug is not True:
+            response = {
+                "status_code": 404,
+                "headers": dict(json_headers),
+                "body": json.dumps({"error": "Not Found"}),
+            }
+            return response
+
+        secret_matches = False
+        if isinstance(secret, str):
+            secret_matches = hmac.compare_digest(
+                secret.encode("utf-8"), self._secret.encode("utf-8"),
+            )
+
+        if not secret_matches:
+            response = {
+                "status_code": 403,
+                "headers": dict(json_headers),
+                "body": json.dumps({"error": "Forbidden"}),
+            }
+            return response
+
         requests = self.get_requests(limit=limit, path_filter=path_filter)
 
         request_dicts = []

@@ -7,6 +7,7 @@
  */
 
 import { MjElement } from "../core/mjelement.js";
+import { t } from "../core/intl.js";
 
 const STYLES = `
 :host { display: inline-flex; }
@@ -64,7 +65,7 @@ const STYLES = `
   background: transparent; border: none; border-radius: 50%;
   cursor: pointer; color: inherit; flex-shrink: 0;
 }
-.remove:hover { background: rgba(0,0,0,0.12); }
+.remove:hover { background: color-mix(in srgb, currentColor 16%, transparent); }
 .remove:focus-visible { outline: var(--mj-focus-ring-width) solid var(--mj-chip-focus-ring-color, var(--mj-focus-ring)); outline-offset: 1px; }
 .remove svg { width: 0.75rem; height: 0.75rem; }
 :host(:not([mode="removable"])) .remove { display: none; }
@@ -99,13 +100,14 @@ export class MjChip extends MjElement {
     this.listen(this._removeBtn, "keydown", this._onRemoveKey.bind(this))
     this.listen(this._chipEl, "click", this._onChipClick.bind(this))
     this.listen(this._chipEl, "keydown", this._onChipKey.bind(this))
+    this.listen(this.$("slot:not([name])"), "slotchange", this._syncRemoveLabel.bind(this))
     this._syncMode()
     this._syncRemoveLabel()
     return
   }
 
   onAttributeChanged(name, oldValue, newValue) {
-    if (this._chipEl === undefined) {
+    if (this._chipEl === undefined || this._chipEl === null) {
       return
     }
     if (name === "mode") {
@@ -115,10 +117,13 @@ export class MjChip extends MjElement {
       this._syncSelected()
     }
     if (name === "disabled") {
-      this._syncDisabled()
+      this._syncMode()
     }
     if (name === "color") {
       this._syncColor()
+    }
+    if (name === "remove-label") {
+      this._syncRemoveLabel()
     }
     return
   }
@@ -126,13 +131,15 @@ export class MjChip extends MjElement {
   _syncMode() {
     const mode = this.getAttribute("mode") || "static"
     const chip = this._chipEl
-    if (chip === null) {
+    if (chip === undefined || chip === null) {
       return
     }
 
     if (mode === "selectable") {
+      /* A disabled chip is not a tab stop, like a disabled checkbox. */
+      const disabled = this.hasAttribute("disabled")
       chip.setAttribute("role", "checkbox")
-      chip.setAttribute("tabindex", "0")
+      chip.setAttribute("tabindex", disabled === true ? "-1" : "0")
       this._syncSelected()
     } else if (mode === "removable") {
       chip.removeAttribute("role")
@@ -152,7 +159,12 @@ export class MjChip extends MjElement {
 
   _syncSelected() {
     const chip = this._chipEl
-    if (chip === null) {
+    if (chip === undefined || chip === null) {
+      return
+    }
+    const mode = this.getAttribute("mode") || "static"
+    if (mode !== "selectable") {
+      chip.removeAttribute("aria-checked")
       return
     }
     const selected = this.hasAttribute("selected")
@@ -162,7 +174,7 @@ export class MjChip extends MjElement {
 
   _syncDisabled() {
     const chip = this._chipEl
-    if (chip === null) {
+    if (chip === undefined || chip === null) {
       return
     }
     const disabled = this.hasAttribute("disabled")
@@ -177,15 +189,20 @@ export class MjChip extends MjElement {
     return
   }
 
+  /* Name the remove button: `remove-label`, else "Remove <label text>". */
   _syncRemoveLabel() {
     const removeBtn = this._removeBtn
-    if (removeBtn === null) {
+    if (removeBtn === undefined || removeBtn === null) {
       return
     }
     const explicit = this.getAttribute("remove-label")
-    const label = (explicit !== null && explicit.length > 0)
-      ? explicit
-      : `Remove ${this.labelText}`
+    const labelText = this.labelText
+    let label = t("core.remove")
+    if (explicit !== null && explicit.length > 0) {
+      label = explicit
+    } else if (labelText.length > 0) {
+      label = t("mj.chip.removeItem", { label: labelText })
+    }
     removeBtn.setAttribute("aria-label", label)
     return
   }
@@ -200,6 +217,58 @@ export class MjChip extends MjElement {
     return
   }
 
+  /*
+   * The chip is about to disappear while its remove button has focus. Move
+   * focus to the next chip, else the previous chip, else the element named
+   * by `return-focus`, so it does not fall back to the top of the document.
+   */
+  _moveFocusAway() {
+    const root = this.getRootNode()
+    const active = root.activeElement
+    const hasFocus = active !== null && active !== undefined && (active === this || this.contains(active) === true)
+    if (hasFocus === false) {
+      return
+    }
+
+    const isFocusableChip = (element) => {
+      const usable =
+        element.localName === "mj-chip" &&
+        element.hasAttribute("disabled") === false &&
+        (element.getAttribute("mode") === "removable" || element.getAttribute("mode") === "selectable")
+      return usable
+    }
+
+    let target = null
+
+    let sibling = this.nextElementSibling
+    while (sibling !== null && target === null) {
+      if (isFocusableChip(sibling) === true) {
+        target = sibling
+      }
+      sibling = sibling.nextElementSibling
+    }
+
+    sibling = this.previousElementSibling
+    while (sibling !== null && target === null) {
+      if (isFocusableChip(sibling) === true) {
+        target = sibling
+      }
+      sibling = sibling.previousElementSibling
+    }
+
+    if (target === null) {
+      const returnId = this.getAttribute("return-focus")
+      if (returnId !== null && returnId !== "" && typeof root.getElementById === "function") {
+        target = root.getElementById(returnId)
+      }
+    }
+
+    if (target !== null && typeof target.focus === "function") {
+      target.focus()
+    }
+    return
+  }
+
   _onRemove() {
     if (this.hasAttribute("disabled")) {
       return
@@ -208,12 +277,20 @@ export class MjChip extends MjElement {
     if (proceed === false) {
       return
     }
+    this._moveFocusAway()
     this.remove()
     return
   }
 
+  /*
+   * Backspace / Delete on the remove button. The key is handled here only:
+   * it must not bubble to the chip-level handler, which would ask for the
+   * removal a second time when the first request was vetoed.
+   */
   _onRemoveKey(event) {
     if (event.key === "Backspace" || event.key === "Delete") {
+      event.preventDefault()
+      event.stopPropagation()
       this._onRemove()
     }
     return
@@ -232,6 +309,10 @@ export class MjChip extends MjElement {
   }
 
   _onChipKey(event) {
+    if (this.hasAttribute("disabled") === true) {
+      return
+    }
+
     const mode = this.getAttribute("mode") || "static"
     if (mode === "selectable") {
       if (event.key === "Enter" || event.key === " ") {
@@ -264,7 +345,20 @@ export class MjChip extends MjElement {
   }
 
   set selected(value) {
-    this.reflectBoolean("selected", value === true)
+    this.reflectBoolean("selected", Boolean(value))
+    return
+  }
+
+  /*
+   * Toggles a selectable chip as a user click would (mj-chip-select, then
+   * mj-chip-change); a static or removable chip ignores it, as it ignores a
+   * click on its body. HTMLElement.click() would only dispatch a click at
+   * the host, which never reaches the inner chip.
+   */
+  click() {
+    if (this._chipEl !== undefined && this._chipEl !== null) {
+      this._chipEl.click()
+    }
     return
   }
 

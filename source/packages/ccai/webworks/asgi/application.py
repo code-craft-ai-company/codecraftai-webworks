@@ -15,9 +15,13 @@ import logging
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from ccai.webworks.asgi.constants import (
+    MESSAGE_HTTP_RESPONSE_BODY,
+    MESSAGE_HTTP_RESPONSE_START,
+    MESSAGE_WEBSOCKET_CLOSE,
     SCOPE_TYPE_HTTP,
     SCOPE_TYPE_WEBSOCKET,
     SCOPE_TYPE_LIFESPAN,
+    WS_CLOSE_TRY_AGAIN_LATER,
 )
 from ccai.webworks.asgi.httphandler import HTTPHandler
 from ccai.webworks.asgi.websockethandler import WebSocketHandler
@@ -107,10 +111,23 @@ class ASGIApplication:
         else:
             self._logger = logger
         
+        if error_handler is None:
+            self._error_handler = ErrorHandler(debug=debug, logger=self._logger)
+        else:
+            self._error_handler = error_handler
+        
         if http_handler is None:
-            self._http_handler = HTTPHandler(debug=debug)
+            self._http_handler = HTTPHandler(debug=debug, error_handler=self._error_handler)
         else:
             self._http_handler = http_handler
+            
+            # The HTTP handler answers the exceptions of the request handler
+            # itself. It is given the error handler of the application, so
+            # custom handlers registered there are reached.
+            set_error_handler = getattr(self._http_handler, "set_error_handler", None)
+            current_error_handler = getattr(self._http_handler, "error_handler", None)
+            if callable(set_error_handler) and current_error_handler is None:
+                set_error_handler(self._error_handler)
         
         if websocket_handler is None:
             self._websocket_handler = WebSocketHandler(debug=debug, logger=self._logger)
@@ -121,11 +138,6 @@ class ASGIApplication:
             self._lifespan_handler = LifespanHandler(logger=self._logger)
         else:
             self._lifespan_handler = lifespan_handler
-        
-        if error_handler is None:
-            self._error_handler = ErrorHandler(debug=debug, logger=self._logger)
-        else:
-            self._error_handler = error_handler
         
         return
     
@@ -230,11 +242,44 @@ class ASGIApplication:
             :param receive: Async receive callable.
             :param send: Async send callable.
         """
+        if getattr(self._lifespan_handler, "requests_blocked", False) is True:
+            # Startup failed or has not finished. The state the handlers
+            # rely on is not there, so the request is not passed to them.
+            await self._send_service_unavailable(send)
+            return
+        
         try:
             await self._http_handler.handle(scope, receive, send)
         except Exception as exc:
             # Use the error handler for any exceptions that propagate up
             await self._error_handler.handle_http_error(exc, send, scope)
+        return
+    
+    async def _send_service_unavailable(self, send: SendCallable) -> None:
+        """
+            Answer a request with 503 Service Unavailable.
+            
+            :param send: Async send callable.
+        """
+        body = b"Service Unavailable"
+        
+        start_message = {
+            "type": MESSAGE_HTTP_RESPONSE_START,
+            "status": 503,
+            "headers": [
+                (b"content-type", b"text/plain; charset=utf-8"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+        }
+        await send(start_message)
+        
+        body_message = {
+            "type": MESSAGE_HTTP_RESPONSE_BODY,
+            "body": body,
+            "more_body": False,
+        }
+        await send(body_message)
+        
         return
     
     async def _handle_websocket(
@@ -253,6 +298,17 @@ class ASGIApplication:
             :param receive: Async receive callable.
             :param send: Async send callable.
         """
+        if getattr(self._lifespan_handler, "requests_blocked", False) is True:
+            # Startup failed or has not finished, refuse the connection.
+            # A close sent before the connection is accepted rejects it.
+            await receive()
+            close_message = {
+                "type": MESSAGE_WEBSOCKET_CLOSE,
+                "code": WS_CLOSE_TRY_AGAIN_LATER,
+            }
+            await send(close_message)
+            return
+        
         try:
             await self._websocket_handler.handle(scope, receive, send)
         except Exception as exc:
@@ -379,6 +435,7 @@ def create_asgi_application(
     lifespan_handler: Optional[LifespanHandler] = None,
     error_handler: Optional[ErrorHandler] = None,
     logger: Optional[logging.Logger] = None,
+    max_request_body_size: Optional[int] = None,
 ) -> ASGIApplication:
     """
         Application factory for creating ASGI applications.
@@ -400,6 +457,8 @@ def create_asgi_application(
                       - lifespan_handler: LifespanHandler instance
                       - error_handler: ErrorHandler instance
                       - logger: Logger instance
+                      - max_request_body_size: int - Maximum request body size
+                        in bytes, 0 for unlimited
         :param debug: If True, include stack traces in error responses.
         :param lifespan_enabled: If True, enable lifespan protocol support.
                                 If False, lifespan events are ignored.
@@ -408,6 +467,12 @@ def create_asgi_application(
         :param lifespan_handler: Custom lifespan handler instance.
         :param error_handler: Custom error handler instance.
         :param logger: Logger instance for application logging.
+        :param max_request_body_size: Maximum request body size in bytes for the
+                                     HTTP handler this factory creates. Request
+                                     bodies are read into memory, so when this is
+                                     not given a default limit applies. Pass 0
+                                     for unlimited. Ignored when an HTTP handler
+                                     is passed in.
         
         :returns: New ASGIApplication instance.
         
@@ -461,6 +526,18 @@ def create_asgi_application(
     effective_logger = logger
     if effective_logger is None and "logger" in effective_config:
         effective_logger = effective_config["logger"]
+    
+    effective_max_body_size = max_request_body_size
+    if effective_max_body_size is None and "max_request_body_size" in effective_config:
+        effective_max_body_size = effective_config["max_request_body_size"]
+    
+    # Create the HTTP handler here when a body size limit was asked for,
+    # the limit belongs to the reader the handler owns.
+    if effective_http_handler is None and effective_max_body_size is not None:
+        effective_http_handler = HTTPHandler(
+            debug=effective_debug,
+            max_body_size=effective_max_body_size,
+        )
     
     # Create the lifespan handler with enabled/disabled support
     if effective_lifespan_handler is None:

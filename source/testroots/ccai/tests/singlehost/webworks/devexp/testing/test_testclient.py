@@ -977,8 +977,12 @@ def test_property_7_multiple_cookies_persist():
 
                     if idx < len(pairs):
                         c_name, c_value = pairs[idx]
+                        # 'Path=/' makes the cookie apply to the whole
+                        # site. Without it a cookie set at '/set/0' is
+                        # scoped to '/set', as in a browser, and would
+                        # not be sent to '/check'.
                         resp_headers = {
-                            "Set-Cookie": "{}={}".format(c_name, c_value),
+                            "Set-Cookie": "{}={}; Path=/".format(c_name, c_value),
                         }
                         return 200, resp_headers, b"set"
 
@@ -1011,5 +1015,709 @@ def test_property_7_multiple_cookies_persist():
                     "All cookies: {}"
                 ).format(iteration, expected, cookie_header, cookie_pairs)
                 raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# CookieJar Attribute Tests
+# =============================================================================
+
+def test_cookiejar_removes_cookie_expired_with_max_age_zero():
+    """
+        Test that 'Max-Age=0' deletes the cookie instead of storing an
+        empty value that keeps being sent.
+    """
+    jar = CookieJar()
+
+    jar.update_from_headers([("Set-Cookie", "session=abc; Path=/")], request_host="testserver")
+    jar.update_from_headers([("Set-Cookie", "session=; Max-Age=0; Path=/")], request_host="testserver")
+
+    if "session" in jar.cookies:
+        errmsg = "Expected the session cookie to be removed, jar holds {}".format(jar.cookies)
+        raise AssertionError(errmsg)
+
+    if jar.to_header(path="/", host="testserver") != "":
+        errmsg = "Expected no Cookie header after deletion, got '{}'".format(
+            jar.to_header(path="/", host="testserver")
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_cookiejar_removes_cookie_expired_in_the_past():
+    """
+        Test that an 'Expires' date in the past deletes the cookie.
+    """
+    jar = CookieJar()
+
+    jar.update_from_headers([("Set-Cookie", "session=abc; Path=/")], request_host="testserver")
+    jar.update_from_headers(
+        [("Set-Cookie", "session=gone; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/")],
+        request_host="testserver",
+    )
+
+    if "session" in jar.cookies:
+        errmsg = "Expected the session cookie to be removed, jar holds {}".format(jar.cookies)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_cookiejar_honours_cookie_path():
+    """
+        Test that a cookie is only sent to paths under its Path.
+    """
+    jar = CookieJar()
+
+    jar.update_from_headers([("Set-Cookie", "admin=1; Path=/admin")], request_host="testserver")
+
+    if jar.to_header(path="/admin/users", host="testserver") != "admin=1":
+        errmsg = "Expected the cookie to be sent to '/admin/users'."
+        raise AssertionError(errmsg)
+
+    if jar.to_header(path="/administrator", host="testserver") != "":
+        errmsg = "Did not expect the cookie to be sent to '/administrator'."
+        raise AssertionError(errmsg)
+
+    if jar.to_header(path="/", host="testserver") != "":
+        errmsg = "Did not expect the cookie to be sent to '/'."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_cookiejar_honours_secure_attribute():
+    """
+        Test that a Secure cookie is only sent over https.
+    """
+    jar = CookieJar()
+
+    jar.update_from_headers([("Set-Cookie", "token=t; Path=/; Secure")], request_host="testserver")
+
+    if jar.to_header(path="/", host="testserver", scheme="http") != "":
+        errmsg = "Did not expect a Secure cookie to be sent over http."
+        raise AssertionError(errmsg)
+
+    if jar.to_header(path="/", host="testserver", scheme="https") != "token=t":
+        errmsg = "Expected the Secure cookie to be sent over https."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_cookiejar_honours_cookie_domain():
+    """
+        Test that a host-only cookie is not sent to another host, and a
+        Domain cookie is sent to subdomains.
+    """
+    jar = CookieJar()
+
+    jar.update_from_headers([("Set-Cookie", "hostonly=1; Path=/")], request_host="app.example.com")
+    jar.update_from_headers(
+        [("Set-Cookie", "shared=1; Path=/; Domain=example.com")], request_host="app.example.com",
+    )
+
+    other_host = jar.to_header(path="/", host="api.example.com")
+
+    if other_host != "shared=1":
+        errmsg = "Expected only the Domain cookie on another subdomain, got '{}'".format(other_host)
+        raise AssertionError(errmsg)
+
+    same_host = jar.to_header(path="/", host="app.example.com")
+
+    if "hostonly=1" not in same_host or "shared=1" not in same_host:
+        errmsg = "Expected both cookies on the setting host, got '{}'".format(same_host)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_cookiejar_stores_every_set_cookie_header():
+    """
+        Test that several Set-Cookie headers of one response are all stored.
+    """
+    jar = CookieJar()
+
+    jar.update_from_headers([
+        ("Set-Cookie", "session=abc; Path=/"),
+        ("Set-Cookie", "theme=dark; Path=/"),
+    ])
+
+    if jar.cookies != {"session": "abc", "theme": "dark"}:
+        errmsg = "Expected both cookies to be stored, got {}".format(jar.cookies)
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Framework ASGI Application Tests
+# =============================================================================
+
+def _build_framework_asgi_app():
+    """
+        Build the framework's own ASGI application with a router that
+        holds a few endpoints, wired the way WebApplication wires it.
+    """
+    from ccai.webworks.asgi.application import create_asgi_application
+    from ccai.webworks.endpoints.endpoint import Endpoint
+    from ccai.webworks.endpoints.registry import EndpointRegistry
+    from ccai.webworks.routing.dispatcher import Dispatcher
+    from ccai.webworks.routing.request import Request
+    from ccai.webworks.routing.response import JSONResponse
+    from ccai.webworks.routing.response import RedirectResponse
+    from ccai.webworks.routing.router import Router
+
+    @Endpoint.attach_at(path="/hello", methods=["GET"])
+    def hello(request: Request) -> JSONResponse:
+        return JSONResponse(content={"message": "hello"}, status_code=200)
+
+    @Endpoint.attach_at(path="/items/{item_id}", methods=["GET"])
+    def get_item(request: Request) -> JSONResponse:
+        return JSONResponse(content={"item_id": request.path_params.get("item_id")}, status_code=200)
+
+    @Endpoint.attach_at(path="/old", methods=["GET"])
+    def old_location(request: Request) -> RedirectResponse:
+        return RedirectResponse(url="/hello", status_code=302)
+
+    registry = EndpointRegistry()
+    registry.collect_from(hello, get_item, old_location)
+
+    router = Router()
+    router.load_from_registry(registry)
+
+    dispatcher = Dispatcher(router=router)
+
+    asgi_app = create_asgi_application()
+    asgi_app.http_handler.set_handler(dispatcher.dispatch_async)
+
+    return asgi_app
+
+
+def test_client_calls_framework_asgi_application():
+    """
+        Test that the client accepts the framework's ASGIApplication and
+        gets the response of a routed endpoint.
+    """
+    client = TestClient(_build_framework_asgi_app())
+
+    try:
+        if client.transport_name != "asgi":
+            errmsg = "Expected the 'asgi' transport, got '{}'".format(client.transport_name)
+            raise AssertionError(errmsg)
+
+        response = client.get("/hello")
+
+        if response.status_code != 200:
+            errmsg = "Expected status 200, got {}".format(response.status_code)
+            raise AssertionError(errmsg)
+
+        if response.json != {"message": "hello"}:
+            errmsg = "Unexpected body: {}".format(response.json)
+            raise AssertionError(errmsg)
+    finally:
+        client.close()
+
+    return
+
+
+def test_client_exercises_framework_routing():
+    """
+        Test that path parameters and unknown paths go through the
+        framework's real router.
+    """
+    client = TestClient(_build_framework_asgi_app())
+
+    try:
+        found = client.get("/items/42")
+        missing = client.get("/no-such-route")
+    finally:
+        client.close()
+
+    if found.status_code != 200 or found.json != {"item_id": "42"}:
+        errmsg = "Expected the routed item, got {} {}".format(found.status_code, found.text)
+        raise AssertionError(errmsg)
+
+    if missing.status_code != 404:
+        errmsg = "Expected 404 for an unknown path, got {}".format(missing.status_code)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_client_follows_redirect_of_framework_application():
+    """
+        Test that follow_redirects follows a redirect issued by a
+        framework endpoint and records it in the history.
+    """
+    client = TestClient(_build_framework_asgi_app())
+
+    try:
+        not_followed = client.get("/old")
+        followed = client.get("/old", follow_redirects=True)
+    finally:
+        client.close()
+
+    if not_followed.status_code != 302:
+        errmsg = "Expected 302 without follow_redirects, got {}".format(not_followed.status_code)
+        raise AssertionError(errmsg)
+
+    if followed.status_code != 200 or followed.json != {"message": "hello"}:
+        errmsg = "Expected the redirect target, got {} {}".format(followed.status_code, followed.text)
+        raise AssertionError(errmsg)
+
+    if len(followed.history) != 1 or followed.history[0].status_code != 302:
+        errmsg = "Expected one 302 response in the history, got {}".format(
+            [response.status_code for response in followed.history]
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# ASGI and WSGI Transport Tests
+# =============================================================================
+
+async def _inspecting_asgi_app(scope, receive, send):
+    """
+        An ASGI app that reports what it received as JSON.
+    """
+    message = await receive()
+
+    headers = {}
+    for name, value in scope["headers"]:
+        headers[name.decode("latin-1")] = value.decode("latin-1")
+
+    payload = {
+        "method": scope["method"],
+        "path": scope["path"],
+        "query": scope["query_string"].decode("ascii"),
+        "headers": headers,
+        "body": message["body"].decode("latin-1"),
+    }
+
+    await send({
+        "type": "http.response.start",
+        "status": 200,
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"set-cookie", b"first=1; Path=/"),
+            (b"set-cookie", b"second=2; Path=/"),
+        ],
+    })
+    await send({"type": "http.response.body", "body": json.dumps(payload).encode("utf-8")})
+
+
+def test_asgi_request_carries_scope_headers_and_body():
+    """
+        Test that an ASGI application receives the method, path, query
+        string, headers and body of the request.
+    """
+    client = TestClient(_inspecting_asgi_app)
+
+    try:
+        response = client.post(
+            "/submit", params={"page": 2}, json={"a": 1}, headers={"X-Trace": "t-1"},
+        )
+    finally:
+        client.close()
+
+    seen = response.json
+
+    if seen["method"] != "POST" or seen["path"] != "/submit" or seen["query"] != "page=2":
+        errmsg = "Unexpected request line seen by the application: {}".format(seen)
+        raise AssertionError(errmsg)
+
+    if seen["headers"].get("x-trace") != "t-1" or seen["headers"].get("content-type") != "application/json":
+        errmsg = "Unexpected headers seen by the application: {}".format(seen["headers"])
+        raise AssertionError(errmsg)
+
+    if seen["headers"].get("host") != "testserver" or seen["headers"].get("content-length") != "8":
+        errmsg = "Expected Host and Content-Length to be supplied: {}".format(seen["headers"])
+        raise AssertionError(errmsg)
+
+    if json.loads(seen["body"]) != {"a": 1}:
+        errmsg = "Unexpected body seen by the application: {}".format(seen["body"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_response_keeps_repeated_set_cookie_headers():
+    """
+        Test that two Set-Cookie headers of one response are both
+        available and both stored in the cookie jar.
+    """
+    client = TestClient(_inspecting_asgi_app)
+
+    try:
+        response = client.get("/")
+        second = client.get("/")
+    finally:
+        client.close()
+
+    values = response.get_headers("Set-Cookie")
+
+    if values != ["first=1; Path=/", "second=2; Path=/"]:
+        errmsg = "Expected both Set-Cookie values, got {}".format(values)
+        raise AssertionError(errmsg)
+
+    if client.cookies.cookies != {"first": "1", "second": "2"}:
+        errmsg = "Expected both cookies in the jar, got {}".format(client.cookies.cookies)
+        raise AssertionError(errmsg)
+
+    sent_cookie = second.json["headers"].get("cookie", "")
+
+    if "first=1" not in sent_cookie or "second=2" not in sent_cookie:
+        errmsg = "Expected both cookies to be sent on the next request, got '{}'".format(sent_cookie)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_logout_response_stops_the_session_cookie_being_sent():
+    """
+        Test that after a response expires the session cookie, later
+        requests no longer send it.
+    """
+    async def _session_app(scope, receive, send):
+        await receive()
+
+        cookie = ""
+        for name, value in scope["headers"]:
+            if name == b"cookie":
+                cookie = value.decode("latin-1")
+
+        headers = [(b"content-type", b"text/plain")]
+
+        if scope["path"] == "/login":
+            headers.append((b"set-cookie", b"session=abc; Path=/; HttpOnly"))
+        elif scope["path"] == "/logout":
+            headers.append((b"set-cookie", b"session=; Max-Age=0; Path=/"))
+
+        await send({"type": "http.response.start", "status": 200, "headers": headers})
+        await send({"type": "http.response.body", "body": cookie.encode("latin-1")})
+
+    client = TestClient(_session_app)
+
+    try:
+        client.get("/login")
+        during = client.get("/profile")
+        client.get("/logout")
+        after = client.get("/profile")
+    finally:
+        client.close()
+
+    if during.text != "session=abc":
+        errmsg = "Expected the session cookie while logged in, got '{}'".format(during.text)
+        raise AssertionError(errmsg)
+
+    if after.text != "":
+        errmsg = "Expected no cookie after logout, got '{}'".format(after.text)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_streamed_response_is_collected_piece_by_piece():
+    """
+        Test that a response sent in several body messages is joined in
+        the body and available piece by piece.
+    """
+    async def _streaming_app(scope, receive, send):
+        await receive()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"one,", "more_body": True})
+        await send({"type": "http.response.body", "body": b"two", "more_body": False})
+
+    client = TestClient(_streaming_app)
+
+    try:
+        response = client.get("/stream")
+    finally:
+        client.close()
+
+    if response.body != b"one,two":
+        errmsg = "Expected body b'one,two', got {!r}".format(response.body)
+        raise AssertionError(errmsg)
+
+    if response.chunks != [b"one,", b"two"]:
+        errmsg = "Expected the two pieces, got {}".format(response.chunks)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_context_manager_runs_asgi_lifespan():
+    """
+        Test that using the client as a context manager sends the
+        lifespan startup and shutdown events.
+    """
+    events = []
+
+    async def _lifespan_app(scope, receive, send):
+        if scope["type"] == "lifespan":
+            while True:
+                message = await receive()
+                events.append(message["type"])
+
+                if message["type"] == "lifespan.startup":
+                    await send({"type": "lifespan.startup.complete"})
+                elif message["type"] == "lifespan.shutdown":
+                    await send({"type": "lifespan.shutdown.complete"})
+                    return
+
+        await receive()
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    with TestClient(_lifespan_app) as client:
+        if events != ["lifespan.startup"]:
+            errmsg = "Expected the startup event on entry, got {}".format(events)
+            raise AssertionError(errmsg)
+
+        client.get("/")
+
+    if events != ["lifespan.startup", "lifespan.shutdown"]:
+        errmsg = "Expected startup then shutdown, got {}".format(events)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_asgi_application_exception_is_raised_in_the_test():
+    """
+        Test that an exception in the application propagates into the
+        test by default and becomes a 500 when that is turned off.
+    """
+    async def _failing_app(scope, receive, send):
+        raise RuntimeError("handler exploded")
+
+    raising_client = TestClient(_failing_app)
+
+    try:
+        raised = False
+        try:
+            raising_client.get("/")
+        except RuntimeError:
+            raised = True
+    finally:
+        raising_client.close()
+
+    if raised is not True:
+        errmsg = "Expected the application's RuntimeError to be raised in the test."
+        raise AssertionError(errmsg)
+
+    quiet_client = TestClient(_failing_app, raise_app_exceptions=False)
+
+    try:
+        response = quiet_client.get("/")
+    finally:
+        quiet_client.close()
+
+    if response.status_code != 500:
+        errmsg = "Expected a 500 response, got {}".format(response.status_code)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def _inspecting_wsgi_app(environ, start_response):
+    """
+        A WSGI app that reports what it received as JSON.
+    """
+    payload = {
+        "method": environ["REQUEST_METHOD"],
+        "path": environ["PATH_INFO"],
+        "query": environ["QUERY_STRING"],
+        "content_type": environ.get("CONTENT_TYPE", ""),
+        "trace": environ.get("HTTP_X_TRACE", ""),
+        "body": environ["wsgi.input"].read().decode("latin-1"),
+    }
+
+    start_response("201 Created", [("Content-Type", "application/json")])
+
+    return [json.dumps(payload).encode("utf-8")]
+
+
+def test_client_calls_wsgi_application():
+    """
+        Test that a WSGI application is detected and called with a real
+        environ.
+    """
+    client = TestClient(_inspecting_wsgi_app)
+
+    if client.transport_name != "wsgi":
+        errmsg = "Expected the 'wsgi' transport, got '{}'".format(client.transport_name)
+        raise AssertionError(errmsg)
+
+    response = client.put("/things/1", params={"v": "2"}, data={"name": "x"}, headers={"X-Trace": "t-9"})
+
+    if response.status_code != 201:
+        errmsg = "Expected status 201, got {}".format(response.status_code)
+        raise AssertionError(errmsg)
+
+    seen = response.json
+
+    expected = {
+        "method": "PUT",
+        "path": "/things/1",
+        "query": "v=2",
+        "content_type": "application/x-www-form-urlencoded",
+        "trace": "t-9",
+        "body": "name=x",
+    }
+
+    if seen != expected:
+        errmsg = "Unexpected environ seen by the application: {}".format(seen)
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Request Body Option Tests
+# =============================================================================
+
+def test_content_option_sends_raw_bytes():
+    """
+        Test that content= sends the bytes unchanged.
+    """
+    client = TestClient(_inspecting_wsgi_app)
+
+    response = client.post("/raw", content=b"\x00\x01\xfe", headers={"Content-Type": "application/octet-stream"})
+
+    if response.json["body"] != "\x00\x01\xfe":
+        errmsg = "Expected the raw bytes to arrive unchanged, got {!r}".format(response.json["body"])
+        raise AssertionError(errmsg)
+
+    if response.json["content_type"] != "application/octet-stream":
+        errmsg = "Expected the given content type, got '{}'".format(response.json["content_type"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_files_option_sends_multipart_form_data():
+    """
+        Test that files= produces a multipart body carrying the file
+        and the accompanying form fields.
+    """
+    client = TestClient(_inspecting_wsgi_app)
+
+    response = client.post(
+        "/upload",
+        data={"title": "report"},
+        files={"attachment": ("notes.txt", b"file content", "text/plain")},
+    )
+
+    seen = response.json
+
+    if not seen["content_type"].startswith("multipart/form-data; boundary="):
+        errmsg = "Expected a multipart content type, got '{}'".format(seen["content_type"])
+        raise AssertionError(errmsg)
+
+    boundary = seen["content_type"].split("boundary=", 1)[1]
+
+    for expected_part in [
+        'name="title"',
+        "report",
+        'name="attachment"; filename="notes.txt"',
+        "Content-Type: text/plain",
+        "file content",
+        "--" + boundary + "--",
+    ]:
+        if expected_part not in seen["body"]:
+            errmsg = "Expected {!r} in the multipart body: {!r}".format(expected_part, seen["body"])
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_redirect_after_post_becomes_get():
+    """
+        Test that following a 303 after a POST requests the target with
+        GET and without the body.
+    """
+    seen_requests = []
+
+    def _post_redirect_get_app(environ, start_response):
+        seen_requests.append((environ["REQUEST_METHOD"], environ["PATH_INFO"], environ["wsgi.input"].read()))
+
+        if environ["PATH_INFO"] == "/submit":
+            start_response("303 See Other", [("Location", "/done")])
+            return [b""]
+
+        start_response("200 OK", [("Content-Type", "text/plain")])
+        return [b"done"]
+
+    client = TestClient(_post_redirect_get_app, follow_redirects=True)
+
+    response = client.post("/submit", data={"a": "1"})
+
+    if response.text != "done":
+        errmsg = "Expected the redirect target's body, got '{}'".format(response.text)
+        raise AssertionError(errmsg)
+
+    if seen_requests != [("POST", "/submit", b"a=1"), ("GET", "/done", b"")]:
+        errmsg = "Unexpected request sequence: {}".format(seen_requests)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_redirect_loop_is_stopped():
+    """
+        Test that an endless redirect raises instead of looping forever.
+    """
+    from ccai.webworks.devexp.testing.testclient import TooManyRedirectsError
+
+    def _looping_app(environ, start_response):
+        start_response("302 Found", [("Location", environ["PATH_INFO"])])
+        return [b""]
+
+    client = TestClient(_looping_app, follow_redirects=True)
+
+    raised = False
+    try:
+        client.get("/loop")
+    except TooManyRedirectsError:
+        raised = True
+
+    if raised is not True:
+        errmsg = "Expected TooManyRedirectsError for an endless redirect."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_cookie_without_path_is_scoped_to_the_request_directory():
+    """
+        Test that a cookie set without a Path applies to the directory of
+        the request that set it, as it does in a browser.
+    """
+    def _app(method, path, headers, body):
+        if path == "/account/login":
+            return 200, {"Set-Cookie": "session=abc"}, b""
+
+        return 200, {}, headers.get("Cookie", "").encode("utf-8")
+
+    client = TestClient(app=_app)
+
+    client.get("/account/login")
+
+    inside = client.get("/account/profile")
+    outside = client.get("/other")
+
+    if inside.text != "session=abc":
+        errmsg = "Expected the cookie under '/account', got '{}'".format(inside.text)
+        raise AssertionError(errmsg)
+
+    if outside.text != "":
+        errmsg = "Did not expect the cookie outside '/account', got '{}'".format(outside.text)
+        raise AssertionError(errmsg)
 
     return

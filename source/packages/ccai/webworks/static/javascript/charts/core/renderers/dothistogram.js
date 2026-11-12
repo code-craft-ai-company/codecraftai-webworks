@@ -1,305 +1,224 @@
 /*
  * dothistogram.js
  *
- * Dot histogram (Wilkinson dot plot) renderer — stacked circles per bin
- * instead of bars.  Auto-switches to bar rendering when counts are too large
- * to draw individually.
+ * Dot histogram (Wilkinson dot plot) renderer — one dot per observation,
+ * stacked per bin. Falls back to bars when a series has too many dots to
+ * draw individually (the chart then says so).
  *
- * Registers: "dot-histogram"
+ * Registers: "dot-histogram", "dothistogram" (the spec's key)
  *
  * ctx.model.series data shape:
  *   series[]:
- *     - { name, samples: [n, …] }            renderer bins internally
+ *     - { name, samples: [n, …] }            binned with shared edges
  *     - { name, bins: [{x0, x1, count}] }    pre-binned
  *
+ * Dot k of a bin (k = 0, 1, …) is centred on count k + 0.5 of the count
+ * axis, so stacks and gridlines always agree, and the radius is the
+ * largest that fits both the bin (lane) width and one count unit.
+ *
  * Relevant ctx.attrs:
- *   bin-count   integer (Sturges default)
- *   dot-size    radius relative hint (default auto from bin width)
- *   group       "overlay" | (default side-by-side within bins)
- *   dot-limit   max dots per series before falling back to bars (default 200)
+ *   bin-count   number of bins (default Sturges)
+ *   bin-width   bin width in data units (wins over bin-count)
+ *   dot-size    dot diameter as a share (0–1] of the largest that fits
+ *               (default 1)
+ *   group       "overlay" (series share the bin) | default: side by side
+ *   dot-limit   max dots of any one series before bars are drawn
+ *               (default 200)
  */
 
 import { registerRenderer } from "../renderregistry.js";
 import { svgEl, formatNumber } from "../svgdraw.js";
-import { linearScale, niceTicks } from "../scales.js";
+import { linearScale, niceDomain, niceTicks } from "../scales.js";
+import {
+  binSeries, isFiniteNumber, hasSeriesSamples, axisLayer, drawTicks, drawBaseline,
+  drawAxisTitle, tickCount, activateOnKey, focusableMark, MUTED_TEXT_COLOR
+} from "./diststats.js";
+
+/* Below this radius dots are unreadable and bars are drawn instead. */
+const MIN_DOT_RADIUS = 1.5;
 
 
-/* ── bin helpers ─────────────────────────────────────────────────────────── */
-
-function _sturgesBinCount(n) {
-  const k = Math.ceil(Math.log2(Math.max(n, 1)) + 1)
-  return Math.max(k, 2)
+function _binLabel(name, bin) {
+  /*
+   * Accessible text of a bin.
+   */
+  const label = `${name}, ${formatNumber(bin.x0)}–${formatNumber(bin.x1)}: ${formatNumber(bin.count)}`
+  return label
 }
 
-
-function _makeBins(samples, binCount) {
-  const sorted = samples.slice().sort((a, b) => a - b)
-  const dataMin = sorted[0]
-  const dataMax = sorted[sorted.length - 1]
-  const binW = dataMax === dataMin ? 1 : (dataMax - dataMin) / binCount
-  const bins = []
-  for (let index = 0; index < binCount; index = index + 1) {
-    const x0 = dataMin + index * binW
-    const x1 = index === binCount - 1 ? dataMax + 1e-9 : dataMin + (index + 1) * binW
-    bins.push({ x0: x0, x1: x1, count: 0 })
-  }
-  for (let si = 0; si < sorted.length; si = si + 1) {
-    const value = sorted[si]
-    let bi = Math.floor((value - dataMin) / binW)
-    if (bi >= binCount) { bi = binCount - 1 }
-    bins[bi].count = bins[bi].count + 1
-  }
-  return bins
-}
-
-
-function _resolveSeries(series, binCountAttr) {
-  const resolved = []
-  for (let si = 0; si < series.length; si = si + 1) {
-    const s = series[si]
-    let bins = null
-    if (Array.isArray(s.bins) === true && s.bins.length > 0) {
-      bins = s.bins
-    } else if (Array.isArray(s.samples) === true && s.samples.length > 0) {
-      const k = binCountAttr > 0 ? binCountAttr : _sturgesBinCount(s.samples.length)
-      bins = _makeBins(s.samples, k)
-    } else {
-      bins = []
-    }
-    resolved.push({ name: s.name, bins: bins })
-  }
-  return resolved
-}
-
-
-/* ── main render ─────────────────────────────────────────────────────────── */
 
 export function render(ctx) {
   /*
    * Render a dot histogram.
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
   const model = ctx.model
   const horizontal = ctx.orientation === "horizontal"
-  const binCountRaw = parseInt(ctx.attrs("bin-count", "0"), 10) || 0
-  const dotSizeAttr = parseFloat(ctx.attrs("dot-size", "0")) || 0
-  const overlayMode = ctx.attrs("group", "") === "overlay"
-  const dotLimit = parseInt(ctx.attrs("dot-limit", "200"), 10) || 200
+  const countAttr = parseInt(ctx.attrs("bin-count", ""), 10)
+  const widthAttr = parseFloat(ctx.attrs("bin-width", ""))
+  const sizeAttr = parseFloat(ctx.attrs("dot-size", ""))
+  const dotShare = isFiniteNumber(sizeAttr) === true && sizeAttr > 0 && sizeAttr <= 1 ? sizeAttr : 1
+  const overlay = ctx.attrs("group", "") === "overlay"
+  const limitAttr = parseInt(ctx.attrs("dot-limit", "200"), 10)
+  const dotLimit = isFiniteNumber(limitAttr) === true && limitAttr > 0 ? limitAttr : 200
 
   const root = svgEl("g", { part: "plot" }, [])
-
-  const series = model.series
-  if (series === null || series === undefined || series.length === 0) {
+  const series = Array.isArray(model.series) === true ? model.series : []
+  const prepared = binSeries(series, {
+    count: isFiniteNumber(countAttr) === true && countAttr > 0 ? countAttr : null,
+    width: isFiniteNumber(widthAttr) === true && widthAttr > 0 ? widthAttr : null,
+    method: "sturges"
+  })
+  const resolved = prepared.series.filter((entry) => entry.bins.length > 0)
+  if (resolved.length === 0) {
     return root
   }
 
-  const resolvedSeries = _resolveSeries(series, binCountRaw)
-  const hasData = resolvedSeries.some((s) => s.bins.length > 0)
-  if (hasData === false) {
-    return root
-  }
-
-  /* Global extents. */
-  let globalMin = Infinity
-  let globalMax = -Infinity
-  let globalMaxCount = 0
-  for (let si = 0; si < resolvedSeries.length; si = si + 1) {
-    const rs = resolvedSeries[si]
-    for (let bi = 0; bi < rs.bins.length; bi = bi + 1) {
-      const bin = rs.bins[bi]
-      if (bin.x0 < globalMin) { globalMin = bin.x0 }
-      if (bin.x1 > globalMax) { globalMax = bin.x1 }
-      if (bin.count > globalMaxCount) { globalMaxCount = bin.count }
+  let binMin = Infinity
+  let binMax = -Infinity
+  let maxCount = 0
+  let largestSeries = 0
+  let narrowestBin = Infinity
+  for (let si = 0; si < resolved.length; si = si + 1) {
+    const entry = resolved[si]
+    largestSeries = Math.max(largestSeries, entry.total)
+    for (let bi = 0; bi < entry.bins.length; bi = bi + 1) {
+      const bin = entry.bins[bi]
+      binMin = Math.min(binMin, bin.x0)
+      binMax = Math.max(binMax, bin.x1)
+      maxCount = Math.max(maxCount, bin.count)
+      narrowestBin = Math.min(narrowestBin, bin.x1 - bin.x0)
     }
   }
 
-  const margin = { top: 16, right: 16, bottom: 40, left: 52 }
+  const margin = { top: 16, right: 16, bottom: 44, left: 60 }
   const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
+  const binLength = horizontal === true ? plotH : plotW
+  const countLength = horizontal === true ? plotW : plotH
 
-  /* Stacked count domain. */
-  let maxStackCount = globalMaxCount
-  if (overlayMode === false && resolvedSeries.length > 1) {
-    /* Side-by-side: still one series per lane, max is per-series. */
-    maxStackCount = globalMaxCount
-  }
+  const countTicksWanted = tickCount(countLength, horizontal === true ? 70 : 40)
+  const countTop = Math.max(Math.ceil(niceDomain(0, Math.max(maxCount, 1), countTicksWanted)[1]), 1)
+  const binScale = linearScale([binMin, binMax], [0, binLength])
+  const countScale = horizontal === true
+    ? linearScale([0, countTop], [0, plotW])
+    : linearScale([0, countTop], [plotH, 0])
 
-  const binScale = linearScale([globalMin, globalMax], horizontal ? [0, plotH] : [0, plotW])
-  const countScale = horizontal
-    ? linearScale([0, maxStackCount * 1.1], [0, plotW])
-    : linearScale([0, maxStackCount * 1.1], [plotH, 0])
+  /* Largest radius that fits a lane of the narrowest bin and a count unit. */
+  const lanes = overlay === false && resolved.length > 1 ? resolved.length : 1
+  const laneWidth = Math.abs(binScale(binMin + narrowestBin) - binScale(binMin)) / lanes
+  const unit = countLength / countTop
+  const fitRadius = (Math.min(laneWidth, unit) / 2 - 0.5) * dotShare
+  const useBars = largestSeries > dotLimit || fitRadius < MIN_DOT_RADIUS
 
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
+  const plot = svgEl("g", { transform: `translate(${margin.left},${margin.top})` }, [])
   root.appendChild(plot)
-
-  /* Count gridlines + labels. */
-  const ticks = niceTicks(0, maxStackCount, 5)
-  for (let ti = 0; ti < ticks.length; ti = ti + 1) {
-    const tick = ticks[ti]
-    if (horizontal === true) {
-      const x = countScale(tick)
-      plot.appendChild(svgEl("line", {
-        x1: x, y1: 0, x2: x, y2: plotH,
-        stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-      }, []))
-      plot.appendChild(svgEl("text", {
-        x: x, y: plotH + 16, "text-anchor": "middle",
-        "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-      }, formatNumber(tick)))
-    } else {
-      const y = countScale(tick)
-      plot.appendChild(svgEl("line", {
-        x1: 0, y1: y, x2: plotW, y2: y,
-        stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-      }, []))
-      plot.appendChild(svgEl("text", {
-        x: -8, y: y + 4, "text-anchor": "end",
-        "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-      }, formatNumber(tick)))
-    }
+  const axes = axisLayer(plot)
+  let countTicks = niceTicks(0, countTop, countTicksWanted)
+  if (countTicks.length < 3) {
+    countTicks = niceTicks(0, countTop, countTicksWanted * 2)
   }
-
-  /* Bin axis labels. */
-  const binTicks = niceTicks(globalMin, globalMax, 6)
-  for (let ti = 0; ti < binTicks.length; ti = ti + 1) {
-    const tick = binTicks[ti]
-    const px = binScale(tick)
-    if (horizontal === true) {
-      plot.appendChild(svgEl("text", {
-        x: -8, y: px + 4, "text-anchor": "end",
-        "font-size": 11, fill: "var(--mj-text, #14181f)"
-      }, formatNumber(tick)))
-    } else {
-      plot.appendChild(svgEl("text", {
-        x: px, y: plotH + 18, "text-anchor": "middle",
-        "font-size": 11, fill: "var(--mj-text, #14181f)"
-      }, formatNumber(tick)))
-    }
-  }
-
-  /* Baseline. */
-  const zero = countScale(0)
+  countTicks = countTicks.filter((tick) => Number.isInteger(tick) === true)
+  const binTickCount = tickCount(binLength, horizontal === true ? 36 : 70)
   if (horizontal === true) {
-    plot.appendChild(svgEl("line", {
-      x1: zero, y1: 0, x2: zero, y2: plotH,
-      stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
-    }, []))
+    drawTicks(axes, countScale, { side: "bottom", extent: plotH, ticks: countTicks })
+    drawTicks(axes, binScale, { side: "left", extent: plotW, count: binTickCount, grid: false })
+    drawAxisTitle(axes, "Count", "bottom", plotW, plotH, 36)
   } else {
-    plot.appendChild(svgEl("line", {
-      x1: 0, y1: zero, x2: plotW, y2: zero,
-      stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
-    }, []))
+    drawTicks(axes, countScale, { side: "left", extent: plotW, ticks: countTicks })
+    drawTicks(axes, binScale, { side: "bottom", extent: plotH, count: binTickCount, grid: false })
+    drawAxisTitle(axes, "Count", "left", plotW, plotH, 46)
   }
 
-  /* Check if total dots across all series exceeds limit — if so use bars. */
-  let totalDots = 0
-  for (let si = 0; si < resolvedSeries.length; si = si + 1) {
-    for (let bi = 0; bi < resolvedSeries[si].bins.length; bi = bi + 1) {
-      totalDots = totalDots + resolvedSeries[si].bins[bi].count
-    }
-  }
-  const useBars = totalDots > dotLimit
+  const marks = svgEl("g", { part: "marks" }, [])
+  plot.appendChild(marks)
+  const rows = []
 
-  for (let si = 0; si < resolvedSeries.length; si = si + 1) {
-    const rs = resolvedSeries[si]
-    const color = ctx.colorFor(si)
+  for (let si = 0; si < resolved.length; si = si + 1) {
+    const entry = resolved[si]
+    const color = ctx.colorFor(entry.name)
+    const group = svgEl("g", { part: "series" }, [])
+    const lane = overlay === false && resolved.length > 1 ? si : 0
 
-    /* Compute per-bin pixel width/height to size dots. */
-    for (let bi = 0; bi < rs.bins.length; bi = bi + 1) {
-      const bin = rs.bins[bi]
-      const binPxStart = binScale(bin.x0)
-      const binPxEnd = binScale(bin.x1)
-      const binPxW = Math.abs(binPxEnd - binPxStart)
-
-      /* Lane within bin for multi-series side-by-side. */
-      const laneCount = overlayMode === false && resolvedSeries.length > 1
-        ? resolvedSeries.length : 1
-      const laneW = binPxW / laneCount
-      const laneOffset = overlayMode === false ? si * laneW : 0
-      const r = dotSizeAttr > 0 ? dotSizeAttr : Math.max(Math.min(laneW / 2 - 1, 10), 2)
+    for (let bi = 0; bi < entry.bins.length; bi = bi + 1) {
+      const bin = entry.bins[bi]
+      rows.push([entry.name, bin.x0, bin.x1, bin.count])
+      if (bin.count <= 0) {
+        continue
+      }
+      const start = Math.min(binScale(bin.x0), binScale(bin.x1))
+      const binPx = Math.abs(binScale(bin.x1) - binScale(bin.x0))
+      const lanePx = binPx / lanes
+      const laneStart = start + lane * lanePx
+      const label = _binLabel(entry.name, bin)
+      const handlerBin = bin
+      const handler = () => {
+        ctx.emit("mj-chart-dot-click", {
+          series: entry.name, x0: handlerBin.x0, x1: handlerBin.x1, count: handlerBin.count
+        })
+      }
 
       if (useBars === true) {
-        /* Fallback: draw a bar rect. */
-        const barOpacity = overlayMode && resolvedSeries.length > 1 ? 0.65 : 1
-        if (horizontal === true) {
-          const barW = countScale(bin.count)
-          const barY = Math.min(binPxStart, binPxEnd) + laneOffset
-          const barH = laneW - 1
-          const bar = svgEl("rect", {
-            x: zero, y: barY, width: barW, height: barH,
-            fill: color, opacity: barOpacity
-          }, [])
-          bar.setAttribute("part", "bar")
-          bar.appendChild(svgEl("title", null,
-            `${rs.name} [${formatNumber(bin.x0)}–${formatNumber(bin.x1)}]: ${bin.count}`))
-          plot.appendChild(bar)
-        } else {
-          const barH = Math.abs(countScale(bin.count) - zero)
-          const barX = Math.min(binPxStart, binPxEnd) + laneOffset
-          const barW = laneW - 1
-          const bar = svgEl("rect", {
-            x: barX, y: countScale(bin.count),
-            width: barW, height: barH,
-            fill: color, opacity: barOpacity
-          }, [])
-          bar.setAttribute("part", "bar")
-          bar.appendChild(svgEl("title", null,
-            `${rs.name} [${formatNumber(bin.x0)}–${formatNumber(bin.x1)}]: ${bin.count}`))
-          plot.appendChild(bar)
+        const from = countScale(0)
+        const to = countScale(bin.count)
+        const bar = horizontal === true
+          ? svgEl("rect", { x: Math.min(from, to), y: laneStart + 0.5, width: Math.abs(to - from), height: Math.max(lanePx - 1, 1) })
+          : svgEl("rect", { x: laneStart + 0.5, y: Math.min(from, to), width: Math.max(lanePx - 1, 1), height: Math.abs(to - from) })
+        bar.setAttribute("fill", color)
+        if (overlay === true && resolved.length > 1) {
+          bar.setAttribute("fill-opacity", "0.55")
         }
+        bar.setAttribute("part", "bar")
+        focusableMark(bar, label)
+        activateOnKey(bar, handler)
+        group.appendChild(bar)
         continue
       }
 
-      /* Draw stacked dots. */
-      const binMid = (binPxStart + binPxEnd) / 2 + (laneCount > 1 ? laneOffset - laneW * (laneCount - 1) / 2 : 0)
-
+      /* One focusable stack per bin; its dots are its visual content. */
+      const stack = svgEl("g", { part: "dot-stack" }, [])
+      const laneCenter = laneStart + lanePx / 2
       for (let di = 0; di < bin.count; di = di + 1) {
-        /* Stack up from the baseline. Each dot sits atop the previous. */
-        const dotCenter = di + 0.5
-        const cx = horizontal
-          ? countScale(0) + (dotCenter) * (r * 2 + 1)
-          : binMid
-        const cy = horizontal
-          ? binMid
-          : countScale(0) - (dotCenter) * (r * 2 + 1)
-
-        const dot = svgEl("circle", {
-          cx: cx, cy: cy, r: r, fill: color, opacity: 0.85
-        }, [])
-        dot.setAttribute("part", "dot")
-        dot.setAttribute("tabindex", "0")
-        dot.setAttribute("role", "img")
-        dot.setAttribute("aria-label",
-          `${rs.name} [${formatNumber(bin.x0)}–${formatNumber(bin.x1)}] dot ${di + 1} of ${bin.count}`)
-        dot.appendChild(svgEl("title", null,
-          `${rs.name} [${formatNumber(bin.x0)}–${formatNumber(bin.x1)}]: ${bin.count}`))
-        const handlerBin = bin
-        const handlerRs = rs
-        const clickHandler = () => {
-          ctx.emit("mj-chart-dot-click", {
-            series: handlerRs.name,
-            x0: handlerBin.x0, x1: handlerBin.x1,
-            count: handlerBin.count
-          })
-        }
-        dot.addEventListener("click", clickHandler)
-        dot.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault()
-            clickHandler()
-          }
-        })
-        plot.appendChild(dot)
+        const along = countScale(di + 0.5)
+        stack.appendChild(svgEl("circle", {
+          cx: horizontal === true ? along : laneCenter,
+          cy: horizontal === true ? laneCenter : along,
+          r: fitRadius, fill: color, "fill-opacity": overlay === true && resolved.length > 1 ? 0.6 : 0.9,
+          part: "dot"
+        }, []))
       }
+      focusableMark(stack, label)
+      activateOnKey(stack, handler)
+      group.appendChild(stack)
     }
+    marks.appendChild(group)
   }
 
+  const zero = countScale(0)
+  if (horizontal === true) {
+    drawBaseline(axes, zero, 0, zero, plotH)
+  } else {
+    drawBaseline(axes, 0, zero, plotW, zero)
+  }
+
+  if (useBars === true) {
+    const reason = largestSeries > dotLimit
+      ? `Shown as bars: a series has more than ${formatNumber(dotLimit)} observations`
+      : "Shown as bars: too many observations per bin for dots at this size"
+    plot.appendChild(svgEl("text", {
+      x: plotW, y: -4, "text-anchor": "end", "font-size": 10,
+      fill: MUTED_TEXT_COLOR, part: "fallback-note"
+    }, reason))
+  }
+
+  ctx.setTable({ columns: ["Series", "From", "To", "Count"], rows: rows, caption: "Observations per bin" })
   return root
 }
 
 
-registerRenderer("dot-histogram", render)
+const OPTIONS = { isEmpty: (model) => hasSeriesSamples(model) === false }
+
+registerRenderer("dot-histogram", render, OPTIONS)
+registerRenderer("dothistogram", render, OPTIONS)

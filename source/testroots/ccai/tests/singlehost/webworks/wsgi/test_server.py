@@ -2,10 +2,13 @@
     Tests for the WSGIServer class in the WSGI layer.
 """
 
+import os
+import signal
 import sys
+import tempfile
 import threading
 import time
-from typing import Any, Callable, Dict, Iterable
+from typing import Any, Callable, Dict, Iterable, List
 
 from ccai.webworks.wsgi.server import WSGIServer
 from ccai.webworks.wsgi.serverconfig import ServerConfig
@@ -781,3 +784,292 @@ def test_property_shutdown_stops_accepting_connections():
     
     return
 
+
+
+# =============================================================================
+# Tests for signal handling and reload
+# =============================================================================
+
+class RecordingWorkerManager:
+    """
+        Stand-in for the worker manager that records the calls made to it.
+    """
+    
+    def __init__(self):
+        """
+            Construct a recording worker manager.
+        """
+        self.calls: List[str] = []
+        return
+    
+    def shutdown(self, graceful: bool = True) -> None:
+        """
+            Record a shutdown call.
+        """
+        self.calls.append(f"shutdown(graceful={graceful})")
+        return
+    
+    def spawn(self) -> None:
+        """
+            Record a spawn call.
+        """
+        self.calls.append("spawn")
+        return
+
+
+class RestartRecordingServer(WSGIServer):
+    """
+        WSGIServer whose process restart is recorded and not carried out.
+    """
+    
+    def __init__(self, app: Callable, calls: List[str], restart_error: Exception = None):
+        """
+            Construct the server.
+            
+            :param app: The WSGI application.
+            :param calls: List the restart is recorded in.
+            :param restart_error: Error to raise in place of restarting.
+        """
+        super().__init__(app, ServerConfig(host="127.0.0.1", port=0))
+        self._calls = calls
+        self._restart_error = restart_error
+        return
+    
+    def _restart_process(self) -> None:
+        """
+            Record the restart, or fail the way a restart can fail.
+        """
+        self._calls.append("restart")
+        if self._restart_error is not None:
+            raise self._restart_error
+        return
+
+
+def create_running_server_with_recording_manager() -> WSGIServer:
+    """
+        Create a server that looks running and has a recording worker manager.
+    """
+    server = WSGIServer(create_simple_app(), ServerConfig(host="127.0.0.1", port=0))
+    server._worker_manager = RecordingWorkerManager()
+    server._running = True
+    return server
+
+
+def test_sigterm_handler_only_records_the_request():
+    """
+        Test that the SIGTERM handler does not shut the workers down itself.
+    """
+    server = create_running_server_with_recording_manager()
+    manager = server._worker_manager
+    
+    server._handle_sigterm(signal.SIGTERM, None)
+    
+    if len(manager.calls) != 0:
+        errmsg = f"Expected no worker manager call inside the signal handler, got {manager.calls}"
+        raise AssertionError(errmsg)
+    
+    if server._shutdown_requested is not True:
+        errmsg = "Expected the shutdown to be requested"
+        raise AssertionError(errmsg)
+    
+    if server._shutdown_graceful is not True:
+        errmsg = "Expected SIGTERM to ask for a graceful shutdown"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_sigint_handler_only_records_the_request():
+    """
+        Test that the SIGINT handler does not shut the workers down itself.
+    """
+    server = create_running_server_with_recording_manager()
+    manager = server._worker_manager
+    
+    server._handle_sigint(signal.SIGINT, None)
+    
+    if len(manager.calls) != 0:
+        errmsg = f"Expected no worker manager call inside the signal handler, got {manager.calls}"
+        raise AssertionError(errmsg)
+    
+    if server._shutdown_graceful is not False:
+        errmsg = "Expected SIGINT to ask for an immediate shutdown"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_stop_workers_carries_out_requested_shutdown():
+    """
+        Test that the shutdown a signal asked for is carried out by _stop_workers.
+    """
+    server = create_running_server_with_recording_manager()
+    manager = server._worker_manager
+    
+    server._handle_sigint(signal.SIGINT, None)
+    server._stop_workers()
+    
+    if manager.calls != ["shutdown(graceful=False)"]:
+        errmsg = f"Expected one immediate shutdown of the workers, got {manager.calls}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_stop_workers_shuts_workers_down_once():
+    """
+        Test that the workers are shut down once however often it is asked for.
+    """
+    server = create_running_server_with_recording_manager()
+    manager = server._worker_manager
+    
+    server.shutdown(graceful=True)
+    server._stop_workers()
+    
+    if manager.calls != ["shutdown(graceful=True)"]:
+        errmsg = f"Expected exactly one shutdown of the workers, got {manager.calls}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_handle_reload_restarts_the_server_process():
+    """
+        Test that a reload stops the workers and starts the process again.
+    """
+    calls: List[str] = []
+    server = RestartRecordingServer(create_simple_app(), calls)
+    manager = RecordingWorkerManager()
+    manager.calls = calls
+    server._worker_manager = manager
+    server._reload_requested = True
+    
+    server._handle_reload()
+    
+    if calls != ["shutdown(graceful=True)", "restart"]:
+        errmsg = f"Expected the workers to be stopped and the process restarted, got {calls}"
+        raise AssertionError(errmsg)
+    
+    if server._reload_requested is not False:
+        errmsg = "Expected the reload request to be cleared"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_handle_reload_keeps_serving_when_restart_fails():
+    """
+        Test that workers are started again when the process cannot be restarted.
+    """
+    calls: List[str] = []
+    server = RestartRecordingServer(create_simple_app(), calls, restart_error=OSError("exec failed"))
+    manager = RecordingWorkerManager()
+    manager.calls = calls
+    server._worker_manager = manager
+    
+    server._handle_reload()
+    
+    if calls != ["shutdown(graceful=True)", "restart", "spawn"]:
+        errmsg = f"Expected workers to be spawned again after the failed restart, got {calls}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_file_signature_changes_when_file_is_modified():
+    """
+        Test that the signature the reload watcher compares changes with the file.
+    """
+    server = WSGIServer(create_simple_app(), ServerConfig(host="127.0.0.1", port=0))
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = os.path.join(tmpdir, "module.py")
+        
+        with open(filepath, "w") as source_file:
+            source_file.write("VALUE = 1\n")
+        
+        before = server._file_signature(filepath)
+        
+        with open(filepath, "w") as source_file:
+            source_file.write("VALUE = 2  # changed\n")
+        
+        after = server._file_signature(filepath)
+    
+    if before == after:
+        errmsg = f"Expected the signature to change with the file, got {before!r} both times"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_file_signature_is_stable_for_unchanged_file():
+    """
+        Test that the signature of a file that was not touched stays the same.
+    """
+    server = WSGIServer(create_simple_app(), ServerConfig(host="127.0.0.1", port=0))
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        filepath = os.path.join(tmpdir, "module.py")
+        
+        with open(filepath, "w") as source_file:
+            source_file.write("VALUE = 1\n")
+        
+        first = server._file_signature(filepath)
+        second = server._file_signature(filepath)
+    
+    if first != second:
+        errmsg = f"Expected a stable signature, got {first!r} and {second!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+# The child runs a WSGIServer whose application cannot start in a worker and
+# reports how serve_forever() ended. argv: port
+BOOT_FAILURE_SERVER_CODE = r"""
+import sys
+from ccai.webworks.wsgi import ServerConfig, WSGIServer
+
+class BootFailingApp:
+    def on_worker_start(self, worker):
+        raise RuntimeError("cannot start in a worker")
+    def __call__(self, environ, start_response):
+        start_response("200 OK", [])
+        return [b""]
+
+server = WSGIServer(BootFailingApp(), ServerConfig(host="127.0.0.1", port=int(sys.argv[1]), workers=2, graceful_timeout=2))
+server.serve_forever()
+print("BOOT_FAILED=" + str(server.boot_failed))
+"""
+
+
+def test_server_stops_when_a_worker_cannot_boot():
+    """
+        A worker that cannot start its application stops the server instead
+        of being replaced over and over.
+    """
+    if not hasattr(os, "fork"):
+        from ccai.errors.exceptions import SkipError
+        raise SkipError("os.fork is not available on this platform.")
+    
+    import subprocess
+    from ccai.testshared.servers.serverprocess import child_environment, find_free_port
+    
+    port = find_free_port()
+    completed = subprocess.run(
+        [sys.executable, "-c", BOOT_FAILURE_SERVER_CODE, str(port)],
+        env=child_environment(),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    
+    if completed.returncode != 0 or "BOOT_FAILED=True" not in completed.stdout:
+        errmsg = f"Expected serve_forever() to end with a boot failure, got {completed.returncode}:\n{completed.stdout}\n{completed.stderr}"
+        raise AssertionError(errmsg)
+    
+    if "cannot start in a worker" not in completed.stderr:
+        errmsg = f"Expected the cause in the log, got:\n{completed.stderr}"
+        raise AssertionError(errmsg)
+    
+    return

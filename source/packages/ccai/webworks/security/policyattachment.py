@@ -22,7 +22,7 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from ccai.webworks.security.accesspolicy import AccessPolicy
 from ccai.webworks.security.errors import PolicyValidationError
@@ -100,17 +100,32 @@ def attach_policy(descriptor_constraints: Dict[str, Any],
 
 
 def get_attached_policy(
-        descriptor_constraints: Dict[str, Any]) -> Optional[AccessPolicy]:
+        descriptor_constraints: Any) -> Optional[AccessPolicy]:
     """
-        Retrieve the AccessPolicy stored in a descriptor constraints
-        dictionary.
+        Retrieve the AccessPolicy stored in the constraints of an endpoint.
 
-        :param descriptor_constraints: The constraints dictionary of an
-            EndpointDescriptor to inspect.
+        The constraints of a registered endpoint are an
+        ``EndpointConstraints`` object whose ``access_policy`` attribute
+        holds the policy; constraints assembled by hand may be a
+        dictionary with an ``access_policy`` key. Both are accepted, as is
+        an ``EndpointDescriptor``, whose constraints are then inspected.
+
+        :param descriptor_constraints: The constraints of an
+            EndpointDescriptor to inspect -- a dictionary or an object with
+            an ``access_policy`` attribute -- or the descriptor itself.
 
         :returns: The attached AccessPolicy, or None if no policy is stored.
     """
-    rtnval = descriptor_constraints.get(POLICY_CONSTRAINTS_KEY, None)
+    rtnval = None
+
+    if descriptor_constraints is None:
+        rtnval = None
+    elif isinstance(descriptor_constraints, Mapping):
+        rtnval = descriptor_constraints.get(POLICY_CONSTRAINTS_KEY, None)
+    elif hasattr(descriptor_constraints, POLICY_CONSTRAINTS_KEY):
+        rtnval = getattr(descriptor_constraints, POLICY_CONSTRAINTS_KEY)
+    elif hasattr(descriptor_constraints, "constraints"):
+        rtnval = get_attached_policy(getattr(descriptor_constraints, "constraints"))
 
     return rtnval
 

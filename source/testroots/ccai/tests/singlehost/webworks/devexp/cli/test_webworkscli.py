@@ -561,16 +561,31 @@ def test_cli_run_parses_config_option():
     """
         Test that the --config global option is parsed and available.
     """
-    cli = WebworksCLI()
-    cmd = _HelloCommand()
-    cli.register_command(cmd)
+    import json
+    import os
+    import tempfile
 
-    cli.run(["--config", "/path/to/config.cfg", "hello"])
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
+        json.dump({"server": {"port": 9123}}, tmp)
+        config_path = tmp.name
 
-    config_val = getattr(cmd.received_args, "config", None)
-    if config_val != "/path/to/config.cfg":
-        errmsg = "Expected config '/path/to/config.cfg', got '{}'".format(config_val)
-        raise AssertionError(errmsg)
+    try:
+        cli = WebworksCLI()
+        cmd = _HelloCommand()
+        cli.register_command(cmd)
+
+        cli.run(["--config", config_path, "hello"])
+
+        config_val = getattr(cmd.received_args, "config", None)
+        if config_val != config_path:
+            errmsg = "Expected config '{}', got '{}'".format(config_path, config_val)
+            raise AssertionError(errmsg)
+
+        if cli.config["server"]["port"] != 9123:
+            errmsg = "Expected the port from the config file, got {}".format(cli.config["server"]["port"])
+            raise AssertionError(errmsg)
+    finally:
+        os.unlink(config_path)
 
     return
 
@@ -779,5 +794,215 @@ def test_cli_run_dispatches_correct_group_command():
     if stop_cmd.executed is not True:
         errmsg = "Expected stop command to be executed."
         raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Unit Tests for the Console Entry Point and Error Reporting
+# =============================================================================
+
+class _FailingCommand(CLICommand):
+    """
+        A command that always raises, to observe how the CLI reports it.
+    """
+
+    name = "explode"
+    help = "Raise an error"
+
+    def execute(self, args: "Namespace", config: Dict[str, Any]) -> int:
+        raise RuntimeError("the reactor is on fire")
+
+
+def _run_capturing_stderr(cli, argv):
+    """
+        Run the CLI and return (exit_code, text written to stderr).
+    """
+    import contextlib
+    import io
+
+    buffer = io.StringIO()
+
+    with contextlib.redirect_stderr(buffer):
+        exit_code = cli.run(argv)
+
+    return exit_code, buffer.getvalue()
+
+
+def test_create_default_cli_registers_builtin_commands():
+    """
+        Test that the default CLI has the built-in commands and groups.
+    """
+    from ccai.webworks.devexp.cli.webworkscli import create_default_cli
+
+    cli = create_default_cli()
+
+    command_names = sorted(cli.commands.keys())
+    group_names = sorted(cli.groups.keys())
+
+    if command_names != ["new", "prodserve", "routes", "serve", "shell"]:
+        errmsg = "Unexpected built-in commands: {}".format(command_names)
+        raise AssertionError(errmsg)
+
+    if group_names != ["db", "generate"]:
+        errmsg = "Unexpected built-in groups: {}".format(group_names)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_run_prints_command_exception_to_stderr():
+    """
+        Test that an exception raised by a command is reported on stderr.
+    """
+    cli = WebworksCLI()
+    cli.register_command(_FailingCommand())
+
+    exit_code, stderr_text = _run_capturing_stderr(cli, ["explode"])
+
+    if exit_code != 1:
+        errmsg = "Expected exit code 1, got {}".format(exit_code)
+        raise AssertionError(errmsg)
+
+    if "RuntimeError: the reactor is on fire" not in stderr_text:
+        errmsg = "Expected the error on stderr, got: {!r}".format(stderr_text)
+        raise AssertionError(errmsg)
+
+    if "Traceback" in stderr_text:
+        errmsg = "Did not expect a traceback without --verbose."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_run_verbose_prints_traceback():
+    """
+        Test that --verbose adds the traceback of a failing command.
+    """
+    cli = WebworksCLI()
+    cli.register_command(_FailingCommand())
+
+    _exit_code, stderr_text = _run_capturing_stderr(cli, ["--verbose", "explode"])
+
+    if "Traceback (most recent call last)" not in stderr_text:
+        errmsg = "Expected a traceback with --verbose, got: {!r}".format(stderr_text)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_run_fails_for_missing_config_file():
+    """
+        Test that an explicitly given config file that does not exist
+        stops the run with EXIT_CONFIG_ERROR and names the file.
+    """
+    from ccai.webworks.devexp.cli.exitcodes import EXIT_CONFIG_ERROR
+
+    cli = WebworksCLI()
+    cmd = _HelloCommand()
+    cli.register_command(cmd)
+
+    exit_code, stderr_text = _run_capturing_stderr(cli, ["--config", "/nonexistent/typo.json", "hello"])
+
+    if exit_code != EXIT_CONFIG_ERROR:
+        errmsg = "Expected EXIT_CONFIG_ERROR, got {}".format(exit_code)
+        raise AssertionError(errmsg)
+
+    if "/nonexistent/typo.json" not in stderr_text:
+        errmsg = "Expected the config path on stderr, got: {!r}".format(stderr_text)
+        raise AssertionError(errmsg)
+
+    if cmd.executed is not False:
+        errmsg = "Did not expect the command to run with an unusable config file."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_global_app_option_is_parsed():
+    """
+        Test that the global --app option is available to commands.
+    """
+    cli = WebworksCLI()
+    cmd = _HelloCommand()
+    cli.register_command(cmd)
+
+    cli.run(["--app", "mysite.app:app", "hello"])
+
+    app_val = getattr(cmd.received_args, "app", None)
+    if app_val != "mysite.app:app":
+        errmsg = "Expected app 'mysite.app:app', got '{}'".format(app_val)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_module_entry_point_prints_help():
+    """
+        Test that 'python -m ccai.webworks.devexp.cli --help' runs and
+        lists the built-in commands.
+    """
+    import subprocess
+    import sys
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "ccai.webworks.devexp.cli", "--help"],
+        capture_output=True, text=True, timeout=120,
+    )
+
+    if completed.returncode != 0:
+        errmsg = "Expected exit code 0 from --help, got {}: {}".format(
+            completed.returncode, completed.stderr[-500:]
+        )
+        raise AssertionError(errmsg)
+
+    for name in ["serve", "prodserve", "new", "routes", "shell", "generate", "db"]:
+        if name not in completed.stdout:
+            errmsg = "Expected '{}' in the help output.".format(name)
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_module_entry_point_lists_routes_of_scaffolded_project():
+    """
+        Test the command line end to end: scaffold a project with 'new',
+        then list its routes with 'routes' from the project directory.
+    """
+    import json
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import tempfile
+
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        created = subprocess.run(
+            [sys.executable, "-m", "ccai.webworks.devexp.cli", "new", "cli-demo", "--template", "api"],
+            cwd=temp_dir, capture_output=True, text=True, timeout=120,
+        )
+
+        if created.returncode != 0:
+            errmsg = "'new' failed: {}".format(created.stderr[-500:])
+            raise AssertionError(errmsg)
+
+        listed = subprocess.run(
+            [sys.executable, "-m", "ccai.webworks.devexp.cli", "routes", "--format", "json"],
+            cwd=os.path.join(temp_dir, "cli-demo"), capture_output=True, text=True, timeout=120,
+        )
+
+        if listed.returncode != 0:
+            errmsg = "'routes' failed: {}{}".format(listed.stdout[-300:], listed.stderr[-500:])
+            raise AssertionError(errmsg)
+
+        paths = sorted(route["path"] for route in json.loads(listed.stdout))
+
+        if paths != ["/", "/api/health", "/api/items/list"]:
+            errmsg = "Unexpected routes for the scaffolded project: {}".format(paths)
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
 
     return

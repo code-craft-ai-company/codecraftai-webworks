@@ -718,10 +718,19 @@ from ccai.webworks.routing.matcher import Matcher
 
 
 def _random_safe_string(min_len=1, max_len=20):
-    """Generate a random URL-safe string without slashes."""
+    """
+    Generate a random URL-safe string without slashes.
+
+    The string is never '..': as a path segment that is refused by the
+    path converter and the router, because it would walk out of the
+    directory a handler serves.
+    """
     length = random.randint(min_len, max_len)
     chars = string.ascii_letters + string.digits + "-_."
-    return "".join(random.choice(chars) for _ in range(length))
+    value = "".join(random.choice(chars) for _ in range(length))
+    if value == "..":
+        value = "dots"
+    return value
 
 
 def _random_uuid_string():
@@ -1047,4 +1056,50 @@ def test_property_matcher_integration_correct_types():
             errmsg = f"Expected '{path_val}', got '{result['filepath']}'"
             raise AssertionError(errmsg)
 
+    return
+
+
+# ============================================================================
+# PathConverter traversal guard
+# ============================================================================
+
+def test_path_converter_rejects_parent_directory_segments():
+    """
+        A path value with a '..' segment does not convert.
+    """
+    converter = PathConverter()
+
+    for value in ["../../etc/passwd", "docs/../secret", "a/b/..", ".."]:
+        raised = False
+        try:
+            converter.convert(value)
+        except ValueError:
+            raised = True
+        assert raised, f"Expected ValueError for {value!r}"
+    return
+
+
+def test_path_converter_rejects_backslash_and_nul():
+    """
+        A backslash or a NUL character in a path value does not convert.
+    """
+    converter = PathConverter()
+
+    for value in ["a\\..\\b", "a\x00b"]:
+        raised = False
+        try:
+            converter.convert(value)
+        except ValueError:
+            raised = True
+        assert raised, f"Expected ValueError for {value!r}"
+    return
+
+
+def test_path_converter_accepts_names_containing_dots():
+    """
+        Dots inside a segment are ordinary characters.
+    """
+    converter = PathConverter()
+
+    assert converter.convert("docs/v1.2/read..me.txt") == "docs/v1.2/read..me.txt"
     return

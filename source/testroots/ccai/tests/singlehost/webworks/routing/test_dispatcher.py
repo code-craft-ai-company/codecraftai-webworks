@@ -1102,3 +1102,913 @@ def test_dispatch_handler_returns_streaming_template_response():
         raise AssertionError(errmsg)
 
     return
+
+
+# ============================================================================
+# Access policy enforcement
+# ============================================================================
+
+import threading
+
+from datetime import datetime, timedelta, timezone
+
+from ccai.webworks.authentication.core import AuthenticationContext, Principal
+from ccai.webworks.endpoints.constraints import EndpointConstraints
+from ccai.webworks.endpoints.endpoint import Endpoint
+from ccai.webworks.routing.middlewarecontext import MiddlewareContext
+from ccai.webworks.routing.middlewareregistry import MiddlewareRegistry
+from ccai.webworks.routing.middleware.cors import CORSMiddleware
+from ccai.webworks.security.accesspolicy import AccessPolicy
+from ccai.webworks.security.decorators import require_roles
+from ccai.webworks.security.securitycontext import SECURITY_CONTEXT_SCOPE_KEY, SecurityContext
+
+
+def create_auth_scope(roles=None, permissions=None, expires_at=None):
+    """
+        Create a request scope carrying an authentication context, the way
+        the authentication middleware leaves it.
+    """
+    principal = Principal(
+        identifier="tester",
+        roles=set(roles or []),
+        permissions=set(permissions or [])
+    )
+    context = AuthenticationContext(principal=principal, scheme="Test", expires_at=expires_at)
+    return {"auth": context}
+
+
+def create_policy_dispatcher(policy, path="/admin/users", calls=None, **dispatcher_options):
+    """
+        Create a dispatcher with one GET route protected by the given policy.
+        The handler records each call in ``calls``.
+    """
+    def handler(request):
+        if calls is not None:
+            calls.append(request.path)
+        return {"secret": "data"}
+
+    descriptor = EndpointDescriptor(
+        handler=handler,
+        module="test",
+        path=path,
+        methods=["GET"],
+        constraints=EndpointConstraints(access_policy=policy),
+    )
+
+    router = Router()
+    router.add_endpoint(descriptor)
+
+    return Dispatcher(router, **dispatcher_options)
+
+
+def test_dispatch_refuses_anonymous_request_to_protected_endpoint():
+    """
+        An endpoint with an access policy answers 401 to a request without
+        an authentication context and does not run its handler.
+    """
+    calls = []
+    dispatcher = create_policy_dispatcher(AccessPolicy(roles=["system-admin"]), calls=calls)
+
+    response = dispatcher.dispatch(Request(method="GET", path="/admin/users"))
+
+    assert response.status_code == 401, f"Expected 401, got {response.status_code}"
+    assert len(calls) == 0, "The handler must not run for an anonymous request"
+    assert "WWW-Authenticate" in response.headers, "A 401 response must carry a challenge"
+    return
+
+
+def test_dispatch_refuses_authenticated_request_without_required_role():
+    """
+        An authenticated request that lacks the required role is answered 403.
+    """
+    calls = []
+    dispatcher = create_policy_dispatcher(AccessPolicy(roles=["system-admin"]), calls=calls)
+
+    request = Request(method="GET", path="/admin/users", scope=create_auth_scope(roles=["viewer"]))
+    response = dispatcher.dispatch(request)
+
+    assert response.status_code == 403, f"Expected 403, got {response.status_code}"
+    assert len(calls) == 0, "The handler must not run without the required role"
+    return
+
+
+def test_dispatch_allows_request_that_satisfies_the_policy():
+    """
+        A request whose authentication context satisfies the policy reaches
+        the handler.
+    """
+    calls = []
+    dispatcher = create_policy_dispatcher(AccessPolicy(roles=["system-admin"]), calls=calls)
+
+    request = Request(method="GET", path="/admin/users", scope=create_auth_scope(roles=["system-admin"]))
+    response = dispatcher.dispatch(request)
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+    assert calls == ["/admin/users"], f"Expected the handler to run once, got {calls}"
+    return
+
+
+def test_dispatch_async_enforces_the_policy():
+    """
+        dispatch_async, the path WebApplication serves, enforces the policy too.
+    """
+    calls = []
+    dispatcher = create_policy_dispatcher(AccessPolicy(roles=["system-admin"]), calls=calls)
+
+    anonymous = asyncio.run(dispatcher.dispatch_async(Request(method="GET", path="/admin/users")))
+    viewer = asyncio.run(dispatcher.dispatch_async(
+        Request(method="GET", path="/admin/users", scope=create_auth_scope(roles=["viewer"]))))
+    admin = asyncio.run(dispatcher.dispatch_async(
+        Request(method="GET", path="/admin/users", scope=create_auth_scope(roles=["system-admin"]))))
+
+    assert anonymous.status_code == 401, f"Expected 401, got {anonymous.status_code}"
+    assert viewer.status_code == 403, f"Expected 403, got {viewer.status_code}"
+    assert admin.status_code == 200, f"Expected 200, got {admin.status_code}"
+    assert len(calls) == 1, f"Only the admin request may reach the handler, got {calls}"
+    return
+
+
+def test_dispatch_enforces_policy_from_security_decorator():
+    """
+        A policy attached by @require_roles and recorded by attach_at is
+        enforced for the route.
+    """
+    @Endpoint.attach_at(path="/decorated", methods=["GET"])
+    @require_roles("system-admin")
+    def decorated(request):
+        return {"ok": True}
+
+    descriptor = Endpoint._find_descriptors_for_handler(decorated)[0]
+
+    router = Router()
+    router.add_endpoint(descriptor)
+    dispatcher = Dispatcher(router)
+
+    anonymous = dispatcher.dispatch(Request(method="GET", path="/decorated"))
+    admin = dispatcher.dispatch(
+        Request(method="GET", path="/decorated", scope=create_auth_scope(roles=["system-admin"])))
+
+    assert anonymous.status_code == 401, f"Expected 401, got {anonymous.status_code}"
+    assert admin.status_code == 200, f"Expected 200, got {admin.status_code}"
+    return
+
+
+def test_dispatch_refuses_expired_authentication_context():
+    """
+        An expired authentication context authenticates nobody.
+    """
+    dispatcher = create_policy_dispatcher(AccessPolicy(roles=["system-admin"]))
+
+    expired = datetime.now(timezone.utc) - timedelta(minutes=1)
+    scope = create_auth_scope(roles=["system-admin"], expires_at=expired)
+    response = dispatcher.dispatch(Request(method="GET", path="/admin/users", scope=scope))
+
+    assert response.status_code == 401, f"Expected 401, got {response.status_code}"
+    return
+
+
+def test_dispatch_requires_scopes_of_the_policy():
+    """
+        A policy with scopes is satisfied only by a principal holding all of them.
+    """
+    dispatcher = create_policy_dispatcher(AccessPolicy(scopes=["users:read", "users:write"]))
+
+    partial = dispatcher.dispatch(
+        Request(method="GET", path="/admin/users", scope=create_auth_scope(permissions=["users:read"])))
+    full = dispatcher.dispatch(
+        Request(method="GET", path="/admin/users",
+                scope=create_auth_scope(permissions=["users:read", "users:write"])))
+
+    assert partial.status_code == 403, f"Expected 403, got {partial.status_code}"
+    assert full.status_code == 200, f"Expected 200, got {full.status_code}"
+    return
+
+
+def test_dispatch_denies_when_policy_can_not_be_evaluated():
+    """
+        A policy whose check raises grants nothing: the request is refused
+        and the handler does not run.
+    """
+    class BrokenPolicy:
+        def check(self, subject):
+            raise RuntimeError("policy backend unavailable")
+
+    calls = []
+    dispatcher = create_policy_dispatcher(BrokenPolicy(), calls=calls)
+
+    request = Request(method="GET", path="/admin/users", scope=create_auth_scope(roles=["system-admin"]))
+    response = dispatcher.dispatch(request)
+
+    assert response.status_code == 403, f"Expected 403, got {response.status_code}"
+    assert len(calls) == 0, "The handler must not run when the policy fails to evaluate"
+    return
+
+
+def test_dispatch_enforces_roles_listed_on_constraints():
+    """
+        Roles listed on the constraints without an AccessPolicy are enforced.
+    """
+    descriptor = EndpointDescriptor(
+        handler=create_test_handler({"ok": True}),
+        module="test",
+        path="/listed",
+        methods=["GET"],
+        constraints=EndpointConstraints(roles=["auditor"]),
+    )
+    router = Router()
+    router.add_endpoint(descriptor)
+    dispatcher = Dispatcher(router)
+
+    anonymous = dispatcher.dispatch(Request(method="GET", path="/listed"))
+    auditor = dispatcher.dispatch(
+        Request(method="GET", path="/listed", scope=create_auth_scope(roles=["auditor"])))
+
+    assert anonymous.status_code == 401, f"Expected 401, got {anonymous.status_code}"
+    assert auditor.status_code == 200, f"Expected 200, got {auditor.status_code}"
+    return
+
+
+def test_dispatch_leaves_endpoint_without_policy_public():
+    """
+        An endpoint that declares no policy is served to anonymous requests.
+    """
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/public", ["GET"], create_test_handler({"ok": True})))
+    dispatcher = Dispatcher(router)
+
+    response = dispatcher.dispatch(Request(method="GET", path="/public"))
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+    return
+
+
+def test_dispatch_applies_default_policy_to_endpoint_without_policy():
+    """
+        With a default policy configured, an endpoint without a policy of
+        its own is protected by the default.
+    """
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/implicit", ["GET"], create_test_handler({"ok": True})))
+    dispatcher = Dispatcher(router, default_policy=AccessPolicy(require_auth=True))
+
+    anonymous = dispatcher.dispatch(Request(method="GET", path="/implicit"))
+    authenticated = dispatcher.dispatch(
+        Request(method="GET", path="/implicit", scope=create_auth_scope()))
+
+    assert anonymous.status_code == 401, f"Expected 401, got {anonymous.status_code}"
+    assert authenticated.status_code == 200, f"Expected 200, got {authenticated.status_code}"
+    return
+
+
+def test_dispatch_accepts_security_context_published_on_scope():
+    """
+        The SecurityContext stored on the scope by the SecurityMiddleware
+        is a valid subject for the policy check.
+    """
+    dispatcher = create_policy_dispatcher(AccessPolicy(roles=["system-admin"]))
+
+    context = SecurityContext(user_id="u1", roles=("system-admin",))
+    request = Request(method="GET", path="/admin/users", scope={SECURITY_CONTEXT_SCOPE_KEY: context})
+    response = dispatcher.dispatch(request)
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+    return
+
+
+# ============================================================================
+# Path normalisation
+# ============================================================================
+
+def test_dispatch_applies_policy_to_every_spelling_of_a_path():
+    """
+        //admin/users and /admin//users reach the /admin/users handler and
+        are checked against its policy.
+    """
+    calls = []
+    dispatcher = create_policy_dispatcher(AccessPolicy(roles=["system-admin"]), calls=calls)
+
+    for path in ["//admin/users", "/admin//users", "///admin///users"]:
+        anonymous = dispatcher.dispatch(Request(method="GET", path=path))
+        assert anonymous.status_code == 401, f"{path}: expected 401, got {anonymous.status_code}"
+
+        viewer = dispatcher.dispatch(
+            Request(method="GET", path=path, scope=create_auth_scope(roles=["viewer"])))
+        assert viewer.status_code == 403, f"{path}: expected 403, got {viewer.status_code}"
+
+    assert len(calls) == 0, f"No refused request may reach the handler, got {calls}"
+    return
+
+
+def test_dispatch_publishes_canonical_path_on_request():
+    """
+        Middleware and handlers see the canonical path, the one the router matched.
+    """
+    seen = []
+
+    def recording_middleware(request, call_next):
+        seen.append(request.path)
+        return call_next(request)
+
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/a/b", ["GET"], create_test_handler({"ok": True})))
+    pipeline = MiddlewarePipeline()
+    pipeline.add(recording_middleware)
+    dispatcher = Dispatcher(router, pipeline)
+
+    response = dispatcher.dispatch(Request(method="GET", path="//a//b"))
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+    assert seen == ["/a/b"], f"Expected middleware to see the canonical path, got {seen}"
+    return
+
+
+def test_dispatch_answers_404_for_path_with_dot_segments():
+    """
+        A path with '..' segments names no route.
+    """
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/files/{name}", ["GET"], create_test_handler({"ok": True})))
+    dispatcher = Dispatcher(router)
+
+    response = dispatcher.dispatch(Request(method="GET", path="/files/.."))
+
+    assert response.status_code == 404, f"Expected 404, got {response.status_code}"
+    return
+
+
+# ============================================================================
+# Middleware around routing
+# ============================================================================
+
+def test_dispatch_runs_middleware_for_unmatched_route():
+    """
+        Global middleware runs for a request no route matches and sees the
+        404 response.
+    """
+    seen = []
+
+    def recording_middleware(request, call_next):
+        response = call_next(request)
+        seen.append(response.status_code)
+        return response
+
+    pipeline = MiddlewarePipeline()
+    pipeline.add(recording_middleware)
+    dispatcher = Dispatcher(Router(), pipeline)
+
+    response = dispatcher.dispatch(Request(method="GET", path="/missing"))
+
+    assert response.status_code == 404, f"Expected 404, got {response.status_code}"
+    assert seen == [404], f"Expected the middleware to see the 404 response, got {seen}"
+    return
+
+
+def test_dispatch_async_answers_cors_preflight_for_registered_route():
+    """
+        A CORS preflight for a route registered for GET and POST is answered
+        by the CORS middleware with 204 and CORS headers, not with 405.
+    """
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/api/items", ["GET", "POST"], create_test_handler({"ok": True})))
+    pipeline = MiddlewarePipeline()
+    pipeline.add(CORSMiddleware(allowed_origins=["https://app.example"], allowed_methods=["GET", "POST"]))
+    dispatcher = Dispatcher(router, pipeline)
+
+    request = Request(
+        method="OPTIONS",
+        path="/api/items",
+        headers={"Origin": "https://app.example", "Access-Control-Request-Method": "POST"}
+    )
+    response = asyncio.run(dispatcher.dispatch_async(request))
+
+    assert response.status_code == 204, f"Expected 204, got {response.status_code}"
+    assert response.headers.get("Access-Control-Allow-Origin") == "https://app.example", \
+        f"Expected the allowed origin to be echoed, got {response.headers}"
+    return
+
+
+def test_dispatch_adds_cors_headers_to_404_response():
+    """
+        A 404 passes back through the CORS middleware and receives CORS headers.
+    """
+    pipeline = MiddlewarePipeline()
+    pipeline.add(CORSMiddleware(allowed_origins=["https://app.example"]))
+    dispatcher = Dispatcher(Router(), pipeline)
+
+    request = Request(method="GET", path="/missing", headers={"Origin": "https://app.example"})
+    response = dispatcher.dispatch(request)
+
+    assert response.status_code == 404, f"Expected 404, got {response.status_code}"
+    assert response.headers.get("Access-Control-Allow-Origin") == "https://app.example", \
+        f"Expected CORS headers on the 404, got {response.headers}"
+    return
+
+
+def test_dispatch_sets_middleware_context_without_descriptor_before_routing():
+    """
+        Global middleware runs before routing, so its middleware context has
+        no endpoint descriptor.
+    """
+    seen = []
+
+    def recording_middleware(request, call_next):
+        seen.append(request.middleware_context)
+        return call_next(request)
+
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/ctx", ["GET"], create_test_handler({"ok": True})))
+    pipeline = MiddlewarePipeline()
+    pipeline.add(recording_middleware)
+    dispatcher = Dispatcher(router, pipeline)
+
+    dispatcher.dispatch(Request(method="GET", path="/ctx"))
+
+    assert isinstance(seen[0], MiddlewareContext), f"Expected a MiddlewareContext, got {seen[0]!r}"
+    assert seen[0].endpoint_descriptor is None, "No descriptor is known before routing"
+    return
+
+
+def test_dispatch_runs_route_pipeline_with_matched_descriptor():
+    """
+        Middleware of the route pipeline runs after routing and can read
+        the matched descriptor.
+    """
+    seen = []
+
+    def recording_middleware(request, call_next):
+        seen.append(request.middleware_context.endpoint_descriptor)
+        return call_next(request)
+
+    descriptor = create_test_descriptor("/ctx", ["GET"], create_test_handler({"ok": True}))
+    router = Router()
+    router.add_endpoint(descriptor)
+    dispatcher = Dispatcher(router)
+    dispatcher.route_pipeline.add(recording_middleware)
+
+    dispatcher.dispatch(Request(method="GET", path="/ctx"))
+
+    assert seen == [descriptor], f"Expected the matched descriptor, got {seen}"
+    return
+
+
+def test_dispatch_composes_global_blueprint_and_route_middleware_from_registry():
+    """
+        With a registry, global middleware runs first, then the blueprint
+        middleware, then the route middleware of the matched route.
+    """
+    order = []
+
+    def make_middleware(label):
+        def middleware(request, call_next):
+            order.append(label)
+            return call_next(request)
+        return middleware
+
+    registry = MiddlewareRegistry()
+    registry.register(make_middleware("route"), scope="route", scope_key="/bp/items", priority=5)
+    registry.register(make_middleware("blueprint"), scope="blueprint", scope_key="shop", priority=10)
+    registry.register(make_middleware("global"), scope="global", priority=50)
+
+    descriptor = EndpointDescriptor(
+        handler=create_test_handler({"ok": True}),
+        module="test",
+        path="/bp/items",
+        methods=["GET"],
+        extras={"blueprint": "shop"},
+    )
+    router = Router()
+    router.add_endpoint(descriptor)
+    router.add_endpoint(create_test_descriptor("/other", ["GET"], create_test_handler({"ok": True})))
+    dispatcher = Dispatcher(router, registry=registry)
+
+    dispatcher.dispatch(Request(method="GET", path="/bp/items"))
+    assert order == ["global", "blueprint", "route"], f"Unexpected order {order}"
+
+    del order[:]
+    dispatcher.dispatch(Request(method="GET", path="/other"))
+    assert order == ["global"], f"Scoped middleware must not run for another route, got {order}"
+    return
+
+
+# ============================================================================
+# HEAD, OPTIONS and trailing slash redirects
+# ============================================================================
+
+def test_dispatch_answers_head_from_get_handler_without_body():
+    """
+        HEAD on a GET-only route returns the GET status and headers and no body.
+    """
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/health", ["GET"], create_test_handler({"status": "ok"})))
+    dispatcher = Dispatcher(router)
+
+    response = dispatcher.dispatch(Request(method="HEAD", path="/health"))
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+    assert response.body == b"", f"A HEAD response must have no body, got {response.body!r}"
+    assert "json" in response.headers.get("Content-Type", ""), \
+        f"Expected the GET headers to be kept, got {response.headers}"
+    return
+
+
+def test_dispatch_answers_options_with_allow_header():
+    """
+        OPTIONS on a route without an OPTIONS handler is answered 204 with
+        the methods the path supports.
+    """
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/items", ["GET", "POST"], create_test_handler({"ok": True})))
+    dispatcher = Dispatcher(router)
+
+    response = dispatcher.dispatch(Request(method="OPTIONS", path="/items"))
+
+    assert response.status_code == 204, f"Expected 204, got {response.status_code}"
+    allow = response.headers.get("Allow", "")
+    for method in ["GET", "HEAD", "OPTIONS", "POST"]:
+        assert method in allow, f"Expected {method} in Allow, got {allow!r}"
+    return
+
+
+def test_dispatch_method_not_allowed_lists_automatic_methods():
+    """
+        The Allow header of a 405 lists HEAD and OPTIONS next to the
+        registered methods.
+    """
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/items", ["GET"], create_test_handler({"ok": True})))
+    dispatcher = Dispatcher(router)
+
+    response = dispatcher.dispatch(Request(method="DELETE", path="/items"))
+
+    assert response.status_code == 405, f"Expected 405, got {response.status_code}"
+    assert response.headers.get("Allow") == "GET, HEAD, OPTIONS", \
+        f"Unexpected Allow header {response.headers.get('Allow')!r}"
+    return
+
+
+def test_dispatch_redirects_to_registered_slash_variant():
+    """
+        With redirect_slashes, /docs/ is redirected with 308 to the
+        registered /docs, keeping the query string.
+    """
+    router = Router(redirect_slashes=True)
+    router.add_endpoint(create_test_descriptor("/docs", ["GET"], create_test_handler({"ok": True})))
+    dispatcher = Dispatcher(router)
+
+    response = dispatcher.dispatch(Request(method="GET", path="/docs/", query_string=b"page=2"))
+
+    assert response.status_code == 308, f"Expected 308, got {response.status_code}"
+    assert response.headers.get("Location") == "/docs?page=2", \
+        f"Unexpected Location {response.headers.get('Location')!r}"
+    return
+
+
+def test_dispatch_does_not_redirect_without_redirect_slashes():
+    """
+        Without redirect_slashes a trailing slash mismatch stays a 404.
+    """
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/docs", ["GET"], create_test_handler({"ok": True})))
+    dispatcher = Dispatcher(router)
+
+    response = dispatcher.dispatch(Request(method="GET", path="/docs/"))
+
+    assert response.status_code == 404, f"Expected 404, got {response.status_code}"
+    return
+
+
+# ============================================================================
+# Sync and async handlers
+# ============================================================================
+
+def test_dispatch_async_runs_sync_handler_off_the_event_loop():
+    """
+        dispatch_async runs a handler that is not a coroutine function on a
+        worker thread, so it can block without stalling the event loop.
+    """
+    threads = {}
+
+    def blocking_handler(request):
+        threads["handler"] = threading.get_ident()
+        return {"ok": True}
+
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/blocking", ["GET"], blocking_handler))
+    dispatcher = Dispatcher(router)
+
+    async def run():
+        threads["loop"] = threading.get_ident()
+        return await dispatcher.dispatch_async(Request(method="GET", path="/blocking"))
+
+    response = asyncio.run(run())
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+    assert threads["handler"] != threads["loop"], "The sync handler ran on the event loop thread"
+    return
+
+
+def test_dispatch_async_keeps_sync_handler_inline_when_offloading_disabled():
+    """
+        With offload_sync_handlers=False a sync handler runs on the event loop thread.
+    """
+    threads = {}
+
+    def handler(request):
+        threads["handler"] = threading.get_ident()
+        return {"ok": True}
+
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/inline", ["GET"], handler))
+    dispatcher = Dispatcher(router, offload_sync_handlers=False)
+
+    async def run():
+        threads["loop"] = threading.get_ident()
+        return await dispatcher.dispatch_async(Request(method="GET", path="/inline"))
+
+    asyncio.run(run())
+
+    assert threads["handler"] == threads["loop"], "The handler should have run on the loop thread"
+    return
+
+
+def test_dispatch_drives_async_handler_to_completion():
+    """
+        Synchronous dispatch awaits a coroutine handler instead of trying to
+        serialise the coroutine.
+    """
+    async def async_handler(request):
+        await asyncio.sleep(0)
+        return {"from": "async"}
+
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/async", ["GET"], async_handler))
+    dispatcher = Dispatcher(router)
+
+    response = dispatcher.dispatch(Request(method="GET", path="/async"))
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+    assert b"async" in response.body, f"Unexpected body {response.body!r}"
+    return
+
+
+def test_dispatch_async_publishes_application_loop_to_offloaded_handler():
+    """
+        A handler running on a worker thread can reach the dispatcher's
+        event loop and drive a coroutine on it.
+    """
+    from ccai.webworks.routing.dispatcher import get_application_loop
+
+    seen = {}
+
+    async def loop_bound_lookup():
+        seen["lookup_loop"] = asyncio.get_running_loop()
+        return "value"
+
+    def handler(request):
+        loop = get_application_loop()
+        seen["handler_loop"] = loop
+        future = asyncio.run_coroutine_threadsafe(loop_bound_lookup(), loop)
+        return {"result": future.result(timeout=5)}
+
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/lookup", ["GET"], handler))
+    dispatcher = Dispatcher(router)
+
+    async def run():
+        seen["dispatch_loop"] = asyncio.get_running_loop()
+        return await dispatcher.dispatch_async(Request(method="GET", path="/lookup"))
+
+    response = asyncio.run(run())
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.body!r}"
+    assert seen["handler_loop"] is seen["dispatch_loop"], "The handler did not receive the dispatcher's loop"
+    assert seen["lookup_loop"] is seen["dispatch_loop"], "The coroutine did not run on the dispatcher's loop"
+    assert get_application_loop() is None, "The loop must not be published outside a handler call"
+    return
+
+
+# ============================================================================
+# Request lifecycle hooks
+# ============================================================================
+
+import asyncio as _hooks_asyncio
+
+from ccai.webworks.extensibility.hookmanager import HookManager
+from ccai.webworks.extensibility.requestlifecyclehooks import RequestLifecycleHooks
+from ccai.webworks.routing.response import JSONResponse as _HooksJSONResponse
+
+
+def _hooked_dispatcher(events, handler, register=None, on_first_request=None):
+    """
+        Build a dispatcher serving ``handler`` at /item with request hooks
+        that record into ``events``.
+
+        :param events: The list the hooks append to.
+        :param handler: The route handler.
+        :param register: Called with the HookManager to register more callbacks.
+        :param on_first_request: The dispatcher's first-request callable.
+
+        :returns: The dispatcher.
+    """
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/item", ["GET"], handler))
+
+    manager = HookManager()
+    manager.register("before_first_request", lambda request: events.append("before_first_request"), extension_name="rec")
+    manager.register("before_request", lambda request: events.append("before_request"), extension_name="rec")
+    manager.register(
+        "on_request_error",
+        lambda request, error: events.append(("on_request_error", type(error).__name__)),
+        extension_name="rec"
+    )
+    manager.register("after_request", lambda request, response: events.append("after_request"), extension_name="rec")
+    manager.register(
+        "teardown_request",
+        lambda request, response, error: events.append(
+            ("teardown_request", response.status_code, type(error).__name__ if error is not None else None)
+        ),
+        extension_name="rec"
+    )
+
+    if register is not None:
+        register(manager)
+
+    rtnval = Dispatcher(
+        router,
+        request_hooks=RequestLifecycleHooks(hook_manager=manager),
+        on_first_request=on_first_request
+    )
+    return rtnval
+
+
+def test_dispatch_fires_request_hooks_in_order_sync_and_async():
+    """
+        Test that dispatch and dispatch_async fire the request hooks in the
+        same order, before_first_request only for the first request.
+    """
+    events = []
+
+    def handler(request):
+        events.append("handler")
+        return {"ok": True}
+
+    dispatcher = _hooked_dispatcher(events, handler)
+
+    sync_response = dispatcher.dispatch(Request("GET", "/item"))
+    async_response = _hooks_asyncio.run(dispatcher.dispatch_async(Request("GET", "/item")))
+
+    expected = [
+        "before_first_request",
+        "before_request", "handler", "after_request", ("teardown_request", 200, None),
+        "before_request", "handler", "after_request", ("teardown_request", 200, None),
+    ]
+    assert events == expected, f"Expected {expected}, got {events}"
+    assert sync_response.status_code == 200 and async_response.status_code == 200
+    return
+
+
+def test_dispatch_on_first_request_runs_once_before_before_first_request():
+    """
+        Test that the first-request callable runs once, before before_first_request.
+    """
+    events = []
+    dispatcher = _hooked_dispatcher(
+        events, create_test_handler({"ok": True}), on_first_request=lambda: events.append("on_first_request")
+    )
+
+    dispatcher.dispatch(Request("GET", "/item"))
+    _hooks_asyncio.run(dispatcher.dispatch_async(Request("GET", "/item")))
+
+    assert events.count("on_first_request") == 1, f"Expected one call, got {events}"
+    assert events.index("on_first_request") < events.index("before_first_request"), f"Unexpected order {events}"
+    return
+
+
+def test_dispatch_before_request_response_short_circuits_routing():
+    """
+        Test that a response from before_request is sent without routing,
+        even for a path no route matches, and after_request still runs.
+    """
+    events = []
+
+    def register(manager):
+        manager.register(
+            "before_request", lambda request: _HooksJSONResponse({"maintenance": True}, status_code=503),
+            extension_name="gate"
+        )
+
+    dispatcher = _hooked_dispatcher(events, create_test_handler({"ok": True}), register=register)
+
+    response = _hooks_asyncio.run(dispatcher.dispatch_async(Request("GET", "/no-such-route")))
+
+    assert response.status_code == 503, f"Expected the short-circuit 503, got {response.status_code}"
+    assert events[-2:] == ["after_request", ("teardown_request", 503, None)], f"Unexpected events {events}"
+    return
+
+
+def test_dispatch_reports_an_unhandled_error_before_the_500():
+    """
+        Test that on_request_error sees the handler's exception, and teardown
+        gets the 500 response and the exception, in both dispatch modes.
+    """
+    for mode in ("sync", "async"):
+        events = []
+        dispatcher = _hooked_dispatcher(events, create_exception_handler(RuntimeError("broken")))
+
+        if mode == "sync":
+            response = dispatcher.dispatch(Request("GET", "/item"))
+        else:
+            response = _hooks_asyncio.run(dispatcher.dispatch_async(Request("GET", "/item")))
+
+        expected = [
+            "before_first_request",
+            "before_request",
+            ("on_request_error", "RuntimeError"),
+            "after_request",
+            ("teardown_request", 500, "RuntimeError"),
+        ]
+        assert response.status_code == 500, f"{mode}: expected 500, got {response.status_code}"
+        assert events == expected, f"{mode}: expected {expected}, got {events}"
+
+    return
+
+
+def test_dispatch_after_request_may_replace_the_response():
+    """
+        Test that a response returned by after_request is the one sent.
+    """
+    events = []
+
+    def register(manager):
+        manager.register(
+            "after_request",
+            lambda request, response: _HooksJSONResponse({"replaced": True}, status_code=202),
+            extension_name="replacer"
+        )
+
+    dispatcher = _hooked_dispatcher(events, create_test_handler({"ok": True}), register=register)
+
+    response = dispatcher.dispatch(Request("GET", "/item"))
+
+    assert response.status_code == 202, f"Expected the replacement, got {response.status_code}"
+    assert events[-1] == ("teardown_request", 202, None), f"Expected teardown to see the replacement, got {events}"
+    return
+
+
+def test_dispatch_failing_hook_answers_500_and_still_tears_down():
+    """
+        Test that a failing after_request callback turns the request into a
+        500, reported to on_request_error, and the teardown still runs.
+    """
+    events = []
+
+    def failing(request, response):
+        raise ValueError("after failed")
+
+    def register(manager):
+        manager.register("after_request", failing, extension_name="bad")
+
+    dispatcher = _hooked_dispatcher(events, create_test_handler({"ok": True}), register=register)
+
+    response = _hooks_asyncio.run(dispatcher.dispatch_async(Request("GET", "/item")))
+
+    assert response.status_code == 500, f"Expected 500, got {response.status_code}"
+    assert ("on_request_error", "HookExecutionError") in events, f"Expected the hook failure reported, got {events}"
+    assert events[-1] == ("teardown_request", 500, "HookExecutionError"), f"Unexpected teardown {events}"
+    return
+
+
+def test_dispatch_head_response_has_no_body_after_hooks():
+    """
+        Test that a HEAD response is emptied after the after_request hooks.
+    """
+    events = []
+    dispatcher = _hooked_dispatcher(events, create_test_handler({"ok": True}))
+
+    response = dispatcher.dispatch(Request("HEAD", "/item"))
+
+    assert response.status_code == 200 and response.body == b"", f"Expected an empty 200, got {response.body!r}"
+    return
+
+
+def test_dispatch_without_callbacks_takes_the_plain_path():
+    """
+        Test that with no request hook callback the hooks are not consulted
+        after the first request.
+    """
+    router = Router()
+    router.add_endpoint(create_test_descriptor("/item", ["GET"], create_test_handler({"ok": True})))
+
+    manager = HookManager()
+    hooks = RequestLifecycleHooks(hook_manager=manager)
+    dispatcher = Dispatcher(router, request_hooks=hooks)
+
+    dispatcher.dispatch(Request("GET", "/item"))
+
+    assert hooks.first_request_handled is True, "Expected the first request to be handled"
+    assert dispatcher._uses_request_hooks() is False, "Expected the plain path without callbacks"
+
+    manager.register("before_request", lambda request: None, extension_name="late")
+
+    assert dispatcher._uses_request_hooks() is True, "Expected the hooks path once a callback is registered"
+    return

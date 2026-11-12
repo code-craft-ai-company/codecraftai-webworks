@@ -741,9 +741,9 @@ def test_lifespanhandler_startup_failure_stops_at_first_error():
     return
 
 
-def test_lifespanhandler_shutdown_failure_stops_at_first_error():
+def test_lifespanhandler_shutdown_failure_runs_remaining_handlers():
     """
-        Test that shutdown stops at the first handler that fails.
+        Test that shutdown runs the handlers after one that fails.
     """
     mock_logger = MockLogger()
     handler = LifespanHandler(logger=mock_logger)
@@ -776,8 +776,8 @@ def test_lifespanhandler_shutdown_failure_stops_at_first_error():
     )
     
     # Shutdown handlers execute in reverse order: b, fail, a
-    # Should stop at the failing handler
-    expected_order = ["b", "fail"]
+    # A failing handler must not keep the ones after it from cleaning up
+    expected_order = ["b", "fail", "a"]
     if execution_order != expected_order:
         errmsg = f"Expected execution order {expected_order}, got {execution_order}"
         raise AssertionError(errmsg)
@@ -881,3 +881,171 @@ def test_lifespanhandler_async_handlers_with_await():
     
     return
 
+
+
+# =============================================================================
+# Tests for request gating, shutdown error collection and plain callables
+# =============================================================================
+
+def run_lifespan(handler: LifespanHandler, messages: List[Dict[str, Any]]) -> MockSend:
+    """
+        Run lifespan messages through a handler and return what it sent.
+    """
+    receive = MockReceive(messages)
+    send = MockSend()
+    
+    asyncio.get_event_loop().run_until_complete(
+        handler.handle({"type": "lifespan"}, receive, send)
+    )
+    
+    return send
+
+
+def test_lifespanhandler_does_not_block_requests_before_any_lifespan_event():
+    """
+        Test that requests are not blocked when the server never started the lifespan.
+    """
+    handler = LifespanHandler()
+    
+    if handler.requests_blocked is not False:
+        errmsg = "Expected requests not to be blocked before any lifespan event"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_lifespanhandler_blocks_requests_after_failed_startup():
+    """
+        Test that requests are blocked once a startup handler has failed.
+    """
+    handler = LifespanHandler(logger=MockLogger())
+    
+    @handler.on_startup
+    async def failing_startup():
+        raise ValueError("startup failed")
+    
+    run_lifespan(handler, [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
+    
+    if handler.requests_blocked is not True:
+        errmsg = "Expected requests to be blocked after a failed startup"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_lifespanhandler_blocks_requests_while_startup_is_running():
+    """
+        Test that requests are blocked from the startup event until startup is done.
+    """
+    handler = LifespanHandler()
+    blocked_during_startup: List[bool] = []
+    
+    @handler.on_startup
+    async def observing_startup():
+        blocked_during_startup.append(handler.requests_blocked)
+    
+    run_lifespan(handler, [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
+    
+    if blocked_during_startup != [True]:
+        errmsg = f"Expected requests to be blocked while startup runs, got {blocked_during_startup}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_lifespanhandler_does_not_block_requests_after_successful_startup():
+    """
+        Test that requests are let through once startup has completed.
+    """
+    handler = LifespanHandler()
+    
+    @handler.on_startup
+    async def startup():
+        return
+    
+    run_lifespan(handler, [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
+    
+    if handler.requests_blocked is not False:
+        errmsg = "Expected requests not to be blocked after a successful startup"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_lifespanhandler_shutdown_reports_every_failed_handler():
+    """
+        Test that the shutdown failure message names every handler error.
+    """
+    handler = LifespanHandler(logger=MockLogger())
+    
+    @handler.on_shutdown
+    async def first_failure():
+        raise ValueError("first failure")
+    
+    @handler.on_shutdown
+    async def second_failure():
+        raise KeyError("second failure")
+    
+    send = run_lifespan(handler, [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
+    
+    failed_messages = [msg for msg in send.messages if msg.get("type") == "lifespan.shutdown.failed"]
+    
+    if len(failed_messages) != 1:
+        errmsg = f"Expected one shutdown.failed message, got {send.messages}"
+        raise AssertionError(errmsg)
+    
+    message_text = failed_messages[0].get("message", "")
+    
+    if "first failure" not in message_text or "second failure" not in message_text:
+        errmsg = f"Expected both errors in the message, got {message_text!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_lifespanhandler_accepts_plain_function_as_startup_handler():
+    """
+        Test that a startup handler that is not an async function is called.
+    """
+    handler = LifespanHandler()
+    called: List[str] = []
+    
+    @handler.on_startup
+    def plain_startup():
+        called.append("startup")
+    
+    send = run_lifespan(handler, [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
+    
+    if called != ["startup"]:
+        errmsg = f"Expected the plain startup function to be called, got {called}"
+        raise AssertionError(errmsg)
+    
+    if send.messages[0].get("type") != "lifespan.startup.complete":
+        errmsg = f"Expected startup to complete, got {send.messages[0]}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_lifespanhandler_accepts_plain_function_as_shutdown_handler():
+    """
+        Test that a shutdown handler that is not an async function is called.
+    """
+    handler = LifespanHandler()
+    called: List[str] = []
+    
+    @handler.on_shutdown
+    def plain_shutdown():
+        called.append("shutdown")
+    
+    send = run_lifespan(handler, [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
+    
+    if called != ["shutdown"]:
+        errmsg = f"Expected the plain shutdown function to be called, got {called}"
+        raise AssertionError(errmsg)
+    
+    if send.messages[-1].get("type") != "lifespan.shutdown.complete":
+        errmsg = f"Expected shutdown to complete, got {send.messages[-1]}"
+        raise AssertionError(errmsg)
+    
+    return

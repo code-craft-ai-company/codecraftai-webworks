@@ -13,8 +13,9 @@ from ccai.webworks.authentication.core import (
     AuthenticationContext,
     Principal,
 )
+from ccai.webworks.routing.exceptions import BadRequest, MalformedRequestBody
 from ccai.webworks.routing.request import Request
-from ccai.webworks.routing.headers import Headers
+from ccai.webworks.routing.headers import Headers, parse_cookie_header
 from ccai.webworks.routing.queryparams import QueryParams
 
 
@@ -338,12 +339,19 @@ def test_request_json_raises_on_invalid_json():
     body = b'not valid json'
     request = Request(method="POST", path="/", body=body)
     
+    raised = None
     try:
         request.json()
-        errmsg = "Expected JSONDecodeError for invalid JSON"
+    except MalformedRequestBody as exc:
+        raised = exc
+
+    if raised is None:
+        errmsg = "Expected MalformedRequestBody for invalid JSON"
         raise AssertionError(errmsg)
-    except json.JSONDecodeError:
-        pass
+
+    if raised.status_code != 400:
+        errmsg = f"Expected status 400 for invalid JSON, got {raised.status_code}"
+        raise AssertionError(errmsg)
     
     return
 
@@ -354,12 +362,15 @@ def test_request_json_handles_empty_body():
     """
     request = Request(method="POST", path="/", body=b"")
     
+    raised = None
     try:
         request.json()
-        errmsg = "Expected JSONDecodeError for empty body"
+    except MalformedRequestBody as exc:
+        raised = exc
+
+    if raised is None:
+        errmsg = "Expected MalformedRequestBody for empty body"
         raise AssertionError(errmsg)
-    except json.JSONDecodeError:
-        pass
     
     return
 
@@ -589,7 +600,119 @@ def test_request_from_wsgi_extracts_host_and_port():
     if request.url != expected:
         errmsg = f"Expected '{expected}', got '{request.url}'"
         raise AssertionError(errmsg)
-    
+
+    return
+
+
+class _StreamThatBlocksUntilClose:
+    """
+        A wsgi.input that, like a raw socket stream, would wait for the
+        client to close the connection if read to its end.
+    """
+
+    def __init__(self):
+        self.unbounded_reads = 0
+        return
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            self.unbounded_reads += 1
+        return b""
+
+
+def test_request_from_wsgi_without_content_length_does_not_read_to_end():
+    """
+        Test that from_wsgi() treats a request without CONTENT_LENGTH as
+        having no body instead of reading wsgi.input until it closes.
+    """
+    stream = _StreamThatBlocksUntilClose()
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "wsgi.input": stream,
+    }
+
+    request = Request.from_wsgi(environ)
+
+    if stream.unbounded_reads != 0:
+        errmsg = f"Expected no read to the end of wsgi.input, got {stream.unbounded_reads}"
+        raise AssertionError(errmsg)
+
+    if request.body != b"":
+        errmsg = f"Expected an empty body, got {request.body!r}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_request_from_wsgi_with_invalid_content_length_does_not_read_to_end():
+    """
+        Test that from_wsgi() treats an invalid CONTENT_LENGTH as no body
+        instead of falling back to a read of the whole stream.
+    """
+    stream = _StreamThatBlocksUntilClose()
+    environ = {
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/",
+        "CONTENT_LENGTH": "not-a-number",
+        "wsgi.input": stream,
+    }
+
+    request = Request.from_wsgi(environ)
+
+    if stream.unbounded_reads != 0:
+        errmsg = f"Expected no read to the end of wsgi.input, got {stream.unbounded_reads}"
+        raise AssertionError(errmsg)
+
+    if request.body != b"":
+        errmsg = f"Expected an empty body, got {request.body!r}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_request_from_wsgi_reads_terminated_input_without_content_length():
+    """
+        Test that from_wsgi() reads the body of a stream the server marks
+        with wsgi.input_terminated when there is no CONTENT_LENGTH.
+    """
+    body_content = b"chunked body"
+    environ = {
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/",
+        "wsgi.input": io.BytesIO(body_content),
+        "wsgi.input_terminated": True,
+    }
+
+    request = Request.from_wsgi(environ)
+
+    if request.body != body_content:
+        errmsg = f"Expected {body_content!r}, got {request.body!r}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_request_from_wsgi_prefers_host_header_over_server_name():
+    """
+        Test that from_wsgi() takes host and port from the Host header
+        rather than from SERVER_NAME / SERVER_PORT.
+    """
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "SERVER_NAME": "0.0.0.0",
+        "SERVER_PORT": "8000",
+        "HTTP_HOST": "example.com:8443",
+        "wsgi.url_scheme": "http",
+    }
+
+    request = Request.from_wsgi(environ)
+
+    if request.host != "example.com" or request.port != 8443:
+        errmsg = f"Expected example.com:8443, got {request.host}:{request.port}"
+        raise AssertionError(errmsg)
+
     return
 
 
@@ -1612,4 +1735,178 @@ def test_request_files_returns_empty_dict_for_non_multipart_request():
         errmsg = "Expected empty dict for non-multipart request, got {!r}".format(files)
         raise AssertionError(errmsg)
 
+    return
+
+
+# ============================================================================
+# Cookie parsing, repeated headers and body errors
+# ============================================================================
+
+def test_request_cookies_survive_a_malformed_sibling_cookie():
+    """
+        A cookie the strict parser rejects does not hide the cookies after it.
+    """
+    request = Request(
+        method="GET",
+        path="/",
+        headers={"Cookie": 'prefs={"x":1}; session_id=abc'}
+    )
+
+    assert request.cookies.get("session_id") == "abc", f"Unexpected cookies {request.cookies}"
+    assert request.cookies.get("prefs") == '{"x":1}', f"Unexpected cookies {request.cookies}"
+    return
+
+
+def test_request_cookies_accept_value_with_space():
+    """
+        A cookie value containing a space is parsed, and so are the cookies after it.
+    """
+    request = Request(method="GET", path="/", headers={"Cookie": "note=hello world; session_id=abc"})
+
+    assert request.cookies.get("note") == "hello world", f"Unexpected cookies {request.cookies}"
+    assert request.cookies.get("session_id") == "abc", f"Unexpected cookies {request.cookies}"
+    return
+
+
+def test_request_cookies_unquote_quoted_value():
+    """
+        A quoted cookie value is returned without quotes and with escapes resolved.
+    """
+    request = Request(method="GET", path="/", headers={"Cookie": 'q="a\\"b\\054c"'})
+
+    assert request.cookies.get("q") == 'a"b,c', f"Unexpected cookies {request.cookies}"
+    return
+
+
+def test_parse_cookie_header_returns_every_occurrence_in_order():
+    """
+        parse_cookie_header reports a repeated cookie name as often as it was sent.
+    """
+    pairs = parse_cookie_header("session_id=first; other=1; session_id=second")
+
+    assert pairs == [("session_id", "first"), ("other", "1"), ("session_id", "second")], \
+        f"Unexpected pairs {pairs}"
+    return
+
+
+def test_from_asgi_joins_cookie_header_split_across_fields():
+    """
+        A Cookie header sent as several fields (HTTP/2) keeps all its cookies.
+    """
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"cookie", b"a=1"), (b"cookie", b"session_id=abc")],
+    }
+
+    request = Request.from_asgi(scope)
+
+    assert request.cookies == {"a": "1", "session_id": "abc"}, f"Unexpected cookies {request.cookies}"
+    return
+
+
+def test_from_asgi_joins_repeated_header_with_comma():
+    """
+        A repeated list-valued header is joined, not overwritten by its last field.
+    """
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "headers": [(b"accept", b"text/html"), (b"accept", b"application/json")],
+    }
+
+    request = Request.from_asgi(scope)
+
+    assert request.headers.get("Accept") == "text/html, application/json", \
+        f"Unexpected Accept {request.headers.get('Accept')!r}"
+    return
+
+
+def test_request_json_error_is_a_bad_request_and_a_value_error():
+    """
+        The error raised for a malformed JSON body maps to 400 and can still
+        be caught as ValueError.
+    """
+    request = Request(method="POST", path="/", body=b"{bad")
+
+    raised = None
+    try:
+        request.json()
+    except ValueError as exc:
+        raised = exc
+
+    assert isinstance(raised, BadRequest), f"Expected a BadRequest, got {raised!r}"
+    assert raised.status_code == 400, f"Expected status 400, got {raised.status_code}"
+    return
+
+
+def test_request_json_raises_bad_request_for_non_utf8_body():
+    """
+        A body that is not UTF-8 is a malformed request, not a server error.
+    """
+    request = Request(method="POST", path="/", body=b"\xff\xfe\xfd")
+
+    raised = False
+    try:
+        request.json()
+    except MalformedRequestBody:
+        raised = True
+
+    assert raised, "Expected MalformedRequestBody for a non-UTF-8 body"
+    return
+
+
+def test_request_form_raises_bad_request_for_non_utf8_body():
+    """
+        A URL-encoded form body that is not UTF-8 is a malformed request.
+    """
+    request = Request(
+        method="POST",
+        path="/",
+        body=b"name=\xff\xfe",
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
+
+    raised = False
+    try:
+        request.form()
+    except MalformedRequestBody:
+        raised = True
+
+    assert raised, "Expected MalformedRequestBody for a non-UTF-8 form body"
+    return
+
+
+def test_request_parses_multipart_body_once_for_form_and_files():
+    """
+        form() and files() share one parse of a multipart body.
+    """
+    boundary = "testboundary123"
+    body = (
+        "--{b}\r\n"
+        'Content-Disposition: form-data; name="title"\r\n\r\n'
+        "hello\r\n"
+        "--{b}\r\n"
+        'Content-Disposition: form-data; name="upload"; filename="a.txt"\r\n'
+        "Content-Type: text/plain\r\n\r\n"
+        "file-content\r\n"
+        "--{b}--\r\n"
+    ).format(b=boundary).encode("utf-8")
+
+    request = Request(
+        method="POST",
+        path="/",
+        body=body,
+        headers={"Content-Type": "multipart/form-data; boundary={}".format(boundary)}
+    )
+
+    form = request.form()
+    first_result = request._multipart_result
+    files = request.files()
+
+    assert form == {"title": "hello"}, f"Unexpected form {form}"
+    assert files["upload"].content == b"file-content", f"Unexpected files {files}"
+    assert request._multipart_result is first_result, "The body was parsed a second time"
     return

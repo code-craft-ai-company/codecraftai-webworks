@@ -425,7 +425,13 @@ class BlockParser:
         if content is None:
             content = ""
         content = content.strip()
-        content = re.sub(r"(?:^|[ \t]+)#+$", "", content)
+
+        # A closing run of "#" counts only at the start of the content or after a space or a tab. It is cut off with
+        # string operations: a pattern for it backtracks over every run of spaces in a long heading.
+        without_closing = content.rstrip("#")
+        if len(without_closing) < len(content):
+            if without_closing == "" or without_closing[-1] in " \t":
+                content = without_closing.rstrip(" \t")
 
         block = BlockNode(BLOCK_KIND_HEADING)
         block.level = len(marks)
@@ -445,6 +451,11 @@ class BlockParser:
             :returns: ``(block quote, index of the line after it)``.
         """
         inner: List[str] = []
+
+        # The fence that is open after the last line of "inner" ("" when none is). It is carried along as the lines
+        # are collected, so deciding about a lazy line does not rescan the quote.
+        open_fence = ""
+
         cursor = index
         total = len(lines)
         while cursor < total:
@@ -456,14 +467,16 @@ class BlockParser:
                     if rest.startswith(" ") or rest.startswith("\t"):
                         rest = rest[1:]
                     inner.append(rest)
+                    open_fence = self._advance_open_fence(open_fence, rest)
                     cursor += 1
                     continue
 
             if is_blank(line):
                 break
 
-            if self._can_continue_lazily(inner, lines, cursor):
+            if self._can_continue_lazily(inner, lines, cursor, open_fence=open_fence):
                 inner.append(line)
+                open_fence = self._advance_open_fence(open_fence, line)
                 cursor += 1
                 continue
 
@@ -620,6 +633,10 @@ class BlockParser:
         item_lines = [marker.first_line]
         started_empty = marker.first_line.strip() == ""
 
+        # The fence that is open after the last line of "item_lines" ("" when none is), carried along as the lines
+        # are collected. A blank line neither opens nor closes a fence.
+        open_fence = self._advance_open_fence("", marker.first_line)
+
         cursor = index + 1
         total = len(lines)
         while cursor < total:
@@ -640,12 +657,15 @@ class BlockParser:
                 break
 
             if leading_columns(line) >= marker.content_column:
-                item_lines.append(remove_columns(line, marker.content_column))
+                item_line = remove_columns(line, marker.content_column)
+                item_lines.append(item_line)
+                open_fence = self._advance_open_fence(open_fence, item_line)
                 cursor += 1
                 continue
 
-            if self._can_continue_lazily(item_lines, lines, cursor):
+            if self._can_continue_lazily(item_lines, lines, cursor, open_fence=open_fence):
                 item_lines.append(line)
+                open_fence = self._advance_open_fence(open_fence, line)
                 cursor += 1
                 continue
 
@@ -654,7 +674,7 @@ class BlockParser:
         rtnval = (item_lines, cursor)
         return rtnval
 
-    def _can_continue_lazily(self, container_lines: List[str], lines: List[str], index: int) -> bool:
+    def _can_continue_lazily(self, container_lines: List[str], lines: List[str], index: int, *, open_fence: str) -> bool:
         """
             Whether a line that lacks a container's prefix still belongs to the container as a lazy continuation of a
             paragraph: the container's last line is paragraph text and the line does not start a block of its own.
@@ -662,6 +682,8 @@ class BlockParser:
             :param container_lines: The lines collected for the container so far, prefix removed.
             :param lines: The lines being read.
             :param index: The line to decide about.
+            :param open_fence: The fence left open by ``container_lines``, as :meth:`_advance_open_fence` tracks it;
+                               the empty string when the lines do not end inside a fenced code block.
 
             :returns: True when the line continues the container.
         """
@@ -677,7 +699,7 @@ class BlockParser:
             return False
         if MARKDOWN_THEMATIC_BREAK_PATTERN.match(last_stripped) is not None:
             return False
-        if self._inside_open_fence(container_lines):
+        if open_fence != "":
             return False
 
         if self._starts_block(lines, index):
@@ -717,30 +739,31 @@ class BlockParser:
 
         return False
 
-    def _inside_open_fence(self, container_lines: List[str]) -> bool:
+    def _advance_open_fence(self, open_fence: str, line: str) -> str:
         """
-            Whether the lines end inside a fenced code block that has not been closed.
+            Follows the fenced code blocks of a container one line further. Called for each line as it is added to
+            the container, this keeps track of whether the container's lines end inside a fence that has not been
+            closed, without reading the earlier lines again.
 
-            :param container_lines: The lines.
+            :param open_fence: The fence that is open before the line, or the empty string when none is.
+            :param line: The line added to the container, prefix removed.
 
-            :returns: True when a fence is still open after the last line.
+            :returns: The fence that is open after the line, or the empty string when none is.
         """
-        open_fence = ""
-        for line in container_lines:
-            if leading_columns(line) > 3:
-                continue
-            stripped = line.lstrip(" \t")
-            if open_fence == "":
-                fence_match = MARKDOWN_FENCE_PATTERN.match(stripped)
-                if fence_match is not None and self._is_valid_fence(fence_match):
-                    open_fence = fence_match.group(1)
-            else:
-                closing = stripped.rstrip(" \t")
-                if closing.startswith(open_fence) and closing.strip(open_fence[0]) == "":
-                    open_fence = ""
+        if leading_columns(line) > 3:
+            return open_fence
 
-        rtnval = open_fence != ""
-        return rtnval
+        stripped = line.lstrip(" \t")
+        if open_fence == "":
+            fence_match = MARKDOWN_FENCE_PATTERN.match(stripped)
+            if fence_match is not None and self._is_valid_fence(fence_match):
+                open_fence = fence_match.group(1)
+        else:
+            closing = stripped.rstrip(" \t")
+            if closing.startswith(open_fence) and closing.strip(open_fence[0]) == "":
+                open_fence = ""
+
+        return open_fence
 
     def _interrupts_paragraph(self, lines: List[str], index: int) -> bool:
         """

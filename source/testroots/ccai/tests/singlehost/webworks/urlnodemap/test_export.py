@@ -1021,3 +1021,103 @@ def test_property_9_export_consistency_metadata_matches_effective():
                 raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# JSON and Markdown export, loading descriptors
+# =============================================================================
+
+import json
+
+from ccai.webworks.endpoints.constraints import EndpointConstraints
+from ccai.webworks.endpoints.descriptor import EndpointDescriptor
+from ccai.webworks.security.accesspolicy import AccessPolicy
+
+
+def _descriptor_handler(request):
+    """
+        Handler stand-in for descriptors loaded into a map.
+    """
+    return {}
+
+
+def test_load_descriptors_builds_nodes_for_registered_routes():
+    """
+        Loading descriptors creates the node of each route with its
+        handlers and its security metadata.
+    """
+    policy = AccessPolicy(roles=("admin",), scopes=("users:write",))
+    descriptor = EndpointDescriptor(
+        handler=_descriptor_handler,
+        module="test",
+        path="/admin/users/{id}",
+        methods=["GET", "DELETE"],
+        tags=["admin"],
+        constraints=EndpointConstraints(access_policy=policy, scopes=policy.scopes),
+    )
+
+    url_map = URLNodeMap()
+    nodes = url_map.load_descriptors([descriptor])
+
+    node = nodes[0]
+
+    assert node.path == "/admin/users/{id}", f"Unexpected path {node.path}"
+    assert node.get_handler("GET") is _descriptor_handler, "Expected the GET handler to be attached"
+    assert node.get_handler("DELETE") is _descriptor_handler, "Expected the DELETE handler to be attached"
+    assert node.get_effective_access_policy() is policy, "Expected the descriptor's policy"
+    assert node.get_effective_tags() == ["admin"], f"Unexpected tags {node.get_effective_tags()}"
+    return
+
+
+def test_load_descriptors_accepts_route_registered_with_and_without_trailing_slash():
+    """
+        The same handler registered for /books and /books/ loads into one node.
+    """
+    first = EndpointDescriptor(handler=_descriptor_handler, module="test", path="/books")
+    second = EndpointDescriptor(handler=_descriptor_handler, module="test", path="/books/")
+
+    url_map = URLNodeMap()
+    nodes = url_map.load_descriptors([first, second])
+
+    assert nodes[0] is nodes[1], "Expected both descriptors to load into the same node"
+    return
+
+
+def test_export_security_map_json_is_valid_json():
+    """
+        The JSON export parses back to the list of security map entries.
+    """
+    descriptor = EndpointDescriptor(
+        handler=_descriptor_handler,
+        module="test",
+        path="/reports",
+        constraints=EndpointConstraints(access_policy=AccessPolicy(roles=("analyst",))),
+    )
+    url_map = URLNodeMap()
+    url_map.load_descriptors([descriptor])
+
+    parsed = json.loads(url_map.export_security_map_json())
+
+    assert len(parsed) == 1, f"Expected one entry, got {parsed}"
+    assert parsed[0]["path"] == "/reports", f"Unexpected entry {parsed[0]}"
+    assert "analyst" in parsed[0]["access_policy"], f"Unexpected entry {parsed[0]}"
+    return
+
+
+def test_export_security_map_markdown_has_one_row_per_route():
+    """
+        The Markdown export is a table with a header, a separator and one
+        row per route.
+    """
+    url_map = URLNodeMap()
+    url_map.load_descriptors([
+        EndpointDescriptor(handler=_descriptor_handler, module="test", path="/a"),
+        EndpointDescriptor(handler=_descriptor_handler, module="test", path="/b"),
+    ])
+
+    lines = url_map.export_security_map_markdown().strip().split("\n")
+
+    assert len(lines) == 4, f"Expected 4 lines, got {lines}"
+    assert lines[0].startswith("| path | methods |"), f"Unexpected header {lines[0]}"
+    assert "/a" in lines[2] and "/b" in lines[3], f"Unexpected rows {lines[2:]}"
+    return

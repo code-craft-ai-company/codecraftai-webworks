@@ -13,12 +13,24 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 import dataclasses
+import enum
 import logging
+import typing
 
-from typing import Any, Dict, List, Type, get_type_hints, get_origin, get_args, Union
+from datetime import date, datetime, time
+from decimal import Decimal, InvalidOperation
+from typing import Any, Dict, List, Tuple, Type, get_origin, get_args
+from uuid import UUID
 
 from ccai.webworks.endpoints.rest.exceptions import ValidationError
 from ccai.webworks.endpoints.rest.models import FieldError
+from ccai.webworks.endpoints.typeinspection import (
+    is_optional_type,
+    is_union_type,
+    non_none_members,
+    resolve_field_types,
+    unwrap_optional,
+)
 
 
 # Module-level logger. ``get_type_hints`` can fail on schemas that
@@ -43,24 +55,31 @@ def _is_pydantic_model_type(obj_type: Type) -> bool:
 
 
 def _is_optional_type(field_type: Type) -> bool:
-    """Check if a type is Optional (Union with None)."""
-    origin = get_origin(field_type)
-    if origin is Union:
-        args = get_args(field_type)
-        return type(None) in args
-    return False
+    """Check if a type is Optional (a union with None, in either spelling)."""
+    return is_optional_type(field_type)
 
 
 def _get_inner_type(field_type: Type) -> Type:
     """Get the inner type from Optional[T] -> T."""
-    origin = get_origin(field_type)
-    if origin is Union:
-        args = get_args(field_type)
-        # Filter out NoneType
-        non_none_args = [arg for arg in args if arg is not type(None)]
-        if len(non_none_args) == 1:
-            return non_none_args[0]
-    return field_type
+    return unwrap_optional(field_type)
+
+
+# Names used in error messages for the JSON value kinds.
+_JSON_TYPE_NAMES: Dict[type, str] = {
+    str: "string",
+    bool: "boolean",
+    int: "integer",
+    float: "number",
+    list: "list",
+    dict: "object",
+    type(None): "null",
+}
+
+
+def _json_type_name(value: Any) -> str:
+    """Name the JSON kind of a value for an error message."""
+    rtnval = _JSON_TYPE_NAMES.get(type(value), type(value).__name__)
+    return rtnval
 
 
 class Validator:
@@ -73,7 +92,25 @@ class Validator:
         - Partial validation for PATCH operations (partial=True)
         - Nested schema validation with field path tracking
         - Detailed field-level error reporting
+
+        Args:
+            reject_unknown_fields: If True, a key in the data that is not a
+                                   field of a dataclass schema is reported as
+                                   an ``unknown_field`` error. By default such
+                                   keys are ignored, which is also what a
+                                   Pydantic model does unless configured
+                                   otherwise.
     """
+
+    def __init__(self, reject_unknown_fields: bool = False):
+        """
+            Initialize a Validator.
+
+            Args:
+                reject_unknown_fields: If True, report keys that are not
+                                       fields of a dataclass schema.
+        """
+        self.reject_unknown_fields = reject_unknown_fields
     
     def validate(
         self,
@@ -345,16 +382,20 @@ class Validator:
         field_errors: List[FieldError] = []
         kwargs: Dict[str, Any] = {}
         
-        # Try to get type hints for better type checking
-        try:
-            type_hints = get_type_hints(schema)
-        except Exception as exc:
-            logger.warning(
-                "Validator: get_type_hints(%s) failed (%s); falling back to dc_field.type",
-                getattr(schema, "__name__", schema),
-                exc,
-            )
-            type_hints = {}
+        # Resolve the annotations to real types, so postponed annotations
+        # and PEP 604 unions are checked as what they mean
+        type_hints = resolve_field_types(schema)
+
+        if self.reject_unknown_fields:
+            known_names = [dc_field.name for dc_field in fields]
+            for key in data:
+                if key not in known_names:
+                    unknown_path = f"{field_prefix}.{key}" if field_prefix else str(key)
+                    field_errors.append(FieldError(
+                        field=unknown_path,
+                        code="unknown_field",
+                        message=f"Field '{key}' is not defined on {schema.__name__}"
+                    ))
         
         for dc_field in fields:
             field_name = dc_field.name
@@ -367,7 +408,7 @@ class Validator:
                 
                 # Handle None value
                 if value is None:
-                    if _is_optional_type(field_type):
+                    if _is_optional_type(field_type) or field_type is Any:
                         kwargs[field_name] = None
                         continue
                     else:
@@ -378,63 +419,13 @@ class Validator:
                         ))
                         continue
                 
-                # Get the actual type (unwrap Optional)
-                actual_type = _get_inner_type(field_type) if _is_optional_type(field_type) else field_type
-                
-                # Check for nested dataclass
-                if _is_dataclass_type(actual_type):
-                    try:
-                        value = self._validate_dataclass(
-                            value, 
-                            actual_type, 
-                            partial=False,  # Nested objects are fully validated
-                            field_prefix=full_field_path
-                        )
-                    except ValidationError as e:
-                        field_errors.extend(e.field_errors)
-                        continue
-                
-                # Check for nested Pydantic model
-                elif _is_pydantic_model_type(actual_type):
-                    try:
-                        value = self._validate_pydantic(value, actual_type, partial=False)
-                    except ValidationError as e:
-                        # Prefix field errors with current field path
-                        for fe in e.field_errors:
-                            prefixed_field = f"{full_field_path}.{fe.field}" if fe.field != "$" else full_field_path
-                            field_errors.append(FieldError(
-                                field=prefixed_field,
-                                code=fe.code,
-                                message=fe.message
-                            ))
-                        continue
-                
-                # Check for list of nested objects
-                elif get_origin(actual_type) is list:
-                    list_args = get_args(actual_type)
-                    if list_args and (_is_dataclass_type(list_args[0]) or _is_pydantic_model_type(list_args[0])):
-                        if isinstance(value, list):
-                            validated_list = []
-                            for idx, item in enumerate(value):
-                                item_path = f"{full_field_path}.{idx}"
-                                try:
-                                    if _is_dataclass_type(list_args[0]):
-                                        validated_item = self._validate_dataclass(
-                                            item, list_args[0], partial=False, field_prefix=item_path
-                                        )
-                                    else:
-                                        validated_item = self._validate_pydantic(item, list_args[0], partial=False)
-                                    validated_list.append(validated_item)
-                                except ValidationError as e:
-                                    field_errors.extend(e.field_errors)
-                            value = validated_list
-                        else:
-                            field_errors.append(FieldError(
-                                field=full_field_path,
-                                code="type_error",
-                                message=f"Expected list, got {type(value).__name__}"
-                            ))
-                            continue
+                # Check the value against the field's type, converting it
+                # where the JSON form differs from the Python one (nested
+                # schemas, dates, UUIDs, enums and so on)
+                value, value_errors = self._check_value(value, field_type, full_field_path)
+                if len(value_errors) > 0:
+                    field_errors.extend(value_errors)
+                    continue
                 
                 # Validate field metadata if present
                 metadata_errors = self._validate_field_metadata(dc_field, value, full_field_path)
@@ -512,6 +503,397 @@ class Validator:
                 ]
             )
     
+    def _check_value(
+        self,
+        value: Any,
+        field_type: Any,
+        field_path: str
+    ) -> Tuple[Any, List[FieldError]]:
+        """
+            Check a value against the type a field declares.
+
+            JSON has fewer types than Python, so a matching value is also
+            converted to the Python form the schema asks for: an object to a
+            nested dataclass or Pydantic model, ISO 8601 text to a
+            ``datetime``/``date``/``time``, text to a ``UUID`` or ``Decimal``,
+            a value to its ``Enum`` member, a whole number to a ``float`` and
+            a list to a ``set`` or ``tuple``. Values are never converted
+            between unrelated kinds: the text ``"5"`` is not an integer and
+            ``true`` is not a number.
+
+            Elements of ``List[T]`` and values of ``Dict[K, V]`` are checked
+            the same way, each reported under its own path
+            (``tags.2``, ``limits.daily``).
+
+            A type this method has no rule for -- an unresolved string
+            annotation, a type variable, an arbitrary class -- accepts any
+            value unchanged.
+
+            Args:
+                value: The value from the request data. Not None; a null is
+                       handled by the caller, which knows the field name.
+                field_type: The resolved type of the field.
+                field_path: Full field path for error reporting.
+
+            Returns:
+                Tuple of (value, errors). When errors is empty the value is
+                the checked, converted value; otherwise it is the input.
+        """
+        if field_type is Any or isinstance(field_type, (str, typing.TypeVar)):
+            return value, []
+
+        if is_union_type(field_type):
+            return self._check_union_value(value, field_type, field_path)
+
+        origin = get_origin(field_type)
+        args = get_args(field_type)
+
+        if origin is typing.Literal:
+            if value in args:
+                return value, []
+            return value, [FieldError(
+                field=field_path,
+                code="invalid_choice",
+                message=f"Value must be one of: {list(args)}"
+            )]
+
+        if field_type in (list, set, frozenset, tuple) or origin in (list, set, frozenset, tuple):
+            return self._check_sequence_value(value, field_type, field_path)
+
+        if field_type is dict or origin is dict:
+            return self._check_mapping_value(value, field_type, field_path)
+
+        if origin is not None:
+            # Some other generic (Callable, a user generic); no rule for it.
+            return value, []
+
+        if _is_dataclass_type(field_type):
+            try:
+                validated = self._validate_dataclass(
+                    value,
+                    field_type,
+                    partial=False,  # Nested objects are fully validated
+                    field_prefix=field_path
+                )
+            except ValidationError as e:
+                return value, list(e.field_errors)
+            return validated, []
+
+        if _is_pydantic_model_type(field_type):
+            try:
+                validated = self._validate_pydantic(value, field_type, partial=False)
+            except ValidationError as e:
+                # Prefix field errors with current field path
+                prefixed_errors: List[FieldError] = []
+                for fe in e.field_errors:
+                    prefixed_field = f"{field_path}.{fe.field}" if fe.field != "$" else field_path
+                    prefixed_errors.append(FieldError(
+                        field=prefixed_field,
+                        code=fe.code,
+                        message=fe.message
+                    ))
+                return value, prefixed_errors
+            return validated, []
+
+        if isinstance(field_type, type):
+            return self._check_scalar_value(value, field_type, field_path)
+
+        return value, []
+
+    def _check_union_value(
+        self,
+        value: Any,
+        field_type: Any,
+        field_path: str
+    ) -> Tuple[Any, List[FieldError]]:
+        """
+            Check a value against a union: it must satisfy one member.
+
+            Members are tried in the order they are written and the first
+            one the value satisfies wins.
+
+            Args:
+                value: The value from the request data (not None).
+                field_type: The union type.
+                field_path: Full field path for error reporting.
+
+            Returns:
+                Tuple of (value, errors) as for :meth:`_check_value`.
+        """
+        members = non_none_members(field_type)
+        if len(members) == 0:
+            return value, []
+
+        first_errors: List[FieldError] = []
+        for member in members:
+            checked, member_errors = self._check_value(value, member, field_path)
+            if len(member_errors) == 0:
+                return checked, []
+            if len(first_errors) == 0:
+                first_errors = member_errors
+
+        if len(members) == 1:
+            # Optional[T]: the errors of T are the useful ones
+            return value, first_errors
+
+        member_names = ", ".join(getattr(member, "__name__", str(member)) for member in members)
+        return value, [FieldError(
+            field=field_path,
+            code="type_error",
+            message=f"Expected one of ({member_names}), got {_json_type_name(value)}"
+        )]
+
+    def _check_sequence_value(
+        self,
+        value: Any,
+        field_type: Any,
+        field_path: str
+    ) -> Tuple[Any, List[FieldError]]:
+        """
+            Check a value against a list, set, frozenset or tuple type,
+            including the type of its elements when one is declared.
+
+            Args:
+                value: The value from the request data (not None).
+                field_type: The sequence type, bare or parameterised.
+                field_path: Full field path for error reporting.
+
+            Returns:
+                Tuple of (value, errors) as for :meth:`_check_value`.
+        """
+        if not isinstance(value, list):
+            return value, [FieldError(
+                field=field_path,
+                code="type_error",
+                message=f"Expected list, got {type(value).__name__}"
+            )]
+
+        origin = get_origin(field_type)
+        container = origin if origin is not None else field_type
+        args = get_args(field_type)
+
+        item_types: List[Any] = []
+        if container is tuple and len(args) > 0 and not (len(args) == 2 and args[1] is Ellipsis):
+            # A fixed-shape tuple: one type per position
+            if len(args) != len(value):
+                return value, [FieldError(
+                    field=field_path,
+                    code="type_error",
+                    message=f"Expected {len(args)} items, got {len(value)}"
+                )]
+            item_types = list(args)
+        elif len(args) > 0:
+            item_types = [args[0]] * len(value)
+        else:
+            item_types = [Any] * len(value)
+
+        errors: List[FieldError] = []
+        checked_items: List[Any] = []
+        for index, item in enumerate(value):
+            item_path = f"{field_path}.{index}"
+            item_type = item_types[index]
+            if item is None:
+                if item_type is Any or _is_optional_type(item_type):
+                    checked_items.append(None)
+                else:
+                    errors.append(FieldError(
+                        field=item_path,
+                        code="type_error",
+                        message="Item cannot be null"
+                    ))
+                continue
+            checked_item, item_errors = self._check_value(item, item_type, item_path)
+            if len(item_errors) > 0:
+                errors.extend(item_errors)
+                continue
+            checked_items.append(checked_item)
+
+        if len(errors) > 0:
+            return value, errors
+
+        if container is list:
+            return checked_items, []
+
+        try:
+            converted = container(checked_items)
+        except TypeError:
+            # Unhashable items for a set
+            return value, [FieldError(
+                field=field_path,
+                code="type_error",
+                message=f"Items cannot be collected into a {container.__name__}"
+            )]
+
+        return converted, []
+
+    def _check_mapping_value(
+        self,
+        value: Any,
+        field_type: Any,
+        field_path: str
+    ) -> Tuple[Any, List[FieldError]]:
+        """
+            Check a value against a dict type, including the type of its
+            values when one is declared. Keys are left as the strings JSON
+            delivers them as.
+
+            Args:
+                value: The value from the request data (not None).
+                field_type: The dict type, bare or parameterised.
+                field_path: Full field path for error reporting.
+
+            Returns:
+                Tuple of (value, errors) as for :meth:`_check_value`.
+        """
+        if not isinstance(value, dict):
+            return value, [FieldError(
+                field=field_path,
+                code="type_error",
+                message=f"Expected object, got {type(value).__name__}"
+            )]
+
+        args = get_args(field_type)
+        if len(args) != 2 or args[1] is Any:
+            return value, []
+
+        value_type = args[1]
+        errors: List[FieldError] = []
+        checked: Dict[Any, Any] = {}
+        for key, item in value.items():
+            item_path = f"{field_path}.{key}"
+            if item is None:
+                if _is_optional_type(value_type):
+                    checked[key] = None
+                else:
+                    errors.append(FieldError(
+                        field=item_path,
+                        code="type_error",
+                        message="Value cannot be null"
+                    ))
+                continue
+            checked_item, item_errors = self._check_value(item, value_type, item_path)
+            if len(item_errors) > 0:
+                errors.extend(item_errors)
+                continue
+            checked[key] = checked_item
+
+        if len(errors) > 0:
+            return value, errors
+
+        return checked, []
+
+    def _check_scalar_value(
+        self,
+        value: Any,
+        field_type: type,
+        field_path: str
+    ) -> Tuple[Any, List[FieldError]]:
+        """
+            Check a value against a plain class: a JSON scalar type, one of
+            the types JSON carries as text (dates, UUID, Decimal), an enum,
+            or any other class.
+
+            Args:
+                value: The value from the request data (not None).
+                field_type: The class the field declares.
+                field_path: Full field path for error reporting.
+
+            Returns:
+                Tuple of (value, errors) as for :meth:`_check_value`.
+        """
+        def mismatch(expected: str) -> Tuple[Any, List[FieldError]]:
+            return value, [FieldError(
+                field=field_path,
+                code="type_error",
+                message=f"Expected {expected}, got {_json_type_name(value)}"
+            )]
+
+        if issubclass(field_type, enum.Enum):
+            try:
+                return field_type(value), []
+            except (ValueError, TypeError):
+                choices = [member.value for member in field_type]
+                return value, [FieldError(
+                    field=field_path,
+                    code="invalid_choice",
+                    message=f"Value must be one of: {choices}"
+                )]
+
+        if field_type is bool:
+            if isinstance(value, bool):
+                return value, []
+            return mismatch("boolean")
+
+        if field_type is int:
+            # bool is a subclass of int, but true/false is not a number
+            if isinstance(value, bool):
+                return mismatch("integer")
+            if isinstance(value, int):
+                return value, []
+            if isinstance(value, float) and value.is_integer():
+                return int(value), []
+            return mismatch("integer")
+
+        if field_type is float:
+            if isinstance(value, bool):
+                return mismatch("number")
+            if isinstance(value, (int, float)):
+                return float(value), []
+            return mismatch("number")
+
+        if field_type is str:
+            if isinstance(value, str):
+                return value, []
+            return mismatch("string")
+
+        if field_type is bytes:
+            if isinstance(value, str):
+                return value.encode("utf-8"), []
+            return mismatch("string")
+
+        if field_type in (datetime, date, time):
+            if isinstance(value, field_type) and type(value) is field_type:
+                return value, []
+            if not isinstance(value, str):
+                return mismatch("ISO 8601 string")
+            try:
+                return field_type.fromisoformat(value), []
+            except ValueError:
+                return value, [FieldError(
+                    field=field_path,
+                    code="type_error",
+                    message=f"Expected an ISO 8601 {field_type.__name__}, got '{value}'"
+                )]
+
+        if field_type is UUID:
+            if isinstance(value, UUID):
+                return value, []
+            if not isinstance(value, str):
+                return mismatch("UUID string")
+            try:
+                return UUID(value), []
+            except ValueError:
+                return value, [FieldError(
+                    field=field_path,
+                    code="type_error",
+                    message=f"Expected a UUID, got '{value}'"
+                )]
+
+        if field_type is Decimal:
+            if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+                return mismatch("decimal number")
+            try:
+                return Decimal(str(value)), []
+            except InvalidOperation:
+                return value, [FieldError(
+                    field=field_path,
+                    code="type_error",
+                    message=f"Expected a decimal number, got '{value}'"
+                )]
+
+        # Any other class: there is no JSON form to check it against
+        return value, []
+
     def _validate_field_metadata(
         self,
         dc_field: dataclasses.Field,

@@ -2044,17 +2044,19 @@ def test_property_safe_string_bypass_with_html_content():
 
 def test_property_safe_string_concatenation_preserves_safety():
     """
-        Property test for SafeString concatenation preserving content.
+        Property test for SafeString concatenation keeping the result safe.
 
         **Property 3: Safe String Bypass**
 
-        *For any* SafeString concatenated with other strings, the resulting
-        SafeString SHALL preserve all original content without escaping.
+        *For any* SafeString concatenated with a plain string, the result
+        SHALL be a SafeString in which the safe operand is unchanged and the
+        plain operand is HTML-escaped; concatenated with another SafeString,
+        both operands SHALL be unchanged.
 
         **Validates: Requirements 5.3, 5.7**
 
-        This property test verifies that concatenation operations on SafeString
-        preserve the safe status and content.
+        This property test verifies that concatenation never marks content
+        as safe that was not safe before.
     """
     iterations = 100
 
@@ -2063,7 +2065,7 @@ def test_property_safe_string_concatenation_preserves_safety():
         str1 = _generate_string_with_html_special_chars(5, 20)
         str2 = _generate_string_with_html_special_chars(5, 20)
 
-        # Create SafeString and concatenate
+        # Create SafeString and concatenate with a plain string
         safe_str = SafeString(str1)
         result = safe_str + str2
 
@@ -2074,11 +2076,11 @@ def test_property_safe_string_concatenation_preserves_safety():
                 f"Got: {type(result).__name__}"
             )
 
-        # Verify content is preserved
-        expected = str1 + str2
+        # Verify the safe operand is preserved and the plain one is escaped
+        expected = str1 + escape(str2)
         if str(result) != expected:
             raise AssertionError(
-                f"Iteration {iteration}: Concatenation content not preserved. "
+                f"Iteration {iteration}: The plain operand should be escaped. "
                 f"Expected: {expected!r}, Got: {str(result)!r}"
             )
 
@@ -2091,11 +2093,21 @@ def test_property_safe_string_concatenation_preserves_safety():
                 f"Got: {type(result_reverse).__name__}"
             )
 
-        expected_reverse = str2 + str1
+        expected_reverse = escape(str2) + str1
         if str(result_reverse) != expected_reverse:
             raise AssertionError(
-                f"Iteration {iteration}: Reverse concatenation content not preserved. "
+                f"Iteration {iteration}: The plain left operand should be escaped. "
                 f"Expected: {expected_reverse!r}, Got: {str(result_reverse)!r}"
+            )
+
+        # Two safe operands are both preserved
+        result_safe = safe_str + SafeString(str2)
+
+        expected_safe = str1 + str2
+        if str(result_safe) != expected_safe:
+            raise AssertionError(
+                f"Iteration {iteration}: Two safe operands should both be preserved. "
+                f"Expected: {expected_safe!r}, Got: {str(result_safe)!r}"
             )
 
     return
@@ -2270,5 +2282,156 @@ def test_property_safe_string_bypass_all_html_special_chars():
                 f"Iteration {iteration}: SafeString content not preserved. "
                 f"Original: {original!r}, SafeString: {str(safe_str)!r}"
             )
+
+    return
+
+
+# =============================================================================
+# SafeString concatenation escapes the unsafe operand
+# =============================================================================
+
+def test_safestring_add_escapes_plain_string():
+    """
+        Test that SafeString + str escapes the plain string.
+    """
+    result = SafeString("<b>") + "<script>&"
+
+    if str(result) != "<b>&lt;script&gt;&amp;":
+        raise AssertionError(f"Expected the plain operand escaped, got {str(result)!r}")
+
+    if not isinstance(result, SafeString):
+        raise AssertionError(f"Expected SafeString, got {type(result).__name__}")
+
+    return
+
+
+def test_safestring_radd_escapes_plain_string():
+    """
+        Test that str + SafeString escapes the plain string.
+    """
+    result = "<script>" + SafeString("<b>")
+
+    if str(result) != "&lt;script&gt;<b>":
+        raise AssertionError(f"Expected the plain left operand escaped, got {str(result)!r}")
+
+    if not isinstance(result, SafeString):
+        raise AssertionError(f"Expected SafeString, got {type(result).__name__}")
+
+    return
+
+
+def test_safestring_add_keeps_safe_operand():
+    """
+        Test that SafeString + SafeString leaves both operands unescaped.
+    """
+    result = SafeString("<b>") + SafeString("</b>")
+
+    if str(result) != "<b></b>":
+        raise AssertionError(f"Expected '<b></b>', got {str(result)!r}")
+
+    return
+
+
+def test_safestring_add_keeps_html_protocol_operand():
+    """
+        Test that an operand implementing __html__ is appended unescaped.
+    """
+    class HtmlValue:
+        def __html__(self) -> str:
+            return "<i>x</i>"
+
+    result = SafeString("<b>") + HtmlValue()
+
+    if str(result) != "<b><i>x</i>":
+        raise AssertionError(f"Expected '<b><i>x</i>', got {str(result)!r}")
+
+    return
+
+
+def test_safestring_wrapping_user_input_is_escaped():
+    """
+        Test that wrapping user input in safe markup does not emit it raw.
+    """
+    user_name = "<img src=x onerror=alert(1)>"
+
+    result = safe("<b>") + user_name + safe("</b>")
+
+    if "<img" in str(result):
+        raise AssertionError(f"User input was emitted unescaped: {str(result)!r}")
+
+    if str(result) != "<b>&lt;img src=x onerror=alert(1)&gt;</b>":
+        raise AssertionError(f"Unexpected result: {str(result)!r}")
+
+    return
+
+
+def test_safestring_add_non_string_raises_type_error():
+    """
+        Test that adding a non-string to a SafeString raises TypeError.
+    """
+    try:
+        SafeString("a") + 5
+        raise AssertionError("Expected TypeError when adding an int to a SafeString")
+    except TypeError:
+        pass  # Expected
+
+    return
+
+
+# =============================================================================
+# escape_json returns markup that is safe inside a script block
+# =============================================================================
+
+def test_escape_json_returns_safestring():
+    """
+        Test that escape_json() returns a SafeString.
+    """
+    result = escape_json({"a": 1})
+
+    if not isinstance(result, SafeString):
+        raise AssertionError(f"Expected SafeString, got {type(result).__name__}")
+
+    return
+
+
+def test_escape_json_escapes_apostrophe():
+    """
+        Test that escape_json() writes an apostrophe as a unicode escape.
+    """
+    result = escape_json("it's")
+
+    if "'" in result:
+        raise AssertionError(f"Apostrophe should be escaped, got {result!r}")
+
+    if result != '"it\\u0027s"':
+        raise AssertionError(f"Unexpected result: {result!r}")
+
+    return
+
+
+def test_escape_json_escapes_line_separators():
+    """
+        Test that escape_json() escapes U+2028 and U+2029.
+    """
+    result = escape_json("a\u2028b\u2029c")
+
+    if "\u2028" in result or "\u2029" in result:
+        raise AssertionError(f"Line separators should be escaped, got {result!r}")
+
+    return
+
+
+def test_escape_json_round_trips():
+    """
+        Test that escape_json() output parses back to the original value.
+    """
+    import json
+
+    value = {"html": "</script><b>'&'</b>", "n": [1, 2, 3]}
+
+    result = escape_json(value)
+
+    if json.loads(result) != value:
+        raise AssertionError(f"Escaped JSON should parse to the original value, got {result!r}")
 
     return

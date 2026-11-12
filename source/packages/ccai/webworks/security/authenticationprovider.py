@@ -20,17 +20,25 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
-import base64
-import hashlib
-import hmac
-import json
 import logging
-import time
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Protocol, Tuple, runtime_checkable
+from typing import Any, Dict, Optional, Protocol, Tuple, Union, runtime_checkable
 
+from ccai.webworks.security.jsonwebtoken import (
+    HMAC_ALGORITHMS,
+    ClaimsRegistry,
+    JoseError,
+    decode as decode_jwt,
+)
 from ccai.webworks.security.securitycontext import SecurityContext
+
+
+#: Shortest shared secret a :class:`JWTAuthProvider` accepts, in bytes.
+#: RFC 7518 section 3.2 requires an HMAC key at least as long as the hash
+#: output; 32 bytes is that length for HS256. A shorter secret can be
+#: found by brute force from a single captured token.
+MIN_JWT_SECRET_BYTES: int = 32
 
 
 # Module-level logger. The JWT verification helper deliberately
@@ -135,93 +143,62 @@ class AuthenticationProvider(Protocol):
         """
 
 
-def _base64url_decode(data: str) -> bytes:
-    """
-        Decode a base64url-encoded string with padding correction.
-
-        :param data: The base64url-encoded string to decode.
-
-        :returns: The decoded bytes.
-    """
-    padding = 4 - len(data) % 4
-    if padding != 4:
-        data = data + "=" * padding
-
-    rtnval = base64.urlsafe_b64decode(data)
-    return rtnval
-
-
-def _verify_jwt(token: str, secret_key: str, algorithm: str = "HS256") -> Optional[Dict[str, Any]]:
+def _verify_jwt(
+    token: str,
+    secret_key: Union[str, bytes],
+    algorithm: str = "HS256",
+    issuer: Optional[str] = None,
+    audience: Optional[str] = None,
+    leeway: int = 0
+) -> Optional[Dict[str, Any]]:
     """
         Verify and decode a JWT token using HMAC signature verification.
 
-        Supports HS256, HS384, and HS512 algorithms. Checks the signature
-        and expiration claim if present.
+        Supports HS256, HS384, and HS512 algorithms. The token is decoded
+        and its signature verified by
+        :func:`ccai.webworks.security.jsonwebtoken.decode`; its claims are
+        then validated:
+
+        - ``exp`` is required and must lie in the future, so a token can
+          not be valid for ever;
+        - ``nbf``, when present, must lie in the past;
+        - ``iss`` must equal *issuer* when one is configured;
+        - ``aud`` must equal, or contain, *audience* when one is configured.
 
         :param token: The JWT token string to verify.
         :param secret_key: The secret key used for signature verification.
         :param algorithm: The expected signing algorithm.
+        :param issuer: The issuer the token must name, or None to accept any.
+        :param audience: The audience the token must be issued for, or
+            None to accept any.
+        :param leeway: Clock skew tolerated in the time checks, in seconds.
 
         :returns: The decoded payload dictionary, or None if verification fails.
     """
-    algorithm_map = {
-        "HS256": hashlib.sha256,
-        "HS384": hashlib.sha384,
-        "HS512": hashlib.sha512,
-    }
+    rtnval: Optional[Dict[str, Any]] = None
 
-    hash_func = algorithm_map.get(algorithm)
-    if hash_func is None:
-        return None
+    if algorithm in HMAC_ALGORITHMS:
+        claim_options: Dict[str, Dict[str, Any]] = {"exp": {"essential": True}}
 
-    parts = token.split(".")
-    if len(parts) != 3:
-        return None
+        if issuer is not None:
+            claim_options["iss"] = {"essential": True, "value": issuer}
 
-    header_segment = parts[0]
-    payload_segment = parts[1]
-    signature_segment = parts[2]
+        if audience is not None:
+            claim_options["aud"] = {"essential": True, "value": audience}
 
-    try:
-        header_bytes = _base64url_decode(header_segment)
-        header = json.loads(header_bytes)
-    except (ValueError, json.JSONDecodeError) as exc:
-        logger.warning("JWT verify: malformed header segment: %s", exc)
-        return None
+        try:
+            decoded = decode_jwt(token, secret_key, [algorithm])
 
-    header_alg = header.get("alg")
-    if header_alg != algorithm:
-        return None
+            registry = ClaimsRegistry(claim_options, leeway=leeway)
+            registry.validate(decoded.claims)
 
-    signing_input = f"{header_segment}.{payload_segment}"
-    signing_input_bytes = signing_input.encode("utf-8")
-    secret_bytes = secret_key.encode("utf-8")
+            rtnval = decoded.claims
+        except JoseError as exc:
+            logger.warning("JWT verify: token rejected: %s", exc)
+        except (ValueError, TypeError, OverflowError) as exc:
+            # Segments that are not base64url, claims of the wrong type
+            logger.warning("JWT verify: malformed token: %s", exc)
 
-    expected_signature = hmac.HMAC(secret_bytes, signing_input_bytes, hash_func).digest()
-
-    try:
-        actual_signature = _base64url_decode(signature_segment)
-    except (ValueError,) as exc:
-        logger.warning("JWT verify: malformed signature segment: %s", exc)
-        return None
-
-    if hmac.compare_digest(expected_signature, actual_signature) is not True:
-        return None
-
-    try:
-        payload_bytes = _base64url_decode(payload_segment)
-        payload = json.loads(payload_bytes)
-    except (ValueError, json.JSONDecodeError) as exc:
-        logger.warning("JWT verify: malformed payload segment: %s", exc)
-        return None
-
-    exp_claim = payload.get("exp")
-    if exp_claim is not None:
-        now = time.time()
-        if now > exp_claim:
-            return None
-
-    rtnval = payload
     return rtnval
 
 
@@ -233,26 +210,69 @@ class JWTAuthProvider:
         using the configured secret key and algorithm, and returns a
         Security_Context populated from the token claims on success.
 
-        :param secret_key: The secret key used for HMAC signature verification.
+        A token is accepted only if it carries an ``exp`` claim in the
+        future; ``nbf`` is honoured when present, and ``iss`` / ``aud``
+        are checked when *issuer* / *audience* are configured. Configure
+        them whenever the signing secret is shared with another service:
+        without them a token minted for that service authenticates here.
+
+        :param secret_key: The secret key used for HMAC signature
+            verification. At least :data:`MIN_JWT_SECRET_BYTES` bytes.
         :param algorithm: The signing algorithm. Defaults to HS256.
         :param header_name: The request header containing the token. Defaults to Authorization.
         :param header_prefix: The prefix before the token value. Defaults to Bearer.
         :param priority: Provider priority for ordering. Lower is higher priority.
+        :param issuer: The ``iss`` value a token must carry. None accepts
+            any issuer.
+        :param audience: The ``aud`` value a token must carry. None accepts
+            any audience.
+        :param leeway: Clock skew tolerated in the ``exp`` / ``nbf`` checks,
+            in seconds.
+
+        :raises ValueError: If the secret key is empty or shorter than
+            :data:`MIN_JWT_SECRET_BYTES` bytes, or the algorithm is not one
+            of HS256, HS384 and HS512.
     """
 
     def __init__(
         self,
-        secret_key: str,
+        secret_key: Union[str, bytes],
         algorithm: str = "HS256",
         header_name: str = "Authorization",
         header_prefix: str = "Bearer",
-        priority: int = 10
+        priority: int = 10,
+        issuer: Optional[str] = None,
+        audience: Optional[str] = None,
+        leeway: int = 0
     ):
+        if isinstance(secret_key, str):
+            secret_length = len(secret_key.encode("utf-8"))
+        elif isinstance(secret_key, (bytes, bytearray)):
+            secret_length = len(secret_key)
+        else:
+            secret_length = 0
+
+        if secret_length < MIN_JWT_SECRET_BYTES:
+            errmsg = (
+                "JWTAuthProvider: the secret key must be at least {} bytes long; "
+                "tokens signed with a shorter or empty secret can be forged."
+            ).format(MIN_JWT_SECRET_BYTES)
+            raise ValueError(errmsg)
+
+        if algorithm not in HMAC_ALGORITHMS:
+            errmsg = (
+                "JWTAuthProvider: unsupported algorithm {!r}; expected one of {}."
+            ).format(algorithm, sorted(HMAC_ALGORITHMS.keys()))
+            raise ValueError(errmsg)
+
         self._secret_key = secret_key
         self._algorithm = algorithm
         self._header_name = header_name
         self._header_prefix = header_prefix
         self._priority = priority
+        self._issuer = issuer
+        self._audience = audience
+        self._leeway = leeway
         return
 
     @property
@@ -297,7 +317,14 @@ class JWTAuthProvider:
         if len(token) == 0:
             return None
 
-        payload = _verify_jwt(token, self._secret_key, self._algorithm)
+        payload = _verify_jwt(
+            token,
+            self._secret_key,
+            self._algorithm,
+            issuer=self._issuer,
+            audience=self._audience,
+            leeway=self._leeway
+        )
         if payload is None:
             return None
 
@@ -320,15 +347,20 @@ class JWTAuthProvider:
         if scopes is None:
             return None
 
-        iat_claim = payload.get("iat")
-        authenticated_at = None
-        if iat_claim is not None:
-            authenticated_at = datetime.fromtimestamp(iat_claim, tz=timezone.utc)
+        try:
+            iat_claim = payload.get("iat")
+            authenticated_at = None
+            if iat_claim is not None:
+                authenticated_at = datetime.fromtimestamp(iat_claim, tz=timezone.utc)
 
-        exp_claim = payload.get("exp")
-        expires_at = None
-        if exp_claim is not None:
-            expires_at = datetime.fromtimestamp(exp_claim, tz=timezone.utc)
+            exp_claim = payload.get("exp")
+            expires_at = None
+            if exp_claim is not None:
+                expires_at = datetime.fromtimestamp(exp_claim, tz=timezone.utc)
+        except (TypeError, ValueError, OverflowError, OSError) as exc:
+            # A timestamp claim that is not a usable number
+            logger.warning("JWT verify: malformed timestamp claim: %s", exc)
+            return None
 
         extra = {}
         reserved_claims = {"sub", "username", "email", "roles", "scopes", "iat", "exp", "alg", "typ"}

@@ -47,7 +47,9 @@ import unicodedata
 from dataclasses import dataclass, field
 from email.parser import BytesParser
 from email.policy import default as _default_email_policy
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+from ccai.webworks.routing.exceptions import PayloadTooLarge
 
 
 # Module-level logger. ``parse_multipart`` returns an empty result
@@ -56,6 +58,24 @@ from typing import Dict, List, Tuple
 # breadcrumb in the journal so a sudden surge of empty parses isn't
 # silently shrugged off as "the client sent nothing".
 logger = logging.getLogger(__name__)
+
+
+# Limits applied by :func:`parse_multipart` when the caller passes none.
+# Parsing cost grows with the number of parts, not only with the size of
+# the body: a body of a megabyte can carry tens of thousands of empty
+# fields. Without a cap on the part count one such request keeps a worker
+# busy for seconds. The values are read when ``parse_multipart`` is
+# called, so an application can assign different ones at start-up.
+
+#: Largest ``multipart/form-data`` body that is parsed, in bytes.
+DEFAULT_MAX_BODY_SIZE: int = 100 * 1024 * 1024
+
+#: Largest number of parts (form fields plus files) in one body.
+DEFAULT_MAX_PARTS: int = 1000
+
+#: Largest value of a single form field (a part without a filename), in
+#: bytes. Uploaded files are bounded by the body size instead.
+DEFAULT_MAX_FIELD_SIZE: int = 1024 * 1024
 
 
 # Characters allowed in a "safe" filename. Everything else is
@@ -290,6 +310,9 @@ def parse_options_header(header_value: str) -> Tuple[str, Dict[str, str]]:
 def parse_multipart(
     body: bytes,
     content_type: str,
+    max_body_size: Optional[int] = None,
+    max_parts: Optional[int] = None,
+    max_field_size: Optional[int] = None,
 ) -> MultipartResult:
     """
         Parse a ``multipart/form-data`` request body.
@@ -299,12 +322,27 @@ def parse_multipart(
         a missing / corrupt upload as "no data" without wrapping
         the call in a try/except.
 
+        A body that is larger than the limits allow is different from a
+        malformed one: it is refused with :class:`PayloadTooLarge` (HTTP
+        413) before any parsing work is done, so an oversized request
+        costs the server next to nothing.
+
         :param body: The raw HTTP request body.
         :param content_type: The full ``Content-Type`` header value
                              — including the ``boundary`` parameter.
+        :param max_body_size: Largest body accepted, in bytes. Defaults
+                              to :data:`DEFAULT_MAX_BODY_SIZE`.
+        :param max_parts: Largest number of parts accepted. Defaults to
+                          :data:`DEFAULT_MAX_PARTS`.
+        :param max_field_size: Largest value of one form field, in
+                               bytes. Defaults to
+                               :data:`DEFAULT_MAX_FIELD_SIZE`.
 
         :returns: A :class:`MultipartResult` carrying the parsed
                   form fields and uploaded files.
+
+        :raises PayloadTooLarge: When the body, the number of parts or
+                                 a form field exceeds its limit.
     """
     if not isinstance(body, (bytes, bytearray)):
         return MultipartResult()
@@ -316,6 +354,26 @@ def parse_multipart(
     boundary = params.get("boundary", "")
     if boundary == "":
         return MultipartResult()
+
+    if max_body_size is None:
+        max_body_size = DEFAULT_MAX_BODY_SIZE
+    if max_parts is None:
+        max_parts = DEFAULT_MAX_PARTS
+    if max_field_size is None:
+        max_field_size = DEFAULT_MAX_FIELD_SIZE
+
+    if len(body) > max_body_size:
+        errmsg = "The multipart body is larger than the {} bytes accepted.".format(max_body_size)
+        raise PayloadTooLarge(errmsg)
+
+    # Every part is introduced by one delimiter line, and the body ends
+    # with one more. Counting the delimiters is cheap and bounds the work
+    # the parser below is asked to do.
+    delimiter = b"--" + boundary.encode("latin-1", errors="replace")
+    delimiter_count = bytes(body).count(delimiter)
+    if delimiter_count - 1 > max_parts:
+        errmsg = "The multipart body has more than the {} parts accepted.".format(max_parts)
+        raise PayloadTooLarge(errmsg)
 
     # The email parser consumes a complete RFC 5322 message:
     # ``Content-Type`` header (declaring the boundary), blank line,
@@ -367,6 +425,10 @@ def parse_multipart(
             else:
                 payload_bytes = bytes(payload)
 
+            if len(payload_bytes) > max_field_size:
+                errmsg = "A form field is larger than the {} bytes accepted.".format(max_field_size)
+                raise PayloadTooLarge(errmsg)
+
             charset = part.get_content_charset(failobj="utf-8")
             try:
                 value_text = payload_bytes.decode(charset, errors="replace")
@@ -403,6 +465,9 @@ def parse_multipart(
 
 
 __all__ = [
+    "DEFAULT_MAX_BODY_SIZE",
+    "DEFAULT_MAX_FIELD_SIZE",
+    "DEFAULT_MAX_PARTS",
     "MultipartResult",
     "UploadedFile",
     "parse_multipart",

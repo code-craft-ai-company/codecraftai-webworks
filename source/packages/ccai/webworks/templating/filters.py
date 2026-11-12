@@ -23,11 +23,10 @@
         {{ data | json }}
 """
 
-import json
 from datetime import date, datetime
 from typing import Any, List
 
-from ccai.webworks.templating.escaping import SafeString, escape
+from ccai.webworks.templating.escaping import SafeString, escape, escape_json
 
 
 # =============================================================================
@@ -226,18 +225,29 @@ def filter_safe(value: Any) -> SafeString:
     return SafeString(str(value))
 
 
-def filter_escape(value: Any) -> str:
+def filter_escape(value: Any) -> SafeString:
     """
         Escape HTML special characters in a value.
 
         The value is converted to a string and HTML special characters
         are replaced with their entity equivalents to prevent XSS attacks.
+        A value that is already marked safe (it implements ``__html__``)
+        is not escaped a second time.
+
+        The result is escaped HTML, so it is returned as a SafeString: an
+        auto-escaping template engine emits it as it is instead of
+        escaping the entities again.
 
         :param value: The value to escape.
 
-        :returns: The escaped string.
+        :returns: The escaped text as a SafeString.
     """
-    return escape(str(value))
+    if hasattr(value, "__html__"):
+        escaped = SafeString(value.__html__())
+    else:
+        escaped = SafeString(escape(str(value)))
+
+    return escaped
 
 
 def filter_default(value: Any, default: Any = "") -> Any:
@@ -274,18 +284,27 @@ def filter_date(value: Any, format_str: str = "%Y-%m-%d") -> str:
     return str(value)
 
 
-def filter_json(value: Any) -> str:
+def filter_json(value: Any) -> SafeString:
     """
-        Convert a value to a JSON string.
+        Convert a value to JSON that is safe to embed in an HTML page.
 
-        Serializes the value using Python's json module with
-        ensure_ascii=False to preserve Unicode characters.
+        Serializes the value with :func:`escape_json`: Unicode characters
+        are preserved, and ``<``, ``>``, ``&`` and ``'`` are written as
+        JSON unicode escapes, so a value containing ``</script>`` cannot
+        close the script block it is rendered into. The result is a
+        SafeString, so an auto-escaping engine emits it unchanged and
+        ``{{ data|json }}`` works inside a ``<script>`` tag without the
+        ``safe`` filter. This matches Jinja2's ``tojson`` filter.
+
+        The output is still JSON and parses to the same value. In an HTML
+        attribute it must be placed inside single quotes.
 
         :param value: The value to serialize to JSON.
 
-        :returns: The JSON string representation.
+        :returns: The JSON text as a SafeString.
     """
-    return json.dumps(value, ensure_ascii=False)
+    json_markup = escape_json(value)
+    return json_markup
 
 
 # =============================================================================

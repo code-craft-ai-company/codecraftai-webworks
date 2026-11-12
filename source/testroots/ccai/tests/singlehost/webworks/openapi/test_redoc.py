@@ -436,17 +436,18 @@ def test_get_descriptors_method_is_get():
     return
 
 
-def test_get_descriptors_handler_is_serve_ui():
+def test_get_descriptors_handler_is_handle_ui():
     """
-        Test that the descriptor handler is the serve_ui bound method.
+        Test that the descriptor handler is the handle_ui bound method,
+        the route handler that takes the request and returns a Response.
     """
     generator = _create_mock_generator()
     blueprint = ReDocBlueprint(generator=generator)
     descriptors = blueprint.get_descriptors()
     ui_descriptor = descriptors[0]
 
-    if ui_descriptor.handler.__func__ is not ReDocBlueprint.serve_ui:
-        errmsg = "Expected descriptor handler to be bound to ReDoc_Blueprint.serve_ui"
+    if ui_descriptor.handler.__func__ is not ReDocBlueprint.handle_ui:
+        errmsg = "Expected descriptor handler to be bound to ReDoc_Blueprint.handle_ui"
         raise AssertionError(errmsg)
 
     if ui_descriptor.handler.__self__ is not blueprint:
@@ -760,8 +761,8 @@ def test_get_descriptors_includes_static_route():
 
     static_descriptor = descriptors[1]
 
-    if "/_redoc/<filename>" != static_descriptor.path:
-        errmsg = f"Expected static descriptor path '/_redoc/<filename>', got {static_descriptor.path!r}"
+    if "/_redoc/{filename}" != static_descriptor.path:
+        errmsg = f"Expected static descriptor path '/_redoc/{{filename}}', got {static_descriptor.path!r}"
         raise AssertionError(errmsg)
 
     return
@@ -777,24 +778,25 @@ def test_get_descriptors_static_route_uses_custom_path():
 
     static_descriptor = descriptors[1]
 
-    if "/custom-redoc-static/<filename>" != static_descriptor.path:
-        errmsg = f"Expected path '/custom-redoc-static/<filename>', got {static_descriptor.path!r}"
+    if "/custom-redoc-static/{filename}" != static_descriptor.path:
+        errmsg = f"Expected path '/custom-redoc-static/{{filename}}', got {static_descriptor.path!r}"
         raise AssertionError(errmsg)
 
     return
 
 
-def test_get_descriptors_static_handler_is_serve_static():
+def test_get_descriptors_static_handler_is_handle_static():
     """
-        Test that the static descriptor handler is the serve_static bound method.
+        Test that the static descriptor handler is the handle_static bound method,
+        the route handler that takes the request and returns a Response.
     """
     generator = _create_mock_generator()
     blueprint = ReDocBlueprint(generator=generator)
     descriptors = blueprint.get_descriptors()
     static_descriptor = descriptors[1]
 
-    if static_descriptor.handler.__func__ is not ReDocBlueprint.serve_static:
-        errmsg = "Expected static descriptor handler to be bound to ReDocBlueprint.serve_static"
+    if static_descriptor.handler.__func__ is not ReDocBlueprint.handle_static:
+        errmsg = "Expected static descriptor handler to be bound to ReDocBlueprint.handle_static"
         raise AssertionError(errmsg)
 
     if static_descriptor.handler.__self__ is not blueprint:
@@ -940,6 +942,80 @@ def test_simultaneous_hosting_descriptors_do_not_overlap():
     overlap = swagger_paths & redoc_paths
     if overlap:
         errmsg = f"Expected no overlapping paths, found: {overlap}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# The registered routes are served through Router and Dispatcher
+# =============================================================================
+
+from ccai.webworks.routing.dispatcher import Dispatcher
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.router import Router
+
+
+def _get_from_registered_redoc(path, **blueprint_kwargs):
+    """Register a ReDocBlueprint on a Router through the instance and GET ``path`` from it."""
+    blueprint = ReDocBlueprint(generator=_create_mock_generator(), **blueprint_kwargs)
+
+    router = Router()
+    blueprint.register(router)
+
+    response = Dispatcher(router).dispatch(Request("GET", path))
+    return response
+
+
+def test_registered_redoc_route_serves_the_html_page():
+    """GET /redoc through the dispatcher answers 200 with the HTML page."""
+    response = _get_from_registered_redoc("/redoc")
+
+    if response.status_code != 200:
+        errmsg = f"Expected 200, got {response.status_code}: {response.body[:200]!r}"
+        raise AssertionError(errmsg)
+
+    if b"<redoc" not in response.body:
+        raise AssertionError("Expected the ReDoc page in the body")
+
+    return
+
+
+def test_registered_redoc_static_route_serves_the_bundle():
+    """GET /_redoc/redoc.standalone.js through the dispatcher answers 200 with the script."""
+    response = _get_from_registered_redoc("/_redoc/redoc.standalone.js")
+
+    if response.status_code != 200:
+        errmsg = f"Expected 200, got {response.status_code}"
+        raise AssertionError(errmsg)
+
+    if response.headers.get("Content-Type") != "application/javascript":
+        errmsg = f"Expected 'application/javascript', got {response.headers.get('Content-Type')!r}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_registered_redoc_static_route_answers_404_for_an_unknown_file():
+    """A file name that is not a bundled asset is answered 404 by the handler."""
+    response = _get_from_registered_redoc("/_redoc/not-there.js")
+
+    if response.status_code != 404:
+        errmsg = f"Expected 404, got {response.status_code}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_redoc_instance_register_returns_the_instance_descriptors():
+    """blueprint.register() on a configured instance registers that instance's two routes."""
+    blueprint = ReDocBlueprint(generator=_create_mock_generator(), ui_path="/reference")
+
+    descriptors = blueprint.register()
+
+    paths = [descriptor.path for descriptor in descriptors]
+    if paths != ["/reference", "/_redoc/{filename}"]:
+        errmsg = f"Expected the instance's routes, got {paths}"
         raise AssertionError(errmsg)
 
     return

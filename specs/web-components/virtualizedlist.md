@@ -157,7 +157,7 @@ viewport does not jump.
 | `Home` / `End` | Scrolls to the top/bottom of the list (when scroll container is focused). |
 
 ## 13. Accessibility
-- Scroll container: `role="feed"` for streaming/incremental content (WAI-ARIA `feed` pattern); `aria-busy` reflects loading state.
+- Feed: the inner box the items are positioned in (`::part(inner)`) has `role="feed"` (WAI-ARIA `feed` pattern) and `aria-busy` reflecting the loading state. It owns only the item articles: the load-more button, the loading / error / end regions and the empty state are its siblings inside the scroll container (`::part(container)`), which has no role. While it holds no article and is not loading it has no role (an empty feed is invalid ARIA).
 - Each item: `role="article"` (within a `feed`); `aria-posinset` and `aria-setsize` reflect index and total when known.
 - When `total` is `-1`, `aria-setsize="-1"` signals unknown total to AT.
 - Load-more button: `aria-label` set to `load-more-label` attribute; `aria-disabled` when loading.
@@ -197,7 +197,7 @@ and attaches the scroll/intersection engine.
 
 ## 19. Acceptance criteria
 - [ ] Only visible rows + overscan in DOM; spacer heights encode un-rendered items.
-- [ ] `role="feed"` on container; each item `role="article"` with `aria-posinset` and `aria-setsize`.
+- [ ] `role="feed"` on the inner item box, owning only articles; each item `role="article"` with `aria-posinset` and `aria-setsize` (never on the feed itself).
 - [ ] `aria-busy="true"` during loading; polite live region announces count after each page.
 - [ ] `intersection` mode: sentinel triggers `mj-load-more`; items append; `end-of-list` set when adapter exhausted.
 - [ ] `manual` mode: load-more button always visible; triggers `mj-load-more` on click/Enter.

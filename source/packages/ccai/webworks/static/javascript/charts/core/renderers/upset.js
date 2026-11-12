@@ -5,22 +5,154 @@
  *
  * JSON shape (ctx.raw):
  *   sets[]           { name, size }          – individual sets
- *   intersections[]  { sets[], size }         – all named intersections
+ *   intersections[]  { sets[], size }        – named intersections, drawn
+ *                    as given (exclusive or inclusive, as the data says);
+ *                    entries naming an unknown set are dropped and a
+ *                    repeated combination is drawn once
+ *   elements[]       optional { sets[] } (or plain arrays of set names), one
+ *                    per element: when present the EXCLUSIVE intersections
+ *                    and the set sizes are computed from it, and
+ *                    `intersections` / `sets[].size` are not needed
+ *   max_columns      optional cap on the number of intersection columns
  *
  * Layout regions:
- *   1. Top: vertical bars for intersection sizes (sorted by size desc)
+ *   1. Top: vertical bars for intersection sizes with value labels
  *   2. Bottom: dot membership matrix (one row per set, one column per
- *      intersection)
- *   3. Left (bottom region): horizontal bars for individual set sizes
+ *      intersection, members joined by a line)
+ *   3. Bottom left: horizontal bars for individual set sizes with values
+ *
+ * Columns are sized to the width; when there are more intersections than
+ * fit (about 14px per column) the largest are shown and a "+N more" note
+ * names how many were left out (they stay in the accessible table).
  *
  * `sort` attr: "size" (default) | "degree"
+ *
+ * Interaction: intersection bars emit `mj-chart-upset-click` { sets, size };
+ * set bars emit `mj-chart-upset-set-click` { name, size }.
  *
  * Registers: "upset"
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber } from "../svgdraw.js";
-import { linearScale, bandScale, niceTicks } from "../scales.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
+import { linearScale, niceTicks } from "../scales.js";
+
+const MIN_COLUMN = 14
+const CHAR_WIDTH = 0.6
+
+
+function _number(value) {
+  /*
+   * A finite, non-negative number, else 0.
+   */
+  const numeric = typeof value === "number" && Number.isFinite(value) === true ? Math.max(value, 0) : 0
+  return numeric
+}
+
+
+function _readData(raw) {
+  /*
+   * Normalise sets and intersections (computed from elements when given).
+   *
+   * :returns: { sets: [{name, size}], intersections: [{members, names,
+   *     size}], dropped: count of intersections that named unknown sets }
+   */
+  const sets = []
+  const indexOf = new Map()
+  const list = Array.isArray(raw.sets) === true ? raw.sets : []
+  for (let index = 0; index < list.length; index = index + 1) {
+    const entry = list[index]
+    const name = entry !== null && typeof entry === "object" && entry.name !== undefined && entry.name !== null
+      ? String(entry.name)
+      : (typeof entry === "string" ? entry : null)
+    if (name === null || indexOf.has(name) === true) {
+      continue
+    }
+    indexOf.set(name, sets.length)
+    sets.push({ name: name, size: entry !== null && typeof entry === "object" ? _number(entry.size) : 0 })
+  }
+
+  const combos = new Map()
+  let dropped = 0
+  const addCombo = (names, size, accumulate) => {
+    const members = []
+    for (let m = 0; m < names.length; m = m + 1) {
+      const position = indexOf.get(String(names[m]))
+      if (position === undefined) {
+        return false
+      }
+      if (members.indexOf(position) < 0) {
+        members.push(position)
+      }
+    }
+    if (members.length === 0) {
+      return false
+    }
+    members.sort((a, b) => a - b)
+    const key = members.join(",")
+    if (combos.has(key) === true) {
+      if (accumulate === true) {
+        combos.get(key).size = combos.get(key).size + size
+      }
+      return true
+    }
+    combos.set(key, { members: members, names: members.map((m) => sets[m].name), size: size })
+    return true
+  }
+
+  const elements = Array.isArray(raw.elements) === true ? raw.elements : null
+  if (elements !== null) {
+    /* Exclusive intersections and set sizes from element memberships. */
+    sets.forEach((set) => {
+      set.size = 0
+    })
+    for (let index = 0; index < elements.length; index = index + 1) {
+      const entry = elements[index]
+      const names = Array.isArray(entry) === true
+        ? entry
+        : (entry !== null && typeof entry === "object" && Array.isArray(entry.sets) === true ? entry.sets : null)
+      if (names === null) {
+        continue
+      }
+      const known = Array.from(new Set(names.map((name) => String(name)))).filter((name) => indexOf.has(name))
+      if (known.length === 0) {
+        continue
+      }
+      known.forEach((name) => {
+        sets[indexOf.get(name)].size = sets[indexOf.get(name)].size + 1
+      })
+      addCombo(known, 1, true)
+    }
+  } else {
+    const given = Array.isArray(raw.intersections) === true ? raw.intersections : []
+    for (let index = 0; index < given.length; index = index + 1) {
+      const entry = given[index]
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry.sets) === false) {
+        continue
+      }
+      if (addCombo(entry.sets, _number(entry.size), false) === false) {
+        dropped = dropped + 1
+      }
+    }
+  }
+
+  return { sets: sets, intersections: Array.from(combos.values()), dropped: dropped }
+}
+
+
+function _activate(element, handler) {
+  /*
+   * Run a handler on click and on Enter / Space.
+   */
+  element.addEventListener("click", handler)
+  element.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault()
+      handler()
+    }
+  })
+  return
+}
 
 
 export function render(ctx) {
@@ -28,244 +160,203 @@ export function render(ctx) {
    * Render an UpSet plot.
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
-  const raw = ctx.raw
-  const sets = (raw !== null && raw !== undefined && Array.isArray(raw.sets))
-    ? raw.sets
-    : []
-  const intersections = (raw !== null && raw !== undefined && Array.isArray(raw.intersections))
-    ? raw.intersections
-    : []
+  const raw = ctx.raw !== null && ctx.raw !== undefined ? ctx.raw : {}
+  const data = _readData(raw)
+  const sets = data.sets
   const sortMode = ctx.attrs("sort", "size")
-
   const root = svgEl("g", { part: "plot" }, [])
 
-  if (sets.length === 0 || intersections.length === 0) {
+  const sorted = data.intersections.slice().sort((a, b) => {
+    if (sortMode === "degree" && a.members.length !== b.members.length) {
+      return a.members.length - b.members.length
+    }
+    return b.size - a.size
+  })
+
+  const tableRows = sorted.map((item) => [item.names.join(" ∩ "), item.members.length, item.size])
+  sets.forEach((set) => {
+    tableRows.push([`${set.name} (set total)`, 1, set.size])
+  })
+  ctx.setTable({ columns: ["Intersection", "Sets", "Size"], rows: tableRows, caption: ctx.label })
+
+  if (sets.length === 0 || sorted.length === 0) {
     return root
   }
 
-  /* Sort intersections. */
-  const sorted = intersections.slice().sort((a, b) => {
-    const av = typeof a.size === "number" ? a.size : 0
-    const bv = typeof b.size === "number" ? b.size : 0
-    if (sortMode === "degree") {
-      const da = Array.isArray(a.sets) ? a.sets.length : 0
-      const db = Array.isArray(b.sets) ? b.sets.length : 0
-      if (da !== db) {
-        return da - db
-      }
-    }
-    return bv - av
+  /* Layout. */
+  let longest = 0
+  sets.forEach((set) => {
+    longest = Math.max(longest, set.name.length * 11 * CHAR_WIDTH)
   })
+  const setLabelW = Math.min(Math.max(longest + 8, 40), ctx.width * 0.22)
+  const leftBarW = Math.min(Math.max(ctx.width * 0.16, 60), 120)
+  const margin = { top: 20, right: 12, bottom: 18, left: 4 }
+  const matrixX = margin.left + leftBarW + setLabelW
+  const availableW = Math.max(ctx.width - matrixX - margin.right, 20)
+  const totalH = Math.max(ctx.height - margin.top - margin.bottom, 20)
 
-  /* Layout constants. */
-  const leftBarW = 80
-  const setLabelW = 72
-  const marginTop = 12
-  const marginRight = 12
-  const marginBottom = 8
-  const topBarFraction = 0.55   /* fraction of height for the top bar region */
-
-  const totalW = Math.max(ctx.width - marginRight, 10)
-  const totalH = Math.max(ctx.height - marginTop - marginBottom, 10)
-
-  /* Column band for intersection columns. */
-  const colW = Math.max((totalW - leftBarW - setLabelW) / sorted.length, 8)
-  const matrixH = totalH * (1 - topBarFraction)
-  const rowH = sets.length > 0 ? matrixH / sets.length : 20
-
-  /* Max intersection size for y-scale. */
-  let maxInter = 1
-  for (let i = 0; i < sorted.length; i = i + 1) {
-    const sz = typeof sorted[i].size === "number" ? sorted[i].size : 0
-    if (sz > maxInter) { maxInter = sz }
+  let capacity = Math.max(Math.floor(availableW / MIN_COLUMN), 1)
+  if (Number.isInteger(raw.max_columns) === true && raw.max_columns > 0) {
+    capacity = Math.min(capacity, raw.max_columns)
+  }
+  let shown = sorted
+  let hidden = 0
+  if (sorted.length > capacity) {
+    shown = sorted.slice().sort((a, b) => b.size - a.size).slice(0, capacity)
+    shown = sorted.filter((item) => shown.indexOf(item) >= 0)
+    hidden = sorted.length - shown.length
   }
 
-  /* Max individual set size for left bar scale. */
-  let maxSetSize = 1
-  for (let s = 0; s < sets.length; s = s + 1) {
-    const sz = typeof sets[s].size === "number" ? sets[s].size : 0
-    if (sz > maxSetSize) { maxSetSize = sz }
-  }
+  const colW = availableW / shown.length
+  const matrixH = Math.min(totalH * 0.45, sets.length * 24)
+  const rowH = matrixH / sets.length
+  const topBarH = totalH - matrixH - 6
+  const dotR = Math.max(Math.min(rowH * 0.3, colW * 0.32, 7), 1.5)
+  const barColor = ctx.colorFor(0)
 
-  const topBarH = totalH * topBarFraction
-  const topBarYScale = linearScale([0, maxInter], [topBarH, 0])
-  const leftBarXScale = linearScale([0, maxSetSize], [leftBarW, 0])
+  let maxInter = 0
+  shown.forEach((item) => {
+    maxInter = Math.max(maxInter, item.size)
+  })
+  const ticks = niceTicks(0, Math.max(maxInter, 1), 4)
+  const topValue = Math.max(ticks[ticks.length - 1], maxInter, 1)
+  const topY = linearScale([0, topValue], [topBarH, 0])
 
-  const plot = svgEl("g", {
-    transform: `translate(0,${marginTop})`
-  }, [])
+  let maxSet = 0
+  sets.forEach((set) => {
+    maxSet = Math.max(maxSet, set.size)
+  })
+  const setX = linearScale([0, Math.max(maxSet, 1)], [leftBarW, 0])
+
+  const plot = svgEl("g", { transform: `translate(0,${margin.top})` }, [])
   root.appendChild(plot)
 
-  /* ── Top bar region ──────────────────────────────────────────── */
-  const topBarGroup = svgEl("g", {
-    transform: `translate(${setLabelW + leftBarW},0)`
-  }, [])
-  plot.appendChild(topBarGroup)
-
-  /* Y-axis gridlines for top bars. */
-  const topTicks = niceTicks(0, maxInter, 4)
-  for (let t = 0; t < topTicks.length; t = t + 1) {
-    const tickY = topBarYScale(topTicks[t])
-    topBarGroup.appendChild(svgEl("line", {
-      x1: 0, y1: tickY,
-      x2: sorted.length * colW, y2: tickY,
+  /* ── Top bars ─────────────────────────────────────────────────── */
+  const top = svgEl("g", { transform: `translate(${matrixX},0)` }, [])
+  plot.appendChild(top)
+  const grid = svgEl("g", { "aria-hidden": "true" }, [])
+  top.appendChild(grid)
+  for (let t = 0; t < ticks.length; t = t + 1) {
+    const y = topY(ticks[t])
+    grid.appendChild(svgEl("line", {
+      x1: 0, y1: y, x2: shown.length * colW, y2: y,
       stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
     }, []))
-    topBarGroup.appendChild(svgEl("text", {
-      x: -4, y: tickY + 4,
-      "text-anchor": "end", "font-size": 10,
-      fill: "var(--mj-text-muted, #6b7280)"
-    }, formatNumber(topTicks[t])))
+    grid.appendChild(svgEl("text", {
+      x: -4, y: y + 3, "text-anchor": "end", "font-size": 10, fill: "var(--mj-text-muted, #5f6673)"
+    }, formatNumber(ticks[t], { notation: "compact", maximumFractionDigits: 1 })))
   }
+  grid.appendChild(svgEl("text", {
+    x: -4, y: -10, "text-anchor": "end", "font-size": 10, fill: "var(--mj-text-muted, #5f6673)"
+  }, "Intersection"))
 
-  /* Intersection bars. */
-  for (let i = 0; i < sorted.length; i = i + 1) {
-    const inter = sorted[i]
-    const sz = typeof inter.size === "number" ? inter.size : 0
-    const barX = i * colW + colW * 0.1
-    const barW = colW * 0.8
-    const barY = topBarYScale(sz)
-    const barH = topBarH - barY
-    const membership = Array.isArray(inter.sets) ? inter.sets : []
-    const ariaLabel = `${membership.join(" ∩ ")}: ${formatNumber(sz)}`
-
-    const barEl = svgEl("g", {
-      tabindex: "0",
-      role: "img",
-      "aria-label": ariaLabel,
-      part: "upset-bar"
-    }, [])
-
-    barEl.appendChild(svgEl("rect", {
-      x: barX, y: barY,
-      width: barW, height: Math.max(barH, 1),
-      rx: 2,
-      fill: "var(--mj-color-accent-500, #2563eb)"
+  const valueFont = 9
+  for (let i = 0; i < shown.length; i = i + 1) {
+    const item = shown[i]
+    const y = topY(item.size)
+    const label = `${item.names.join(" ∩ ")}: ${formatNumber(item.size)}`
+    const bar = svgEl("g", { tabindex: "0", role: "img", "aria-label": label, part: "upset-bar" }, [])
+    bar.appendChild(svgEl("rect", {
+      x: (i * colW + colW * 0.12).toFixed(2), y: y.toFixed(2),
+      width: Math.max(colW * 0.76, 1).toFixed(2), height: Math.max(topBarH - y, 0.5).toFixed(2),
+      rx: 1.5, fill: barColor
     }, []))
-
-    barEl.appendChild(svgEl("title", null, ariaLabel))
-
-    const capturedInter = inter
-    const handler = () => {
-      ctx.emit("mj-chart-upset-click", {
-        sets: capturedInter.sets,
-        size: capturedInter.size
-      })
+    const text = formatNumber(item.size, { notation: "compact", maximumFractionDigits: 1 })
+    if (text.length * valueFont * CHAR_WIDTH <= colW + 2) {
+      bar.appendChild(svgEl("text", {
+        x: (i * colW + colW / 2).toFixed(2), y: (y - 3).toFixed(2), "text-anchor": "middle",
+        "font-size": valueFont, fill: "var(--mj-text, #14181f)", "aria-hidden": "true"
+      }, text))
     }
-    barEl.addEventListener("click", handler)
-    barEl.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault()
-        handler()
-      }
+    bar.appendChild(svgEl("title", null, label))
+    const captured = item
+    _activate(bar, () => {
+      ctx.emit("mj-chart-upset-click", { sets: captured.names, size: captured.size })
     })
-
-    topBarGroup.appendChild(barEl)
+    top.appendChild(bar)
+  }
+  if (hidden > 0) {
+    top.appendChild(svgEl("text", {
+      x: shown.length * colW, y: -4, "text-anchor": "end", "font-size": 10,
+      fill: "var(--mj-text-muted, #5f6673)", part: "upset-more"
+    }, `+${hidden} more (smallest) not shown`))
   }
 
-  /* ── Matrix region ───────────────────────────────────────────── */
-  const matrixGroup = svgEl("g", {
-    transform: `translate(${setLabelW + leftBarW},${topBarH})`
-  }, [])
-  plot.appendChild(matrixGroup)
-
-  /* Matrix background rows. */
+  /* ── Matrix ───────────────────────────────────────────────────── */
+  const matrixY = topBarH + 6
+  const matrix = svgEl("g", { transform: `translate(${matrixX},${matrixY})`, "aria-hidden": "true" }, [])
+  plot.appendChild(matrix)
   for (let s = 0; s < sets.length; s = s + 1) {
-    matrixGroup.appendChild(svgEl("rect", {
-      x: 0, y: s * rowH,
-      width: sorted.length * colW, height: rowH,
-      fill: s % 2 === 0
-        ? "var(--mj-surface-subtle, #f8f9fb)"
-        : "var(--mj-surface, #ffffff)"
-    }, []))
-  }
-
-  /* Dots and connectors for each intersection column. */
-  for (let i = 0; i < sorted.length; i = i + 1) {
-    const inter = sorted[i]
-    const membership = Array.isArray(inter.sets) ? inter.sets : []
-    const colCX = i * colW + colW / 2
-
-    /* Compute row indices of participating sets for the connector. */
-    const memberRows = []
-    for (let s = 0; s < sets.length; s = s + 1) {
-      if (membership.includes(sets[s].name)) {
-        memberRows.push(s)
-      }
-    }
-
-    /* Vertical connector between first and last member dot. */
-    if (memberRows.length >= 2) {
-      const topDot = memberRows[0]
-      const botDot = memberRows[memberRows.length - 1]
-      matrixGroup.appendChild(svgEl("line", {
-        x1: colCX, y1: topDot * rowH + rowH / 2,
-        x2: colCX, y2: botDot * rowH + rowH / 2,
-        stroke: "var(--mj-color-accent-500, #2563eb)",
-        "stroke-width": 3
+    if (s % 2 === 0) {
+      matrix.appendChild(svgEl("rect", {
+        x: -setLabelW - leftBarW, y: s * rowH, width: shown.length * colW + setLabelW + leftBarW,
+        height: rowH, fill: "var(--mj-bg-muted, #eef0f3)", "fill-opacity": 0.55
       }, []))
     }
-
-    /* Dots. */
+  }
+  for (let i = 0; i < shown.length; i = i + 1) {
+    const item = shown[i]
+    const cx = i * colW + colW / 2
+    if (item.members.length >= 2) {
+      const first = item.members[0]
+      const last = item.members[item.members.length - 1]
+      matrix.appendChild(svgEl("line", {
+        x1: cx, y1: first * rowH + rowH / 2, x2: cx, y2: last * rowH + rowH / 2,
+        stroke: barColor, "stroke-width": Math.max(dotR * 0.6, 1.5)
+      }, []))
+    }
     for (let s = 0; s < sets.length; s = s + 1) {
-      const isMember = membership.includes(sets[s].name)
-      matrixGroup.appendChild(svgEl("circle", {
-        cx: colCX,
-        cy: s * rowH + rowH / 2,
-        r: Math.min(rowH * 0.3, 8),
-        fill: isMember === true
-          ? "var(--mj-color-accent-500, #2563eb)"
-          : "var(--mj-border, #e0e3e9)"
+      const member = item.members.indexOf(s) >= 0
+      matrix.appendChild(svgEl("circle", {
+        cx: cx.toFixed(2), cy: (s * rowH + rowH / 2).toFixed(2), r: dotR.toFixed(2),
+        fill: member === true ? barColor : "var(--mj-border, #e0e3e9)"
       }, []))
     }
   }
 
-  /* ── Left bars (individual set sizes) ───────────────────────── */
-  const leftGroup = svgEl("g", {
-    transform: `translate(${setLabelW},${topBarH})`
-  }, [])
-  plot.appendChild(leftGroup)
-
+  /* ── Set-size bars and set names ──────────────────────────────── */
+  const left = svgEl("g", { transform: `translate(${margin.left},${matrixY})` }, [])
+  plot.appendChild(left)
   for (let s = 0; s < sets.length; s = s + 1) {
     const set = sets[s]
-    const sz = typeof set.size === "number" ? set.size : 0
-    const barX = leftBarXScale(sz)
-    const barW = leftBarW - barX
-    const barY = s * rowH + rowH * 0.1
-    const barH = rowH * 0.8
-    const ariaLabel = `${set.name}: ${formatNumber(sz)}`
-
-    leftGroup.appendChild(svgEl("rect", {
-      x: barX, y: barY,
-      width: Math.max(barW, 1), height: barH,
-      rx: 2,
-      fill: "var(--mj-color-accent-300, #80a8ff)",
-      part: "upset-set-bar"
+    const x = setX(set.size)
+    const label = `${set.name}: ${formatNumber(set.size)}`
+    const group = svgEl("g", { tabindex: "0", role: "img", "aria-label": label, part: "upset-set" }, [])
+    group.appendChild(svgEl("rect", {
+      x: x.toFixed(2), y: (s * rowH + rowH * 0.15).toFixed(2),
+      width: Math.max(leftBarW - x, 0.5).toFixed(2), height: Math.max(rowH * 0.7, 1).toFixed(2),
+      rx: 1.5, fill: barColor, "fill-opacity": 0.6, part: "upset-set-bar"
     }, []))
-
-    leftGroup.appendChild(svgEl("title", null, ariaLabel))
+    const valueText = formatNumber(set.size, { notation: "compact", maximumFractionDigits: 1 })
+    const inside = leftBarW - x > valueText.length * valueFont * CHAR_WIDTH + 6
+    group.appendChild(svgEl("text", {
+      x: inside === true ? (x + 3).toFixed(2) : (x - 3).toFixed(2),
+      y: (s * rowH + rowH / 2 + 3).toFixed(2),
+      "text-anchor": inside === true ? "start" : "end", "font-size": valueFont,
+      fill: "var(--mj-text, #14181f)", "aria-hidden": "true"
+    }, valueText))
+    const capacityChars = Math.max(Math.floor((setLabelW - 6) / (11 * CHAR_WIDTH)), 1)
+    const name = set.name.length > capacityChars ? set.name.slice(0, Math.max(capacityChars - 1, 1)) + "…" : set.name
+    group.appendChild(svgEl("text", {
+      x: leftBarW + setLabelW - 6, y: (s * rowH + rowH / 2 + 4).toFixed(2), "text-anchor": "end",
+      "font-size": 11, fill: "var(--mj-text, #14181f)", "aria-hidden": "true"
+    }, name))
+    group.appendChild(svgEl("title", null, label))
+    const captured = set
+    _activate(group, () => {
+      ctx.emit("mj-chart-upset-set-click", { name: captured.name, size: captured.size })
+    })
+    left.appendChild(group)
   }
-
-  /* Set name labels. */
-  const labelGroup = svgEl("g", {
-    transform: `translate(0,${topBarH})`
-  }, [])
-  plot.appendChild(labelGroup)
-
-  for (let s = 0; s < sets.length; s = s + 1) {
-    labelGroup.appendChild(svgEl("text", {
-      x: setLabelW - 4,
-      y: s * rowH + rowH / 2 + 4,
-      "text-anchor": "end",
-      "font-size": 11,
-      fill: "var(--mj-text, #14181f)"
-    }, escapeHtml(sets[s].name)))
-  }
+  left.appendChild(svgEl("text", {
+    x: leftBarW, y: matrixH + 13, "text-anchor": "end", "font-size": 10,
+    fill: "var(--mj-text-muted, #5f6673)", "aria-hidden": "true"
+  }, "Set size"))
 
   return root
 }
 
 
-registerRenderer("upset", render)
+registerRenderer("upset", render, { legend: "none" })

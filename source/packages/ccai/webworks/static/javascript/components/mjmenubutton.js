@@ -3,10 +3,23 @@
  *
  * <mj-menu-button> — single trigger button that opens an actions menu.
  * Covers kebab/meatball/overflow menus.
+ *
+ * The menu is built from the host's children:
+ *   <mj-menu-item value variant shortcut disabled>   an action row
+ *   <mj-menu-item type="checkbox|radio" checked>     a checkable row
+ *   <mj-menu-separator>                              a divider
+ *   <mj-menu-group label="...">                      a labelled group of rows
+ * A MutationObserver keeps the menu in step with them.
+ *
+ * Opening the menu moves DOM focus to the role="menu" element, which tracks
+ * the active item through aria-activedescendant: Arrow keys, Home and End
+ * move it, Enter or Space activate it, Escape closes and returns focus to
+ * the trigger, Tab closes and moves on.
  */
 
 import { MjElement, nextId } from "../core/mjelement.js";
 import { autoPosition } from "../core/overlay.js";
+import { t } from "../core/intl.js";
 
 const STYLES = `
 :host { display: inline-block; vertical-align: middle; }
@@ -30,17 +43,18 @@ const STYLES = `
   transition: background var(--mj-motion-fast);
 }
 :host([icon-only]) .trigger { padding: 0; }
-.trigger:hover { background: var(--mj-bg-muted); }
+.trigger:hover:not(:disabled) { background: var(--mj-bg-muted); }
 .trigger:focus-visible {
   outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring);
   outline-offset: var(--mj-focus-ring-offset);
 }
-:host([disabled]) .trigger { opacity: 0.55; cursor: not-allowed; pointer-events: none; }
+.trigger:disabled { opacity: 0.55; cursor: not-allowed; }
+:host([disabled]) .trigger { pointer-events: none; }
 
 :host([size="sm"]) .trigger { min-height: var(--mj-control-height-sm); font-size: var(--mj-font-size-sm); }
 :host([size="lg"]) .trigger { min-height: var(--mj-control-height-lg); font-size: var(--mj-font-size-lg); }
 
-.trigger-label { }
+.trigger-label:empty { display: none; }
 :host([icon-only]) .trigger-label { display: none; }
 
 .popup {
@@ -57,7 +71,7 @@ const STYLES = `
 }
 :host([open]) .popup { display: block; }
 
-.menu { padding: var(--mj-space-1) 0; }
+.menu { padding: var(--mj-space-1) 0; outline: none; }
 
 .menu-item {
   display: flex;
@@ -73,6 +87,9 @@ const STYLES = `
 .menu-item:hover, .menu-item.focused { background: var(--mj-bg-muted); }
 .menu-item[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; }
 .menu-item[data-variant="danger"] { color: var(--mj-color-danger); }
+
+.menu-item-check { width: 1em; height: 1em; flex-shrink: 0; visibility: hidden; }
+.menu-item[aria-checked="true"] .menu-item-check { visibility: visible; }
 
 .menu-separator {
   height: 1px;
@@ -96,22 +113,34 @@ const STYLES = `
 }
 `;
 
+const CHECK_ICON_MARKUP =
+  '<svg class="menu-item-check" aria-hidden="true" viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 3.5 6 11 2.5 7.5l1-1L6 9 12.5 2.5z"/></svg>'
+
+/* Child attributes whose changes alter what the menu shows. */
+const ITEM_ATTRIBUTES = ["value", "disabled", "variant", "shortcut", "type", "checked", "label"]
+
 export class MjMenuButton extends MjElement {
   static tagName = "mj-menu-button";
   static styles = STYLES;
-  static watched = ["label", "icon-only", "disabled", "open", "placement", "size"];
+  static watched = ["label", "aria-label", "icon-only", "disabled", "open", "placement", "size"];
 
   constructor() {
     super()
     this._itemData = []
     this._focusedIndex = -1
     this._disposePosition = null
+
+    /* Set by _open(): which item to activate and that focus should move. */
+    this._openFocus = null
+
+    /* The missing-label error of an icon-only trigger is logged once. */
+    this._missingLabelReported = false
+
     this._menuId = nextId("mj-mb-menu")
     this._triggerId = nextId("mj-mb-tr")
   }
 
   render() {
-    const label = this.getAttribute("label") || ""
     const markup = `
       <button
         class="trigger"
@@ -121,10 +150,9 @@ export class MjMenuButton extends MjElement {
         aria-haspopup="menu"
         aria-expanded="false"
         aria-controls="${this._menuId}"
-        ${label.length > 0 ? `aria-label="${label}"` : ""}
       >
         <slot name="trigger-icon"></slot>
-        <span class="trigger-label" part="trigger-label">${label}</span>
+        <span class="trigger-label" part="trigger-label"></span>
       </button>
       <div class="popup" part="popup">
         <div
@@ -142,156 +170,337 @@ export class MjMenuButton extends MjElement {
 
   afterRender() {
     this._trigger = this.$(".trigger")
+    this._triggerLabel = this.$(".trigger-label")
     this._popup = this.$(".popup")
     this._menu = this.$(".menu")
 
     this.listen(this._trigger, "click", this._onTriggerClick.bind(this))
     this.listen(this._trigger, "keydown", this._onTriggerKeydown.bind(this))
     this.listen(this._menu, "keydown", this._onMenuKeydown.bind(this))
+
+    /* One delegated pair of listeners serves every menu item. */
+    this.listen(this._menu, "click", this._onItemClick.bind(this))
+    this.listen(this._menu, "mouseover", this._onItemHover.bind(this))
+
     this.listen(document, "click", this._onDocClick.bind(this))
     this.listen(document, "focusin", this._onDocFocusin.bind(this))
 
+    this._observeItems()
     this._buildMenu()
+    this._syncTrigger()
 
-    const slot = this.shadowRoot.querySelector("slot:not([name])")
-    if (slot !== null) {
-      this.listen(slot, "slotchange", () => this._buildMenu())
-    }
+    /* `open` present at first render, or still set when the element is re-inserted. */
+    this._syncOpen()
+    return
+  }
 
-    this._checkLabel()
+  onDisconnected() {
+    this._stopPositioning()
     return
   }
 
   onAttributeChanged(name, oldValue, newValue) {
-    if (name === "open") {
+    if (name === "open" || name === "placement") {
       this._syncOpen()
     }
-    if (name === "label" && this._trigger !== undefined) {
-      this._trigger.setAttribute("aria-label", newValue || "")
-      const lbl = this._trigger.querySelector(".trigger-label")
-      if (lbl !== null) {
-        lbl.textContent = newValue || ""
-      }
-    }
-    if (name === "disabled" && this._trigger !== undefined) {
-      this._trigger.disabled = this.hasAttribute("disabled")
+    if (name === "label" || name === "aria-label" || name === "icon-only" || name === "disabled") {
+      this._syncTrigger()
     }
     return
   }
 
-  _checkLabel() {
-    const iconOnly = this.hasAttribute("icon-only")
-    if (iconOnly === true) {
-      const label = this.getAttribute("label") || this.getAttribute("aria-label") || ""
-      if (label.length === 0) {
-        console.error("<mj-menu-button>: icon-only mode requires a label or aria-label attribute.")
-        this._trigger.setAttribute("aria-label", "Actions")
-      }
-    }
-    return
-  }
-
-  _buildMenu() {
-    const allChildren = Array.from(this.childNodes)
-    const itemEls = Array.from(this.querySelectorAll("mj-menu-item"))
-
-    if (itemEls.length === 0) {
-      this._trigger.disabled = true
-      console.warn("<mj-menu-button>: no menu items slotted.")
+  /*
+   * Text, accessible name and disabled state of the trigger. The name is the
+   * `label` attribute, else the host's `aria-label`; an icon-only trigger
+   * with neither is reported and falls back to a generic name. A menu with
+   * no items leaves the trigger nothing to open.
+   */
+  _syncTrigger() {
+    if (this._trigger === undefined || this._trigger === null) {
       return
     }
 
-    this._itemData = itemEls.map((el, idx) => ({
-      id: nextId("mj-mb-mi"),
-      label: el.textContent.trim(),
-      value: el.getAttribute("value") || "",
-      disabled: el.hasAttribute("disabled"),
-      variant: el.getAttribute("variant") || "",
-      shortcut: el.getAttribute("shortcut") || "",
-      index: idx,
-      el: el
-    }))
+    const label = this.getAttribute("label") || ""
+    const name = label.length > 0 ? label : (this.getAttribute("aria-label") || "")
+    this._triggerLabel.textContent = label
 
-    let html = ""
-    this._itemData.forEach((item) => {
-      const disabledAttr = item.disabled === true ? ' aria-disabled="true"' : ""
-      const variantAttr = item.variant.length > 0 ? ` data-variant="${item.variant}"` : ""
-      const shortcutHtml = item.shortcut.length > 0 ? `<span class="shortcut" aria-hidden="true">${item.shortcut}</span>` : ""
-      html += `<div
-        class="menu-item"
-        part="menu-item"
-        role="menuitem"
-        id="${item.id}"
-        data-value="${item.value}"
-        data-index="${item.index}"
-        tabindex="-1"
-        ${disabledAttr}${variantAttr}
-      >
-        <span class="menu-item-label" part="menu-item-label">${item.label}</span>
-        ${shortcutHtml}
-      </div>`
+    if (name.length > 0) {
+      this._trigger.setAttribute("aria-label", name)
+    } else if (this.hasAttribute("icon-only") === true) {
+      if (this._missingLabelReported === false) {
+        console.error("<mj-menu-button>: icon-only mode requires a label or aria-label attribute.")
+        this._missingLabelReported = true
+      }
+      this._trigger.setAttribute("aria-label", t("mj.menuButton.defaultLabel"))
+    } else {
+      this._trigger.removeAttribute("aria-label")
+    }
+
+    const disabled = this.hasAttribute("disabled")
+    this._trigger.disabled = disabled === true || this._itemData.length === 0
+    if (disabled === true) {
+      this._close(false)
+    }
+    return
+  }
+
+  /* ----- menu building ----- */
+
+  /*
+   * Rebuild the menu whenever the item children change, so items added
+   * after the first render appear and an initially empty menu becomes usable.
+   */
+  _observeItems() {
+    if (typeof MutationObserver !== "function") {
+      return
+    }
+    const observer = new MutationObserver((records) => {
+      const relevant = records.some((record) => {
+        return record.type !== "attributes" || record.target !== this
+      })
+      if (relevant === true && this._menu !== undefined && this._menu !== null) {
+        this._buildMenu()
+        this._syncTrigger()
+      }
     })
-    this._menu.innerHTML = html
-
-    const items = this._menu.querySelectorAll(".menu-item")
-    items.forEach((item) => {
-      this.listen(item, "click", this._onItemClick.bind(this))
+    observer.observe(this, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ITEM_ATTRIBUTES
+    })
+    this.onTeardown(() => {
+      observer.disconnect()
     })
     return
   }
 
+  /*
+   * Build the row for one <mj-menu-item> and its record. Rows are created
+   * with DOM APIs and textContent: item text, shortcut and variant are
+   * application data, never markup.
+   */
+  _buildItem(el, index) {
+    const type = el.getAttribute("type") || ""
+    const checkable = type === "checkbox" || type === "radio"
+    const shortcut = el.getAttribute("shortcut") || ""
+    const variant = el.getAttribute("variant") || ""
+    const disabled = el.hasAttribute("disabled")
+
+    const label = el.textContent.replace(/\s+/g, " ").trim()
+
+    const node = document.createElement("div")
+    node.className = "menu-item"
+    node.setAttribute("part", "menu-item")
+    node.id = nextId("mj-mb-mi")
+    node.dataset.index = String(index)
+    node.tabIndex = -1
+
+    if (type === "checkbox") {
+      node.setAttribute("role", "menuitemcheckbox")
+    } else if (type === "radio") {
+      node.setAttribute("role", "menuitemradio")
+    } else {
+      node.setAttribute("role", "menuitem")
+    }
+    if (checkable === true) {
+      node.setAttribute("aria-checked", el.hasAttribute("checked") === true ? "true" : "false")
+      node.innerHTML = CHECK_ICON_MARKUP
+    }
+    if (disabled === true) {
+      node.setAttribute("aria-disabled", "true")
+    }
+    if (variant.length > 0) {
+      node.dataset.variant = variant
+    }
+
+    const labelEl = document.createElement("span")
+    labelEl.className = "menu-item-label"
+    labelEl.setAttribute("part", "menu-item-label")
+    labelEl.textContent = label
+    node.appendChild(labelEl)
+
+    if (shortcut.length > 0) {
+      const shortcutEl = document.createElement("span")
+      shortcutEl.className = "shortcut"
+      shortcutEl.setAttribute("part", "menu-item-shortcut")
+      shortcutEl.setAttribute("aria-hidden", "true")
+      shortcutEl.textContent = shortcut
+      node.appendChild(shortcutEl)
+    }
+
+    const item = {
+      id: node.id,
+      label: label,
+      value: el.hasAttribute("value") === true ? el.getAttribute("value") : label,
+      disabled: disabled,
+      type: type,
+      index: index,
+      el: el,
+      node: node
+    }
+    return item
+  }
+
+  /*
+   * Walk the host's children in order and mirror them into the menu:
+   * items, separators and labelled groups. Other wrapper elements are
+   * looked through; anything assigned to a named slot is left alone.
+   */
+  _buildMenu() {
+    /* Keep the active item by element across the rebuild. */
+    const activeBefore = this._itemData[this._focusedIndex]
+    const activeEl = activeBefore !== undefined ? activeBefore.el : null
+
+    this._menu.replaceChildren()
+    this._itemData = []
+
+    const visit = (parentEl, container) => {
+      Array.from(parentEl.children).forEach((child) => {
+        const tag = child.localName
+
+        if (tag === "mj-menu-item") {
+          const item = this._buildItem(child, this._itemData.length)
+          this._itemData.push(item)
+          container.appendChild(item.node)
+        } else if (tag === "mj-menu-separator") {
+          const separator = document.createElement("div")
+          separator.className = "menu-separator"
+          separator.setAttribute("part", "menu-separator")
+          separator.setAttribute("role", "separator")
+          container.appendChild(separator)
+        } else if (tag === "mj-menu-group") {
+          const groupNode = document.createElement("div")
+          groupNode.className = "menu-group"
+          groupNode.setAttribute("part", "menu-group")
+          groupNode.setAttribute("role", "group")
+
+          const groupLabel = child.getAttribute("label") || ""
+          if (groupLabel.length > 0) {
+            const labelNode = document.createElement("div")
+            labelNode.className = "menu-group-label"
+            labelNode.setAttribute("part", "menu-group-label")
+            labelNode.id = nextId("mj-mb-grp")
+            labelNode.textContent = groupLabel
+            groupNode.setAttribute("aria-labelledby", labelNode.id)
+            groupNode.appendChild(labelNode)
+          }
+
+          container.appendChild(groupNode)
+          visit(child, groupNode)
+        } else if (child.hasAttribute("slot") === false) {
+          visit(child, container)
+        }
+      })
+    }
+    visit(this, this._menu)
+
+    const restored = this._itemData.findIndex((item) => item.el === activeEl)
+    this._focusedIndex = -1
+    this._menu.removeAttribute("aria-activedescendant")
+    if (this.hasAttribute("open") === true) {
+      this._moveFocus(restored >= 0 ? restored : this._stepEnabled(-1, 1))
+    }
+    return
+  }
+
+  /* ----- open/close ----- */
+
+  _stopPositioning() {
+    if (this._disposePosition !== null) {
+      this._disposePosition()
+      this._disposePosition = null
+    }
+    return
+  }
+
+  /*
+   * Bring the popup and the trigger in line with the `open` attribute. Safe
+   * to call repeatedly: the positioner is replaced, never stacked. DOM focus
+   * moves into the menu only when the menu was opened through _open().
+   */
   _syncOpen() {
+    if (this._trigger === undefined || this._trigger === null) {
+      return
+    }
+
     const isOpen = this.hasAttribute("open")
     this._trigger.setAttribute("aria-expanded", isOpen === true ? "true" : "false")
+    this._stopPositioning()
+
     if (isOpen === true) {
       const placement = this.getAttribute("placement") || "bottom-start"
-      this._disposePosition = autoPosition(this._popup, this._trigger, { placement })
-      this._focusedIndex = 0
-      this._moveFocus(0)
-    } else {
-      if (this._disposePosition !== null) {
-        this._disposePosition()
-        this._disposePosition = null
+      this._disposePosition = autoPosition(this._popup, this._trigger, { placement: placement })
+
+      const wanted = this._openFocus
+      this._openFocus = null
+      if (wanted === "last") {
+        this._moveFocus(this._stepEnabled(this._itemData.length, -1))
+      } else if (wanted === "first" || this._focusedIndex < 0) {
+        this._moveFocus(this._stepEnabled(-1, 1))
       }
-      this._focusedIndex = -1
+      if (wanted !== null) {
+        this._menu.focus()
+      }
+    } else {
       this._clearFocus()
     }
     return
   }
 
+  /* Open the menu with the first (default) or last item active. */
   _open(focusLast) {
-    if (this.hasAttribute("disabled")) {
+    if (this.hasAttribute("disabled") === true || this.hasAttribute("open") === true) {
       return
     }
     const proceed = this.emit("mj-open", {}, { cancelable: true })
     if (proceed === false) {
       return
     }
+    this._openFocus = focusLast === true ? "last" : "first"
     this.setAttribute("open", "")
-    if (focusLast === true) {
-      const count = this._itemData.length
-      if (count > 0) {
-        this._moveFocus(count - 1)
-      }
-    }
     return
   }
 
-  _close() {
+  /* Close the menu; `restoreFocus` puts focus back on the trigger. */
+  _close(restoreFocus) {
     if (this.hasAttribute("open") === false) {
       return
     }
     this.removeAttribute("open")
     this.emit("mj-close", {})
+    if (restoreFocus === true && this._trigger !== undefined && this._trigger !== null) {
+      this._trigger.focus()
+    }
     return
   }
 
+  /*
+   * Index of the next enabled item from `from` in direction `delta`,
+   * wrapping round; -1 when no item is enabled.
+   */
+  _stepEnabled(from, delta) {
+    const count = this._itemData.length
+    let found = -1
+
+    for (let offset = 1; offset <= count; offset = offset + 1) {
+      const index = (((from + delta * offset) % count) + count) % count
+      if (this._itemData[index].disabled !== true) {
+        found = index
+        break
+      }
+    }
+
+    return found
+  }
+
   _moveFocus(index) {
-    const items = Array.from(this._menu.querySelectorAll(".menu-item"))
-    items.forEach((el) => el.classList.remove("focused"))
-    const item = items[index]
+    this._itemData.forEach((item) => item.node.classList.remove("focused"))
+    const item = this._itemData[index]
     if (item !== undefined) {
-      item.classList.add("focused")
+      item.node.classList.add("focused")
+      item.node.scrollIntoView({ block: "nearest" })
       this._menu.setAttribute("aria-activedescendant", item.id)
       this._focusedIndex = index
     }
@@ -299,15 +508,17 @@ export class MjMenuButton extends MjElement {
   }
 
   _clearFocus() {
-    const items = this._menu.querySelectorAll(".menu-item")
-    items.forEach((el) => el.classList.remove("focused"))
+    this._itemData.forEach((item) => item.node.classList.remove("focused"))
     this._menu.removeAttribute("aria-activedescendant")
+    this._focusedIndex = -1
     return
   }
 
+  /* ----- event handlers ----- */
+
   _onTriggerClick() {
     if (this.hasAttribute("open")) {
-      this._close()
+      this._close(true)
     } else {
       this._open(false)
     }
@@ -315,6 +526,12 @@ export class MjMenuButton extends MjElement {
   }
 
   _onTriggerKeydown(event) {
+    if (this.hasAttribute("open") === true) {
+      /* Open with focus still on the trigger: the menu keys work from here too. */
+      this._onMenuKeydown(event)
+      return
+    }
+
     if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
       event.preventDefault()
       this._open(false)
@@ -326,59 +543,95 @@ export class MjMenuButton extends MjElement {
   }
 
   _onMenuKeydown(event) {
-    const items = Array.from(this._menu.querySelectorAll(".menu-item"))
-    const count = items.length
-    if (count === 0) {
-      return
-    }
+    const count = this._itemData.length
 
     if (event.key === "ArrowDown") {
       event.preventDefault()
-      const next = (this._focusedIndex + 1) % count
-      this._moveFocus(next)
+      this._moveFocus(this._stepEnabled(this._focusedIndex, 1))
     } else if (event.key === "ArrowUp") {
       event.preventDefault()
-      const prev = (this._focusedIndex - 1 + count) % count
-      this._moveFocus(prev)
+      const from = this._focusedIndex >= 0 ? this._focusedIndex : count
+      this._moveFocus(this._stepEnabled(from, -1))
     } else if (event.key === "Home") {
       event.preventDefault()
-      this._moveFocus(0)
+      this._moveFocus(this._stepEnabled(-1, 1))
     } else if (event.key === "End") {
       event.preventDefault()
-      this._moveFocus(count - 1)
+      this._moveFocus(this._stepEnabled(count, -1))
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault()
-      const item = items[this._focusedIndex]
-      if (item !== undefined && item.getAttribute("aria-disabled") !== "true") {
+      const item = this._itemData[this._focusedIndex]
+      if (item !== undefined && item.disabled !== true) {
         this._activateItem(item)
       }
     } else if (event.key === "Escape") {
-      this._close()
-      this._trigger.focus()
+      /* Consumed here so an enclosing dialog does not close as well. */
+      event.preventDefault()
+      this._close(true)
     } else if (event.key === "Tab") {
-      this._close()
+      /* Tab leaves from the trigger, so it lands on the next control. */
+      this._trigger.focus()
+      this._close(false)
     }
     return
+  }
+
+  _itemFor(event) {
+    const node = event.target instanceof Element ? event.target.closest(".menu-item") : null
+    const item = node !== null ? this._itemData[parseInt(node.dataset.index, 10)] : undefined
+    return item
   }
 
   _onItemClick(event) {
-    const node = event.currentTarget
-    if (node.getAttribute("aria-disabled") === "true") {
+    const item = this._itemFor(event)
+    if (item === undefined || item.disabled === true) {
       return
     }
-    this._activateItem(node)
+    this._activateItem(item)
     return
   }
 
-  _activateItem(node) {
-    const idx = parseInt(node.dataset.index, 10)
-    const data = this._itemData[idx]
-    this.emit("mj-select", {
-      item: data !== undefined ? data.el : null,
-      value: node.dataset.value
-    })
-    this._close()
-    this._trigger.focus()
+  _onItemHover(event) {
+    const item = this._itemFor(event)
+    if (item !== undefined && item.disabled !== true && item.index !== this._focusedIndex) {
+      this._moveFocus(item.index)
+    }
+    return
+  }
+
+  /*
+   * A checkable item records its state in the `checked` attribute of its
+   * <mj-menu-item>: a checkbox flips, a radio becomes the only checked radio
+   * among its siblings. Returns the new state, or null for a plain item.
+   */
+  _updateChecked(item) {
+    let checked = null
+
+    if (item.type === "checkbox") {
+      checked = item.el.hasAttribute("checked") === false
+      item.el.toggleAttribute("checked", checked)
+    } else if (item.type === "radio") {
+      checked = true
+      const siblings = Array.from(item.el.parentNode.children)
+      siblings.forEach((sibling) => {
+        if (sibling.localName === "mj-menu-item" && sibling.getAttribute("type") === "radio") {
+          sibling.toggleAttribute("checked", sibling === item.el)
+        }
+      })
+    }
+
+    return checked
+  }
+
+  _activateItem(item) {
+    const checked = this._updateChecked(item)
+    const detail = { item: item.el, value: item.value }
+    if (checked !== null) {
+      detail.checked = checked
+    }
+
+    this.emit("mj-select", detail)
+    this._close(true)
     return
   }
 
@@ -388,7 +641,7 @@ export class MjMenuButton extends MjElement {
     }
     const inside = event.composedPath().includes(this)
     if (inside === false) {
-      this._close()
+      this._close(false)
     }
     return
   }
@@ -399,10 +652,12 @@ export class MjMenuButton extends MjElement {
     }
     const inside = event.composedPath().includes(this)
     if (inside === false) {
-      this._close()
+      this._close(false)
     }
     return
   }
+
+  /* ----- scriptable API ----- */
 
   get open() {
     return this.hasAttribute("open")
@@ -412,13 +667,20 @@ export class MjMenuButton extends MjElement {
     if (value === true) {
       this._open(false)
     } else {
-      this._close()
+      this._close(false)
     }
     return
   }
 
   get menuItems() {
     return Array.from(this.querySelectorAll("mj-menu-item"))
+  }
+
+  /* The <mj-menu-item> that is currently the active descendant, or null. */
+  get focusedItem() {
+    const item = this._itemData[this._focusedIndex]
+    const element = item !== undefined ? item.el : null
+    return element
   }
 
   focus() {

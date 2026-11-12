@@ -11,11 +11,17 @@
     - ``errornormalization``: ErrorNormalizationMiddleware for error handling
 """
 
+import asyncio
+import contextvars
+import inspect
+import threading
+
 from typing import (
     Any,
     Awaitable,
     Callable,
     Dict,
+    Iterable,
     List,
     Optional,
     Protocol,
@@ -208,7 +214,124 @@ class MiddlewareEntry:
         return f"MiddlewareEntry({self._middleware!r}, priority={self._priority}, scope={self._scope!r})"
 
 
-import inspect
+#: Name of the optional method a middleware object provides when it has an
+#: asynchronous form alongside its synchronous ``__call__``. The async
+#: pipeline calls it in preference to bridging ``__call__`` through a thread.
+ASYNC_CALL_METHOD_NAME = "call_async"
+
+
+def _get_async_callable(middleware: Any) -> Optional[Callable]:
+    """
+        Get the callable the async pipeline awaits for a middleware, if the
+        middleware has one.
+
+        A middleware is asynchronous when it is a coroutine function, when
+        it is an object whose ``__call__`` is a coroutine function (the
+        :class:`AsyncMiddleware` protocol), or when it provides a
+        ``call_async`` coroutine method next to a synchronous ``__call__``.
+
+        :param middleware: The middleware to inspect.
+
+        :returns: The coroutine function to await, or None when the
+                  middleware only has a synchronous form.
+    """
+    rtnval: Optional[Callable] = None
+
+    call_async = getattr(middleware, ASYNC_CALL_METHOD_NAME, None)
+
+    if call_async is not None and inspect.iscoroutinefunction(call_async):
+        rtnval = call_async
+    elif inspect.iscoroutinefunction(middleware):
+        rtnval = middleware
+    elif not inspect.isfunction(middleware) and not inspect.ismethod(middleware):
+        call_method = getattr(middleware, "__call__", None)
+        if call_method is not None and inspect.iscoroutinefunction(call_method):
+            rtnval = middleware
+
+    return rtnval
+
+
+async def _call_sync_middleware(
+    middleware: Callable,
+    request: Request,
+    next_fn: Callable[[Request], Awaitable[Response]]
+) -> Any:
+    """
+        Run a synchronous middleware from the async pipeline.
+
+        A synchronous middleware blocks while it waits for ``call_next``,
+        and the rest of the chain is asynchronous, so it can not run on the
+        event loop: the loop would be waiting on itself. The middleware
+        runs on a thread of its own instead. When it calls ``call_next``
+        that thread hands the downstream chain back to the event loop and
+        waits for the response.
+
+        A thread is started per call rather than borrowed from the default
+        executor. A bridged middleware holds its thread until everything
+        downstream has finished; drawing those threads from the pool that
+        also runs offloaded handlers would let waiting middleware exhaust
+        the pool and deadlock the handlers they are waiting for.
+
+        :param middleware: The synchronous middleware callable.
+        :param request: The incoming Request.
+        :param next_fn: The async callable for the rest of the chain.
+
+        :returns: Whatever the middleware returned.
+    """
+    loop = asyncio.get_running_loop()
+    outcome: "asyncio.Future[Any]" = loop.create_future()
+
+    def sync_next(next_request: Request) -> Response:
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is loop:
+            raise RuntimeError(
+                "A synchronous middleware called call_next on the event loop thread. "
+                "call_next of a synchronous middleware must be called from the "
+                "middleware's own call."
+            )
+
+        future = asyncio.run_coroutine_threadsafe(next_fn(next_request), loop)
+        return future.result()
+
+    def deliver(result: Any, error: Optional[BaseException]) -> None:
+        if outcome.cancelled():
+            return
+        if error is not None:
+            outcome.set_exception(error)
+        else:
+            outcome.set_result(result)
+        return
+
+    context = contextvars.copy_context()
+
+    def run() -> None:
+        result = None
+        error: Optional[BaseException] = None
+
+        try:
+            result = context.run(middleware, request, sync_next)
+        except BaseException as exc:
+            error = exc
+
+        try:
+            loop.call_soon_threadsafe(deliver, result, error)
+        except RuntimeError:
+            # The event loop was closed while the middleware was
+            # running; nobody is waiting for the outcome any more.
+            pass
+
+        return
+
+    worker = threading.Thread(target=run, name="webworks-sync-middleware", daemon=True)
+    worker.start()
+
+    rtnval = await outcome
+
+    return rtnval
 
 
 def _validate_middleware(middleware: Any) -> None:
@@ -364,6 +487,23 @@ class MiddlewarePipeline:
         del self._entries[index]
         return
     
+    def extend(self, entries: Iterable[MiddlewareEntry]) -> None:
+        """
+            Append middleware entries in the order given.
+
+            Unlike :meth:`add`, the entries are not placed by priority:
+            their order was decided where they were registered, and
+            appending keeps it. Used to compose a pipeline from lists that
+            are already ordered, such as the scopes of a
+            :class:`MiddlewareRegistry`.
+
+            :param entries: MiddlewareEntry objects to append; another
+                MiddlewarePipeline may be passed.
+        """
+        for entry in entries:
+            self._entries.append(entry)
+        return
+
     def _find_index_by_name(self, name: str) -> Optional[int]:
         """
             Find the index of middleware by name.
@@ -427,14 +567,21 @@ class MiddlewarePipeline:
             Execute the pipeline asynchronously.
             
             Similar to execute() but supports async middleware and handlers.
+
+            Each middleware runs in the form it provides:
+
+            - a coroutine function, an object with an ``async __call__`` or
+              an object with a ``call_async`` coroutine method is awaited
+              on the event loop with the async ``call_next``;
+            - a synchronous middleware runs on its own thread, where its
+              ``call_next`` blocks until the event loop has produced the
+              downstream response.
             
             :param request: The incoming Request.
             :param handler: The async endpoint handler to wrap.
             
             :returns: Response from the pipeline.
         """
-        import asyncio
-        
         # Build the async call chain from the end (handler) to the start
         current_callable: Callable[[Request], Awaitable[Response]] = handler
         
@@ -448,30 +595,20 @@ class MiddlewarePipeline:
                 mw: Any,
                 next_fn: Callable[[Request], Awaitable[Response]]
             ) -> Callable[[Request], Awaitable[Response]]:
+                async_callable = _get_async_callable(mw)
+
                 async def async_wrapper(req: Request) -> Response:
-                    # Check if middleware is async
-                    if asyncio.iscoroutinefunction(mw):
-                        return await mw(req, next_fn)
+                    if async_callable is not None:
+                        result = await async_callable(req, next_fn)
                     else:
-                        # Sync middleware - wrap next_fn to be sync-compatible
-                        def sync_next(r: Request) -> Response:
-                            # Run the async next_fn in the event loop
-                            # This is a simplification - in practice, you'd want
-                            # to handle this more carefully
-                            loop = asyncio.get_event_loop()
-                            if loop.is_running():
-                                # A sync callable cannot wait on the async downstream chain
-                                # from inside the running loop, so do not schedule it at all.
-                                # This is a limitation - sync middleware in async
-                                # pipeline should ideally be avoided
-                                raise RuntimeError(
-                                    "Sync middleware cannot call async next in running loop. "
-                                    "Use async middleware for async pipelines."
-                                )
-                            else:
-                                return loop.run_until_complete(next_fn(r))
-                        
-                        return mw(req, sync_next)
+                        result = await _call_sync_middleware(mw, req, next_fn)
+
+                    # A middleware may hand back the awaitable it received
+                    # from call_next instead of awaiting it.
+                    if inspect.isawaitable(result):
+                        result = await result
+
+                    return result
                 
                 return async_wrapper
             
@@ -538,7 +675,8 @@ class MiddlewarePipeline:
     def from_config(
         cls,
         config: List[Dict[str, Any]],
-        factory_registry: Optional[Dict[str, Callable]] = None
+        factory_registry: Optional[Dict[str, Callable]] = None,
+        allow_placeholders: bool = False
     ) -> "MiddlewarePipeline":
         """
             Reconstruct a pipeline from a list of middleware configuration
@@ -549,15 +687,25 @@ class MiddlewarePipeline:
             'scope' (default "global").
 
             A factory_registry mapping middleware names to factory callables
-            is required to instantiate the actual middleware objects. If a
-            name is not found in the factory_registry, a placeholder callable
-            is used.
+            is required to instantiate the actual middleware objects. A name
+            that is not in the factory_registry is an error: a pipeline that
+            lists a middleware it does not run -- a mistyped name, an
+            ``authentication`` or ``csrf`` entry whose factory was never
+            registered -- would report a protection that is not there.
 
             :param config: List of middleware configuration dictionaries.
             :param factory_registry: Optional mapping of middleware names to
                 factory callables that produce middleware instances.
+            :param allow_placeholders: If True, an entry without a factory
+                becomes a pass-through placeholder carrying the entry's
+                name instead of raising. Intended for tooling that only
+                inspects the shape of a pipeline; a placeholder does no
+                work when a request passes through it.
 
             :returns: A reconstructed MiddlewarePipeline.
+
+            :raises ValueError: If an entry names a middleware that has no
+                factory and ``allow_placeholders`` is False.
         """
         if factory_registry is None:
             factory_registry = {}
@@ -571,7 +719,7 @@ class MiddlewarePipeline:
 
             if mw_name and mw_name in factory_registry:
                 middleware = factory_registry[mw_name]()
-            else:
+            elif allow_placeholders is True:
                 # Create a passthrough placeholder middleware
                 def _make_passthrough(n: Optional[str]) -> Callable:
                     def passthrough(request: Request, call_next: Callable) -> Any:
@@ -579,6 +727,13 @@ class MiddlewarePipeline:
                     passthrough.name = n  # type: ignore[attr-defined]
                     return passthrough
                 middleware = _make_passthrough(mw_name)
+            else:
+                known_names = ", ".join(sorted(factory_registry.keys()))
+                raise ValueError(
+                    f"No middleware factory is registered for {mw_name!r}; "
+                    f"the pipeline can not be built without it. "
+                    f"Registered factories: [{known_names}]"
+                )
 
             pipeline.add(
                 middleware,

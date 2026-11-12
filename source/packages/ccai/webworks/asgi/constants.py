@@ -43,6 +43,12 @@ HTTP_STATUS_PHRASES: Dict[int, str] = {
 }
 
 
+# Largest request body, in bytes, that is accepted when no limit is configured.
+# Request bodies are held in memory, so an unlimited default lets any client
+# exhaust the memory of the server. A limit of 0 turns the check off.
+DEFAULT_MAX_REQUEST_BODY_SIZE: int = 16 * 1024 * 1024
+
+
 # Framework-specific scope keys
 SCOPE_REQUEST: str = "webworks.request"
 SCOPE_ROUTE: str = "webworks.route"

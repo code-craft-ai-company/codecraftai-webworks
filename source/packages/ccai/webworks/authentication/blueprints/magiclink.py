@@ -37,6 +37,7 @@ __credits__ = []
 
 
 import json
+import html
 import logging
 import re
 import secrets
@@ -150,9 +151,15 @@ class MagicLinkBlueprint(SecurityBlueprint):
         redirect responses, and threads the session cookie through
         :meth:`SessionAuthBlueprint.establish_session`.
 
-        Default Endpoint:
-            - ``GET /auth/magic/{token}`` — Redeem a single-use
-              magic-link token and redirect to the post-redemption URL.
+        Default Endpoints:
+            - ``GET /auth/magic/{token}`` — The link in the email. Shows
+              a confirmation page and leaves the token untouched, so a
+              mail scanner or link previewer that fetches the URL does
+              not burn the single-use token.
+            - ``POST /auth/magic/redeem`` — Submitted by the confirmation
+              page with the token as a form field. Redeems the token,
+              establishes the session and redirects to the
+              post-redemption URL.
 
         Class Attributes:
             base_path: Base URL path for the redemption endpoint.
@@ -189,6 +196,22 @@ class MagicLinkBlueprint(SecurityBlueprint):
                            validate the raw token before calling the
                            consumer. Defaults to
                            :data:`DEFAULT_TOKEN_PATTERN`.
+            confirm_on_get: When True (the default), ``GET`` on the
+                            link only shows the confirmation page and
+                            the token is consumed by the ``POST`` the
+                            page submits. Set to False to restore the
+                            legacy behaviour in which the ``GET`` itself
+                            consumes the token.
+            confirm_page_title: Heading of the confirmation page.
+            confirm_page_message: Text shown above the button.
+            confirm_button_label: Label of the button that redeems the
+                                  token.
+
+        CSRF:
+            The confirmation form is posted before any session exists.
+            Sites that run CSRF middleware add the paths returned by
+            :meth:`get_csrf_exempt_paths` to its exempt set; the token
+            in the form is itself the proof that the request is wanted.
     """
 
     base_path: str = "/auth/magic"
@@ -203,6 +226,11 @@ class MagicLinkBlueprint(SecurityBlueprint):
     success_message: str = "Welcome — your link has been redeemed"
     token_pattern: "re.Pattern[str]" = DEFAULT_TOKEN_PATTERN
     token_byte_length: int = DEFAULT_TOKEN_BYTE_LENGTH
+
+    confirm_on_get: bool = True
+    confirm_page_title: str = "Confirm sign-in"
+    confirm_page_message: str = "Select the button below to finish signing in."
+    confirm_button_label: str = "Continue"
 
     # --- Class constants ---
     # Override these on a subclass to rebrand wire-format strings without
@@ -234,6 +262,15 @@ class MagicLinkBlueprint(SecurityBlueprint):
 
     # AuthenticationContext attribute key for the optional token id
     TOKEN_ID_ATTRIBUTE: str = "token_id"
+
+    # Confirmation page / redemption form literals
+    REDEEM_LEAF: str = "/redeem"
+    TOKEN_FORM_FIELD: str = "token"
+    HTML_CONTENT_TYPE_UTF8: str = "text/html; charset=utf-8"
+    CACHE_CONTROL_HEADER: str = "Cache-Control"
+    CACHE_CONTROL_NO_STORE: str = "no-store"
+    REFERRER_POLICY_HEADER: str = "Referrer-Policy"
+    REFERRER_POLICY_NO_REFERRER: str = "no-referrer"
 
     # --------------------------------------------------------------
     # Token issuance API (the inverse of the redemption flow).
@@ -401,11 +438,85 @@ class MagicLinkBlueprint(SecurityBlueprint):
                 path_params = mapped
 
         raw_value = path_params.get("token")
+
+        if raw_value is None:
+            # The confirmation page posts the token as a form field
+            body = cls.read_request_data(request)
+            if body is not None:
+                raw_value = body.get(cls.TOKEN_FORM_FIELD)
+
         if raw_value is None:
             return ""
 
         rtnval = str(raw_value).strip()
         return rtnval
+
+    @classmethod
+    def get_csrf_exempt_paths(cls) -> List[str]:
+        """
+            Return the list of paths sites should add to their CSRF
+            middleware exempt set.
+
+            The confirmation page posts the token before any session
+            exists, so a site's CSRF middleware would otherwise reject
+            the redemption.
+
+            :returns: A list with the absolute path of the redemption
+                      endpoint.
+        """
+        base = cls._get_base_path() or ""
+        rtnval = ["{}{}".format(base, cls.REDEEM_LEAF)]
+        return rtnval
+
+    @classmethod
+    def render_confirmation_page(cls, request: Any, token: str) -> str:
+        """
+            Render the page shown when the magic link is opened.
+
+            The page holds a form that posts the token to the redemption
+            endpoint. Nothing is redeemed until a person submits it, so
+            automated fetches of the link are harmless. Override this on
+            a subclass to render the page with the site's templates; the
+            form must post the token in a field named ``token`` to the
+            path returned by :meth:`get_csrf_exempt_paths`.
+
+            :param request: The incoming HTTP request object.
+            :param token: The raw token from the link. It has already
+                          passed the format check.
+
+            :returns: The HTML document.
+        """
+        action = cls.get_csrf_exempt_paths()[0]
+
+        page = (
+            "<!DOCTYPE html>\n"
+            "<html lang=\"en\">\n"
+            "<head>\n"
+            "<meta charset=\"utf-8\">\n"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+            "<meta name=\"robots\" content=\"noindex\">\n"
+            "<title>{title}</title>\n"
+            "</head>\n"
+            "<body>\n"
+            "<main>\n"
+            "<h1>{title}</h1>\n"
+            "<p>{message}</p>\n"
+            "<form method=\"post\" action=\"{action}\">\n"
+            "<input type=\"hidden\" name=\"{field}\" value=\"{token}\">\n"
+            "<button type=\"submit\">{label}</button>\n"
+            "</form>\n"
+            "</main>\n"
+            "</body>\n"
+            "</html>\n"
+        ).format(
+            title=html.escape(cls.confirm_page_title),
+            message=html.escape(cls.confirm_page_message),
+            action=html.escape(action, quote=True),
+            field=html.escape(cls.TOKEN_FORM_FIELD, quote=True),
+            token=html.escape(token, quote=True),
+            label=html.escape(cls.confirm_button_label),
+        )
+        return page
 
     @classmethod
     def _build_redirect_response(
@@ -508,6 +619,85 @@ class MagicLinkBlueprint(SecurityBlueprint):
     @SecurityBlueprint.read(
         path="/{token}",
         doc=Doc(
+            summary="Open a magic link",
+            description="Show the confirmation page for a magic-link "
+                        "token. The token is not consumed until the "
+                        "page's form is submitted."
+        ),
+        on_conflict="replace"
+    )
+    def confirm(cls, request: Any) -> Response:
+        """
+            Handle the ``GET`` request made when a magic link is opened.
+
+            Mail security scanners and link previewers fetch the URLs in
+            a message before the recipient does. If that fetch consumed
+            the single-use token, the real user would find the link
+            already used. This handler therefore only checks the token's
+            format and returns a confirmation page; the token is
+            redeemed by the ``POST`` that page submits (see
+            :meth:`redeem`).
+
+            When :attr:`confirm_on_get` is False the request is passed
+            straight to :meth:`redeem` (legacy behaviour).
+
+            :param request: The incoming HTTP request object. The
+                            token is read from the ``token`` path
+                            parameter.
+
+            :returns: A :class:`Response` ready for the request
+                      dispatcher to emit.
+        """
+        if not cls.confirm_on_get:
+            response = cls.redeem(request)
+            return response
+
+        if not cls.is_endpoint_enabled("redeem"):
+            error = AuthError(
+                error=cls.ENDPOINT_DISABLED_ERROR_CODE,
+                error_description=cls.ENDPOINT_DISABLED_MESSAGE
+            )
+            response = cls._build_auth_error_response(
+                error=error,
+                status_code=404,
+            )
+            return response
+
+        raw_token = cls._extract_raw_token(request)
+
+        token_is_well_formed = raw_token != ""
+        if token_is_well_formed and cls.token_pattern is not None:
+            token_is_well_formed = cls.token_pattern.match(raw_token) is not None
+
+        if not token_is_well_formed:
+            logger.info(
+                "magiclink confirmation rejected: token failed format check"
+            )
+            response = cls._build_error_redirect(
+                error_code=cls.INVALID_ERROR_CODE
+            )
+            return response
+
+        page = cls.render_confirmation_page(request, raw_token)
+
+        # The URL of this page contains the token: keep it out of
+        # caches and out of the Referer header of any outgoing request.
+        headers: Dict[str, str] = {
+            cls.CONTENT_TYPE_HEADER: cls.HTML_CONTENT_TYPE_UTF8,
+            cls.CACHE_CONTROL_HEADER: cls.CACHE_CONTROL_NO_STORE,
+            cls.REFERRER_POLICY_HEADER: cls.REFERRER_POLICY_NO_REFERRER,
+        }
+        response = Response(
+            status_code=200,
+            headers=headers,
+            body=page.encode("utf-8"),
+        )
+        return response
+
+    @classmethod
+    @SecurityBlueprint.create(
+        leaf="redeem",
+        doc=Doc(
             summary="Redeem a magic-link token",
             description="Consume a single-use magic-link token, "
                         "establish a session for the associated user, "
@@ -520,7 +710,9 @@ class MagicLinkBlueprint(SecurityBlueprint):
         """
             Handle a magic-link redemption request.
 
-            Reads the ``token`` path parameter, defensively validates
+            Reads the token from the ``token`` form field posted by the
+            confirmation page (or from the ``token`` path parameter when
+            called for a legacy ``GET``), defensively validates
             its format, calls the site-supplied :attr:`token_consumer`,
             and then either:
 

@@ -46,34 +46,35 @@ Nearest alternative: `<mj-burndown-chart>` for remaining work only.
 
 | Mode / Variant | Attribute | Behavior |
 |---|---|---|
-| Stacked area | `type="area"` (default) | Smooth stacked area paths |
-| Stacked step | `type="step"` | Step-interpolated stacked areas (daily resolution) |
+| Stacked area | (always) | Stacked area bands joining the daily values; a single day is drawn as a one-day bar |
 | Normalized | `normalized` (boolean) | Y axis shows percentage share rather than count |
+
+The former `type` attribute (`"area"` / `"step"`) was removed and is not
+observed; there is no step interpolation.
 
 ## 5. Attributes
 
 | Attribute | Type | Default | Reflects | Description |
 |-----------|------|---------|----------|-------------|
-| `src` | string | `""` | yes | URL for the data-source adapter |
-| `adapter` | string | `"static"` | yes | Adapter key: `"static"`, `"jira"`, `"linear"`, `"github"` |
-| `type` | `"area"` \| `"step"` | `"area"` | yes | Area interpolation style |
+| `src` | string | `""` | no | URL of a JSON document with the diagram data, fetched when no `data` property has been assigned; an inline `<script type="application/json">` child works the same way. A failure shows the error state and fires `mj-error` |
+| `adapter` | string | `"static"` | yes | **Not implemented** (not observed by the component). Adapter key: `"static"`, `"jira"`, `"linear"`, `"github"` |
 | `normalized` | boolean | `false` | yes | Show percentage share on Y axis |
 | `start-date` | string (ISO 8601) | `""` | yes | Left bound |
 | `end-date` | string (ISO 8601) | `""` | yes | Right bound |
 | `today-marker` | boolean | `true` | yes | Show today vertical line |
-| `show-wip-callout` | boolean | `true` | yes | Show WIP annotation |
-| `show-lead-time-callout` | boolean | `true` | yes | Show lead-time annotation |
-| `locale` | string | `""` | yes | BCP 47 locale for axis labels |
-| `label-loading` | string | `"Loading diagram…"` | yes | Loading message |
-| `label-empty` | string | `"No flow data."` | yes | Empty message |
-| `label-error` | string | `"Failed to load diagram."` | yes | Error message |
+| `show-wip-callout` | boolean | `true` | yes | **Not implemented** (not observed by the component). Show WIP annotation (WIP is given in the day read-out instead) |
+| `show-lead-time-callout` | boolean | `true` | yes | **Not implemented** (not observed by the component). Show lead-time annotation (lead time is given in the day read-out instead) |
+| `locale` | string | `""` | yes | **Not implemented** (not observed by the component). BCP 47 locale for axis labels |
+| `label-loading` | string | `"Loading diagram…"` | yes | **Not implemented** (not observed by the component). Loading message |
+| `label-empty` | string | `"No flow data."` | yes | **Not implemented** (not observed by the component). Empty message (use the `empty` slot) |
+| `label-error` | string | `"Failed to load diagram."` | yes | **Not implemented** (not observed by the component). Error message |
 
 ## 6. Properties
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `data` | `CFDData` | `{ states: WorkflowState[], dailySeries: DaySeries[] }` |
-| `selectedDate` | `string \| null` | ISO date of the focused column |
+| `selectedDate` | `string \| null` | Local `YYYY-MM-DD` date of the selected (activated) day column |
 | `hiddenStates` | `Set<string>` | State IDs toggled off via legend |
 
 ## 7. Slots
@@ -90,11 +91,19 @@ Nearest alternative: `<mj-burndown-chart>` for remaining work only.
 
 | Event | `detail` | Bubbles | Cancelable | Description |
 |-------|----------|---------|------------|-------------|
-| `mj-column-select` | `{ date: string, values: Record<string, number> }` | yes | no | A date column focused/activated |
-| `mj-column-deselect` | `{}` | yes | no | Column deselected |
+| `mj-column-select` | `{ date: string, values: Record<string, number> }` | yes | no | A day column activated (click, Enter or Space; focus alone does not select). `date` is the local `YYYY-MM-DD` day, `values` the per-state counts by state id |
+| `mj-column-deselect` | `{}` | yes | no | The selected column was cleared with Escape |
 | `mj-state-toggle` | `{ stateId: string, visible: boolean }` | yes | no | Legend item toggled |
-| `mj-data-load` | `{ states: number, days: number }` | yes | no | Data loaded |
-| `mj-error` | `{ message: string, cause: unknown }` | yes | no | Adapter error |
+| `mj-data-load` | `{ states: number, days: number }` | yes | no | After data is assigned (property, `src` or inline JSON) and drawn |
+| `mj-error` | `{ message: string }` | yes | no | The `src` fetch failed or the inline JSON could not be parsed |
+
+**Day read-out:** selecting a column shows its label in a live read-out
+(`part="column-detail"`, `role="status"`) next to the title: the date, the
+count per state, the WIP (items past the first and before the last state;
+with fewer than three states, everything before the last) and, with three or
+more states, an approximate lead time in days (from where the arrivals curve
+met the current departures). The bracket-shaped WIP / lead-time callouts are
+not drawn.
 
 ## 9. CSS parts & custom properties
 
@@ -153,10 +162,13 @@ recalculates the stack.
 
 ## 13. Accessibility
 
-- Root: `role="img"` with `aria-label` = "Cumulative flow diagram: {n} states,
-  {start} to {end}".
-- Legend items: `role="button"` with `aria-pressed` for toggle state;
-  `aria-label` = "{state name}, currently {visible|hidden}".
+- Root wrapper: `role="group"` with `aria-label` = "Cumulative flow diagram: {n}
+  states, {days} days from {start} to {end}"; the `<svg>` is a labelled
+  `role="group"` whose day columns are `role="button"` marks with one roving
+  tab stop.
+- Legend items: native `<button>`s with `aria-pressed` for the toggle state,
+  named by the state name only; a toggle updates the button in place so focus
+  stays on it.
 - Date columns: `role="button"` with `aria-label` = "{date}: {state1}: {n1},
   {state2}: {n2}, …".
 - State bands use both color and fill pattern (hatching, dots) to distinguish
