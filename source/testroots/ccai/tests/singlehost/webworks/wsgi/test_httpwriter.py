@@ -10,6 +10,7 @@
 
 import random
 import socket
+import ssl
 import string
 from typing import List, Tuple
 
@@ -1014,7 +1015,74 @@ def test_flush_raises_broken_pipe_when_nothing_can_be_sent():
     if not raised:
         errmsg = "Expected BrokenPipeError when the socket sends nothing"
         raise AssertionError(errmsg)
-    
+
+    return
+
+
+class ClosedTLSSocket:
+    """
+        Mock TLS socket whose send reports a closed connection as an SSL error.
+    """
+
+    def __init__(self, error: ssl.SSLError):
+        self.error = error
+        return
+
+    def send(self, data: bytes) -> int:
+        """
+            Raise the SSL error of a closed connection.
+        """
+        raise self.error
+
+
+def test_flush_raises_broken_pipe_when_tls_connection_is_closed():
+    """
+        Test that the SSL errors of a closed TLS connection are reported as a broken pipe.
+    """
+    tls_errors = [
+        ssl.SSLEOFError(ssl.SSL_ERROR_EOF, "EOF occurred in violation of protocol"),
+        ssl.SSLZeroReturnError(ssl.SSL_ERROR_ZERO_RETURN, "TLS/SSL connection has been closed"),
+    ]
+
+    for tls_error in tls_errors:
+        writer = HTTPWriter(ClosedTLSSocket(tls_error))
+        writer.write_body(b"data")
+
+        raised = None
+        try:
+            writer.flush()
+        except BrokenPipeError as pipe_err:
+            raised = pipe_err
+
+        if raised is None:
+            errmsg = f"Expected BrokenPipeError for {type(tls_error).__name__}"
+            raise AssertionError(errmsg)
+
+        if raised.__cause__ is not tls_error:
+            errmsg = f"Expected the BrokenPipeError to be caused by the {type(tls_error).__name__}, got {raised.__cause__!r}"
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_flush_raises_other_tls_errors_unchanged():
+    """
+        Test that an SSL error that is not a closed connection reaches the caller unchanged.
+    """
+    tls_error = ssl.SSLError(ssl.SSL_ERROR_SSL, "bad record mac")
+    writer = HTTPWriter(ClosedTLSSocket(tls_error))
+    writer.write_body(b"data")
+
+    raised = None
+    try:
+        writer.flush()
+    except ssl.SSLError as ssl_err:
+        raised = ssl_err
+
+    if raised is not tls_error:
+        errmsg = f"Expected the SSLError itself to be raised, got {raised!r}"
+        raise AssertionError(errmsg)
+
     return
 
 

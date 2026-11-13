@@ -7,6 +7,7 @@
 """
 
 import socket
+import ssl
 from datetime import datetime, timezone
 from typing import Iterable, List, Optional, Tuple
 
@@ -389,17 +390,26 @@ class HTTPWriter:
             response is incomplete.
             
             :raises: OSError if the socket reports an error or times out.
-            :raises: BrokenPipeError if the client closed the connection.
+            :raises: BrokenPipeError if the client closed the connection,
+                     also when a TLS connection reports it as an SSL EOF.
         """
         if len(self._buffer) == 0:
             return
-        
+
         total_sent = 0
         data_to_send = self._buffer
         self._buffer = b""
-        
+
         while total_sent < len(data_to_send):
-            sent = self._socket.send(data_to_send[total_sent:])
+            try:
+                sent = self._socket.send(data_to_send[total_sent:])
+            except (ssl.SSLEOFError, ssl.SSLZeroReturnError) as tls_closed:
+                # A TLS connection the client closed, or that a forced stop
+                # shut down, reports it as an SSL error. It is the same
+                # closed connection as a broken pipe on a plain socket, and
+                # the caller handles it as one.
+                errmsg = "The connection was closed while the response was being sent"
+                raise BrokenPipeError(errmsg) from tls_closed
             if sent == 0:
                 errmsg = "The client closed the connection while the response was being sent"
                 raise BrokenPipeError(errmsg)
