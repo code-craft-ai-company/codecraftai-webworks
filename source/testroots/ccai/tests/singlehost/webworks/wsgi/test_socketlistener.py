@@ -821,6 +821,7 @@ def test_perform_handshake_completes_with_tls_client():
         Test that the deferred handshake succeeds with a client that does its part.
     """
     client_errors: List[Exception] = []
+    server_finished = threading.Event()
     
     with tempfile.TemporaryDirectory() as tmpdir:
         listener = create_tls_listener(tmpdir)
@@ -833,6 +834,10 @@ def test_perform_handshake_completes_with_tls_client():
                 client_context.verify_mode = ssl.CERT_NONE
                 raw_sock = socket_module.create_connection(("127.0.0.1", port), timeout=5.0)
                 tls_sock = client_context.wrap_socket(raw_sock)
+                # The client is done before the server: under TLS 1.3 the
+                # server still sends its session tickets. Closing now would
+                # abort that write on Windows.
+                server_finished.wait(timeout=5.0)
                 tls_sock.close()
             except Exception as client_err:
                 client_errors.append(client_err)
@@ -844,7 +849,10 @@ def test_perform_handshake_completes_with_tls_client():
         
         try:
             client_sock, _ = listener.accept()
-            listener.perform_handshake(client_sock, timeout=5.0)
+            try:
+                listener.perform_handshake(client_sock, timeout=5.0)
+            finally:
+                server_finished.set()
             negotiated = client_sock.version()
         finally:
             client_thread.join(timeout=5.0)

@@ -122,6 +122,9 @@ class Harness:
         return self
 
     def close(self) -> None:
+        # start() runs on_worker_start, which starts the snapshot writer
+        # thread; left running, it keeps writing into the removed directory
+        self.metrics_store.stop_snapshot_writer()
         self.structured_logger.close_log_files()
         shutil.rmtree(self.directory, ignore_errors=True)
         return

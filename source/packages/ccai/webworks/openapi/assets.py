@@ -315,8 +315,6 @@ class AssetUpdater:
             :returns: A dictionary with ``version`` and ``files`` keys
                 summarizing what was downloaded.
         """
-        import requests
-
         if version is None:
             version = self._get_latest_release(self.SWAGGER_UI_GITHUB)
 
@@ -356,8 +354,6 @@ class AssetUpdater:
             :returns: A dictionary with ``version`` and ``files`` keys
                 summarizing what was downloaded.
         """
-        import requests
-
         if version is None:
             version = self._get_latest_release(self.REDOC_GITHUB)
 

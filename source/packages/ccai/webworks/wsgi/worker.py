@@ -877,9 +877,13 @@ class Worker:
         
         for conn in still_serving:
             # Shutting the socket down makes the handler thread fail out of
-            # whatever read or write it is waiting in.
+            # whatever read or write it is waiting in. The operating system
+            # socket is shut down directly: SSLSocket.shutdown would also
+            # drop the SSL object the handler thread is still using, and the
+            # thread would fail with an AttributeError (for example inside
+            # the TLS handshake) instead of the OSError of a closed connection.
             try:
-                conn.socket.shutdown(socket.SHUT_RDWR)
+                socket.socket.shutdown(conn.socket, socket.SHUT_RDWR)
             except OSError as shutdown_exc:
                 _logger.debug(
                     "Worker %d: socket shutdown raised: %s",

@@ -248,8 +248,6 @@ class Validator:
             Raises:
                 ValidationError: On validation errors for provided fields.
         """
-        from pydantic import ValidationError as PydanticValidationError
-        
         # Get model fields
         model_fields = schema.model_fields
         

@@ -5,7 +5,9 @@
     in the built-in WSGI server.
 """
 
+import logging
 import os
+import select
 import socket
 import ssl
 import subprocess
@@ -15,6 +17,8 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Tuple
 
 from ccai.errors.exceptions import SkipError
+
+from ccai.testshared.servers.tlscert import create_self_signed_certificate
 
 from ccai.webworks.wsgi.worker import Worker
 from ccai.webworks.wsgi.serverconfig import ServerConfig
@@ -1190,32 +1194,48 @@ def test_worker_bounds_slowly_dripped_headers_with_deadline():
     """
     calls: List[str] = []
     worker, listener, port, worker_thread = start_worker(create_recording_app(calls), timeout=1)
-    
+
     data = b""
-    started = time.time()
-    
+    answered_while_sending = False
+
+    # Dripping all of it takes about 5.5 seconds, far past the 1 second deadline
+    dripped = b"GET / HTTP/1.1\r\nX-Slow: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
     try:
         sock = socket.create_connection(("127.0.0.1", port))
         try:
             # Each byte arrives well within the timeout of a single read
-            for byte in b"GET / HTTP/1.1\r\nX-Slow: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":
+            for byte in dripped:
+                # Stop sending once the server has answered, as a client
+                # does. Writing to a connection the server has closed draws a
+                # reset, and on macOS and Windows the reset discards the
+                # answer before the client reads it.
+                readable, _, _ = select.select([sock], [], [], 0)
+                if len(readable) > 0:
+                    answered_while_sending = True
+                    break
+
                 try:
                     sock.sendall(bytes([byte]))
                 except OSError:
                     break
                 time.sleep(0.1)
-                if time.time() - started > 8.0:
-                    break
             data = read_until_closed(sock, timeout=3.0)
         finally:
             sock.close()
     finally:
         stop_worker(worker, listener, worker_thread)
-    
+
     if not data.startswith(b"HTTP/1.1 408 "):
         errmsg = f"Expected the dripping client to be cut off with 408, got {data[:80]!r}"
         raise AssertionError(errmsg)
-    
+
+    # A 408 that arrives only after the last byte would come from the
+    # timeout of a single read, not from the deadline on the headers
+    if not answered_while_sending:
+        errmsg = "Expected the 408 to arrive while the client was still sending"
+        raise AssertionError(errmsg)
+
     return
 
 
@@ -1536,6 +1556,109 @@ def test_worker_silent_tls_client_does_not_block_other_clients():
     
     if elapsed > 8.0:
         errmsg = f"Expected the TLS client to be served at once, it waited {elapsed:.1f}s"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_worker_forced_stop_ends_a_queued_tls_handshake_cleanly():
+    """
+        Test that a TLS connection queued for a handler thread at a forced stop ends as a closed connection.
+    """
+    
+    class RecordingHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__(level=logging.ERROR)
+            self.records: List[logging.LogRecord] = []
+            return
+        
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+            return
+    
+    app_entered = threading.Event()
+    release_app = threading.Event()
+    
+    def blocking_app(environ: Dict[str, Any], start_response: Callable) -> Iterable[bytes]:
+        app_entered.set()
+        release_app.wait(timeout=10.0)
+        start_response("200 OK", [("Content-Type", "text/plain")])
+        return [b"ok"]
+    
+    handler = RecordingHandler()
+    worker_logger = logging.getLogger("webworks.wsgi.worker")
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        certfile, keyfile = create_self_signed_certificate(tmpdir)
+        
+        listener_config = ServerConfig(host="127.0.0.1", port=0, ssl_certfile=certfile, ssl_keyfile=keyfile)
+        tls_listener = SocketListener(listener_config)
+        tls_listener.bind()
+        tls_listener.setup_ssl()
+        
+        worker, listener, port, worker_thread = start_worker(
+            blocking_app,
+            listener=tls_listener,
+            threads=1,
+            timeout=20
+        )
+        
+        worker_logger.addHandler(handler)
+        
+        busy_client = None
+        queued_client = None
+        
+        try:
+            # The only handler thread is held inside the application
+            client_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            client_context.check_hostname = False
+            client_context.verify_mode = ssl.CERT_NONE
+            raw_sock = socket.create_connection(("127.0.0.1", port), timeout=10.0)
+            busy_client = client_context.wrap_socket(raw_sock)
+            busy_client.sendall(GET_CLOSE)
+            
+            if not app_entered.wait(timeout=5.0):
+                errmsg = "Expected the first request to reach the application"
+                raise AssertionError(errmsg)
+            
+            # The first byte of a TLS record makes the second connection
+            # readable, so it is queued for the handler thread with its
+            # handshake still to be done
+            queued_client = socket.create_connection(("127.0.0.1", port))
+            queued_client.sendall(b"\x16")
+            
+            deadline = time.time() + 5.0
+            while len(worker._serving) < 2 and time.time() < deadline:
+                time.sleep(0.01)
+            
+            if len(worker._serving) < 2:
+                errmsg = "Expected the second connection to be queued for the handler thread"
+                raise AssertionError(errmsg)
+            
+            stop_worker(worker, listener, worker_thread)
+            
+            # The handler thread finishes the first request and then starts
+            # the handshake of the queued connection, whose socket the stop
+            # has shut down
+            release_app.set()
+            
+            deadline = time.time() + 5.0
+            while len(worker._serving) > 0 and time.time() < deadline:
+                time.sleep(0.01)
+        finally:
+            release_app.set()
+            worker_logger.removeHandler(handler)
+            for client in (busy_client, queued_client):
+                if client is not None:
+                    client.close()
+    
+    if len(worker._serving) != 0:
+        errmsg = "Expected the handler thread to end both connections after the stop"
+        raise AssertionError(errmsg)
+    
+    errors = [record.getMessage() for record in handler.records]
+    if len(errors) != 0:
+        errmsg = f"Expected the stopped connections to end without an error, got {errors}"
         raise AssertionError(errmsg)
     
     return

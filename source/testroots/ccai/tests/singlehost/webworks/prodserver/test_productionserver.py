@@ -234,6 +234,9 @@ def test_tls_key_is_loaded_before_privileges_are_dropped():
     """
         The TLS context, which reads the private key, exists at the drop.
     """
+    if not hasattr(os, "fork"):
+        raise SkipError("The production server needs os.fork.")
+
     directory = tempfile.mkdtemp(prefix="prodserver-tls-")
 
     try:

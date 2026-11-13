@@ -19,7 +19,6 @@ from ccai.webworks.endpoints.rest.models import (
     PaginatedResponse,
     select_status_code,
     build_location_header,
-    METHOD_STATUS_CODES as MODELS_METHOD_STATUS_CODES,
     ACTION_POST_STATUS,
     apply_json_merge_patch,
     extract_patch_fields,

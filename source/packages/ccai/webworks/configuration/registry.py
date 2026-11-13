@@ -575,7 +575,7 @@ class ConfigRegistry:
         if source_type == ConfigSourceType.ENVIRONMENT:
             return f"ENV:{key.upper().replace('.', '_')}"
         elif source_type == ConfigSourceType.FILE:
-            return f"FILE:config"
+            return "FILE:config"
         elif source_type == ConfigSourceType.SECRETS:
             return f"SECRETS:{key}"
         elif source_type == ConfigSourceType.DEFAULT:

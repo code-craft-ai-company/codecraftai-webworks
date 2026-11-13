@@ -94,12 +94,11 @@ jobs:
         # pipx run avoids installing into the runner's system python (PEP 668).
         run: pipx run ruff check --select E722 .
 
-      - name: Lint - pyflakes rules (report only)
-        # Undefined names, unused imports and similar defects. Reported
-        # without failing the job until the existing findings are cleared;
-        # then drop continue-on-error and add "F" to [tool.ruff.lint] select
-        # in pyproject.toml.
-        continue-on-error: true
+      - name: Lint - pyflakes rules for the package
+        # Undefined names, unused imports and similar defects in the shipped
+        # package. The test roots and test sites still have findings of their
+        # own, so "F" is not in [tool.ruff.lint] select in pyproject.toml yet
+        # and this step checks source/packages only.
         run: pipx run ruff check --select F --statistics source/packages
 
       - name: Setup the Virtual Environment
@@ -118,7 +117,23 @@ jobs:
           # load the development environment file that rehome-repository wrote.
           source ./.venv/bin/activate 2>/dev/null || source ./.venv/Scripts/activate
           set -a; . ./.env; set +a
-          testbase testing run --root ./source/testroots/ccai --includes=ccai.tests.singlehost
+          testbase testing run --root ./source/testroots/ccai --includes=ccai.tests.singlehost --output=./.output/singlehost-tests
+
+      - name: List the failed and errored tests
+        # The run's console output gives only the totals; this names each
+        # test that failed or errored, with its error, in the job log.
+        if: failure()
+        run: |
+          source ./.venv/bin/activate 2>/dev/null || source ./.venv/Scripts/activate
+          testbase agents testresult failures --results-file=./.output/singlehost-tests/testrun_results_stream.jsos
+
+      - name: Keep the single-host results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: singlehost-tests-${{ matrix.os }}-${{ matrix.python-version }}
+          path: .output/singlehost-tests/
+          if-no-files-found: warn
 
       - name: Build the distributions
         # Packaging regressions surface here instead of at publish time.

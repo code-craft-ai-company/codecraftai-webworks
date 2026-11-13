@@ -25,7 +25,6 @@ from typing import (
     List,
     Optional,
     Protocol,
-    Tuple,
     Union,
     runtime_checkable,
 )
