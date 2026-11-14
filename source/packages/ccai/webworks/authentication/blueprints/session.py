@@ -27,6 +27,7 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 
+import inspect
 import logging
 import secrets
 import time
@@ -118,6 +119,33 @@ def _run_async(coro: Any) -> Any:
     """
     result = _shared_run_async(coro)
     return result
+
+
+def _create_session_takes_principal_id(store: Any) -> bool:
+    """
+        Check whether a store's ``create_session`` has the signature of
+        the legacy, record-oriented :class:`SessionStore` contract: a
+        ``principal_id`` parameter and no ``principal`` parameter.
+
+        :param store: The configured session store.
+
+        :returns: True when ``create_session`` follows the legacy
+                  contract, False otherwise or when its signature cannot
+                  be read.
+    """
+    rtnval = False
+
+    create_session = getattr(store, "create_session", None)
+
+    if callable(create_session):
+        try:
+            parameters = inspect.signature(create_session).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+
+        rtnval = "principal_id" in parameters and "principal" not in parameters
+
+    return rtnval
 
 
 class SessionStore:
@@ -339,10 +367,23 @@ class SessionAuthBlueprint(SecurityBlueprint):
             Check whether the configured store follows the legacy,
             record-oriented :class:`SessionStore` contract.
 
+            A store follows it when it subclasses :class:`SessionStore`,
+            or when its ``create_session`` takes the legacy
+            ``principal_id`` argument and no ``principal``: up to 1.6 the
+            blueprint called every configured store that way, so a store
+            written to the contract without subclassing it is still
+            called that way.
+
             :returns: True for a legacy store, False for a store that
                       follows the authenticator's protocol.
         """
-        rtnval = isinstance(cls.session_store, SessionStore)
+        store = cls.session_store
+
+        rtnval = isinstance(store, SessionStore)
+
+        if not rtnval and store is not None:
+            rtnval = _create_session_takes_principal_id(store)
+
         return rtnval
 
     @classmethod

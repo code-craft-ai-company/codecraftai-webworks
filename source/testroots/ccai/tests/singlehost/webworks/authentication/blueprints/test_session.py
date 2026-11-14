@@ -909,6 +909,59 @@ def test_establish_session_persists_to_session_store():
     return
 
 
+class DuckTypedLegacySessionStore:
+    """
+        A record-oriented session store that follows the legacy
+        :class:`SessionStore` contract without subclassing it, as sites
+        written against 1.6 and earlier do.
+    """
+
+    def __init__(self):
+        self._sessions = {}
+
+    async def create_session(self, session_id, principal_id, created_at,
+                             expires_at, last_accessed, data=None):
+        self._sessions[session_id] = {
+            "session_id": session_id,
+            "principal_id": principal_id,
+            "created_at": created_at,
+            "expires_at": expires_at,
+            "last_accessed": last_accessed,
+        }
+
+    async def get_session(self, session_id):
+        return self._sessions.get(session_id)
+
+    async def delete_session(self, session_id):
+        return self._sessions.pop(session_id, None) is not None
+
+    async def update_last_accessed(self, session_id, last_accessed):
+        return session_id in self._sessions
+
+
+def test_establish_session_calls_a_duck_typed_legacy_store_with_the_legacy_arguments():
+    """
+        Verify that ``establish_session`` recognises a store written to the
+        legacy contract without subclassing :class:`SessionStore` (its
+        ``create_session`` takes ``principal_id``) and calls it the legacy
+        way, as releases up to 1.6 did for every store.
+    """
+    blueprint = _create_fresh_blueprint()
+    store = DuckTypedLegacySessionStore()
+    blueprint.session_store = store
+
+    response = blueprint.establish_session(principal=TEST_PRINCIPAL)
+
+    session_id = _session_id_from_response(response)
+    persisted = store._sessions.get(session_id)
+
+    if persisted is None or persisted.get("principal_id") != "user-001":
+        errmsg = "Expected session {!r} with principal_id 'user-001', got {!r}".format(session_id, persisted)
+        raise AssertionError(errmsg)
+
+    return
+
+
 def test_establish_session_remember_me_uses_extended_duration():
     """
         Verify that ``remember_me=True`` causes the cookie Max-Age and the
