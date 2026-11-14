@@ -18,7 +18,6 @@ from typing import Any, Dict
 from ccai.webworks.devexp.apploader import ApplicationLoadError
 from ccai.webworks.devexp.cli.exitcodes import EXIT_CONFIG_ERROR
 from ccai.webworks.devexp.cli.exitcodes import EXIT_ERROR
-from ccai.webworks.devexp.cli.exitcodes import EXIT_SUCCESS
 from ccai.webworks.devexp.server.servecommand import ServeCommand
 
 

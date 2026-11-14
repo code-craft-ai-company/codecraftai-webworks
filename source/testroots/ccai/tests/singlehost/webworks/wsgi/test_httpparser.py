@@ -768,7 +768,7 @@ def test_create_bad_request_response():
     response = parser.create_bad_request_response("Missing header")
     
     if not response.startswith(b"HTTP/1.1 400 Bad Request"):
-        errmsg = f"Expected response to start with 'HTTP/1.1 400 Bad Request'"
+        errmsg = "Expected response to start with 'HTTP/1.1 400 Bad Request'"
         raise AssertionError(errmsg)
     
     if b"Missing header" not in response:

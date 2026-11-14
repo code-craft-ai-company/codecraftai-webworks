@@ -259,7 +259,7 @@ def test_authentication_error_internal_message():
         raise AssertionError(errmsg)
     
     if error.internal_message != "Detailed internal message with password=secret123":
-        errmsg = f"Expected internal_message to contain detailed info"
+        errmsg = "Expected internal_message to contain detailed info"
         raise AssertionError(errmsg)
     
     return
@@ -383,7 +383,7 @@ def test_rate_limit_exceeded_error_with_retry_after():
         raise AssertionError(errmsg)
     
     if "60" not in error.safe_message:
-        errmsg = f"Expected safe_message to mention retry time"
+        errmsg = "Expected safe_message to mention retry time"
         raise AssertionError(errmsg)
     
     return
@@ -418,7 +418,7 @@ def test_account_locked_error_with_locked_until():
     error = AccountLockedError(locked_until=unlock_time)
     
     if error.locked_until != unlock_time:
-        errmsg = f"Expected locked_until to be set"
+        errmsg = "Expected locked_until to be set"
         raise AssertionError(errmsg)
     
     return
@@ -566,7 +566,7 @@ def test_sanitize_dict_nested():
     sanitized = sanitize_dict(data)
     
     if sanitized["user"]["credentials"]["password"] != "[REDACTED]":
-        errmsg = f"Expected nested password to be redacted"
+        errmsg = "Expected nested password to be redacted"
         raise AssertionError(errmsg)
     
     return
@@ -580,7 +580,7 @@ def test_sanitize_dict_custom_sensitive_keys():
     sanitized = sanitize_dict(data, sensitive_keys={"custom_secret"})
     
     if sanitized.get("custom_secret") != "[REDACTED]":
-        errmsg = f"Expected custom_secret to be redacted"
+        errmsg = "Expected custom_secret to be redacted"
         raise AssertionError(errmsg)
     
     return
@@ -831,7 +831,7 @@ def test_create_safe_error_response():
         raise AssertionError(errmsg)
     
     if response.get("error_description") != "The token is invalid":
-        errmsg = f"Expected error_description 'The token is invalid'"
+        errmsg = "Expected error_description 'The token is invalid'"
         raise AssertionError(errmsg)
     
     return

@@ -983,7 +983,7 @@ def test_format_does_not_modify_the_record():
     formatter = ColoredFormatter(fmt="%(levelname)s %(message)s", use_colors=False)
     record = _make_log_record()
 
-    token = set_request_id("req-1")
+    set_request_id("req-1")
     try:
         formatter.format(record)
     finally:

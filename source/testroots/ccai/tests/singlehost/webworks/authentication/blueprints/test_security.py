@@ -15,7 +15,6 @@ import time
 from ccai.webworks.authentication.basic import BasicAuthenticator
 from ccai.webworks.authentication.blueprints.apikey import APIKeyBlueprint
 from ccai.webworks.authentication.blueprints.oauth2 import OAuth2Blueprint
-from ccai.webworks.authentication.blueprints.responses import AuthError
 from ccai.webworks.authentication.blueprints.schemas import (
     SessionInfo,
     SessionLoginRequest,

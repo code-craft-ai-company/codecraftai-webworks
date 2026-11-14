@@ -534,7 +534,7 @@ def test_validate_raises_for_negative_port():
     
     try:
         config.validate()
-    except ConfigurationError as err:
+    except ConfigurationError:
         exception_raised = True
     
     if exception_raised is not True:

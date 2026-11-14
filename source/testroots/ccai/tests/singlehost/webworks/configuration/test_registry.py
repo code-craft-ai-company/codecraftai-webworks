@@ -1462,7 +1462,7 @@ def test_config_registry_update_atomic_rollback_on_validation_error():
         
         # valid.key should not have been set
         if registry.get("valid.key") == "new_value":
-            errmsg = f"Expected valid.key to not be 'new_value' after rollback"
+            errmsg = "Expected valid.key to not be 'new_value' after rollback"
             raise AssertionError(errmsg)
     
     return
@@ -1722,11 +1722,7 @@ def test_config_registry_export_yaml():
     """
         Test that export() can export configuration to YAML format.
     """
-    try:
-        import yaml
-    except ImportError:
-        # Skip if YAML not available
-        return
+    import yaml
     
     registry = ConfigRegistry()
     source = MockConfigSource({
@@ -1982,11 +1978,7 @@ def test_property_export_round_trip_yaml():
         
         **Validates: Requirements 7.1**
     """
-    try:
-        import yaml
-    except ImportError:
-        # Skip if YAML not available
-        return
+    import yaml
     
     import random
     import string
@@ -2125,12 +2117,6 @@ def test_config_registry_export_template_yaml():
     """
         Test that export_template() generates a YAML template with defaults.
     """
-    try:
-        import yaml
-    except ImportError:
-        # Skip if YAML not available
-        return
-    
     schema = ConfigSchema()
     schema.define("database.host", str, default="localhost", description="Database hostname")
     schema.define("database.port", int, default=5432, description="Database port")
@@ -3233,15 +3219,7 @@ def test_property_export_secret_masking_all_formats():
     import string
     from ccai.webworks.configuration.core import SecretValue
     
-    formats_to_test = ["json", "ini"]
-    
-    # Add YAML if available
-    try:
-        import yaml
-        formats_to_test.append("yaml")
-    except ImportError:
-        # YAML support is optional; the YAML format is only tested when PyYAML is installed.
-        pass
+    formats_to_test = ["json", "ini", "yaml"]
     
     # Run 100 iterations
     for iteration in range(100):

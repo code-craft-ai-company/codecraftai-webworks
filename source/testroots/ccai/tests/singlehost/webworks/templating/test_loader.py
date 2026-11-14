@@ -949,7 +949,7 @@ def test_priority_ordering_with_mixed_priorities():
         
         # High priority should be first
         if loader.directories[0] != temp_dir_high:
-            raise AssertionError(f"Expected high priority dir first")
+            raise AssertionError("Expected high priority dir first")
         
         # Load should return from highest priority
         content = loader.load("index.html")

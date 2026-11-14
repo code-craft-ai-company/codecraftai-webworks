@@ -998,7 +998,6 @@ def test_read_multipart_parses_file_upload():
     """
         Test that read_multipart() parses file upload.
     """
-    from ccai.webworks.asgi.bodyreader import UploadedFile
     
     reader = BodyReader()
     boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"

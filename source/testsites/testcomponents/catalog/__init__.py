@@ -10,7 +10,6 @@
 
 from testcomponents.catalog.componentdoc import ComponentDoc
 from testcomponents.catalog.groups import GROUP_ORDER
-from testcomponents.catalog.groups import group_by_key
 
 from testcomponents.catalog import selection
 from testcomponents.catalog import text

@@ -621,8 +621,7 @@ def test_property_1_http_method_to_crud_operation_mapping():
 
 import json
 
-from dataclasses import field
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 from ccai.webworks.endpoints.rest.models import ErrorMapping
 from ccai.webworks.routing.dispatcher import Dispatcher

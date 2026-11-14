@@ -166,7 +166,7 @@ const STRINGS = {
   "mj.uploadButton.selected": { one: "{count} file selected", other: "{count} files selected" },
   "mj.uploadButton.fileCount": { one: "{count} file", other: "{count} files" },
 
-  /* mj-chart, mj-chart-data-table (charts/**; routed through t() by the charts owner) */
+  /* mj-chart, mj-chart-data-table (charts/**) */
   "mj.chart.empty": "No chart data supplied.",
   "mj.chart.loadFailed": "Chart data could not be loaded.",
   "mj.chart.invalidData": "Chart data is not valid.",

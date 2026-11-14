@@ -765,7 +765,6 @@ def generate_random_config_dict(num_keys: int = None, max_depth: int = 2) -> Dic
         num_keys = random.randint(1, 5)
     
     result: Dict[str, Any] = {}
-    used_prefixes: set = set()
     
     for _ in range(num_keys):
         # Generate a key with random depth
@@ -1993,13 +1992,6 @@ def test_property_21_optional_missing_file_no_error():
 # SecretsProvider Tests
 # =============================================================================
 
-# Check if cryptography is available for encryption tests
-try:
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    CRYPTOGRAPHY_AVAILABLE = True
-except ImportError:
-    CRYPTOGRAPHY_AVAILABLE = False
-
 from ccai.webworks.configuration import SecretsProvider, SecretValue
 
 
@@ -2200,10 +2192,6 @@ def test_property_13_secret_encryption_round_trip():
         **Feature: configuration-system, Property 13: Secret Encryption Round-Trip**
         **Validates: Requirements 4.1**
     """
-    if not CRYPTOGRAPHY_AVAILABLE:
-        # Skip test if cryptography is not available
-        return
-    
     temp_dir = tempfile.mkdtemp()
     
     try:
@@ -2281,10 +2269,6 @@ def test_property_13_encryption_with_different_keys():
         **Feature: configuration-system, Property 13: Secret Encryption Round-Trip**
         **Validates: Requirements 4.1**
     """
-    if not CRYPTOGRAPHY_AVAILABLE:
-        # Skip test if cryptography is not available
-        return
-    
     temp_dir = tempfile.mkdtemp()
     
     try:

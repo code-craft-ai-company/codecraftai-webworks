@@ -1414,7 +1414,6 @@ def test_property_25_middleware_context_attachment():
 # Unit Tests for Access Policy Integration
 # =============================================================================
 
-from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 
 
 def test_middleware_with_path_policies():

@@ -637,7 +637,7 @@ def test_property_route_precedence_static_over_param():
         
         assert match_other is not None, f"Expected match for {other_path}"
         assert match_other.handler.__name__ == "param_handler", \
-            f"Parameterized route should match other values"
+            "Parameterized route should match other values"
     
     return
 
@@ -674,11 +674,11 @@ def test_property_route_precedence_typed_over_string():
         request_numeric = Request(method="GET", path=f"/{base}/{numeric_value}")
         match_numeric = router.match(request_numeric)
         
-        assert match_numeric is not None, f"Expected match for numeric path"
+        assert match_numeric is not None, "Expected match for numeric path"
         assert match_numeric.handler.__name__ == "typed_handler", \
-            f"Typed route should be preferred for numeric values"
+            "Typed route should be preferred for numeric values"
         assert match_numeric.path_params["id"] == numeric_value, \
-            f"Parameter should be converted to int"
+            "Parameter should be converted to int"
         
         # Property: String route should match non-numeric values
         string_value = _random_path_segment()
@@ -689,9 +689,9 @@ def test_property_route_precedence_typed_over_string():
         request_string = Request(method="GET", path=f"/{base}/{string_value}")
         match_string = router.match(request_string)
         
-        assert match_string is not None, f"Expected match for string path"
+        assert match_string is not None, "Expected match for string path"
         assert match_string.handler.__name__ == "string_handler", \
-            f"String route should match non-numeric values"
+            "String route should match non-numeric values"
     
     return
 
@@ -724,9 +724,9 @@ def test_property_route_precedence_registration_order():
         request = Request(method="GET", path=f"/{base}/{numeric_value}")
         match = router.match(request)
         
-        assert match is not None, f"Expected match"
+        assert match is not None, "Expected match"
         assert match.handler.__name__ == "first_handler", \
-            f"First registered route should be preferred"
+            "First registered route should be preferred"
     
     return
 

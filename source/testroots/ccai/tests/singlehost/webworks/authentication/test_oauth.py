@@ -85,7 +85,7 @@ def _make_rs256_id_token(
 
         :returns: A tuple of (compact id_token, jwks document).
     """
-    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)

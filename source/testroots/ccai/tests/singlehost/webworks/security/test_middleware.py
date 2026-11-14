@@ -867,7 +867,7 @@ from ccai.webworks.endpoints.constraints import EndpointConstraints
 from ccai.webworks.endpoints.descriptor import EndpointDescriptor
 from ccai.webworks.routing.dispatcher import Dispatcher
 from ccai.webworks.routing.request import Request
-from ccai.webworks.routing.response import JSONResponse, Response
+from ccai.webworks.routing.response import Response
 from ccai.webworks.routing.router import Router
 from ccai.webworks.security.auditlogger import AuditLogger
 from ccai.webworks.security.authenticationmanager import AuthenticationManager

@@ -49,7 +49,7 @@ def test_safe_string_equality_with_str():
     safe_str = SafeString(value)
     
     if safe_str != value:
-        raise AssertionError(f"SafeString should equal equivalent str")
+        raise AssertionError("SafeString should equal equivalent str")
     
     return
 
@@ -1832,7 +1832,7 @@ def _generate_html_content() -> str:
         f"<{tag}></{tag}>",
         f"<{tag} />",
         f"<!-- {content} -->",
-        f"&amp; &lt; &gt; &quot; &#39;",  # Pre-escaped content
+        "&amp; &lt; &gt; &quot; &#39;",  # Pre-escaped content
         f"<script>alert('{content}')</script>",
         f"<a href=\"javascript:void(0)\">{content}</a>",
     ]

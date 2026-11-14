@@ -1115,7 +1115,9 @@ class Worker:
             
             return keep_alive
         
-        except (ConnectionResetError, BrokenPipeError) as conn_err:
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as conn_err:
+            # Windows often reports a connection the client dropped as
+            # aborted (WSAECONNABORTED) rather than reset.
             _logger.debug(
                 "Worker %d: connection from %s lost: %s",
                 self._worker_id,
@@ -1183,9 +1185,10 @@ class Worker:
             with self._lock:
                 self._total_requests += 1
         
-        except (ConnectionResetError, BrokenPipeError, socket.timeout) as conn_err:
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, socket.timeout) as conn_err:
             # The client went away or stopped reading. The application is
-            # not asked for more and the connection is closed.
+            # not asked for more and the connection is closed. Windows often
+            # reports a dropped connection as aborted (WSAECONNABORTED).
             _logger.debug(
                 "Worker %d: client %s lost while responding: %s",
                 self._worker_id,

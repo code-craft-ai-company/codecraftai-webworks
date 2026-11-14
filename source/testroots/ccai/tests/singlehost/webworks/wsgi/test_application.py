@@ -615,7 +615,6 @@ def test_resolve_target_naming_an_asgi_application_bridges_it():
     """
         A plain ASGI application is served through an ASGIBridge of its own.
     """
-    import ccai.testshared.servers.plainapps as plainapps
     
     application = resolve_wsgi_application("ccai.testshared.servers.plainapps:asgi_app")
     

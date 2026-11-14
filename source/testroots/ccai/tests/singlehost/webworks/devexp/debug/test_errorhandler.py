@@ -55,8 +55,9 @@ def _raise_exception(message: str = "test error") -> Exception:
         :returns: The exception with traceback attached.
     """
     try:
-        local_var_a = 42
-        local_var_b = "hello"
+        # Locals of the failing frame, for the debug page to show
+        local_var_a = 42  # noqa: F841
+        local_var_b = "hello"  # noqa: F841
         raise ValueError(message)
     except ValueError as exc:
         return exc
@@ -72,7 +73,8 @@ def _raise_nested_exception(message: str = "nested error") -> Exception:
     """
     try:
         def inner_function():
-            inner_local = "inner_value"
+            # A local of the inner frame, for the debug page to show
+            inner_local = "inner_value"  # noqa: F841
             raise RuntimeError(message)
 
         inner_function()
@@ -247,6 +249,10 @@ def test_debug_mode_shows_local_variables():
 
     if "Local Variables" not in body:
         errmsg = "Expected 'Local Variables' section in debug page"
+        raise AssertionError(errmsg)
+
+    if "local_var_a" not in body or "local_var_b" not in body:
+        errmsg = "Expected the locals of the failing frame (local_var_a, local_var_b) in debug page"
         raise AssertionError(errmsg)
 
     return
@@ -614,8 +620,8 @@ def _random_exception_type():
 
     try:
         # Create some local variables that should NOT appear in production
-        secret_var = _random_string(min_len=10, max_len=30)
-        internal_path = "/internal/secret/" + _random_string()
+        secret_var = _random_string(min_len=10, max_len=30)  # noqa: F841
+        internal_path = "/internal/secret/" + _random_string()  # noqa: F841
         raise exc_class(message)
     except Exception as exc:
         return exc
@@ -682,6 +688,13 @@ def test_property_3_debug_page_security_boundary():
         if "Local Variables" in body:
             errmsg = (
                 "Iteration {}: Production page contains 'Local Variables'"
+            ).format(iteration)
+            raise AssertionError(errmsg)
+
+        # The production page must NOT contain the locals of the failing code
+        if "secret_var" in body or "/internal/secret/" in body:
+            errmsg = (
+                "Iteration {}: Production page contains a local variable of the failing code"
             ).format(iteration)
             raise AssertionError(errmsg)
 

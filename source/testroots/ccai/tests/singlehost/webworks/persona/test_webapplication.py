@@ -504,11 +504,11 @@ def test_webapplication_can_be_subclassed():
     )
     
     if not isinstance(app, WebApplication):
-        errmsg = f"Expected CustomWebApplication to be instance of WebApplication"
+        errmsg = "Expected CustomWebApplication to be instance of WebApplication"
         raise AssertionError(errmsg)
     
     if not isinstance(app, ThisApplication):
-        errmsg = f"Expected CustomWebApplication to be instance of ThisApplication"
+        errmsg = "Expected CustomWebApplication to be instance of ThisApplication"
         raise AssertionError(errmsg)
     
     return

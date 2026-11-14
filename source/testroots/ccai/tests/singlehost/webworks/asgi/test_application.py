@@ -802,7 +802,6 @@ def test_asgiapplication_handles_asgi_version_in_scope():
 
 from ccai.webworks.asgi.application import (
     get_asgi_application,
-    create_asgi_application,
     reset_singleton_application,
     get_application_variable,
 )

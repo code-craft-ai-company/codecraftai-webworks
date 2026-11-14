@@ -2398,6 +2398,74 @@ def test_chart_data_table_localizes_its_default_caption_and_truncation_note(page
 
 
 @testbase.attach.parameter(create_page, identifier="page")
+def test_chart_localizes_its_messages_label_and_table_note(page, base_url):
+    """
+        <mj-chart> reads its empty and error messages, its default accessible
+        name and its hidden table's caption and truncation note through t():
+        strings registered with registerStrings replace the English ones.
+    """
+
+    large = {"categories": [f"C{index}" for index in range(600)],
+             "series": [{"name": "Count", "values": list(range(600))}]}
+    markup = (
+        _chart("column", large, 'id="big"')
+        + _chart("sankey", {"nodes": [], "links": []}, 'id="empty"')
+        + _chart("no-such-type", {"series": [{"name": "S", "values": [1]}]}, 'id="unknown"')
+    )
+    frame = _mount_charts(page, base_url, markup)
+
+    texts = frame.evaluate(
+        """async () => {
+            const read = () => {
+                const big = document.getElementById('big');
+                const table = big.shadowRoot.querySelector('[data-chart-table]');
+                return {
+                    label: big.getAttribute('aria-label'),
+                    caption: table.querySelector('caption').textContent,
+                    note: table.querySelector('tfoot td').textContent,
+                    empty: document.getElementById('empty').shadowRoot.querySelector('.message').textContent,
+                    unknown: document.getElementById('unknown').shadowRoot.querySelector('.message').textContent
+                };
+            };
+            const english = read();
+            const intl = await import('/static/javascript/core/intl.js');
+            const german = {
+                'mj.chart.empty': 'Keine Diagrammdaten.',
+                'mj.chart.noRenderer': 'Kein Renderer für den Diagrammtyp "{type}".',
+                'mj.chart.figureLabel': 'Diagramm: {type}',
+                'mj.chart.tableCaption': 'Diagrammdaten',
+                'mj.chart.tableTruncated': { one: 'Nur {count} Zeile.', other: 'Nur die ersten {count} Zeilen.' }
+            };
+            intl.registerStrings(german);
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            const localized = read();
+            intl.registerStrings({
+                'mj.chart.empty': 'No chart data supplied.',
+                'mj.chart.noRenderer': 'No renderer for chart type "{type}".',
+                'mj.chart.figureLabel': '{type} chart',
+                'mj.chart.tableCaption': 'Chart data',
+                'mj.chart.tableTruncated': { one: 'Only the first {count} row is shown.',
+                                             other: 'Only the first {count} rows are shown.' }
+            });
+            return { english, localized };
+        }"""
+    )
+    english = texts["english"]
+    localized = texts["localized"]
+    assert english["empty"] == "No chart data supplied.", f"English empty message: {texts}"
+    assert english["unknown"] == 'No renderer for chart type "no-such-type".', f"English error message: {texts}"
+    assert english["label"] == "column chart", f"English default label: {texts}"
+    assert english["note"] == "Only the first 500 rows are shown.", f"English note: {texts}"
+    assert localized["empty"] == "Keine Diagrammdaten.", f"registered empty message not used: {texts}"
+    assert localized["unknown"] == 'Kein Renderer für den Diagrammtyp "no-such-type".', f"registered error message not used: {texts}"
+    assert localized["label"] == "Diagramm: column", f"registered default label not used: {texts}"
+    assert localized["caption"] == "Diagramm: column", f"caption should follow the chart's name: {texts}"
+    assert localized["note"] == "Nur die ersten 500 Zeilen.", f"registered note not used: {texts}"
+
+    return
+
+
+@testbase.attach.parameter(create_page, identifier="page")
 def test_chart_data_table_shows_a_note_when_every_series_is_hidden(page, base_url):
     """
         With every series hidden the data table shows the "All series are

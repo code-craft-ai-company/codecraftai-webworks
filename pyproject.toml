@@ -130,13 +130,15 @@ include = [
 ]
 
 [tool.ruff.lint]
-# Deliberately narrow.  This gate exists for one reason: a bare `except:`
-# swallows ConfigurationError and SemanticError, which derive from
-# BaseException precisely so that they pass through ordinary handlers and end
-# the run.  Catching them hides the original cause behind whatever error
-# happens next.  See userguide/10-00-coding-standards.rst, exception-handling
-# rules 5-7.  Use `except Exception:` when you mean "any ordinary failure".
-select = ["E722"]
+# Deliberately narrow.  E722: a bare `except:` swallows ConfigurationError and
+# SemanticError, which derive from BaseException precisely so that they pass
+# through ordinary handlers and end the run.  Catching them hides the original
+# cause behind whatever error happens next.  See
+# userguide/10-00-coding-standards.rst, exception-handling rules 5-7.  Use
+# `except Exception:` when you mean "any ordinary failure".  F (pyflakes):
+# undefined names, unused imports and variables, and similar defects.  The
+# merge gate runs both.
+select = ["E722", "F"]
 
 [build-system]
 # This file uses PEP 621 [project] metadata and [dependency-groups], which

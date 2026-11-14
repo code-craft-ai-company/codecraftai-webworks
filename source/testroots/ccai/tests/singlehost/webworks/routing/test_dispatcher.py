@@ -994,14 +994,14 @@ def test_property_dispatcher_debug_mode_hides_details():
         
         # Property: Production mode should NOT expose secret message
         assert secret_message.encode() not in response_prod.body, \
-            f"Production mode should not expose error details"
+            "Production mode should not expose error details"
         
         # Property: Debug mode should include traceback information
         # (either "Traceback" or the exception type name)
         body_debug = response_debug.body
         has_traceback = b"Traceback" in body_debug or b"ValueError" in body_debug
         assert has_traceback, \
-            f"Debug mode should include traceback information"
+            "Debug mode should include traceback information"
     
     return
 

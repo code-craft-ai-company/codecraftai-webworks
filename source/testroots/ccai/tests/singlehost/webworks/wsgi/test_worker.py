@@ -1084,6 +1084,91 @@ def test_worker_stops_application_when_client_disconnects():
     return
 
 
+class AbortedConnectionSocket:
+    """
+        A client socket whose connection Windows reports as aborted.
+        
+        Windows often reports a connection the client dropped as WSAECONNABORTED,
+        which Python raises as ConnectionAbortedError, rather than as a reset.
+    """
+    
+    def __init__(self, request: bytes, abort_on_recv: bool = False):
+        self._request = request
+        self._abort_on_recv = abort_on_recv
+        self.send_calls = 0
+        return
+    
+    def settimeout(self, value: Any) -> None:
+        return
+    
+    def recv(self, size: int) -> bytes:
+        if self._abort_on_recv:
+            raise ConnectionAbortedError(10053, "An established connection was aborted by the software in your host machine")
+        data = self._request[:size]
+        self._request = self._request[size:]
+        return data
+    
+    def send(self, data: bytes) -> int:
+        self.send_calls += 1
+        raise ConnectionAbortedError(10053, "An established connection was aborted by the software in your host machine")
+
+
+def test_worker_treats_an_aborted_connection_as_a_lost_client():
+    """
+        Test that a connection reported as aborted, on reading or writing, is handled as a lost client.
+    """
+    
+    class RecordingHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__(level=logging.ERROR)
+            self.records: List[logging.LogRecord] = []
+            return
+        
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+            return
+    
+    calls: List[str] = []
+    listener = create_mock_listener()
+    config = ServerConfig(host="127.0.0.1", port=listener.socket.getsockname()[1], access_log=False)
+    worker = Worker(create_recording_app(calls), listener, config, worker_id=1)
+    
+    handler = RecordingHandler()
+    worker_logger = logging.getLogger("webworks.wsgi.worker")
+    worker_logger.addHandler(handler)
+    
+    try:
+        # Aborted while the response is written
+        writing_sock = AbortedConnectionSocket(GET_CLOSE)
+        keep_alive_after_write = worker.handle_request(writing_sock, ("127.0.0.1", 50000))
+        
+        # Aborted while the request is read
+        reading_sock = AbortedConnectionSocket(b"", abort_on_recv=True)
+        keep_alive_after_read = worker.handle_request(reading_sock, ("127.0.0.1", 50001))
+    finally:
+        worker_logger.removeHandler(handler)
+        listener.close()
+    
+    if calls != ["/"]:
+        errmsg = f"Expected the application to be called once, for the request that was read, got {calls}"
+        raise AssertionError(errmsg)
+    
+    if keep_alive_after_write or keep_alive_after_read:
+        errmsg = "Expected an aborted connection not to be kept alive"
+        raise AssertionError(errmsg)
+    
+    if writing_sock.send_calls != 1:
+        errmsg = f"Expected no error response to be written after the abort, got {writing_sock.send_calls} writes"
+        raise AssertionError(errmsg)
+    
+    errors = [record.getMessage() for record in handler.records]
+    if len(errors) != 0:
+        errmsg = f"Expected an aborted connection to be handled without an error, got {errors}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
 # ============================================================================
 # Tests for requests that must not reach the application
 # ============================================================================

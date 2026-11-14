@@ -427,7 +427,7 @@ def test_generate_code_challenge_plain():
     challenge = generate_code_challenge(verifier, PKCEMethod.PLAIN)
     
     if challenge != verifier:
-        errmsg = f"Expected challenge to equal verifier for plain method"
+        errmsg = "Expected challenge to equal verifier for plain method"
         raise AssertionError(errmsg)
     
     return

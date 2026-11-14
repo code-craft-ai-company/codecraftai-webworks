@@ -94,12 +94,11 @@ jobs:
         # pipx run avoids installing into the runner's system python (PEP 668).
         run: pipx run ruff check --select E722 .
 
-      - name: Lint - pyflakes rules for the package
-        # Undefined names, unused imports and similar defects in the shipped
-        # package. The test roots and test sites still have findings of their
-        # own, so "F" is not in [tool.ruff.lint] select in pyproject.toml yet
-        # and this step checks source/packages only.
-        run: pipx run ruff check --select F --statistics source/packages
+      - name: Lint - pyflakes rules
+        # Undefined names, unused imports and variables, and similar defects,
+        # in the package, the test roots and the test sites. In a test, an
+        # unused variable is often a check that was never written.
+        run: pipx run ruff check --select F --statistics .
 
       - name: Setup the Virtual Environment
         # The 'test' extra brings the testbase runner (and Playwright, used

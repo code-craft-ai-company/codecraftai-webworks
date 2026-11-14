@@ -1929,15 +1929,13 @@ def test_derive_tags_with_descriptions():
 # Generation from endpoints declared through the real endpoint classes
 # =============================================================================
 
-from typing import List, Optional
+from typing import Optional
 
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.registry import EndpointRegistry
 from ccai.webworks.endpoints.restblueprint import RestBlueprint
 from ccai.webworks.endpoints.restendpoint import RestEndpoint
-from ccai.webworks.endpoints.rest.resourceendpoint import ResourceEndpoint
 from ccai.webworks.endpoints.rest.collectionendpoint import CollectionEndpoint
-from ccai.webworks.openapi.validation import OpenAPIValidator
 
 
 @dataclass

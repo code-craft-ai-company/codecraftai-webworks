@@ -409,7 +409,7 @@ def test_property_request_size_limit_enforcement():
         **Validates: Requirements 11.4, 11.5, 7.6, 7.7**
     """
     from ccai.webworks.wsgi.httpparser import HTTPParser
-    from ccai.webworks.wsgi.exceptions import HeaderTooLarge, TooManyHeaders, RequestEntityTooLarge
+    from ccai.webworks.wsgi.exceptions import HeaderTooLarge, TooManyHeaders
     
     # Run 100 iterations with random configurations
     num_iterations = 100
@@ -443,7 +443,7 @@ def test_property_request_size_limit_enforcement():
                 ("127.0.0.1", 8000),
                 "http"
             )
-        except (HeaderTooLarge, Exception) as err:
+        except (HeaderTooLarge, Exception):
             exception_raised = True
             # We expect some form of header-related error
         
@@ -477,7 +477,7 @@ def test_property_request_size_limit_enforcement():
                 ("127.0.0.1", 8000),
                 "http"
             )
-        except (TooManyHeaders, Exception) as err:
+        except (TooManyHeaders, Exception):
             exception_raised2 = True
         
         if not exception_raised2:

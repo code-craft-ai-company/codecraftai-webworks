@@ -145,16 +145,6 @@ slot:not([name])::slotted(:not(mj-chart-title):not(mj-chart-legend):not(mj-chart
 `;
 
 /*
- * User-facing default strings. They are literals until core/intl.js
- * registers chart keys; "Loading" already has one and goes through t().
- */
-const TEXT_EMPTY = "No chart data supplied.";
-const TEXT_LOAD_FAILED = "Chart data could not be loaded.";
-const TEXT_INVALID_DATA = "Chart data is not valid.";
-const TEXT_TABLE_CAPTION = "Chart data";
-const TEXT_TABLE_TRUNCATED = "Only the first {count} rows are shown.";
-
-/*
  * Host attributes that never change what the renderer draws. A change of
  * any other attribute re-renders the chart, because renderers read their
  * options from host attributes through ctx.attrs().
@@ -668,7 +658,7 @@ export class MjChart extends MjElement {
         references = this._referenceCache.resolve(source.data)
       } catch (error) {
         this._setBusy(false)
-        this._finishError(TEXT_LOAD_FAILED, error.message, true)
+        this._finishError(t("mj.chart.loadFailed"), error.message, true)
         return finished
       }
       if (references.pending === null) {
@@ -694,7 +684,7 @@ export class MjChart extends MjElement {
     }, (error) => {
       if (sequence === this._renderSequence) {
         this._setBusy(false)
-        this._finishError(TEXT_LOAD_FAILED, error.message, true)
+        this._finishError(t("mj.chart.loadFailed"), error.message, true)
       }
     })
     return finished
@@ -760,7 +750,7 @@ export class MjChart extends MjElement {
   _publicMessage(error) {
     const fromSrc = this.getAttribute("src") !== null &&
       (this._data === null || this._data === undefined)
-    const text = fromSrc === true ? TEXT_LOAD_FAILED : TEXT_INVALID_DATA
+    const text = fromSrc === true ? t("mj.chart.loadFailed") : t("mj.chart.invalidData")
     return text
   }
 
@@ -822,7 +812,7 @@ export class MjChart extends MjElement {
     try {
       raw = this.adaptChartData(given)
     } catch (error) {
-      this._finishError(TEXT_INVALID_DATA, error.message, true)
+      this._finishError(t("mj.chart.invalidData"), error.message, true)
       return
     }
 
@@ -909,7 +899,7 @@ export class MjChart extends MjElement {
       context.legend = this._buildLegend(null, "series", ctx)
       this._table = genericTable
       context.table = this._table
-      this._finishError(`No renderer for chart type "${type}".`, `Unknown chart type: ${type}`, false)
+      this._finishError(t("mj.chart.noRenderer", { type: type }), `Unknown chart type: ${type}`, false)
       return
     }
 
@@ -926,7 +916,7 @@ export class MjChart extends MjElement {
       this._table = buildTableModel(null, null)
       context.table = this._table
       this._state = "empty"
-      this._showMessage(TEXT_EMPTY, "empty")
+      this._showMessage(t("mj.chart.empty"), "empty")
       this._renderTable(this._table)
       this._broadcast()
       this.emit("mj-chart-empty", { type: type })
@@ -949,7 +939,7 @@ export class MjChart extends MjElement {
         context.legend = this._buildLegend(null, "series", ctx)
         this._table = genericTable
         context.table = this._table
-        this._finishError(`Chart render error: ${error.message}`, error.message, false)
+        this._finishError(t("mj.chart.renderError", { message: error.message }), error.message, false)
         return
       }
     }
@@ -1377,10 +1367,10 @@ export class MjChart extends MjElement {
     return type
   }
 
-  /* The accessible name of a chart the page did not name: "<type> chart". */
+  /* The accessible name of a chart the page did not name: "<type> chart" (mj.chart.figureLabel). */
   get defaultChartLabel() {
     const type = this.chartType.split("-").join(" ")
-    const label = type.endsWith("chart") === true ? type : `${type} chart`
+    const label = type.endsWith("chart") === true ? type : t("mj.chart.figureLabel", { type: type })
     return label
   }
 
@@ -1440,7 +1430,9 @@ export class MjChart extends MjElement {
     }
 
     const element = buildTableElement(
-      table, caption.length > 0 ? caption : TEXT_TABLE_CAPTION, TEXT_TABLE_TRUNCATED
+      table,
+      caption.length > 0 ? caption : t("mj.chart.tableCaption"),
+      t("mj.chart.tableTruncated", { count: table.rows.length })
     )
     this._tableHost.replaceChildren(element)
     return

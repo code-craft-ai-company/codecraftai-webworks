@@ -18,7 +18,6 @@ import json
 
 from testcomponents.catalog.componentdoc import AttributeDoc
 from testcomponents.charttypes.charttypedoc import ChartTypeDoc
-from testcomponents.charttypes.examplemarkup import boolean_option
 from testcomponents.charttypes.examplemarkup import gallery_example
 from testcomponents.charttypes.examplemarkup import json_text
 from testcomponents.charttypes.examplemarkup import orientation_option

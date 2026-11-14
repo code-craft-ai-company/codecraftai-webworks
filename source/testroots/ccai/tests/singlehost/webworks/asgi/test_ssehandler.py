@@ -208,19 +208,19 @@ def test_sseevent_format_with_all_fields():
     formatted = event.format()
     
     if "event: update" not in formatted:
-        errmsg = f"Expected 'event: update' in formatted output"
+        errmsg = "Expected 'event: update' in formatted output"
         raise AssertionError(errmsg)
     
     if "id: 456" not in formatted:
-        errmsg = f"Expected 'id: 456' in formatted output"
+        errmsg = "Expected 'id: 456' in formatted output"
         raise AssertionError(errmsg)
     
     if "retry: 1000" not in formatted:
-        errmsg = f"Expected 'retry: 1000' in formatted output"
+        errmsg = "Expected 'retry: 1000' in formatted output"
         raise AssertionError(errmsg)
     
     if "data: Test message" not in formatted:
-        errmsg = f"Expected 'data: Test message' in formatted output"
+        errmsg = "Expected 'data: Test message' in formatted output"
         raise AssertionError(errmsg)
     
     return
@@ -248,15 +248,15 @@ def test_sseevent_format_multiline_data():
     formatted = event.format()
     
     if "data: Line 1" not in formatted:
-        errmsg = f"Expected 'data: Line 1' in formatted output"
+        errmsg = "Expected 'data: Line 1' in formatted output"
         raise AssertionError(errmsg)
     
     if "data: Line 2" not in formatted:
-        errmsg = f"Expected 'data: Line 2' in formatted output"
+        errmsg = "Expected 'data: Line 2' in formatted output"
         raise AssertionError(errmsg)
     
     if "data: Line 3" not in formatted:
-        errmsg = f"Expected 'data: Line 3' in formatted output"
+        errmsg = "Expected 'data: Line 3' in formatted output"
         raise AssertionError(errmsg)
     
     return
@@ -400,7 +400,7 @@ def test_format_event_encodes_utf8():
     decoded = result.decode("utf-8")
     
     if "Hello, 世界!" not in decoded:
-        errmsg = f"Expected 'Hello, 世界!' in decoded output"
+        errmsg = "Expected 'Hello, 世界!' in decoded output"
         raise AssertionError(errmsg)
     
     return
@@ -416,7 +416,7 @@ def test_format_event_includes_data_prefix():
     result = handler.format_event(event)
     
     if b"data: Test message" not in result:
-        errmsg = f"Expected 'data: Test message' in result"
+        errmsg = "Expected 'data: Test message' in result"
         raise AssertionError(errmsg)
     
     return
@@ -435,7 +435,7 @@ def test_format_event_fields_with_data_only():
     result = handler.format_event_fields(data="Hello")
     
     if b"data: Hello" not in result:
-        errmsg = f"Expected 'data: Hello' in result"
+        errmsg = "Expected 'data: Hello' in result"
         raise AssertionError(errmsg)
     
     return
@@ -455,19 +455,19 @@ def test_format_event_fields_with_all_fields():
     )
     
     if b"event: update" not in result:
-        errmsg = f"Expected 'event: update' in result"
+        errmsg = "Expected 'event: update' in result"
         raise AssertionError(errmsg)
     
     if b"id: 123" not in result:
-        errmsg = f"Expected 'id: 123' in result"
+        errmsg = "Expected 'id: 123' in result"
         raise AssertionError(errmsg)
     
     if b"retry: 5000" not in result:
-        errmsg = f"Expected 'retry: 5000' in result"
+        errmsg = "Expected 'retry: 5000' in result"
         raise AssertionError(errmsg)
     
     if b"data: Test" not in result:
-        errmsg = f"Expected 'data: Test' in result"
+        errmsg = "Expected 'data: Test' in result"
         raise AssertionError(errmsg)
     
     return
@@ -816,11 +816,11 @@ def test_send_event_includes_formatted_event():
     body = message.get("body", b"")
     
     if b"event: update" not in body:
-        errmsg = f"Expected 'event: update' in body"
+        errmsg = "Expected 'event: update' in body"
         raise AssertionError(errmsg)
     
     if b"data: Test message" not in body:
-        errmsg = f"Expected 'data: Test message' in body"
+        errmsg = "Expected 'data: Test message' in body"
         raise AssertionError(errmsg)
     
     return
@@ -1135,7 +1135,7 @@ def test_stream_closes_connection_after_events_exhausted():
         raise AssertionError(errmsg)
     
     if last_message.get("more_body") is not False:
-        errmsg = f"Expected more_body=False for final message"
+        errmsg = "Expected more_body=False for final message"
         raise AssertionError(errmsg)
     
     return
@@ -1257,7 +1257,7 @@ def test_stream_closes_gracefully_on_generator_error():
         raise AssertionError(errmsg)
     
     if last_message.get("more_body") is not False:
-        errmsg = f"Expected more_body=False for final message"
+        errmsg = "Expected more_body=False for final message"
         raise AssertionError(errmsg)
     
     return

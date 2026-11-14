@@ -203,7 +203,7 @@ def test_cache_ttl_returns_none_after_expiry():
     result = cache.get()
 
     if result is not None:
-        errmsg = f"Expected None after TTL expiry, got spec"
+        errmsg = "Expected None after TTL expiry, got spec"
         raise AssertionError(errmsg)
 
     return

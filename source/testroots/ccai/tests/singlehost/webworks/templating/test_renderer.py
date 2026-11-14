@@ -1239,7 +1239,7 @@ def test_property_template_rendering_determinism_with_processors():
             context = _generate_random_context()
             
             # Build a template that uses both context and processor vars
-            parts = [f"{{{{ proc_var }}}}"]
+            parts = ["{{ proc_var }}"]
             for key in context.keys():
                 parts.append(f"{{{{ {key} }}}}")
             template_source = " | ".join(parts)
