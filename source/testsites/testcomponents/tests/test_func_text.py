@@ -55,9 +55,26 @@ def _wait_for_tag(frame, tag: str, timeout: int = 15000) -> None:
     return
 
 
+# True once a run after 'previousRun' has started and its preview reported
+# ready (library loaded, elements upgraded, example scripts run).
+_RUN_READY_JS = """(previousRun) => {
+    const frame = document.getElementById('pg-frame');
+    const sandbox = window.mjSandboxPage;
+    return frame !== null && sandbox !== undefined && sandbox.state.run > previousRun
+        && frame.getAttribute('data-ready-run') === String(sandbox.state.run);
+}"""
+
+
 def _load_html(page, html: str) -> None:
     """
-        Write new HTML into the playground editor and click Run.
+        Write new HTML into the playground editor, click Run and wait until
+        the preview of that run is ready.
+
+        The example on show finishes loading first: its scripts can still be
+        running (an example that submits its form moves focus into the
+        preview). The editor must hold the new HTML before Run is clicked,
+        and the checks that follow see the new preview, not the example it
+        replaced.
 
         :param page: The Playwright Page instance.
         :param html: The HTML snippet to load.
@@ -65,8 +82,17 @@ def _load_html(page, html: str) -> None:
         :returns: None
     """
 
-    page.get_by_test_id("playground-editor").fill(html)
+    page.wait_for_function("() => window.mjSandboxPage !== undefined", timeout=20000)
+    shown_run = page.evaluate("() => window.mjSandboxPage.state.run")
+    page.wait_for_function(_RUN_READY_JS, arg=shown_run - 1, timeout=20000)
+
+    editor = page.get_by_test_id("playground-editor")
+    editor.fill(html)
+    expect(editor).to_have_value(html)
+
+    previous_run = page.evaluate("() => window.mjSandboxPage.state.run")
     page.get_by_test_id("playground-run").click()
+    page.wait_for_function(_RUN_READY_JS, arg=previous_run, timeout=20000)
     return
 
 

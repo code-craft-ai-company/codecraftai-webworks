@@ -631,13 +631,26 @@ def test_property_policy_merge_behavior():
 # =============================================================================
 
 
-def _random_security_context():
+def _some_of(items):
+    """
+        Pick a random subset of ``items``, keeping their order.
+    """
+    rtnval = tuple(item for item in items if random.choice([True, False]))
+    return rtnval
+
+
+def _random_security_context(policy):
     """
         Generate a random Security_Context with random authentication state,
         roles, and scopes.
 
         Approximately half of the generated contexts will be authenticated
-        (have a user_id) and half will be guests.
+        (have a user_id) and half will be guests. The roles and scopes are a
+        random part of the policy's own plus random others, so contexts that
+        meet the role and scope requirements, and guests that hold the
+        required roles, are common rather than chance collisions.
+
+        :param policy: The AccessPolicy the context will be checked against.
 
         :returns: A randomly configured Security_Context instance.
     """
@@ -648,8 +661,8 @@ def _random_security_context():
     else:
         user_id = None
 
-    roles = _random_string_tuple()
-    scopes = _random_string_tuple()
+    roles = tuple(dict.fromkeys(_some_of(policy.roles) + _random_string_tuple()))
+    scopes = tuple(dict.fromkeys(_some_of(policy.scopes) + _random_string_tuple()))
 
     rtnval = SecurityContext(
         user_id=user_id,
@@ -669,16 +682,19 @@ def test_property_policy_evaluation():
         For any AccessPolicy P and Security_Context C, P.check(C) SHALL
         return True if and only if:
         - If P.require_auth=True, then C.is_authenticated must be True
-        - If P.roles is non-empty, then C must have at least one role
-          from P.roles (OR logic)
-        - If P.scopes is non-empty, then C must have all scopes from
-          P.scopes (AND logic)
+        - If P.roles is non-empty, then C must be authenticated and have at
+          least one role from P.roles (OR logic)
+        - If P.scopes is non-empty, then C must be authenticated and have
+          all scopes from P.scopes (AND logic)
+
+        The roles and scopes of a context that is not authenticated grant
+        nothing, whether or not P requires authentication.
     """
     iteration_count = 100
 
     for iteration in range(iteration_count):
         policy = _random_access_policy()
-        ctx = _random_security_context()
+        ctx = _random_security_context(policy)
 
         # --- Compute expected result manually ---
         expected = True
@@ -688,16 +704,16 @@ def test_property_policy_evaluation():
             if ctx.is_authenticated is not True:
                 expected = False
 
-        # Condition 2: Role check (OR logic)
+        # Condition 2: Role check (OR logic), only for an authenticated context
         if expected is True and len(policy.roles) > 0:
             has_matching_role = any(role in ctx.roles for role in policy.roles)
-            if has_matching_role is not True:
+            if ctx.is_authenticated is not True or has_matching_role is not True:
                 expected = False
 
-        # Condition 3: Scope check (AND logic)
+        # Condition 3: Scope check (AND logic), only for an authenticated context
         if expected is True and len(policy.scopes) > 0:
             has_all_scopes = all(scope in ctx.scopes for scope in policy.scopes)
-            if has_all_scopes is not True:
+            if ctx.is_authenticated is not True or has_all_scopes is not True:
                 expected = False
 
         # --- Verify P.check(C) matches expected ---
