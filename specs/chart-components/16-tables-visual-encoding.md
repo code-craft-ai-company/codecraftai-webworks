@@ -1,15 +1,17 @@
 # Tables with Visual Encoding
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Table-based charts blend tabular DOM structure with inline SVG cell encodings.
 The plain table shell reuses `<mj-table>` / `<mj-data-table>` from the
 component library when the primary structure is a DOM `<table>`; the SVG chart
 system contributes in-cell SVG marks rendered by a thin cell-renderer function
-keyed on `type`. Pure SVG rendering (the `<mj-chart-plot>` surface) is used
+keyed on `type`. Pure SVG rendering (`<mj-chart>`'s own drawing) is used
 only where the spatial layout cannot be expressed as rows and columns — notably
 icon arrays and small-multiples tables.
 
@@ -21,7 +23,6 @@ icon arrays and small-multiples tables.
 - **Purpose:** Display raw or summarized data as exact values in a sortable,
   scrollable DOM table; the chart system's accessible baseline for every chart
   type.
-- **Decomposition:** `mj-chart-data-table`, `mj-chart-title`, `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -60,8 +61,6 @@ icon arrays and small-multiples tables.
 - **Purpose:** Show a matrix of numeric values where each cell's background fill
   intensity encodes magnitude, combining exact readability with spatial pattern
   detection.
-- **Decomposition:** `mj-chart-data-table`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -100,7 +99,6 @@ icon arrays and small-multiples tables.
 - **Purpose:** Render a DOM table where one or more numeric columns are replaced
   by miniature horizontal bars, enabling compact side-by-side magnitude
   comparisons across rows without leaving tabular alignment.
-- **Decomposition:** `mj-chart-data-table`, `mj-chart-title`, `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -138,8 +136,6 @@ icon arrays and small-multiples tables.
 - **Controller:** `<mj-chart type="icon-array" ...>`
 - **Purpose:** Represent counts or proportions as a grid of discrete unit icons,
   making the magnitude of a part-to-whole relationship viscerally countable.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`, `mj-chart-value-labels`
 - **JSON shape:**
   ```json
   {
@@ -160,7 +156,7 @@ icon arrays and small-multiples tables.
   instead of circles; `mode="square"` uses `<rect>` icons.
 - **Events:** `mj-chart-icon-click` `{ series, count }` (each series' group of icons).
 - **Phase:** P5
-- **Notes:** Rendered entirely on `<mj-chart-plot>` as pure SVG — not a DOM
+- **Notes:** Rendered entirely by `<mj-chart>` as pure SVG — not a DOM
   table. The grid layout is computed in the renderer: `total` icons are placed
   at `(col, row)` positions; series fill sequentially. Icon paths are inline SVG
   paths from `svgdraw.js`. The `waffle` renderer (category 5) is the analogous
@@ -174,7 +170,6 @@ icon arrays and small-multiples tables.
 - **Purpose:** Emphasize patterns in tabular data by applying color, icon, or
   typographic highlights to cells that satisfy declarative rules, analogous to
   spreadsheet conditional formatting.
-- **Decomposition:** `mj-chart-data-table`, `mj-chart-title`, `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -215,7 +210,6 @@ icon arrays and small-multiples tables.
 - **Purpose:** Summarize multi-dimensional data by grouping rows and columns
   independently, displaying aggregated values at each intersection, with
   optional visual encoding in cells.
-- **Decomposition:** `mj-chart-data-table`, `mj-chart-title`, `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -255,8 +249,6 @@ icon arrays and small-multiples tables.
 - **Purpose:** Surface one or more key performance indicators as prominently
   displayed numbers with supporting context (label, target, trend indicator,
   delta), suitable for dashboard headers and metric tiles.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -276,7 +268,7 @@ icon arrays and small-multiples tables.
   ```
 - **SVG primitives:** `<text>` (headline value, label, delta); `<path>` (trend
   arrow glyph, sparkline line); `<rect>` (progress bar toward target, optional);
-  `<circle>` (sparkline dots, optional); all within `<mj-chart-plot>`'s SVG.
+  `<circle>` (sparkline dots, optional); all within `<mj-chart>`'s SVG.
 - **Orientation:** `horizontal` (metrics arranged in a row) / `vertical`
   (metrics stacked)
 - **Variants / modes:** `mode="compact"` shows only value + label; `mode="full"`
@@ -299,8 +291,6 @@ icon arrays and small-multiples tables.
 - **Purpose:** Arrange many miniature chart panels in a row-column grid, each
   showing the same chart type applied to a different data slice, facilitating
   comparison across groups without overlapping series.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {

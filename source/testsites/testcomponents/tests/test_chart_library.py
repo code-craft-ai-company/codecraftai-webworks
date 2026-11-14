@@ -2662,6 +2662,94 @@ def test_chart_legend_disabled_blocks_keyboard_toggles(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
+def test_chart_tooltip_shows_the_mark_label_on_hover_and_keyboard_focus(page, base_url):
+    """
+        The hovered mark, and the mark focused from the keyboard, shows its
+        label (the text of its <title>) in a tooltip above it. The pointer can
+        move onto the tooltip, leaving closes it, Escape closes it, and
+        no-tooltip turns it off. While it shows, the mark's <title> is held
+        back and an empty title on the surface keeps the host's title from
+        showing as well; both are back when it closes (WCAG 1.4.13).
+    """
+
+    markup = (
+        '<button id="before">before</button>'
+        + _chart("column", _PART_DATA, 'id="tip" title="Sales chart"')
+    )
+    frame = _mount_charts(page, base_url, markup)
+    labels = frame.evaluate(
+        """() => Array.from(document.getElementById('tip').shadowRoot.querySelectorAll('svg [tabindex]'))
+            .map((mark) => mark.querySelector(':scope > title').textContent.trim())"""
+    )
+    state = """() => {
+        const sr = document.getElementById('tip').shadowRoot;
+        const tip = sr.querySelector('[part="tooltip"]');
+        const marks = Array.from(sr.querySelectorAll('svg [tabindex]'));
+        const shown = tip.hidden === false;
+        let above = null;
+        if (shown === true) {
+            const box = tip.getBoundingClientRect();
+            const anchored = marks.find((mark) => mark.querySelector(':scope > title') === null);
+            above = anchored !== undefined && box.bottom <= anchored.getBoundingClientRect().top;
+        }
+        return {
+            shown: shown,
+            text: shown === true ? tip.textContent : null,
+            above: above,
+            heldTitles: marks.filter((mark) => mark.querySelector(':scope > title') === null).length,
+            surfaceTitle: sr.querySelector('[part="surface"]').getAttribute('title'),
+            ariaHidden: tip.getAttribute('aria-hidden'),
+        };
+    }"""
+    assert len(labels) == 6, f"expected 6 column marks, got {labels}"
+
+    marks = frame.locator("#tip svg [tabindex]")
+    marks.nth(1).hover()
+    page.wait_for_timeout(100)
+    hovered = frame.evaluate(state)
+    assert hovered == {"shown": True, "text": labels[1], "above": True, "heldTitles": 1,
+                       "surfaceTitle": "", "ariaHidden": "true"}, f"hover: {hovered}"
+
+    box = frame.locator("#tip").evaluate(
+        "el => { const r = el.shadowRoot.querySelector('[part=\"tooltip\"]').getBoundingClientRect();"
+        " return { x: r.left + r.width / 2, y: r.top + r.height / 2 } }"
+    )
+    preview = page.locator("[data-testid=playground-preview]").bounding_box()
+    page.mouse.move(preview["x"] + box["x"], preview["y"] + box["y"], steps=4)
+    page.wait_for_timeout(300)
+    assert frame.evaluate(state)["text"] == labels[1], "the tooltip closed when the pointer moved onto it"
+
+    page.mouse.move(1, 1)
+    page.wait_for_timeout(300)
+    left = frame.evaluate(state)
+    assert left == {"shown": False, "text": None, "above": None, "heldTitles": 0,
+                    "surfaceTitle": None, "ariaHidden": "true"}, f"after leaving: {left}"
+
+    frame.focus("#before")
+    page.keyboard.press("Tab")
+    page.wait_for_timeout(100)
+    assert frame.evaluate(state)["text"] == labels[0], f"keyboard focus: {frame.evaluate(state)}"
+    page.keyboard.press("ArrowRight")
+    page.wait_for_timeout(100)
+    assert frame.evaluate(state)["text"] == labels[1], f"arrow key: {frame.evaluate(state)}"
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(100)
+    escaped = frame.evaluate(state)
+    assert escaped["shown"] is False and escaped["heldTitles"] == 0, f"Escape: {escaped}"
+    page.keyboard.press("ArrowRight")
+    page.wait_for_timeout(100)
+    assert frame.evaluate(state)["text"] == labels[2], f"next mark after Escape: {frame.evaluate(state)}"
+
+    frame.evaluate("() => { document.getElementById('tip').setAttribute('no-tooltip', ''); document.getElementById('before').focus(); }")
+    marks.nth(3).hover()
+    page.wait_for_timeout(200)
+    off = frame.evaluate(state)
+    assert off["shown"] is False and off["heldTitles"] == 0, f"no-tooltip: {off}"
+
+    return
+
+
 define_page_tests(globals(), "test_chart_type_page_loads",
                   _check_chart_type_page_loads, _CHART_CASES)
 define_page_tests(globals(), "test_chart_type_renders_svg",

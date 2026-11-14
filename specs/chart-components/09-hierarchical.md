@@ -1,9 +1,11 @@
 # Hierarchical Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Each entry uses this format:
 
@@ -11,7 +13,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `<key>` — **Primary renderer** | **Variant of `<key>`**
 - **Controller:** `<mj-chart type="<key>" ...>`
 - **Purpose:** one line — what this chart is best for.
-- **Decomposition:** the part components it uses.
 - **JSON shape:** the concrete data shape this chart consumes.
 - **SVG primitives:** the SVG elements the renderer emits.
 - **Orientation:** `horizontal` / `vertical` support, or `n/a`.
@@ -27,7 +28,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `tree` — **Primary renderer**
 - **Controller:** `<mj-chart type="tree" ...>`
 - **Purpose:** Display parent-child relationships as a node-link tree with explicit branch connectors between every level.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Hierarchical family (plan §3.4); `root` is a recursive structure:
   ```json
   {
@@ -65,7 +65,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `treemap` — **Primary renderer** (`charts/core/renderers/hierlayout.js`, shared with `sunburst`, `icicle`, `circle-pack`; `hierlayout` is the renderer module, not a type key)
 - **Controller:** `<mj-chart type="treemap" ...>`
 - **Purpose:** Represent nested part-to-whole data as a space-filling arrangement of proportionally-sized rectangles, one per leaf node.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Hierarchical family; `root.value` is the aggregate and `children[].value` drive tile sizes:
   ```json
   {
@@ -106,7 +105,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `sunburst` — **Variant of `treemap`** (same `hierlayout.js` renderer)
 - **Controller:** `<mj-chart type="sunburst" ...>`
 - **Purpose:** Display a radial hierarchy where each ring represents a depth level and arc widths are proportional to value, revealing both structure and proportion.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Same hierarchical `root` / `children` shape as Treemap.
   ```json
   {
@@ -133,7 +131,7 @@ Each entry uses this format:
 - **Variants / modes:** See Treemap entry for the full list of `hierlayout.js` layouts.
 - **Events:** `mj-chart-node-click` `{ name, value, depth, path }` (each arc; `path` lists the names from the root).
 - **Phase:** P4
-- **Notes:** Arc angles computed by partitioning `[0, 2π]` proportionally to node value within each ring. Uses `linear` scale for angle, `band` scale for ring radii. Clicking an arc zooms to that subtree (re-partitions the full angle range to the selected node's descendants). Breadcrumb trail annotation supported via `mj-chart-annotation`. Compare with Icicle for the rectangular equivalent.
+- **Notes:** Arc angles computed by partitioning `[0, 2π]` proportionally to node value within each ring. Uses `linear` scale for angle, `band` scale for ring radii. Clicking an arc only emits `mj-chart-node-click`: there is no zoom to a subtree and no breadcrumb trail. Compare with Icicle for the rectangular equivalent.
 
 ---
 
@@ -142,7 +140,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `icicle` — **Variant of `treemap`** (same `hierlayout.js` renderer)
 - **Controller:** `<mj-chart type="icicle" ...>`
 - **Purpose:** Show a rectangular hierarchical partition where depth is mapped to one axis and breadth (proportional to value) to the other — the rectangular counterpart of Sunburst.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Same hierarchical `root` / `children` shape as Treemap.
   ```json
   {
@@ -178,7 +175,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `tree` — **Variant of `tree`**
 - **Controller:** `<mj-chart type="tree" mode="dendrogram" ...>`
 - **Purpose:** Display the results of hierarchical clustering, emphasising the similarity distance between groups by the height at which branches merge.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (distance/height axis), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Hierarchical family; internal nodes carry a `distance` or `height` value representing the merge distance; leaf nodes represent observations:
   ```json
   {
@@ -211,7 +207,7 @@ Each entry uses this format:
 - **Variants / modes:** None beyond the `tree` primary.
 - **Events:** `mj-chart-node-click` `{ name, value, depth, role, path }` (each node; `path` lists the names from the root).
 - **Phase:** P4
-- **Notes:** Reuses the `tree` renderer layout engine; `mode="dendrogram"` replaces tidy-tree x-position assignment with a `linear` scale mapping node `value` (merge distance/height) to the distance axis. Connectors are elbow paths (horizontal + vertical segments). A `mj-chart-axis` with `kind="value"` renders the distance axis. Leaf spacing is equidistant (`band` scale on the leaf axis). Cross-reference: Tree Diagram entry above for the base `tree` renderer.
+- **Notes:** Reuses the `tree` renderer layout engine; `mode="dendrogram"` replaces tidy-tree x-position assignment with a `linear` scale mapping node `value` (merge distance/height) to the distance axis. Connectors are elbow paths (horizontal + vertical segments). The renderer draws the distance axis itself (line, ticks and labels) when internal nodes carry merge distances (`distance` / `height` / `value`); without them each merge sits one level above its tallest child and no axis is drawn. Leaf spacing is equidistant (`band` scale on the leaf axis). Cross-reference: Tree Diagram entry above for the base `tree` renderer.
 
 ---
 
@@ -220,7 +216,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `circle-pack` — **Variant of `treemap`** (same `hierlayout.js` renderer)
 - **Controller:** `<mj-chart type="circle-pack" ...>`
 - **Purpose:** Display nested groups using circles whose areas are proportional to their values, revealing hierarchical structure through containment.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Same hierarchical `root` / `children` shape as Treemap.
   ```json
   {
@@ -263,7 +258,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `tree` — **Variant of `tree`**
 - **Controller:** `<mj-chart type="tree" mode="org" ...>`
 - **Purpose:** Render an organisational reporting hierarchy with styled node cards showing roles, names, and optional metadata.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`, `mj-chart-brush`
 - **JSON shape:** Hierarchical family; leaf and internal nodes carry `role` and `name` fields as well as optional `avatar` (URL), `department`, and other metadata displayed in the node card:
   ```json
   {
@@ -293,7 +287,7 @@ Each entry uses this format:
 - **Variants / modes:** None beyond the `tree` primary.
 - **Events:** `mj-chart-node-click` `{ name, value, depth, role, path }` (each card; `path` lists the names from the root).
 - **Phase:** P4
-- **Notes:** Reuses the `tree` renderer with `mode="org"`, which replaces bare circle/circle nodes with multi-line rectangular cards. Card dimensions are fixed or driven by a design token (`--mj-chart-org-card-width`, `--mj-chart-org-card-height`). The tidy-tree layout algorithm is used with additional inter-node spacing to accommodate card sizes. `mj-chart-brush` enables selection of subtrees (highlights the selected node and all its descendants). Cross-reference: Tree Diagram entry above for the base `tree` renderer.
+- **Notes:** Reuses the `tree` renderer with `mode="org"`, which replaces bare circle/circle nodes with multi-line rectangular cards. Card dimensions are fixed or driven by a design token (`--mj-chart-org-card-width`, `--mj-chart-org-card-height`). The tidy-tree layout algorithm is used with additional inter-node spacing to accommodate card sizes. There is no subtree selection or highlighting; a card reports a click with `mj-chart-node-click`. Cross-reference: Tree Diagram entry above for the base `tree` renderer.
 
 ---
 
@@ -302,7 +296,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `tree` — **Variant of `tree`**
 - **Controller:** `<mj-chart type="tree" mode="mindmap" ...>`
 - **Purpose:** Display a conceptual hierarchy radiating from a central idea, with branches and sub-branches representing related topics.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Hierarchical family; nodes carry `name` and optionally `color` or `icon` metadata:
   ```json
   {

@@ -1,9 +1,11 @@
 # <Category Name>
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Each entry uses this format:
 
@@ -11,10 +13,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `<key>` — **Primary renderer** | **Variant of `<key>`**
 - **Controller:** `<mj-chart type="<key>" ...>`
 - **Purpose:** one line — what this chart is best for.
-- **Decomposition:** the part components it uses (`mj-chart-plot`,
-  `mj-chart-axis` x N, `mj-chart-legend`, `mj-chart-title`,
-  `mj-chart-tooltip`, `mj-chart-grid`, `mj-chart-data-table`,
-  `mj-chart-annotation`, …). List only the parts that apply.
 - **JSON shape:** the concrete data shape this chart consumes, as a compact
   JSON snippet using the common envelope or a documented family-specific
   shape from the plan §3.4.

@@ -1,9 +1,11 @@
 # UX, Product & Business Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 ---
 
@@ -11,7 +13,6 @@
 - **Renderer / `type`:** `kpi` — **Primary renderer**
 - **Controller:** `<mj-chart type="kpi" ...>`
 - **Purpose:** Display a single headline metric with an optional comparison value, trend indicator, and spark trend line.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -39,7 +40,6 @@
 - **Renderer / `type`:** `gauge` — **Primary renderer**
 - **Controller:** `<mj-chart type="gauge" ...>`
 - **Purpose:** Show progress of a single metric toward a target on a circular arc dial — ideal for KPI dashboards.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-annotation`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -72,7 +72,6 @@
 - **Renderer / `type`:** `bullet` — **Primary renderer**
 - **Controller:** `<mj-chart type="bullet" ...>`
 - **Purpose:** Compare an actual value against one or more targets and qualitative ranges — a dense, space-efficient alternative to the gauge.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value, `side="bottom"` for horizontal), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -102,7 +101,6 @@
 - **Renderer / `type`:** `funnel` — **Primary renderer**
 - **Controller:** `<mj-chart type="funnel" ...>`
 - **Purpose:** Visualize sequential stages of a conversion pipeline, showing volume lost at each step.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -126,7 +124,6 @@
 - **Renderer / `type`:** `cohort` — **Primary renderer**
 - **Controller:** `<mj-chart type="cohort" ...>`
 - **Purpose:** Track how discrete user cohorts (grouped by sign-up period) retain or convert over successive time periods — the canonical product-analytics retention view.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category, `side="start"` for row labels), `mj-chart-axis` (time/period, `side="top"`), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -159,7 +156,6 @@
 - **Renderer / `type`:** `retention-curve` — **Variant of `line`**
 - **Controller:** `<mj-chart type="retention-curve" ...>`
 - **Purpose:** Plot the fraction of users from each cohort still active at each period offset — reveals how quickly different cohorts decay.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time/period, `side="bottom"`), `mj-chart-axis` (value 0–100 %, `side="start"`), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -184,7 +180,6 @@
 - **Renderer / `type`:** `churn` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="churn" ...>`
 - **Purpose:** Display churn (or attrition) rate over time periods, optionally segmented by reason or cohort — highlights when and where users are lost.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, `side="bottom"`), `mj-chart-axis` (value, `side="start"`), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -209,7 +204,6 @@
 - **Renderer / `type`:** `user-journey` — **Primary renderer** (`journey.js`)
 - **Controller:** `<mj-chart type="user-journey" ...>`
 - **Purpose:** Visualize discrete steps (or phases) in a user experience, with a sentiment or quality score at each step — used for qualitative UX storytelling alongside quantitative data.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category/steps, `side="bottom"`), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -229,7 +223,7 @@
 - **Variants / modes:** Multi-persona journey — multiple `steps` arrays, one per persona, drawn as separate lines on the same layout.
 - **Events:** `mj-chart-journey-click` `{ label, score, touchpoints, pain_points, persona, index }` (each step).
 - **Phase:** P5
-- **Notes:** Uses a `linear` scale for `score_range` on the vertical axis and a `band` scale for steps on the horizontal axis. The emotion line reuses the `line` renderer's `<path>` builder. Pain-point annotations reuse `mj-chart-annotation`. Accessibility: the data-table exposes step, score, touchpoints, and pain points as a structured table.
+- **Notes:** Uses a `linear` scale for `score_range` on the vertical axis and a `band` scale for steps on the horizontal axis. The emotion line reuses the `line` renderer's `<path>` builder. Pain points are not drawn as text: a step with pain points gets a small red dot on its node, and the pain-point texts are in the step's label, which the tooltip shows (`<step>: score <n>, touchpoints: …, pain points: …`). Accessibility: the data-table exposes step, score, touchpoints, and pain points as a structured table.
 
 ---
 
@@ -237,7 +231,6 @@
 - **Renderer / `type`:** `heatmap` — **Primary renderer**
 - **Controller:** `<mj-chart type="heatmap" ...>`
 - **Purpose:** Encode a numeric value in a two-dimensional grid of cells using color intensity — reveals spatial, temporal, or categorical density and usage patterns.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x-category, `side="bottom"`), `mj-chart-axis` (y-category, `side="start"`), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -264,7 +257,6 @@
 - **Renderer / `type`:** `session-flow` — **Variant of `sankey`**
 - **Controller:** `<mj-chart type="session-flow" ...>`
 - **Purpose:** Show aggregated paths users navigate through an application — which pages or screens they visit in sequence and where they exit.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -292,7 +284,7 @@
 - **Variants / modes:** None beyond the `sankey` renderer modes. Exit nodes are simply leaf nodes with no outbound links.
 - **Events:** `mj-chart-flow-click` `{ id, label, flow, inflow, outflow }` (each page node). `session-flow` is drawn by `journey.js`, so the `sankey` events do not apply; its links are not interactive.
 - **Phase:** P5
-- **Notes:** This is the `sankey` renderer (defined in `specs/chart-components/08-flow-process.md`) applied to session navigation data. `type="session-flow"` sets default node coloring by depth level and enables an exit-rate annotation via `mj-chart-annotation`. No new renderer code is required.
+- **Notes:** This is the `sankey` renderer (defined in `specs/chart-components/08-flow-process.md`) applied to session navigation data. `type="session-flow"` gives each node its own palette colour (links take their source node's colour) and draws no exit-rate annotation; a node's label, which the tooltip shows, gives its sessions with inflow and outflow (`<page>: <n> sessions (in <i>, out <o>)`). No new renderer code is required.
 
 ---
 
@@ -300,7 +292,6 @@
 - **Renderer / `type`:** `feature-adoption` — **Variant of `line`**
 - **Controller:** `<mj-chart type="feature-adoption" ...>`
 - **Purpose:** Track the cumulative or periodic percentage of users who have adopted one or more features over time — shows uptake curves and compares feature rollout trajectories.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, `side="bottom"`), `mj-chart-axis` (value 0–100 %, `side="start"`), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-annotation`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -320,7 +311,7 @@
 - **Variants / modes:** Cumulative vs. periodic adoption toggled by `mode="cumulative|periodic"`.
 - **Events:** none (not implemented).
 - **Phase:** P5
-- **Notes:** `type="feature-adoption"` is the `line` renderer with a `[0, 100]` value clamp, percentage y-axis formatting, and launch-event annotations via `mj-chart-annotation`. No new renderer code; the schema preset enforces the `0–100` value domain. The `line` renderer lives in `specs/chart-components/02-trend-timeseries.md`.
+- **Notes:** `type="feature-adoption"` is planned as the `line` renderer with a `[0, 100]` value clamp and percentage y-axis formatting; no `feature-adoption` key is registered yet. Launch-event lines from `annotations` would have to be drawn by the renderer itself; the `line` renderer reads no `annotations` field today. No new renderer code; the schema preset enforces the `0–100` value domain. The `line` renderer lives in `specs/chart-components/02-trend-timeseries.md`.
 
 ---
 
@@ -328,7 +319,6 @@
 - **Renderer / `type`:** `segmentation` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="segmentation" ...>`
 - **Purpose:** Compare quantitative metrics across distinct user segments side by side — reveals how cohorts or persona groups differ on key KPIs.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category/segment, `side="bottom"` or `side="start"`), `mj-chart-axis` (value, `side="start"` or `side="bottom"`), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {

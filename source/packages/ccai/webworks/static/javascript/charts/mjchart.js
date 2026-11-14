@@ -27,6 +27,8 @@
  *   description   longer text alternative, read with the chart
  *   variant       renderer drawing variant (what renderers read as the
  *                 "style" option; the `style` attribute itself is CSS)
+ *   no-tooltip    boolean: no chart tooltip; the browser's native tooltip
+ *                 of each mark's <title> shows instead
  *   (any other)   renderer options, read through ctx.attrs(name, fallback)
  *
  * Size: the chart fills the block size the page gives its host (inline
@@ -41,6 +43,15 @@
  *   mj-chart-series-toggle  { series, seriesIndex, visible, hidden,
  *                             hiddenSeries }    a series was hidden or shown
  *   mj-chart-connect        { }                 the controller connected
+ *
+ * Tooltip: the mark under the pointer, or the mark with keyboard focus,
+ * shows its label -- the text of its own <title>, which renderers give
+ * each mark together with the same aria-label -- in a tooltip above it,
+ * styled with the <mj-tooltip> tokens (part "tooltip"). The pointer can
+ * move onto it, Escape dismisses it wherever focus is, and it stays until
+ * the mark is no longer hovered or focused (WCAG 1.4.13). While it shows,
+ * the mark's <title> is held back so the native tooltip does not show too.
+ * It is aria-hidden: the focused mark's accessible name already says it.
  *
  * Accessibility: the host is a `figure` named by `label`. The drawing is
  * exposed (not aria-hidden); its focusable marks form one tab stop with
@@ -79,6 +90,7 @@ import { CONTROLLER_CONNECT_EVENT } from "./core/chartregistry.js";
 import { getRenderer, getRendererOptions, hasRenderer } from "./core/renderregistry.js";
 import { seriesColor } from "./core/scales.js";
 import { svgRoot } from "./core/svgdraw.js";
+import { position, removeFromTopLayer } from "../core/overlay.js";
 
 const STYLES = `
 :host {
@@ -124,6 +136,29 @@ const STYLES = `
  */
 .surface svg [data-quiet-mark]:hover,
 .surface svg [data-quiet-mark]:focus-visible { fill-opacity: 1; }
+/*
+ * The tooltip of the hovered or keyboard-focused mark, in the top layer
+ * (placed by the overlay engine) and styled like <mj-tooltip>.
+ */
+.tooltip {
+  position: fixed;
+  z-index: var(--mj-tooltip-z-index, var(--mj-layer-tooltip));
+  max-width: var(--mj-tooltip-max-width, 17.5rem);
+  margin: 0;
+  padding-block: var(--mj-tooltip-padding-block, var(--mj-space-1, 0.25rem));
+  padding-inline: var(--mj-tooltip-padding-inline, var(--mj-space-2, 0.5rem));
+  background: var(--mj-tooltip-bg, var(--mj-color-neutral-800, #2b2f36));
+  color: var(--mj-tooltip-color, var(--mj-color-neutral-50, #f7f8fa));
+  border: 1px solid var(--mj-tooltip-border-color, transparent);
+  border-radius: var(--mj-tooltip-border-radius, var(--mj-radius-sm, 4px));
+  box-shadow: var(--mj-tooltip-shadow, var(--mj-elevation-2, none));
+  font-size: var(--mj-tooltip-font-size, var(--mj-font-size-sm, 0.875rem));
+  line-height: var(--mj-line-height, 1.4);
+  white-space: pre-line;
+  overflow-wrap: break-word;
+  pointer-events: auto;
+}
+.tooltip[hidden] { display: none; }
 .message {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
@@ -152,10 +187,13 @@ slot:not([name])::slotted(:not(mj-chart-title):not(mj-chart-legend):not(mj-chart
 const NON_RENDER_ATTRIBUTES = [
   "style", "class", "id", "role", "slot", "part", "tabindex", "hidden",
   "dock", "anchor", "theme", "data-theme", "disabled", "context-menu",
-  "context-menu-label",
+  "context-menu-label", "no-tooltip",
   /* Handled by onAttributeChanged. */
   "type", "orientation", "src", "label", "description"
 ];
+
+/* How long the tooltip waits before hiding when the pointer leaves (ms). */
+const TOOLTIP_HIDE_DELAY = 150;
 
 /* The drawing box is never treated as smaller than this (pixels). */
 const MIN_DRAW_SIZE = 16;
@@ -223,12 +261,32 @@ export class MjChart extends MjElement {
     /* The aria-label this component wrote, to tell it from an author's. */
     this._appliedLabel = null
     this._messageText = null
+
+    /*
+     * Tooltip: the mark it shows for, how it was opened ("pointer" or
+     * "focus"), the <title> held back while it shows (with the node it
+     * came before), the mark Escape dismissed it for, the pending hide and
+     * the observer of the title's text.
+     */
+    this._tooltipEl = null
+    this._tipTarget = null
+    this._tipVia = null
+    this._heldTitle = null
+    this._heldTitleNext = null
+    this._tipDismissed = null
+    this._tipHideTimer = null
+    this._tipObserver = null
+    this._tipTracking = false
+    this._onTipDocumentKeyDown = this._handleTipDocumentKeyDown.bind(this)
+    this._onTipDocumentPointerDown = this._handleTipDocumentPointerDown.bind(this)
+    this._onTipViewportChange = this._repositionTooltip.bind(this)
   }
 
   render() {
     const markup = `
       <p class="description" part="description" data-chart-description hidden></p>
       <div class="surface" part="surface" data-chart-surface></div>
+      <div class="tooltip" part="tooltip" aria-hidden="true" data-chart-tooltip hidden></div>
       <slot></slot>
       <div class="a11y-table" part="table" data-chart-table></div>
     `
@@ -257,6 +315,32 @@ export class MjChart extends MjElement {
     this.listen(this._surface, "focusin", (event) => {
       this._onSurfaceFocusIn(event)
     })
+
+    this._tooltipEl = this.$("[data-chart-tooltip]")
+    this._tipTarget = null
+    this._heldTitle = null
+    this.listen(this._surface, "focusout", (event) => {
+      this._onSurfaceFocusOut(event)
+    })
+    this.listen(this._surface, "pointerover", (event) => {
+      this._onSurfacePointerOver(event)
+    })
+    this.listen(this._surface, "pointerout", (event) => {
+      this._onSurfacePointerOut(event)
+    })
+    this.listen(this._surface, "scroll", () => {
+      this._repositionTooltip()
+    })
+    if (this._tooltipEl !== null) {
+      this.listen(this._tooltipEl, "pointerenter", () => {
+        this._cancelTooltipHide()
+      })
+      this.listen(this._tooltipEl, "pointerleave", (event) => {
+        if (this._tipVia === "pointer" && event.pointerType !== "touch") {
+          this._scheduleTooltipHide()
+        }
+      })
+    }
     return
   }
 
@@ -285,6 +369,7 @@ export class MjChart extends MjElement {
   }
 
   onDisconnected() {
+    this._hideTooltip()
     if (this._resizeObserver !== null) {
       this._resizeObserver.disconnect()
       this._resizeObserver = null
@@ -341,6 +426,9 @@ export class MjChart extends MjElement {
           continue
         }
         const name = record.attributeName
+        if (name === "no-tooltip" && this.hasAttribute("no-tooltip") === true) {
+          this._hideTooltip()
+        }
         if (name === "id") {
           idChanged = true
         } else if (NON_RENDER_ATTRIBUTES.indexOf(name) < 0 && name.startsWith("aria-") === false) {
@@ -1243,6 +1331,9 @@ export class MjChart extends MjElement {
     const focused = this.shadowRoot.activeElement
     const focusedIndex = focused !== null ? this._marks.indexOf(focused) : -1
 
+    /* The tooltip's mark is about to go; a re-focused mark opens a new one. */
+    this._hideTooltip()
+
     this._surface.replaceChildren(root)
     this._surface.dataset.state = "ready"
     this._messageText = null
@@ -1285,6 +1376,14 @@ export class MjChart extends MjElement {
       this._activeMark = index
       this._applyRovingTabindex()
     }
+
+    /* Keyboard focus shows the mark's tooltip; a click already has the pointer's. */
+    if (this._matchesFocusVisible(event.target) === true) {
+      const target = this._tooltipTarget(event.target)
+      if (target !== null) {
+        this._showTooltip(target, "focus")
+      }
+    }
     return
   }
 
@@ -1319,6 +1418,270 @@ export class MjChart extends MjElement {
         this._applyRovingTabindex()
         this._marks[next].focus()
       }
+    }
+    return
+  }
+
+  /* ----- tooltip: the label of the hovered or keyboard-focused mark ----- */
+
+  _matchesFocusVisible(element) {
+    let visible = false
+    try {
+      visible = element.matches(":focus-visible")
+    } catch (error) {
+      /* A browser without :focus-visible: treat focus as keyboard focus. */
+      visible = true
+    }
+    return visible
+  }
+
+  /* The <title> child of `element`, or null. */
+  _ownTitle(element) {
+    let title = null
+    const children = element.children
+    for (let index = 0; index < children.length && title === null; index = index + 1) {
+      if (children[index].localName === "title") {
+        title = children[index]
+      }
+    }
+    return title
+  }
+
+  /*
+   * The element of the drawing whose label `node` shows: `node` or its
+   * nearest ancestor below the surface with a <title> child (or whose
+   * title the tooltip holds back right now). Null for the background.
+   */
+  _tooltipTarget(node) {
+    let target = null
+    let current = node instanceof Element ? node : null
+    while (current !== null && target === null && current !== this._surface) {
+      if (current === this._tipTarget && this._heldTitle !== null) {
+        target = current
+      } else if (current.localName !== "svg" && this._ownTitle(current) !== null) {
+        target = current
+      }
+      current = current.parentElement
+    }
+    return target
+  }
+
+  _showTooltip(target, via) {
+    const tip = this._tooltipEl
+    if (tip === null || this.hasAttribute("no-tooltip") === true || target === this._tipDismissed) {
+      return
+    }
+    this._cancelTooltipHide()
+    if (target === this._tipTarget) {
+      /* The same mark: keep the tooltip; focus outranks the pointer. */
+      if (via === "focus") {
+        this._tipVia = via
+      }
+      return
+    }
+
+    this._hideTooltip()
+    const title = this._ownTitle(target)
+    if (title === null) {
+      return
+    }
+    const text = title.textContent.trim()
+    if (text.length === 0) {
+      return
+    }
+
+    this._tipTarget = target
+    this._tipVia = via
+
+    /*
+     * Hold the <title> back so the browser does not show its own tooltip
+     * too. An empty title on the surface keeps the host's `title` (the
+     * chart's native tooltip) from showing over the mark instead.
+     */
+    this._heldTitle = title
+    this._heldTitleNext = title.nextSibling
+    title.remove()
+    this._surface.setAttribute("title", "")
+
+    /* A renderer may rewrite the label while it shows (a moving cell cursor). */
+    if (typeof MutationObserver === "function") {
+      this._tipObserver = new MutationObserver(() => {
+        this._syncTooltipText()
+      })
+      this._tipObserver.observe(title, { characterData: true, childList: true, subtree: true })
+    }
+
+    tip.textContent = text
+    tip.hidden = false
+    this._repositionTooltip()
+    this._startTooltipTracking()
+    return
+  }
+
+  _syncTooltipText() {
+    if (this._heldTitle !== null && this._tooltipEl !== null) {
+      const text = this._heldTitle.textContent.trim()
+      if (text.length === 0) {
+        this._hideTooltip()
+      } else {
+        this._tooltipEl.textContent = text
+        this._repositionTooltip()
+      }
+    }
+    return
+  }
+
+  _repositionTooltip() {
+    const tip = this._tooltipEl
+    const target = this._tipTarget
+    if (tip === null || target === null || tip.hidden === true) {
+      return
+    }
+    if (target.isConnected === false) {
+      this._hideTooltip()
+      return
+    }
+    position(tip, target, { placement: "top", offset: 8, hideWhenDetached: true })
+    /* The engine writes a popover z-index inline; the tooltip layer is in the stylesheet. */
+    tip.style.zIndex = ""
+    return
+  }
+
+  _hideTooltip() {
+    this._cancelTooltipHide()
+    this._stopTooltipTracking()
+    if (this._tipObserver !== null) {
+      this._tipObserver.disconnect()
+      this._tipObserver = null
+    }
+
+    /* Give the mark its <title> back, where it was. */
+    const title = this._heldTitle
+    const target = this._tipTarget
+    if (title !== null && target !== null) {
+      const next = this._heldTitleNext
+      if (next !== null && next.parentNode === target) {
+        target.insertBefore(title, next)
+      } else {
+        target.appendChild(title)
+      }
+    }
+    this._heldTitle = null
+    this._heldTitleNext = null
+    this._tipTarget = null
+    this._tipVia = null
+    if (this._surface !== undefined && this._surface !== null) {
+      this._surface.removeAttribute("title")
+    }
+
+    const tip = this._tooltipEl
+    if (tip !== null && tip.hidden === false) {
+      tip.hidden = true
+      tip.textContent = ""
+      removeFromTopLayer(tip)
+    }
+    return
+  }
+
+  _scheduleTooltipHide() {
+    this._cancelTooltipHide()
+    this._tipHideTimer = setTimeout(() => {
+      this._tipHideTimer = null
+      this._hideTooltip()
+    }, TOOLTIP_HIDE_DELAY)
+    return
+  }
+
+  _cancelTooltipHide() {
+    if (this._tipHideTimer !== null) {
+      clearTimeout(this._tipHideTimer)
+      this._tipHideTimer = null
+    }
+    return
+  }
+
+  /* While it shows: Escape anywhere dismisses, a tap elsewhere closes, scroll and resize re-anchor. */
+  _startTooltipTracking() {
+    if (this._tipTracking === false) {
+      this._tipTracking = true
+      document.addEventListener("keydown", this._onTipDocumentKeyDown, true)
+      document.addEventListener("pointerdown", this._onTipDocumentPointerDown, true)
+      window.addEventListener("scroll", this._onTipViewportChange, true)
+      window.addEventListener("resize", this._onTipViewportChange)
+    }
+    return
+  }
+
+  _stopTooltipTracking() {
+    if (this._tipTracking === true) {
+      this._tipTracking = false
+      document.removeEventListener("keydown", this._onTipDocumentKeyDown, true)
+      document.removeEventListener("pointerdown", this._onTipDocumentPointerDown, true)
+      window.removeEventListener("scroll", this._onTipViewportChange, true)
+      window.removeEventListener("resize", this._onTipViewportChange)
+    }
+    return
+  }
+
+  /*
+   * Escape closes the tooltip and nothing else; preventDefault() tells a
+   * surrounding mj-dialog / mj-drawer the key press was handled. It stays
+   * closed for that mark until the pointer or focus leaves it.
+   */
+  _handleTipDocumentKeyDown(event) {
+    if (event.key === "Escape" && this._tipTarget !== null && event.defaultPrevented === false) {
+      event.preventDefault()
+      this._tipDismissed = this._tipTarget
+      this._hideTooltip()
+    }
+    return
+  }
+
+  /* A touch tooltip stays until the next tap; one outside the mark and the tooltip closes it. */
+  _handleTipDocumentPointerDown(event) {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : []
+    const inside = path.indexOf(this._tipTarget) >= 0 || path.indexOf(this._tooltipEl) >= 0
+    if (inside === false) {
+      this._hideTooltip()
+    }
+    return
+  }
+
+  _onSurfacePointerOver(event) {
+    const target = this._tooltipTarget(event.target)
+    /* The latest interaction wins: hovering another mark shows its label. */
+    if (target === null) {
+      if (this._tipVia === "pointer") {
+        this._scheduleTooltipHide()
+      }
+    } else {
+      this._showTooltip(target, "pointer")
+    }
+    return
+  }
+
+  _onSurfacePointerOut(event) {
+    const target = this._tooltipTarget(event.target)
+    const into = event.relatedTarget
+    const stillInside = target !== null && into instanceof Node && target.contains(into) === true
+    if (target !== null && stillInside === false && target === this._tipDismissed) {
+      this._tipDismissed = null
+    }
+    /* A touch tooltip stays until the next tap (see the pointerdown tracking). */
+    if (stillInside === false && this._tipVia === "pointer" && target === this._tipTarget &&
+        event.pointerType !== "touch") {
+      this._scheduleTooltipHide()
+    }
+    return
+  }
+
+  _onSurfaceFocusOut(event) {
+    const target = this._tooltipTarget(event.target)
+    if (target !== null && target === this._tipDismissed) {
+      this._tipDismissed = null
+    }
+    if (this._tipVia === "focus" && target === this._tipTarget) {
+      this._hideTooltip()
     }
     return
   }

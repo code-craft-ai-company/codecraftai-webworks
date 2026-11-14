@@ -1,9 +1,11 @@
 # Financial Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 ---
 
@@ -11,7 +13,6 @@
 - **Renderer / `type`:** `candlestick` — **Variant of `ohlc`** (`ohlc.js` registers both keys)
 - **Controller:** `<mj-chart type="candlestick" ...>` (same drawing as `<mj-chart type="ohlc" variant="candle" ...>`)
 - **Purpose:** Visualise stock or asset price movement over time; body encodes open-to-close range, wicks encode high/low extremes.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, bottom; value, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-brush`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -27,7 +28,7 @@
 - **Variants / modes:** The drawing follows the type key — `candlestick` draws bodies and wicks, `ohlc` draws tick bars — and `variant="ohlc" | "candle"` overrides it (`variant="candlestick"` reads as `candle`), so `type="candlestick" variant="ohlc"` draws the OHLC chart below.
 - **Events:** `mj-chart-candle-click` `{ t, o, h, l, c, direction, count }` (each session; `t` is the session's first date, `direction` `rising` / `falling`, `count` the data rows merged into it); the same for every drawing `variant`.
 - **Phase:** P3
-- **Notes:** Uses `time` scale on the category axis and `linear` scale on the value axis. Bullish candles (close ≥ open) and bearish candles (close < open) are coloured from `--mj-color-success` / `--mj-color-danger` and are hollow / filled, so no meaning is encoded by color alone — tooltip and `aria-label` carry directional text. Volume bars may be overlaid at reduced opacity in the lower portion of the same plot or via a companion `mj-chart` controller sharing the time scale. The `mj-chart-brush` allows zooming the time window.
+- **Notes:** Uses `time` scale on the category axis and `linear` scale on the value axis. Bullish candles (close ≥ open) and bearish candles (close < open) are coloured from `--mj-color-success` / `--mj-color-danger` and are hollow / filled, so no meaning is encoded by color alone — tooltip and `aria-label` carry directional text. Volume is not drawn by this renderer; a separate `type="volume"` chart of the same data at the same width lines up with it (same session slots and margins). There is no zoom or brushing of the time window: when there are more candles than 3 px slots, consecutive candles are merged into one session.
 
 ---
 
@@ -35,7 +36,6 @@
 - **Renderer / `type`:** `ohlc` — **Primary renderer** (`ohlc.js`, shared with `candlestick`)
 - **Controller:** `<mj-chart type="ohlc" ...>` (tick bars are the `ohlc` key's default drawing)
 - **Purpose:** Display open-high-low-close prices as vertical tick bars; preferred when many bars are shown at high density.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, bottom; value, start), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-brush`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:** Identical to Candlestick — same `candles` array.
 - **SVG primitives:** `<line>` (vertical range line), `<line>` (left tick = open), `<line>` (right tick = close), `<g>` (per-bar group)
 - **Orientation:** vertical only — same rationale as Candlestick.
@@ -50,7 +50,6 @@
 - **Renderer / `type`:** `volume` — **Primary renderer**
 - **Controller:** `<mj-chart type="volume" ...>`
 - **Purpose:** Display trading volume as vertical bars over a time axis; often paired below a Candlestick or OHLC chart.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, bottom; value, start), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -66,15 +65,14 @@
 - **Variants / modes:** Bar colour may follow price direction (bullish/bearish from `o`/`c`) or use a uniform series colour, controlled via `color-mode="direction|series"`.
 - **Events:** `mj-chart-bar-click` `{ date, volume, open, close, count }` (each session bar).
 - **Phase:** P3
-- **Notes:** Uses `time` scale + `linear` scale. Frequently composed below a candlestick/OHLC chart in a shared `<mj-dock-layout>` with a shared `mj-chart-brush`.
+- **Notes:** Uses `time` scale + `linear` scale. Frequently placed below a candlestick/OHLC chart of the same data (e.g. in a shared `<mj-dock-layout>`); at the same width its bars line up with the candles, because both renderers use the same session slots and margins. There is no shared brush or zoom.
 
 ---
 
 ### Moving Average Chart  *(MA, SMA, EMA, WMA overlay)*
-- **Renderer / `type`:** `ohlc` with `mj-chart-annotation` — **Variant of `ohlc`**
-- **Controller:** `<mj-chart type="ohlc" ...>` (price) + `<mj-chart-annotation chart="..." kind="line-series" ...>` (MA overlay)
+- **Renderer / `type`:** not implemented — `ohlc.js` draws the price candles and ignores `overlays`, so no moving-average line is drawn
+- **Controller:** none yet (`<mj-chart type="ohlc" ...>` draws the price chart without the overlay)
 - **Purpose:** Overlay one or more smoothed price-trend lines (SMA, EMA, WMA) on top of a price chart to reveal direction and momentum.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, bottom; value, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -90,18 +88,17 @@
   ```
 - **SVG primitives:** `<path>` (smoothed line per overlay via `svgdraw.js` curve builder), `<g>`, `<text>`
 - **Orientation:** vertical only (matches the host price chart).
-- **Variants / modes:** The `mj-chart-annotation` `kind="line-series"` attribute renders the overlay; multiple annotations can be stacked for SMA, EMA, WMA simultaneously.
-- **Events:** `mj-chart-candle-click` `{ t, o, h, l, c, direction, count }` from the price chart (each session); the `mj-chart-annotation` overlay emits no event.
+- **Variants / modes:** not implemented: with no overlay element, the `ohlc` renderer itself would have to draw one line per `overlays` entry with `"kind": "line"` (SMA, EMA and WMA together); it reads no `overlays` field today.
+- **Events:** `mj-chart-candle-click` `{ t, o, h, l, c, direction, count }` from the price chart (each session); the overlay lines are not drawn (not implemented).
 - **Phase:** P3
 - **Notes:** MA computation (SMA, EMA, WMA) is done in the data layer before delivery to the chart; the chart renders pre-computed overlay values. This follows the plan's principle that the renderer is a pure drawing function. The `overlays` array is an extension field in the `candles`-family envelope; unrecognised fields are ignored by chart types that do not use them.
 
 ---
 
 ### Bollinger Bands Chart  *(Keltner channels, price envelope)*
-- **Renderer / `type`:** `ohlc` with `mj-chart-annotation` — **Variant of `ohlc`**
-- **Controller:** `<mj-chart type="ohlc" ...>` + `<mj-chart-annotation chart="..." kind="band" ...>`
+- **Renderer / `type`:** not implemented — `ohlc.js` draws the price candles and ignores `overlays`, so no band is drawn
+- **Controller:** none yet (`<mj-chart type="ohlc" ...>` draws the price chart without the band)
 - **Purpose:** Overlay an upper band, a moving-average midline, and a lower band on a price chart to visualise volatility and potential reversal zones.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, bottom; value, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -121,8 +118,8 @@
   ```
 - **SVG primitives:** `<path>` (filled band area between upper/lower using `svgdraw.js` area builder), `<path>` (midline), `<g>`, `<text>`
 - **Orientation:** vertical only.
-- **Variants / modes:** `kind="band"` on `mj-chart-annotation` renders a filled envelope; the same annotation kind covers Keltner channels and Donchian channels by supplying different computed values.
-- **Events:** `mj-chart-candle-click` `{ t, o, h, l, c, direction, count }` from the price chart (each session); the `mj-chart-annotation` band emits no event.
+- **Variants / modes:** not implemented: with no overlay element, the `ohlc` renderer itself would have to draw an `overlays` entry with `"kind": "band"` as a filled envelope (the same kind would cover Keltner and Donchian channels with different computed values); it reads no `overlays` field today.
+- **Events:** `mj-chart-candle-click` `{ t, o, h, l, c, direction, count }` from the price chart (each session); the band is not drawn (not implemented).
 - **Phase:** P3
 - **Notes:** Like Moving Average, band values are pre-computed by the data layer. The filled band is rendered at reduced opacity using `--mj-chart-band-fill-opacity` token. The renderer reuses the `area` path builder from `svgdraw.js`.
 
@@ -132,7 +129,6 @@
 - **Renderer / `type`:** `waterfall` — **Primary renderer**
 - **Controller:** `<mj-chart type="waterfall" ...>`
 - **Purpose:** Show cumulative effect of sequential positive and negative contributions, revealing how an initial value reaches a final value through a series of incremental changes.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category, bottom; value, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -165,7 +161,6 @@
 - **Renderer / `type`:** `bar` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="bar" group="cluster" ...>`
 - **Purpose:** Compare planned budget figures against actual results to highlight over- and under-performance across categories or time periods.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category, bottom; value, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -182,7 +177,7 @@
 - **Variants / modes:** Uses the `bar` renderer with `group="cluster"`. An optional variance sub-chart showing the delta (`actual - budget`) may be added as a second `mj-chart` controller sharing the same category axis, using the `bar` renderer with a diverging color scale.
 - **Events:** `mj-chart-bar-click` `{ series, category, value }` (each bar).
 - **Phase:** P1
-- **Notes:** No renderer code beyond the standard `bar` renderer is needed. The "variance" interpretation is a data-layer concern. `mj-chart-annotation` may be used to add a reference line at zero variance.
+- **Notes:** No renderer code beyond the standard `bar` renderer is needed. The "variance" interpretation is a data-layer concern. The `bar` renderer always draws the zero baseline (its value domain always includes zero), which is the zero-variance line of a variance chart; no other reference line can be added.
 
 ---
 
@@ -190,7 +185,6 @@
 - **Renderer / `type`:** `line` — **Variant of `line`**
 - **Controller:** `<mj-chart type="line" ...>`
 - **Purpose:** Plot fixed costs, total costs, and total revenue as lines against production or sales volume to reveal the break-even point and profit/loss zones.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value/quantity, bottom; value/currency, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -205,10 +199,10 @@
   Uses the XY/relationship `points` shape from the plan §3.4.
 - **SVG primitives:** `<path>` (line per series), `<circle>` (intersection marker at break-even), `<text>` (zone labels), `<g>`
 - **Orientation:** `vertical` (quantity → x, currency → y). Horizontal is `n/a` — break-even charts have a conventional axis orientation.
-- **Variants / modes:** Uses the standard `line` renderer. The break-even intersection point and profit/loss zone shading are added via `mj-chart-annotation` (`kind="point"` for the intersection, `kind="band"` for zone fills).
-- **Events:** `mj-chart-line-click` `{ series, x, y }` (each point target); the `mj-chart-annotation` point and bands emit no event.
+- **Variants / modes:** Uses the standard `line` renderer, which draws the lines only: it marks no break-even point and shades no profit/loss zones. The intersection can be given as a one-point series, which always gets a marker.
+- **Events:** `mj-chart-line-click` `{ series, x, y }` (each point target).
 - **Phase:** P1
-- **Notes:** Both axes are `linear` scales. The intersection point calculation is a data-layer responsibility; the chart receives it as an annotation coordinate.
+- **Notes:** Both axes are `linear` scales. The intersection point calculation is a data-layer responsibility; the chart receives it as a one-point series.
 
 ---
 
@@ -216,7 +210,6 @@
 - **Renderer / `type`:** `tornado` — **Primary renderer**
 - **Controller:** `<mj-chart type="tornado" ...>`
 - **Purpose:** Rank variables by their impact on an outcome, showing positive and negative sensitivity ranges as horizontal diverging bars sorted by magnitude.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value, bottom; category, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -240,7 +233,7 @@
 - **Variants / modes:** `variant="butterfly"` treats `low` / `high` as magnitudes drawn to the left and right of `baseline` (population pyramid, two-sided comparison); rows keep the data order (no spread sort), values show as magnitudes on both sides, and the legend names default to "Left" / "Right" (`low_label` / `high_label` override them; tornado defaults are "Low input" / "High input").
 - **Events:** `mj-chart-bar-click` `{ label, side, value, baseline }` (each bar; `side` is `low` or `high`, `value` as drawn — a magnitude with `variant="butterfly"`).
 - **Phase:** P2
-- **Notes:** Uses `linear` scale on the value axis (diverging, centred on `baseline`), and `band` scale on the category axis. Without `variant="butterfly"` the renderer sorts rows by `(high - low)` descending before drawing so that the widest bar is always at the top. The centre baseline is drawn via `mj-chart-annotation kind="line"`.
+- **Notes:** Uses `linear` scale on the value axis (diverging, centred on `baseline`), and `band` scale on the category axis. Without `variant="butterfly"` the renderer sorts rows by `(high - low)` descending before drawing so that the widest bar is always at the top. The renderer draws the centre line at `baseline` itself, labelled "Base <value>" above the plot (unlabelled with `variant="butterfly"`).
 
 ---
 
@@ -248,7 +241,6 @@
 - **Renderer / `type`:** `waterfall` — **Variant of `waterfall`**
 - **Controller:** `<mj-chart type="waterfall" ...>`
 - **Purpose:** Decompose revenue into variable costs, contribution margin, fixed costs, and operating profit to reveal cost structure and profitability levers.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category, bottom; value, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {

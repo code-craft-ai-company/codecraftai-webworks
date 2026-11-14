@@ -1,9 +1,11 @@
 # Flow & Process Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Each entry uses this format:
 
@@ -11,7 +13,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `<key>` — **Primary renderer** | **Variant of `<key>`**
 - **Controller:** `<mj-chart type="<key>" ...>`
 - **Purpose:** one line — what this chart is best for.
-- **Decomposition:** the part components it uses.
 - **JSON shape:** the concrete data shape this chart consumes.
 - **SVG primitives:** the SVG elements the renderer emits.
 - **Orientation:** `horizontal` / `vertical` support, or `n/a`.
@@ -27,7 +28,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `sankey` — **Primary renderer**
 - **Controller:** `<mj-chart type="sankey" ...>`
 - **Purpose:** Visualise the magnitude of flow between stages or categories, with link widths proportional to flow volume.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Flow / network family (plan §3.4):
   ```json
   {
@@ -58,7 +58,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `sankey` — **Variant of `sankey`**
 - **Controller:** `<mj-chart type="sankey" mode="alluvial" ...>`
 - **Purpose:** Show how a categorical population redistributes across multiple time points or classification dimensions.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Same `nodes` / `links` envelope as `sankey`, with nodes grouped by a `group` or `time` field to define parallel column positions:
   ```json
   {
@@ -89,7 +88,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `chord` — **Primary renderer**
 - **Controller:** `<mj-chart type="chord" ...>`
 - **Purpose:** Show bidirectional or symmetric flows and relationships between groups arranged on a circle.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:** Flow / network family; a symmetric matrix expressed as `nodes` + `links` (both directions may be listed, or only the upper triangle; renderer symmetrises):
   ```json
   {
@@ -120,7 +118,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `flowchart` — **Primary renderer**
 - **Controller:** `<mj-chart type="flowchart" ...>`
 - **Purpose:** Depict a sequence of process steps, decision branches, and control flow between them.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Flow / network family; nodes carry a `shape` field; links carry an optional `label` for decision branches:
   ```json
   {
@@ -157,7 +154,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `funnel` — **Primary renderer**
 - **Controller:** `<mj-chart type="funnel" ...>`
 - **Purpose:** Show progressive reduction of a quantity through sequential stages, such as a sales or conversion pipeline.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Common envelope; `categories` name the stages and `series[0].values` give the counts or rates:
   ```json
   {
@@ -174,7 +170,7 @@ Each entry uses this format:
   - Pyramid chart — same renderer with `mode="pyramid"` (widths increase toward the last stage instead of narrowing).
 - **Events:** `mj-chart-segment-click` `{ category, value, index }` (each stage; `category` is the stage name).
 - **Phase:** P2
-- **Notes:** Width of each stage segment is proportional to its value relative to the first (largest) stage. The `linear` scale maps value → half-width. Gap between stages is configurable via a design token or attribute. Drop-off percentage between adjacent stages may be annotated via `mj-chart-value-labels`.
+- **Notes:** Width of each stage segment is proportional to its value relative to the first (largest) stage. The `linear` scale maps value → half-width. Gap between stages is configurable via a design token or attribute. The renderer always annotates the signed change between adjacent stages (e.g. `-58.0%`) at the boundary between them; each stage's value is printed in its segment, or beside it when it does not fit.
 
 ---
 
@@ -183,7 +179,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `waterfall` — **Primary renderer**
 - **Controller:** `<mj-chart type="waterfall" ...>`
 - **Purpose:** Show how an initial value increases or decreases through a sequence of positive and negative contributions to reach a final total.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` ×2, `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Common envelope; each `series[0].values` entry represents a step; a special `type` field on each value marks it as `"total"` or `"subtotal"` so the renderer can anchor it at zero:
   ```json
   {
@@ -218,7 +213,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `dependency-graph` — **Variant of `network`** (`charts/core/renderers/network.js`, layered layout by default). (An earlier draft of this entry named the type `depgraph`; the shipped key is `dependency-graph`.)
 - **Controller:** `<mj-chart type="dependency-graph" ...>`; `<mj-dependency-graph>` is a convenience wrapper for this type with the work-item data shape (see `../web-components/dependencygraph.md`, WW-1498).
 - **Purpose:** Visualise directed dependency relationships among software components, packages, or work items, with the critical path and cycles called out.
-- **Decomposition:** drawn by the renderer inside `<mj-chart>`; `mj-chart-legend` (one entry per node group, when nodes have groups), `mj-chart-title` and `mj-chart-data-table` bind as parts.
 - **JSON shape:** Flow / network family; directed links from `source` to `target`:
   ```json
   {
@@ -266,7 +260,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `network` — **Primary renderer**
 - **Controller:** `<mj-chart type="network" ...>`
 - **Purpose:** Show connections and relationships between a set of entities without implying directional flow or hierarchy.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`, `mj-chart-brush`
 - **JSON shape:** Flow / network family; nodes may carry a `group` or `category` for coloring; links carry optional `value` for line weight:
   ```json
   {
@@ -297,7 +290,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `tree` — **Primary renderer**
 - **Controller:** `<mj-chart type="tree" ...>`
 - **Purpose:** Display a hierarchical parent-child structure as a node-link tree with explicit branch connections.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Hierarchical family (plan §3.4); `root` is a recursive structure:
   ```json
   {
@@ -335,7 +327,6 @@ Each entry uses this format:
 - **Renderer / `type`:** `tree` — **Variant of `tree`**
 - **Controller:** `<mj-chart type="tree" mode="decision" ...>`
 - **Purpose:** Show branching decisions or classification splits, with edge labels carrying conditions and leaf nodes carrying outcomes.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Hierarchical family; leaf nodes carry an `outcome` or `label`; edges (encoded as `children[].edgeLabel`) carry the split condition:
   ```json
   {
@@ -363,4 +354,4 @@ Each entry uses this format:
 - **Variants / modes:** None beyond the `tree` primary.
 - **Events:** `mj-chart-node-click` `{ name, value, depth, role, path }` (each node; `path` lists the names from the root).
 - **Phase:** P4
-- **Notes:** Reuses the `tree` renderer layout engine; `mode="decision"` activates edge-label rendering via `mj-chart-annotation`-style text along connectors, and rectangular node shapes instead of circles. Node coloring can encode class purity or a probability value via the `linear` scale mapped to a diverging color ramp from design tokens.
+- **Notes:** Reuses the `tree` renderer layout engine; `mode="decision"` makes the renderer draw each node's `edgeLabel` itself, as italic text at the midpoint of the connector from its parent, and rectangular node shapes instead of circles. Node coloring can encode class purity or a probability value via the `linear` scale mapped to a diverging color ramp from design tokens.

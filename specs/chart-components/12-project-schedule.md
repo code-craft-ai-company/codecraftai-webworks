@@ -1,9 +1,11 @@
 # Project & Schedule Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 ---
 
@@ -11,7 +13,6 @@
 - **Renderer / `type`:** `gantt` — **Primary renderer** (`charts/core/renderers/gantt.js`, shared with `roadmap`)
 - **Controller:** `<mj-chart type="gantt" ...>`; `<mj-gantt-chart>` is a convenience wrapper for this type with its own data shape (see `../web-components/ganttchart.md`)
 - **Purpose:** Display project tasks as horizontal bars along a time axis, showing start dates, durations, progress, dependencies, milestones and phases at a glance.
-- **Decomposition:** drawn by the renderer inside `<mj-chart>`; `mj-chart-legend` (one entry per group), `mj-chart-title` and `mj-chart-data-table` bind as parts.
 - **JSON shape:**
   ```json
   {
@@ -66,7 +67,6 @@
 - **Renderer / `type`:** `timeline` — **Primary renderer** (`charts/core/renderers/timeline.js`, shared with `milestone`)
 - **Controller:** `<mj-chart type="timeline" ...>`
 - **Purpose:** Plot discrete events or milestones at their dates along a time axis; shows sequence, clustering, and temporal gaps without duration bars.
-- **Decomposition:** drawn by the renderer inside `<mj-chart>`; `mj-chart-legend` (statuses, else kinds, else lanes), `mj-chart-title` and `mj-chart-data-table` bind as parts.
 - **JSON shape:**
   ```json
   {
@@ -104,7 +104,6 @@
 - **Renderer / `type`:** `roadmap` — **Variant of `gantt`** (same renderer module; `<mj-chart type="gantt" variant="roadmap">` draws the same)
 - **Controller:** `<mj-chart type="roadmap" ...>`; `<mj-roadmap-chart>` is a convenience wrapper for this type with the initiative data shape (see `../web-components/roadmapchart.md`)
 - **Purpose:** Display product or project initiatives grouped by theme or team across calendar periods or Now / Next / Later buckets, emphasising planning horizons rather than precise task durations.
-- **Decomposition:** drawn by the renderer inside `<mj-chart>`; `mj-chart-legend` (one entry per status seen, with its icon), `mj-chart-title` and `mj-chart-data-table` bind as parts.
 - **JSON shape:**
   ```json
   {
@@ -147,7 +146,6 @@
 - **Renderer / `type`:** `milestone` — **Variant of `timeline`** (same renderer module; `<mj-chart type="timeline" variant="milestone">` draws the same)
 - **Controller:** `<mj-chart type="milestone" ...>`; `<mj-milestone-timeline>` is a convenience wrapper for this type with `dim-past` on and its own data shape (see `../web-components/milestonetimeline.md`)
 - **Purpose:** Highlight key project dates (deadlines, deliverables, go-live dates) as prominent markers on a time axis, with no duration bars.
-- **Decomposition:** as Timeline.
 - **JSON shape:**
   ```json
   {
@@ -174,7 +172,6 @@
 - **Renderer / `type`:** `line` — **Primary renderer** (for burndown/burnup family)
 - **Controller:** `<mj-chart type="line" ...>`
 - **Purpose:** Track remaining work (story points, tasks, or hours) against calendar time to show whether a sprint or release is on track.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, bottom; value, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -197,7 +194,7 @@
 - **Variants / modes:** The `Burnup chart` is a variant of this same renderer entry — see below.
 - **Events:** `mj-chart-line-click` `{ series, x, y }` (each point target).
 - **Phase:** P3
-- **Notes:** Uses `time` scale on the x-axis and `linear` scale on the y-axis. The "Ideal" series is a straight line from total scope to zero; the "Actual" series is the measured remaining work. `mj-chart-annotation kind="line"` marks today's date.
+- **Notes:** Uses `time` scale on the x-axis and `linear` scale on the y-axis. The "Ideal" series is a straight line from total scope to zero; the "Actual" series is the measured remaining work. Today's date is not marked: the `line` renderer draws no reference lines.
 
 ---
 
@@ -205,7 +202,6 @@
 - **Renderer / `type`:** `line` — **Variant of `line`**
 - **Controller:** `<mj-chart type="line" ...>`
 - **Purpose:** Track completed work and total scope over time; reveals scope creep by showing both the completed and the total-scope lines diverging.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, bottom; value, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -227,7 +223,7 @@
 - **Variants / modes:** Uses the standard `line` renderer; the distinction from Burndown is purely in how the data layer populates the series (completed work ascending vs remaining work descending). No renderer attribute needed.
 - **Events:** `mj-chart-line-click` `{ series, x, y }` (each point target).
 - **Phase:** P3
-- **Notes:** The area between the "Scope" and "Completed" lines may optionally be filled using `mj-chart-annotation kind="band"` to highlight the gap. Scope creep is visible when the "Scope" line rises; a flat "Scope" line with a rising "Completed" line indicates a healthy burnup.
+- **Notes:** The area between the "Scope" and "Completed" lines is not filled: the `line` renderer draws no band between two series. Scope creep is visible when the "Scope" line rises; a flat "Scope" line with a rising "Completed" line indicates a healthy burnup.
 
 ---
 
@@ -235,7 +231,6 @@
 - **Renderer / `type`:** `area` — **Variant of `area`**
 - **Controller:** `<mj-chart type="area" group="stack" ...>`
 - **Purpose:** Visualise the quantity of work in each workflow state (backlog, in-progress, done, etc.) over time using stacked bands, revealing bottlenecks and cycle time.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, bottom; value, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -263,7 +258,6 @@
 - **Renderer / `type`:** `kanban` — **Primary renderer**
 - **Controller:** `<mj-chart type="kanban" ...>`
 - **Purpose:** Snapshot the count (or list) of work items in each workflow column at a point in time; shows work-in-progress limits and column load.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category/column, bottom; value/count, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -293,7 +287,7 @@
 - **Variants / modes:** `variant="count"` draws a bar per column of its item count with the WIP limit marked as a dashed line (an over-limit column's bar in `--mj-color-danger`), when item-level detail is not needed; it is drawn by `kanban.js`, not the `bar` renderer. Cards that do not fit a column are summarised by a focusable "+N more" mark; every card is listed in the data table.
 - **Events:** `mj-chart-card-click` `{ column, id, label }`; `mj-chart-overflow-click` `{ column, hidden, items }` (the "+N more" mark); `mj-chart-column-click` `{ column, count, wipLimit }` (count variant).
 - **Phase:** P3
-- **Notes:** The Kanban chart is the only chart in this category whose primary visual is a card-based layout rather than a Cartesian plot. Item cards are `<rect>` + `<text>` groups; priority is encoded by a left-border colour stripe and an `aria-label` (not colour alone). WIP-limit violations are flagged by changing the column background colour using a `--mj-chart-wip-exceeded` token and adding an `aria-alert` annotation. Uses `band` scale for columns. The `mj-chart-annotation kind="line"` draws the WIP limit bar.
+- **Notes:** The Kanban chart is the only chart in this category whose primary visual is a card-based layout rather than a Cartesian plot. Item cards are `<rect>` + `<text>` groups; priority is encoded by a left-border colour stripe and an `aria-label` (not colour alone). WIP-limit violations are flagged by changing the column background colour using a `--mj-chart-wip-exceeded` token and adding an `aria-alert` annotation. Uses `band` scale for columns. The renderer draws the WIP-limit line itself from the column's `wip-limit`: on the horizontal board, a dashed line under the last card within the limit of an over-limit column (the vertical layout draws none); with `variant="count"`, a dashed line at the limit on every column that has one.
 
 ---
 
@@ -301,7 +295,6 @@
 - **Renderer / `type`:** `resource-allocation` — **Primary renderer** (`charts/core/renderers/resource.js`)
 - **Controller:** `<mj-chart type="resource-allocation" ...>`
 - **Purpose:** Show how people or resources are allocated across tasks or projects over time; reveals over-allocation, under-utilisation, and scheduling conflicts.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, top; category/resource, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-brush`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -333,4 +326,4 @@
 - **Variants / modes:** `variant="heatmap"` collapses each resource row to a single band whose colour shows the utilisation (summed load / capacity) of each period — under 50 %, 50–89 %, 90–100 %, over capacity (`--mj-color-danger`) — instead of stacked allocation bars, useful for many resources over long time horizons.
 - **Events:** `mj-chart-allocation-click` — allocation bars `{ resource, task, start, end, load }`; heatmap cells `{ resource, start, end, load, utilization }`; over-capacity flags `{ resource, start, end, load, overAllocated }`.
 - **Phase:** P3
-- **Notes:** Uses `time` scale on the horizontal axis and `band` scale on the vertical (resource/row) axis. Over-allocation (`load` sum > `capacity` in an interval) is highlighted using `--mj-chart-overload` colour token and an `aria-label` warning; pattern fill is used alongside colour. `mj-chart-brush` enables horizontal time-range zoom. The renderer stacks multiple allocation bars vertically within a single resource row when tasks overlap in time.
+- **Notes:** Uses `time` scale on the horizontal axis and `band` scale on the vertical (resource/row) axis. Over-allocation (`load` sum > `capacity` in an interval) is highlighted using `--mj-chart-overload` colour token and an `aria-label` warning; pattern fill is used alongside colour. There is no time-range zoom: the time axis always spans every allocation. The renderer stacks multiple allocation bars vertically within a single resource row when tasks overlap in time.

@@ -1,9 +1,11 @@
 # Statistical & Analytical Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Charts in this category visualize statistical summaries, model diagnostics,
 clinical measurements, and process quality data. Several entries (box plot,
@@ -21,9 +23,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Purpose:** Display five-number summary statistics (min, Q1, median, Q3,
   max) with optional outliers for one or more groups; best for comparing
   distributions across categories at a glance.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -74,9 +73,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Purpose:** Show the full distribution shape (kernel-density estimate) of
   one or more groups; richer than a box plot when the distribution is
   multi-modal or skewed.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -129,9 +125,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Purpose:** Overlay symmetric or asymmetric error bars (standard deviation,
   standard error, or confidence interval) on a point or bar chart; best for
   showing measurement uncertainty or variability alongside central values.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -181,9 +174,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Purpose:** Visualise point estimates with explicit lower and upper
   confidence-interval bounds across multiple parameters or time points; best
   for presenting regression coefficients, survey estimates, or model outputs.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -221,7 +211,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   its default. It draws intervals only — a dot at each point estimate with its
   whisker, never a bar — and a dashed reference line at `null-value`
   (default 0) that is always drawn and always kept in the value domain. The
-  renderer draws the line itself; no `<mj-chart-annotation>` is needed.
+  renderer draws the line itself.
 
 ---
 
@@ -232,9 +222,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Purpose:** Monitor a process variable over time against statistical control
   limits (UCL / LCL / centre line); best for detecting out-of-control signals
   in manufacturing, operations, or quality contexts.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time/sequence + value),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`, `mj-chart-crosshair`
 - **JSON shape:**
   ```json
   {
@@ -296,9 +283,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   trends, cycles, and shifts before formal control limits are established;
   simpler and more honest than a control chart when limits cannot yet be
   calculated.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (sequence + value),
-  `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`,
-  `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -347,9 +331,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Purpose:** Assess agreement between two measurement methods by plotting
   their difference against their mean; best for clinical measurement validation
   and method-comparison studies.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value + value),
-  `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -382,9 +363,10 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   the renderer is unchanged.
 - **Events:** none (not implemented).
 - **Phase:** P3
-- **Notes:** The three annotation lines (mean, upper LoA, lower LoA) are
-  injected into the model as horizontal `<mj-chart-annotation>` entries so
-  they participate in axis scale computation. Scales: `linear` (x and y).
+- **Notes:** No `bland-altman` renderer is registered yet. The three
+  reference lines (mean, upper LoA, lower LoA) would be drawn by that
+  renderer itself from `limits`, with the limits included in the y-axis
+  domain. Scales: `linear` (x and y).
   Accessibility: data-table lists per-subject mean and difference values plus
   the limit values.
 
@@ -397,9 +379,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Purpose:** Evaluate binary classifier performance across all decision
   thresholds by plotting true-positive rate against false-positive rate; best
   for model selection and threshold optimisation.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (FPR + TPR),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -446,9 +425,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Controller:** `<mj-chart type="precision-recall" ...>`
 - **Purpose:** Evaluate classifier performance when class imbalance makes ROC
   analysis misleading; plots precision against recall across thresholds.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (recall + precision),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -488,9 +464,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Purpose:** Show how much better a model targets positive cases compared to
   random selection, expressed as a ratio against population percentage contacted;
   best for direct-marketing and campaign-optimisation decisions.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (% population + lift
-  or % captured), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`,
-  `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -532,9 +505,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Controller:** `<mj-chart type="calibration" ...>`
 - **Purpose:** Compare a classifier's predicted probabilities against observed
   event rates (binned) to assess and communicate model calibration quality.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (predicted + observed),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -579,9 +549,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Purpose:** Plot the estimated probability of surviving (or not experiencing
   an event) beyond each time point; umbrella entry for the step-function
   survival curve family.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time + probability),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -636,9 +603,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Purpose:** Display Kaplan-Meier survival estimates for one or more cohorts,
   with censored-observation ticks, optional confidence bands, and at-risk
   tables; the most common form of survival analysis in clinical research.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time + survival),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -682,9 +646,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   differences) and their confidence intervals across multiple studies or
   subgroups, with an optional pooled-estimate diamond; best for meta-analysis
   and subgroup analysis reporting.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value + category),
-  `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -728,8 +689,8 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Events:** `mj-chart-study-click` `{ series, category, value, ci_lower, ci_upper, weight }` (each study row); `mj-chart-pooled-click` `{ value, ci_lower, ci_upper, label }` (the pooled diamond).
 - **Phase:** P3
 - **Notes:** Study labels are rendered as `<text>` to the left of the plot
-  area; the plot SVG must leave left padding sufficient for the longest label,
-  or labels go in a separate `<mj-chart-axis>` with `kind="category"`.
+  area; the renderer sizes the left margin to the longest label (at most 30%
+  of the chart width) and shortens a longer label with an ellipsis.
   Scales: `linear` or `log` (x), `band` (y). Accessibility: data-table lists
   study name, point estimate, lower CI, upper CI, and weight for each row.
 
@@ -742,9 +703,6 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Purpose:** Detect publication bias or small-study effects in a meta-analysis
   by plotting study effect sizes against a precision measure (standard error,
   sample size); best for systematic reviews and meta-analytic reporting.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (effect + precision),
-  `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {

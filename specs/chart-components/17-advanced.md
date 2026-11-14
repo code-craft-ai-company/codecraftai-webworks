@@ -1,9 +1,11 @@
 # Less Common & Advanced Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Several entries in this category relate to renderers defined elsewhere:
 Node-link diagram, matrix plot, and edge bundling all reuse or extend the
@@ -22,8 +24,6 @@ noted per entry.
 - **Purpose:** Partition a 2-D plane into nearest-neighbor regions around a set
   of seed points, used for proximity analysis, interactive hit-testing overlays,
   and geographic nearest-facility maps.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-legend`, `mj-chart-axis` × 2, `mj-chart-grid`
 - **JSON shape:**
   ```json
   {
@@ -60,8 +60,6 @@ noted per entry.
 - **Purpose:** Show the distribution of individual observations as non-overlapping
   dots arranged along one axis, preserving every data point while avoiding
   overplotting.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` × 1, `mj-chart-title`,
-  `mj-chart-legend`, `mj-chart-tooltip`, `mj-chart-grid`
 - **JSON shape:**
   ```json
   {
@@ -90,8 +88,8 @@ noted per entry.
   sorted by value and placed at the closest available y-position (for horizontal
   orientation) that does not intersect any placed dot. The algorithm runs in the
   renderer. The single axis maps the data dimension; the perpendicular axis has
-  no semantic meaning (jitter only) and no `<mj-chart-axis>` is needed on that
-  side.
+  no semantic meaning (jitter only), so the renderer draws ticks on the value
+  axis only.
 
 ---
 
@@ -101,8 +99,6 @@ noted per entry.
 - **Purpose:** Display relationships between nodes arranged on a single line,
   with arcs of varying height drawn above (or below) the line to represent edges,
   making cyclic or hierarchical relationships readable without 2-D node layout.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -139,8 +135,6 @@ noted per entry.
 - **Purpose:** Represent network or pairwise relationship data as a symmetric
   grid where each cell encodes the presence, count, or weight of an edge between
   two nodes, making community structure readable without hairball layouts.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` × 2, `mj-chart-title`,
-  `mj-chart-legend`, `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -181,8 +175,6 @@ noted per entry.
 - **Purpose:** Visualize entity relationships as a spatial network of nodes and
   edges where a force simulation positions nodes to minimize crossings and
   surface cluster structure.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -224,8 +216,6 @@ noted per entry.
 - **Purpose:** Simplify visually dense networks by routing edges along a shared
   hierarchy so that edges between nodes in the same cluster are drawn close
   together, reducing perceived hairball complexity.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -263,8 +253,6 @@ noted per entry.
 - **Purpose:** Show a continuous metric across every day of one or more calendar
   years as a color-encoded grid aligned to weeks and months, revealing seasonal
   or weekly activity patterns.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -289,8 +277,8 @@ noted per entry.
 - **Notes:** The renderer builds a `time` scale over the date range and a `band`
   scale for day-of-week. Missing dates are rendered as low-opacity empty cells.
   Month boundary labels are placed at the start of each month's first week
-  column. `<mj-chart-annotation>` can highlight a specific date range (e.g. a
-  holiday). Relationship to `heatmap-table`: the calendar heatmap is a pure-SVG
+  column. A specific date range (e.g. a holiday) cannot be highlighted.
+  Relationship to `heatmap-table`: the calendar heatmap is a pure-SVG
   time-structured grid; the heatmap-table is a DOM-table with arbitrary row/column
   dimensions.
 
@@ -302,8 +290,6 @@ noted per entry.
 - **Purpose:** Map a time series onto an Archimedean spiral so that repeating
   cycles (days of the week, months of the year) align radially, making periodic
   patterns and anomalies immediately visible.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-legend`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -344,8 +330,6 @@ noted per entry.
   encoding magnitude as the radius of equal-angle sectors, combining the
   readability of a bar chart with a circular layout that emphasizes cyclicality
   or closure.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -370,8 +354,8 @@ noted per entry.
 - **Notes:** Each sector subtends an equal angle (`2π / N` where N = category
   count). Radius is mapped by a `sqrt` scale from data value to pixel radius,
   so sector area encodes value. Series stack radially within each sector. The
-  radial axis is drawn by a specialized configuration of
-  `<mj-chart-axis kind="radial">`.
+  renderer draws the radial axis itself: grid rings at the value ticks, spokes
+  on the sector boundaries, and tick labels along the boundary nearest north.
 
 ---
 
@@ -381,8 +365,6 @@ noted per entry.
 - **Purpose:** Like the Nightingale rose but with sector angles proportional to
   category values (rather than equal-angle sectors), so that both angle and
   radius encode magnitude — analogous to a polar pie chart.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`
 - **JSON shape:** identical to `nightingale` (common envelope with `categories`
   and `series[].values`).
 - **SVG primitives:** `<path>` (arc-wedge with both angle and radius varying per
@@ -408,8 +390,6 @@ noted per entry.
 - **Purpose:** Display geographic regions as equal-sized tiles arranged in a
   grid that approximately preserves spatial layout, eliminating area distortion
   and making small regions visible while preserving coarse geographic intuition.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -449,8 +429,6 @@ noted per entry.
 - **Purpose:** Repeat the same chart type across independent panels, one per
   value of a facet dimension, so that patterns within each group can be compared
   on identical scales without overplotting.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`, `mj-chart-axis` × 2
 - **JSON shape:**
   ```json
   {
@@ -485,7 +463,7 @@ noted per entry.
 - **Notes:** The `faceted` renderer is a meta-layout: it calls the `childType`
   renderer function once per panel with a sub-region of the plot surface. It does
   not spawn child `<mj-chart>` controllers; instead it allocates sub-`<g>` regions
-  within the single `<mj-chart-plot>` SVG. When `sharedScales: true`, domains
+  within the chart's single SVG. When `sharedScales: true`, domains
   are unioned across all panels before any panel is drawn. Axes appear only on
   border panels to reduce clutter. Relationship to `small-multiples-table`
   (category 16): that renderer arranges panels in a DOM-table grid; `faceted`
@@ -499,8 +477,6 @@ noted per entry.
 - **Purpose:** Encode multiple variables per observation as the features of a
   cartoon face (eye size, brow angle, mouth curve, nose length, face width), exploiting
   human pattern recognition for multivariate outlier detection in small datasets.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -545,8 +521,6 @@ noted per entry.
 - **Purpose:** Encode multiple variables per observation as the shape of a
   repeated visual symbol (star, radar polygon, or custom glyph), enabling
   multivariate comparison at a glance across a grid of observations.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -590,8 +564,6 @@ noted per entry.
 - **Purpose:** Represent very large discrete datasets as a dense grid of
   colored pixels where each pixel encodes one observation or one aggregate bin,
   maximizing information density when individual marks would overlap completely.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` × 2, `mj-chart-title`,
-  `mj-chart-legend`, `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {

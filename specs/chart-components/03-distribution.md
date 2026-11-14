@@ -1,9 +1,11 @@
 # Distribution Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Distribution charts show how values spread across a range — their shape,
 density, summary statistics, and outliers. Most renderers derive their geometry
@@ -16,7 +18,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Renderer / `type`:** `histogram` — **Primary renderer**
 - **Controller:** `<mj-chart type="histogram" ...>`
 - **Purpose:** Show the frequency distribution of a continuous variable by grouping values into equal-width (or custom-width) bins.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value — count/frequency, category — bin ranges), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`, `mj-chart-value-labels`
 - **JSON shape:**
   ```json
   {
@@ -64,7 +65,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Renderer / `type`:** `histogram` — **Variant of `histogram`**
 - **Controller:** `<mj-chart type="histogram" normalize="density" smooth="kde" ...>`
 - **Purpose:** Show the smoothed continuous probability density of a variable, emphasising shape over bin count.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value — density, category — continuous range), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:** Same as Histogram — `samples: [n …]` array per series. The renderer derives KDE internally from raw samples; pre-binned `bins` input is also accepted and converted to a smooth curve estimate.
   ```json
   {
@@ -88,7 +88,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Renderer / `type`:** `boxplot` — **Primary renderer**
 - **Controller:** `<mj-chart type="boxplot" ...>`
 - **Purpose:** Summarise a distribution's median, interquartile range, and outliers as a compact five-number summary, enabling quick comparison across groups.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value — continuous, category — group labels), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   Raw samples (renderer computes the five-number summary):
   ```json
@@ -141,7 +140,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Renderer / `type`:** `violin` — **Primary renderer**
 - **Controller:** `<mj-chart type="violin" ...>`
 - **Purpose:** Show the full distribution shape and density for each group using a mirrored KDE silhouette, revealing multimodality that a box plot hides.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value — continuous, category — group labels), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:** Same `samples` per group structure as Box Plot:
   ```json
   {
@@ -175,7 +173,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Renderer / `type`:** `strip` — **Primary renderer**
 - **Controller:** `<mj-chart type="strip" ...>`
 - **Purpose:** Display every individual data point along a categorical axis to expose the raw distribution without binning or smoothing.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value — continuous, category — group labels), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -209,7 +206,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Renderer / `type`:** `strip` — **Variant of `strip`**
 - **Controller:** `<mj-chart type="strip" jitter="swarm" ...>`
 - **Purpose:** Display individual data points along a categorical axis without overlap, using a force-directed beeswarm layout so every point is visible.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value — continuous, category — group labels), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:** Identical to Strip Plot — `groups[].samples` array per series/category.
 - **SVG primitives:** `<circle>` (one per data point, placed by swarm algorithm), `<g>` (per-group)
 - **Orientation:** `vertical` and `horizontal`; the swarm expands perpendicular to the value axis.
@@ -224,7 +220,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Renderer / `type`:** `rug` — **Primary renderer**
 - **Controller:** `<mj-chart type="rug" ...>`
 - **Purpose:** Display the marginal distribution of a variable as a row of tick marks along an axis — typically combined with a scatter or density plot to annotate where observations fall.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value — continuous), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -236,11 +231,11 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
   }
   ```
 - **SVG primitives:** `<line>` (one short vertical or horizontal tick per observation), `<g>` (per-series)
-- **Orientation:** `horizontal` (ticks run vertically along a horizontal value axis) and `vertical` (ticks run horizontally along a vertical value axis). The rug is rendered as a thin strip; `height` / `width` of the `mj-chart-plot` element controls the strip thickness.
-- **Variants / modes:** No standalone variants; the rug renderer is most often composed as an `overlay` on a scatter or density chart using `<mj-chart-annotation>` or a secondary `mj-chart-plot` sharing the same controller.
+- **Orientation:** `horizontal` (ticks run vertically along a horizontal value axis) and `vertical` (ticks run horizontally along a vertical value axis). The rug is rendered as a thin strip per series (at most 36 px); the `tick-height` attribute sets the tick length (default 70% of the strip).
+- **Variants / modes:** No standalone variants. The rug is drawn as a chart of its own, with its own value axis; it cannot be overlaid on a scatter or density chart.
 - **Events:** `mj-chart-rug-click` `{ series, value }` (each tick).
 - **Phase:** P2
-- **Notes:** Tick opacity is reduced for overlapping observations. The renderer intentionally has no value axis — ticks are purely positional along a shared scale owned by the parent controller. Scales: `linear` for the value axis (shared with host chart when used as overlay).
+- **Notes:** Tick opacity is reduced for overlapping observations. The renderer draws its own value axis (ticks and labels) on a scale fitted to the samples. Scales: `linear` for the value axis.
 
 ---
 
@@ -248,7 +243,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Renderer / `type`:** `dothistogram` — **Primary renderer**
 - **Controller:** `<mj-chart type="dothistogram" ...>`
 - **Purpose:** Show count distributions using stacked dots instead of bars, making individual counts readable and preserving a data-density feel.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value — count, category — bin ranges), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:** Identical envelope to Histogram — `samples: [n …]` or `bins: [{ x0, x1, count }]` per series:
   ```json
   {
@@ -279,7 +273,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Renderer / `type`:** `ridgeline` — **Primary renderer**
 - **Controller:** `<mj-chart type="ridgeline" ...>`
 - **Purpose:** Compare distribution shapes across many groups by displaying partially overlapping density curves (or histograms) in offset rows — effective for showing change across time periods or categories.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value — continuous, category — group labels on an offset y scale), `mj-chart-title`, `mj-chart-legend`, `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -316,7 +309,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Renderer / `type`:** `qqplot` — **Primary renderer**
 - **Controller:** `<mj-chart type="qqplot" ...>`
 - **Purpose:** Assess how closely an observed distribution matches a theoretical distribution (or another empirical distribution) by plotting quantiles against each other; deviations from the diagonal reveal skew, heavy tails, or other departures.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x — theoretical quantiles, y — observed quantiles), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-annotation` (45° reference line), `mj-chart-data-table`
 - **JSON shape:**
   Single-sample against a theoretical distribution:
   ```json
@@ -341,12 +333,12 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
     ]
   }
   ```
-- **SVG primitives:** `<circle>` (one per quantile pair), `<line>` (45° reference line, rendered via `mj-chart-annotation`), `<g>` (per-series)
+- **SVG primitives:** `<circle>` (one per quantile pair), `<line>` (dashed 45° reference line, drawn by the renderer), `<g>` (per-series)
 - **Orientation:** `n/a` — x always carries theoretical/reference quantiles; y always carries observed quantiles.
 - **Variants / modes:** `theoretical` field accepts `"normal"`, `"uniform"`, `"exponential"`, or `"lognormal"` for single-sample mode; omitting it and providing two series activates empirical-vs-empirical mode.
 - **Events:** `mj-chart-qq-click` `{ series, theoretical, observed }` (each point).
 - **Phase:** P3
-- **Notes:** The renderer sorts `samples`, computes empirical quantiles at equally-spaced probability points, then maps them against the theoretical inverse CDF (percent-point function). For two-sample mode the shorter sample's quantiles are interpolated to align with the longer. Scales: `linear` on both axes with symmetric domain expansion to show the diagonal clearly. The 45° reference line is injected as an `mj-chart-annotation` reference-line record.
+- **Notes:** The renderer sorts `samples`, computes empirical quantiles at equally-spaced probability points, then maps them against the theoretical inverse CDF (percent-point function). For two-sample mode the shorter sample's quantiles are interpolated to align with the longer. Scales: `linear` on both axes with symmetric domain expansion to show the diagonal clearly. The renderer draws the dashed reference line itself: y = x by default, or the line through the first- and third-quartile pairs with `reference="quartile"`.
 
 ---
 
@@ -354,7 +346,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Renderer / `type`:** `cdf` — **Primary renderer**
 - **Controller:** `<mj-chart type="cdf" ...>`
 - **Purpose:** Show what fraction of observations fall at or below (or above) each value — useful for reading off percentiles and comparing distributions by their cumulative shape.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value — continuous, cumulative — 0–1 or 0–100%), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   Raw samples (renderer computes the empirical CDF):
   ```json
@@ -385,7 +376,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
     ]
   }
   ```
-- **SVG primitives:** `<path>` (step-function line per series for ECDF; smooth curve for theoretical CDF), `<circle>` (optional step markers), `<line>` (optional reference percentile annotations), `<g>` (per-series)
+- **SVG primitives:** `<path>` (step-function line per series for ECDF; smooth curve for theoretical CDF), `<circle>` (optional step markers), `<g>` (per-series)
 - **Orientation:** `vertical` (value on x, cumulative probability on y — default) and `horizontal` (cumulative probability on x, value on y — "percentile" orientation).
 - **Variants / modes:**
   - `direction="ascending"` (default) — fraction at or below.
@@ -394,7 +385,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
   - `smooth="true"` — connects points with a monotone spline instead of a step function (appropriate for pre-computed theoretical CDFs).
 - **Events:** `mj-chart-cdf-point-click` `{ series, x, y }` (each step point; `y` as plotted, after `direction` and `scale="percent"`); when markers are off (`markers="false"`, or `auto` with more than 60 distinct values) the line is the mark and emits `mj-chart-cdf-click` `{ series }`.
 - **Phase:** P2
-- **Notes:** The ECDF is computed by sorting `samples` and assigning rank/(n) as cumulative probability. Scales: `linear` for both axes. Reference annotation lines (e.g., p50, p95, p99) can be added via `mj-chart-annotation`.
+- **Notes:** The ECDF is computed by sorting `samples` and assigning rank/(n) as cumulative probability. Scales: `linear` for both axes. No reference percentile lines (e.g., p50, p95, p99) are drawn.
 
 ---
 
@@ -402,7 +393,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Renderer / `type`:** `histogram` — **Variant of `histogram`**
 - **Controller:** `<mj-chart type="histogram" display="polygon" ...>`
 - **Purpose:** Show distribution trends across bins as a connected line through bin midpoints rather than as bars — makes multi-series comparisons easier to read when bars would overlap.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value — count/frequency, category — bin ranges), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:** Identical to Histogram — `samples: [n …]` or `bins: [{ x0, x1, count }]` per series. Bins are computed the same way; only the rendering pass changes.
   ```json
   {

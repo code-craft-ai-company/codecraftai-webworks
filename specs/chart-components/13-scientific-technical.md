@@ -1,9 +1,11 @@
 # Scientific & Technical Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Charts in this category visualize quantitative, physical, and engineering data
 that require specialized coordinate systems, derived scales, or domain-specific
@@ -15,7 +17,6 @@ drawing conventions.
 - **Renderer / `type`:** `contour` — **Primary renderer**
 - **Controller:** `<mj-chart type="contour" ...>`
 - **Purpose:** Represent a scalar field `z = f(x, y)` in 2-D by drawing iso-value curves (contours), making a 3-D surface readable on a flat plane.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` × 2 (x and y, both `kind="value"`), `mj-chart-grid`, `mj-chart-legend` (color-band legend for the z scale), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -45,7 +46,6 @@ drawing conventions.
 - **Renderer / `type`:** `surface` — **Primary renderer**
 - **Controller:** `<mj-chart type="surface" ...>`
 - **Purpose:** Show the shape of a 3-D function `z = f(x, y)` as a shaded or wireframe mesh projected onto 2-D SVG using a parallel-oblique or isometric projection.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` × 3 (x, y, z axes rendered as angled SVG lines), `mj-chart-legend` (z color legend), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -68,7 +68,7 @@ drawing conventions.
   - `style: "both"` — shaded faces with wireframe overlay.
 - **Events:** `mj-chart-surface-click` `{ row, col, x0, x1, y0, y1, corners, zAvg }` (each face: its grid cell, x / y extent, four corner values and their mean).
 - **Phase:** P4
-- **Notes:** Rendered entirely as a 2-D SVG projection; no WebGL. The projection transform (isometric or oblique) is computed in `svgdraw.js`. Faces are sorted by painter's algorithm (furthest-center-y first) before emitting `<polygon>` elements so nearer faces paint over farther ones. The z scale maps to the sequential color ramp from design tokens. The three projected axis legs are drawn as `<line>` elements by `mj-chart-axis` in a special `kind="projected"` mode unique to this renderer.
+- **Notes:** Rendered entirely as a 2-D SVG projection; no WebGL. The projection transform (isometric or oblique) is computed in `svgdraw.js`. Faces are sorted by painter's algorithm (furthest-center-y first) before emitting `<polygon>` elements so nearer faces paint over farther ones. The z scale maps to the sequential color ramp from design tokens. The renderer draws the three projected axis legs itself as `<line>` elements (x and y along the floor, z up the left-most corner), with ticks, tick labels and the `meta.xLabel` / `yLabel` / `zLabel` titles.
 
 ---
 
@@ -76,7 +76,6 @@ drawing conventions.
 - **Renderer / `type`:** `phase` — **Primary renderer**
 - **Controller:** `<mj-chart type="phase" ...>`
 - **Purpose:** Delineate regions (phases, states, stability regimes) in a 2-D parameter space, typically with boundary curves separating named regions.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` × 2 (both `kind="value"`), `mj-chart-grid`, `mj-chart-legend` (region labels), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -98,7 +97,7 @@ drawing conventions.
 - **Variants / modes:** None; boundary styles cover common sub-types.
 - **Events:** `mj-chart-phase-region-click` `{ name, index }` (each region); `mj-chart-phase-boundary-click` `{ name }` (each boundary curve); `mj-chart-phase-point-click` `{ name, x, y }` (each special point).
 - **Phase:** P4
-- **Notes:** Regions are drawn back-to-front by array order. Boundary paths support both straight-line segments and spline curves (pass `"curve": "monotone-x"` on a boundary to enable cubic interpolation via `svgdraw.js`). Scales are `linear` or `log` independently per axis — the `scale` attribute on each `mj-chart-axis` drives this. Accessibility: each region polygon carries `aria-label` set to the region name.
+- **Notes:** Regions are drawn back-to-front by array order. Boundary paths support both straight-line segments and spline curves (pass `"curve": "monotone-x"` on a boundary to enable cubic interpolation via `svgdraw.js`). Scales are `linear` or `log` independently per axis — the `scale-x` / `scale-y` attributes (or the data's `xScale` / `yScale`) drive this. Accessibility: each region polygon carries `aria-label` set to the region name.
 
 ---
 
@@ -106,7 +105,6 @@ drawing conventions.
 - **Renderer / `type`:** `vectorfield` — **Primary renderer**
 - **Controller:** `<mj-chart type="vectorfield" ...>`
 - **Purpose:** Display the direction and magnitude of a 2-D vector field `(u, v) = F(x, y)` as a regular or irregular grid of arrows.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` × 2 (both `kind="value"`), `mj-chart-grid`, `mj-chart-legend` (magnitude color scale), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -135,7 +133,6 @@ drawing conventions.
 - **Renderer / `type`:** `streamline` — **Primary renderer**
 - **Controller:** `<mj-chart type="streamline" ...>`
 - **Purpose:** Show the paths that massless particles would follow in a 2-D vector field, revealing overall flow structure (sources, sinks, vortices).
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` × 2 (both `kind="value"`), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -159,7 +156,7 @@ drawing conventions.
   - Pre-computed paths — skip integration, render supplied `lines` directly.
 - **Events:** `mj-chart-streamline-click` `{ index, seed, points, meanSpeed }` (each line; `points` is its point count).
 - **Phase:** P4
-- **Notes:** The RK4 integrator runs in `chartmodel.js` at model-build time; the renderer receives ready-to-draw polylines. Bilinear interpolation of the `(u, v)` grid is done inside the integrator. Integration stops at `maxSteps`, on leaving the domain, or when speed drops below a tolerance. Streamlines share the vector-field grid format; when both `type="streamline"` and a quiver overlay are desired, a second `mj-chart-plot` referencing the same controller with `type="vectorfield"` can be layered.
+- **Notes:** The RK4 integrator runs in `chartmodel.js` at model-build time; the renderer receives ready-to-draw polylines. Bilinear interpolation of the `(u, v)` grid is done inside the integrator. Integration stops at `maxSteps`, on leaving the domain, or when speed drops below a tolerance. Streamlines share the vector-field grid format, so the same data can feed a separate `type="vectorfield"` chart; a quiver overlay cannot be layered on the streamlines.
 
 ---
 
@@ -167,7 +164,6 @@ drawing conventions.
 - **Renderer / `type`:** `spectrogram` — **Primary renderer**
 - **Controller:** `<mj-chart type="spectrogram" ...>`
 - **Purpose:** Display signal energy as a function of both time (x) and frequency (y), using color intensity to encode amplitude or power.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` × 2 (`kind="time"` on x, `kind="value"` on y for frequency), `mj-chart-legend` (color/amplitude scale), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -195,7 +191,6 @@ drawing conventions.
 - **Renderer / `type`:** `polar` — **Primary renderer**
 - **Controller:** `<mj-chart type="polar" ...>`
 - **Purpose:** Plot data in a circular coordinate system where angle encodes one variable and radius encodes another — suited to circular or angular data such as directional measurements and periodic phenomena.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (radial, `kind="value"` for the r axis), `mj-chart-axis` (angular, `kind="angular"` for the θ axis — ring of labels), `mj-chart-grid` (concentric-ring and spoke gridlines), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -233,7 +228,6 @@ drawing conventions.
 - **Renderer / `type`:** `wind-rose` — **Variant of `polar`**
 - **Controller:** `<mj-chart type="wind-rose" ...>`
 - **Purpose:** Show the frequency and intensity distribution of wind (or any directional measurement) across compass directions using variable-length petals or wedge bars.
-- **Decomposition:** Same as `polar`: `mj-chart-plot`, `mj-chart-axis` (radial and angular), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -261,7 +255,6 @@ drawing conventions.
 - **Renderer / `type`:** `nightingale` — **Variant of `polar`**
 - **Controller:** `<mj-chart type="nightingale" ...>`
 - **Purpose:** Display part-to-whole proportions across categorical sectors arranged in a circle, where sector area (radius) encodes value — as invented by Florence Nightingale.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (radial value axis), `mj-chart-grid` (concentric rings), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -288,7 +281,6 @@ drawing conventions.
 - **Renderer / `type`:** `ternary` — **Primary renderer**
 - **Controller:** `<mj-chart type="ternary" ...>`
 - **Purpose:** Display three-component compositional data (where components sum to 100%) inside an equilateral triangle, with each vertex representing 100% of one component.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` × 3 (one per edge, `kind="ternary-axis"`), `mj-chart-grid` (ternary gridlines parallel to each side), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -317,7 +309,7 @@ drawing conventions.
   - Region overlay — named zones drawn as filled polygons from the `regions` array.
 - **Events:** `mj-chart-ternary-click` `{ series, a, b, c }` (each point; the components as given, not normalised).
 - **Phase:** P4
-- **Notes:** The ternary-to-Cartesian transform (`x = b + c/2`, `y = c * sqrt(3)/2`, normalized to the triangle height) lives in `svgdraw.js`. The three `mj-chart-axis` elements use `kind="ternary-axis"` and render tick marks and labels along the three edges. Gridlines are lines parallel to each side, spaced at equal-percentage intervals. Region polygons are converted to SVG pixel coordinates the same way as data points.
+- **Notes:** The ternary-to-Cartesian transform (`x = b + c/2`, `y = c * sqrt(3)/2`, normalized to the triangle height) lives in `svgdraw.js`. The renderer draws the three edge axes itself: percentage labels along each edge and the `meta.aLabel` / `bLabel` / `cLabel` names at the vertices. Gridlines are lines parallel to each side, spaced at equal-percentage intervals. Region polygons are converted to SVG pixel coordinates the same way as data points.
 
 ---
 
@@ -325,7 +317,6 @@ drawing conventions.
 - **Renderer / `type`:** `line` — **Variant of `line`** (scale-mode variant)
 - **Controller:** `<mj-chart type="line" scale-x="log" scale-y="log" ...>`
 - **Purpose:** Reveal power-law relationships `y = ax^b` as straight lines by plotting both axes on logarithmic scales; the slope equals the exponent `b`.
-- **Decomposition:** Identical to `line`: `mj-chart-plot`, `mj-chart-axis` × 2 (both with `scale="log"`), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -358,7 +349,6 @@ drawing conventions.
 - **Renderer / `type`:** `line` — **Variant of `line`** (scale-mode variant)
 - **Controller:** `<mj-chart type="line" scale-y="log" ...>` (or `scale-x="log"` for semi-log X)
 - **Purpose:** Expose exponential growth or decay as a straight line by applying a logarithmic scale to one axis while keeping the other linear.
-- **Decomposition:** Identical to `line`: `mj-chart-plot`, `mj-chart-axis` × 2 (one with `scale="log"`, one with `scale="linear"`), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -392,7 +382,6 @@ drawing conventions.
 - **Renderer / `type`:** `nyquist` — **Primary renderer**
 - **Controller:** `<mj-chart type="nyquist" ...>`
 - **Purpose:** Display the frequency response of a linear system in the complex plane by plotting `Re(H(jω))` vs `Im(H(jω))` as frequency `ω` sweeps from 0 to ∞, used to assess gain and phase margin.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` × 2 (`kind="value"` — Re on x, Im on y), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -427,7 +416,6 @@ drawing conventions.
 - **Renderer / `type`:** `bode` — **Primary renderer**
 - **Controller:** `<mj-chart type="bode" ...>`
 - **Purpose:** Display a linear system's frequency response as two vertically-stacked sub-charts: magnitude (dB) vs log-frequency and phase (degrees) vs log-frequency.
-- **Decomposition:** Two linked `mj-chart-plot` elements (magnitude and phase panels) sharing one `mj-chart` controller; `mj-chart-axis` × 3 (shared log-frequency x axis, dB y axis, degrees y axis); `mj-chart-grid` (shared vertical log-frequency gridlines); `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -450,10 +438,10 @@ drawing conventions.
 - **Orientation:** `n/a` — two stacked panels with shared log-frequency x axis.
 - **Variants / modes:**
   - `asymptotes: true` — piecewise-linear Bode asymptotes overlaid.
-  - Gain/phase margin markers — `<circle>` at the gain crossover and phase crossover frequencies.
+  - Gain/phase margin markers — not implemented (see Notes).
 - **Events:** `mj-chart-bode-click` `{ series, omega, magnitude_db, phase_deg }` (each point, on both the magnitude and the phase panel).
 - **Phase:** P4
-- **Notes:** The Bode renderer manages two distinct SVG drawing areas within one `mj-chart-plot` (each panel is a `<g>` with its own y-scale). The x axis uses the `log` scale from `scales.js`, with tick labels formatted as powers of 10. Gain and phase margin can be annotated automatically when `showMargins: true` is set; the renderer computes the crossover frequencies from the data and places `mj-chart-annotation` markers. The two panels share the x-axis pixel range — the plot's reported box width drives both y-scales consistently.
+- **Notes:** The Bode renderer manages two distinct drawing areas within the chart's one SVG (each panel is a `<g>` with its own y-scale). The x axis uses the `log` scale from `scales.js`, with tick labels formatted as powers of 10. Gain and phase margins are not marked: the renderer reads no `showMargins` option and computes no crossover frequencies. The two panels share the x-axis pixel range — the plot's reported box width drives both y-scales consistently.
 
 ---
 
@@ -461,7 +449,6 @@ drawing conventions.
 - **Renderer / `type`:** `smith` — **Primary renderer**
 - **Controller:** `<mj-chart type="smith" ...>`
 - **Purpose:** Plot complex impedances normalized to a reference impedance (typically 50 Ω) in the reflection-coefficient plane, used for RF matching network and transmission-line analysis.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-legend`, `mj-chart-data-table`, `mj-chart-annotation`. (No standard `mj-chart-axis`; the Smith chart's grid is its own specialized circular coordinate system.)
 - **JSON shape:**
   ```json
   {
@@ -495,7 +482,6 @@ drawing conventions.
 - **Renderer / `type`:** `phylo` — **Primary renderer**
 - **Controller:** `<mj-chart type="phylo" ...>`
 - **Purpose:** Show evolutionary relationships among organisms (or entities) as a branching tree where branch lengths encode evolutionary distance or time.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (optional time/distance axis, `kind="value"`, drawn along the root-to-tip dimension), `mj-chart-legend` (clade color coding), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {

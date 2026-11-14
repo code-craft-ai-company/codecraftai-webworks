@@ -2,11 +2,12 @@
  * chartpart.js
  *
  * ChartPart -- a mixin over MjElement shared by every chart part component
- * (plot, axis, grid, legend, title, tooltip, data-table). It handles
- * controller resolution, registration, and model delivery, so the part
- * components themselves stay thin and only implement `drawPart`.
+ * (title, legend, data-table; the drawing and its tooltip are the
+ * controller's). It handles controller resolution, registration, and model
+ * delivery, so the part components themselves stay thin and only implement
+ * `drawPart`.
  *
- *   export class MjChartPlot extends ChartPart(MjElement) { ... }
+ *   export class MjChartLegend extends ChartPart(MjElement) { ... }
  *
  * A part component overrides:
  *   - drawPart(model, context)  -- render from the chart model + context;

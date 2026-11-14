@@ -2,18 +2,17 @@
 
 The per-category catalog for the codecraftai-webworks SVG chart library. The
 architecture — the coordinated-element model, the `<mj-chart>` controller, the
-part components, the JSON data contract, the SVG drawing model, orientation,
+title / legend / data-table parts, the JSON data contract, the SVG drawing model, orientation,
 docking/anchoring, the `charts/` directory layout, phasing, and the definition
 of done — is in **`../../chart-components-plan.md`**.
 
 Each entry records the renderer/`type` key, whether it is a Primary renderer
-or a variant, the chart's decomposition into part components, its JSON shape,
-the SVG primitives it emits, orientation support, and its implementation
-phase. Entry format: `_template.md`.
+or a variant, its JSON shape, the SVG primitives it emits, orientation
+support, the events it emits, and its implementation phase. Entry format:
+`_template.md`.
 
 Synonyms and mode-variants are consolidated onto a small set of **Primary
-renderers** — the ~150 catalogued chart names map to roughly 80 renderers,
-each composed from the shared part components.
+renderers** — the ~150 catalogued chart names map to roughly 80 renderers.
 
 ## Categories
 
@@ -37,16 +36,20 @@ each composed from the shared part components.
 
 ## How a chart is built
 
-Every chart is a controller plus independently-placeable, dockable parts:
+`<mj-chart>` draws every chart type whole — plot, axes, gridlines, marks,
+value labels and reference lines in one SVG — and shows a tooltip with the
+label of the hovered or keyboard-focused mark. A title, a legend and a visible
+data table are optional parts that can be placed anywhere and docked:
 
 ```html
 <mj-chart id="c1" type="bar" src="/data/sales.json" orientation="vertical"></mj-chart>
 
-<mj-chart-title  chart="c1">Quarterly Sales</mj-chart-title>
-<mj-chart-plot   chart="c1"></mj-chart-plot>
-<mj-chart-axis   chart="c1" kind="category" side="bottom"></mj-chart-axis>
-<mj-chart-axis   chart="c1" kind="value"    side="start"></mj-chart-axis>
-<mj-chart-legend chart="c1" orientation="horizontal"></mj-chart-legend>
+<mj-chart-title      chart="c1">Quarterly Sales</mj-chart-title>
+<mj-chart-legend     chart="c1" orientation="horizontal"></mj-chart-legend>
+<mj-chart-data-table chart="c1"></mj-chart-data-table>
 ```
+
+Plot, axis, grid, tooltip, crosshair, brush, annotation, series and
+value-label part elements were planned once and dropped (plan §3.3).
 
 All chart code lives under `static/javascript/charts/` — see the plan §4.

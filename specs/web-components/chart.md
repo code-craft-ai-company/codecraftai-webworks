@@ -26,6 +26,8 @@
 > `title` / `legend` / `empty` / `donut-center` slots, focusable data-table cells
 > with `mj-chart-point-*` events). None of that shipped. The library draws SVG
 > itself, and the title, legend and visible data table are separate part elements.
+> The mark tooltip was added to the controller later (WW-1203); the remaining
+> attributes, slots and point events of that design are not planned.
 
 ## 1. Purpose
 
@@ -75,6 +77,8 @@ data shape and a toolbar / detail panel (§21). The chart types are canonical
 - **`empty` slot** — inside the empty message: page content shown instead of
   "No chart data supplied." while the data holds nothing to draw.
 - **table (part)** — the visually hidden accessible data table (§13).
+- **tooltip (part)** — the label of the hovered or keyboard-focused mark, shown
+  above it (§11). `aria-hidden`; hidden while no mark is hovered or focused.
 
 ## 4. Variants & modes
 
@@ -98,6 +102,7 @@ data shape and a toolbar / detail panel (§21). The chart types are canonical
 | `title` | string | — | No | Native tooltip; also a fallback for the accessible name. It draws no visible title — use `<mj-chart-title>` |
 | `description` | string | — | No | Longer text alternative, exposed through the visually hidden `description` part; default `meta.description` |
 | `variant` | string | — | No | Renderer drawing variant |
+| `no-tooltip` | boolean | absent | No | No chart tooltip (§11); the browser's native tooltip of each mark's `<title>` shows instead |
 | (any other) | string | — | No | Renderer option (§4) |
 
 Common MjElement attributes (`dock`, `anchor`, `theme`, `hidden`, `context-menu`)
@@ -173,6 +178,7 @@ in the **Events** line of each chart-type page.
 - `::part(description)`, `::part(surface)`, `::part(svg)`, `::part(table)`
 - `::part(message)` with `::part(message loading)`, `::part(message empty)`,
   `::part(message error)`
+- `::part(tooltip)` — the mark tooltip
 - Renderers put further part names on their marks inside the SVG (`bar`, `point`,
   `slice`, `legend`, ...); see the chart-type specs.
 
@@ -184,6 +190,7 @@ in the **Events** line of each chart-type page.
 | `--mj-chart-series-1` ... `--mj-chart-series-8` | tokens in `tokens.css` (light / dark values) | Categorical series palette; slots past 8 repeat the hues with a lightness shift (24 distinct colors) |
 | `--mj-chart-series-secondary`, `--mj-chart-series-secondary-border` | tokens | Secondary / comparison marks |
 | `--mj-chart-geo-land`, `--mj-chart-geo-no-data` | tokens | Map backgrounds |
+| `--mj-tooltip-bg`, `--mj-tooltip-color`, `--mj-tooltip-max-width`, `--mj-tooltip-font-size`, ... | `<mj-tooltip>`'s | The mark tooltip uses the `<mj-tooltip>` tokens, so both look alike |
 
 The part elements have their own properties (`--mj-chart-title-font-size`,
 `--mj-chart-title-color`, `--mj-chart-legend-swatch`; see their specs).
@@ -217,6 +224,20 @@ The part elements have their own properties (`--mj-chart-title-font-size`,
   that show the name — a data table's default caption — follow at once.
 - A bound `<mj-chart-legend>` makes radar, parallel, bullet and streamgraph leave out
   their inline key.
+- **Tooltip.** The mark under the pointer, and the mark with keyboard focus
+  (`:focus-visible`; a click does not add one), shows its label in a tooltip
+  placed above it (below when there is no room) by the overlay engine in the top
+  layer. The label is the text of the mark's own `<title>`, which renderers give
+  each mark with the same text as its `aria-label`; an element without one shows
+  no tooltip. While the tooltip shows, the mark's `<title>` is held back so the
+  browser's native tooltip does not appear as well, and a renderer that rewrites
+  the title (the spectrogram's cell under the pointer) updates the tooltip. The
+  latest interaction wins: hovering another mark shows its label. WCAG 1.4.13:
+  the pointer can move onto the tooltip without it closing, Escape closes it
+  wherever focus is (and claims the key from a surrounding dialog) until the mark
+  is left, and it stays until the mark is no longer hovered or focused. A touch
+  shows it until the next tap outside the mark. Scrolling and resizing re-anchor
+  it; a redraw closes it. `no-tooltip` turns it off.
 - Each series keeps its color — its own `color` in the data, else the palette
   slot of its position in the data — so hiding a series never recolors the
   others; non-series keys get palette slots for the lifetime of the data.
@@ -230,6 +251,7 @@ The part elements have their own properties (`--mj-chart-title-font-size`,
 | `→` / `↓` | Next mark |
 | `Home` / `End` | First / last mark |
 | `Enter` / `Space` | Activates the focused mark where the renderer offers it (its `mj-chart-<mark>-click` event) |
+| `Escape` | Closes the tooltip of the focused (or hovered) mark |
 
 Legend toggles are keyboard-operable buttons of `<mj-chart-legend>`.
 
@@ -241,6 +263,8 @@ Legend toggles are keyboard-operable buttons of `<mj-chart-legend>`.
 - `description` (or `meta.description`) is read with the chart from the visually
   hidden `description` part.
 - The drawing is exposed (not `aria-hidden`); focusable marks carry their own labels.
+- The tooltip is `aria-hidden`: it repeats the label the focused mark already has
+  as its accessible name.
 - A visually hidden data table (`::part(table)`) follows the drawing: the
   renderer's table for its type when it publishes one, else a generic table of the
   data (categories x series, points, or flattened family data), at most 500 rows
@@ -300,6 +324,7 @@ inside an `<mj-chart-data-table>`, whose light DOM shows until it upgrades).
 - [ ] The host is a `figure` named per §13; `description` is exposed.
 - [ ] The hidden data table is present after each render, capped at 500 rows.
 - [ ] Marks are one tab stop with arrow / Home / End movement.
+- [ ] Hovering a mark, or focusing it from the keyboard, shows its label in the tooltip; the pointer can move onto it; Escape closes it; `no-tooltip` turns it off; the mark's `<title>` is back when it closes.
 - [ ] `hideSeries` / `showSeries` / `toggleSeries` update the drawing, the table and bound legends, and emit `mj-chart-series-toggle`.
 - [ ] Bound title, legend and data-table parts follow every render and the chart's name.
 - [ ] Loading, empty, error and deferred states behave as in §10.
@@ -312,8 +337,11 @@ inside an `<mj-chart-data-table>`, whose light DOM shows until it upgrades).
   every series is hidden?
 - Should the chart drop its hidden table while a visible `<mj-chart-data-table>` is
   bound, to avoid reading the data twice?
-- Which of the planned parts (`<mj-chart-plot>`, `-axis`, `-grid`, `-tooltip`,
-  `-annotation`, ...) of `chart-components-plan.md` §3.3 are still wanted?
+
+The other planned parts of `chart-components-plan.md` (`<mj-chart-plot>`, `-axis`,
+`-grid`, `-tooltip`, `-crosshair`, `-brush`, `-annotation`, `-series`,
+`-value-labels`) were dropped (WW-1203): renderers draw axes, gridlines, value
+labels and reference lines inside the drawing, and the tooltip is the chart's own.
 
 ## 21. Project chart types and their wrapper elements (WW-1498)
 

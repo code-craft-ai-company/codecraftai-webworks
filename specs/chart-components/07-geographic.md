@@ -1,9 +1,11 @@
 # Geographic & Map Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 All map renderers project supplied GeoJSON or TopoJSON geometry into SVG
 `<path>` elements using a pure-SVG projection pipeline in `charts/core/geo/`.
@@ -22,9 +24,6 @@ no meaningful horizontal/vertical swap.
   geographic polygon with a color drawn from a sequential or diverging color
   scale — best for showing spatial distribution of a measure (population
   density, election results, sales territory).
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend` (continuous color
-  ramp), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`,
-  `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -66,9 +65,6 @@ no meaningful horizontal/vertical swap.
 - **Purpose:** Plot discrete point locations on a map using a consistent symbol
   at each coordinate — best for showing where events, facilities, or incidents
   occur without encoding magnitude.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend` (symbol/color key),
-  `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`,
-  `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -111,9 +107,6 @@ no meaningful horizontal/vertical swap.
 - **Purpose:** Show magnitude at point locations by scaling a circle's area
   proportionally to a value — best for comparing quantities across geographic
   sites where both location and relative size matter.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend` (size legend + color
-  key), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`,
-  `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -154,8 +147,6 @@ no meaningful horizontal/vertical swap.
 - **Purpose:** Reveal spatial concentration or intensity across a continuous
   surface — best for showing where events cluster in geographic space (foot
   traffic, incident density, signal strength).
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend` (continuous color
-  ramp), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -202,9 +193,6 @@ no meaningful horizontal/vertical swap.
   proportional to a data value rather than physical size — best for making
   value differences visually obvious when physical area misleads (e.g. electoral
   vote cartograms).
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend` (color key),
-  `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`,
-  `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -245,9 +233,6 @@ no meaningful horizontal/vertical swap.
 - **Purpose:** Show movement, migration, or transfers between geographic
   locations using directed arcs or tapered lines — best for visualising
   trade flows, commuter patterns, or data-packet routing.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend` (volume/color key),
-  `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`,
-  `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -289,9 +274,6 @@ no meaningful horizontal/vertical swap.
 - **Purpose:** Render fixed paths or itineraries on a map — best for showing
   transport routes, delivery corridors, or multi-stop journeys where the exact
   line geometry (not a free-form arc) matters.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend` (route/series key),
-  `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`,
-  `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -340,9 +322,6 @@ no meaningful horizontal/vertical swap.
 - **Purpose:** Depict a continuous geographic variable as a set of lines
   connecting points of equal value — best for elevation, atmospheric pressure,
   travel-time zones (isochrones), or temperature fields.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend` (level/color key),
-  `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`,
-  `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -391,9 +370,6 @@ no meaningful horizontal/vertical swap.
   that every region receives the same visual weight regardless of physical area
   — best for comparing values across regions when geographic size differences
   would distort perception.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend` (color or size key),
-  `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`,
-  `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {
@@ -435,9 +411,6 @@ no meaningful horizontal/vertical swap.
   proportionally to a geographic data value — best when circle area alone is
   insufficient to differentiate categories at the same location, or when
   conventions call for non-circular markers.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend` (size + shape key),
-  `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`,
-  `mj-chart-annotation`.
 - **JSON shape:**
   ```json
   {

@@ -1276,6 +1276,10 @@ _CHART = ComponentDoc(
         "<code>&lt;mj-chart-title&gt;</code>, <code>meta.title</code>, then \"&lt;type&gt; chart\"), "
         "described by <code>description</code>. The focusable marks are one tab stop with Arrow, Home "
         "and End to move between them, and a visually hidden data table follows the drawing.</p>"
+        "<p>Tooltip: the mark under the pointer, or the mark focused from the keyboard, shows its "
+        "label in a tooltip above it, styled with the <code>&lt;mj-tooltip&gt;</code> tokens. The "
+        "pointer can move onto it, Escape closes it, and it stays while the mark is hovered or "
+        "focused; <code>no-tooltip</code> turns it off and leaves the browser's native tooltip.</p>"
         "<p>Three chart parts coordinate with it: <code>&lt;mj-chart-title&gt;</code>, "
         "<code>&lt;mj-chart-legend&gt;</code> (its series entries hide and show series) and "
         "<code>&lt;mj-chart-data-table&gt;</code>. Nest them in the chart or bind them anywhere with "
@@ -1309,6 +1313,8 @@ _CHART = ComponentDoc(
         AttributeDoc(name="src", description="URL of the JSON data; fetched once per URL.", kind="string"),
         AttributeDoc(name="variant", description="Drawing variant for types that have one, e.g. `candlestick` / `ohlc` for ohlc, `butterfly` for tornado.",
                      kind="string", values=["candlestick", "ohlc", "butterfly", "diverging"]),
+        AttributeDoc(name="no-tooltip", description="No mark tooltip; the browser's native tooltip of each mark shows instead.",
+                     kind="boolean"),
         AttributeDoc(name="group", description="Bar/column option: side by side, stacked or 100% stacked.",
                      kind="enum", values=["cluster", "stack", "stack100"], default="cluster"),
         AttributeDoc(name="sort", description="Bar/column option: order categories by their total.",
@@ -1352,6 +1358,7 @@ _CHART = ComponentDoc(
         ("surface", "The drawing box holding the SVG and messages."),
         ("description", "The visually hidden description paragraph."),
         ("table", "The visually hidden data table."),
+        ("tooltip", "The tooltip of the hovered or keyboard-focused mark."),
         ("plot", "Renderer group holding the marks (inside the SVG)."),
         ("bar", "Bar/column renderer: each bar."),
     ],
@@ -1361,6 +1368,7 @@ _CHART = ComponentDoc(
         ("--mj-chart-series-secondary", "Secondary mark colour used by some renderers."),
         ("--mj-chart-geo-land", "Land fill of the geographic renderers."),
         ("--mj-chart-geo-no-data", "Fill of regions without data (geographic renderers)."),
+        ("--mj-tooltip-bg, --mj-tooltip-color, --mj-tooltip-max-width ...", "The mark tooltip uses the <mj-tooltip> tokens."),
     ],
     examples=[
         ComponentExample(

@@ -1,9 +1,11 @@
 # Trend & Time-Series Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Charts that show how values change over time or ordered intervals. Fourteen catalog
 names map to **nine primary renderers** after consolidation.
@@ -15,7 +17,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `line` — **Primary renderer**
 - **Controller:** `<mj-chart type="line" ...>`
 - **Purpose:** Show a single continuous trend over a time axis.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (kind="time" side="bottom" + kind="value" side="start"), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -48,7 +49,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `line` — **Variant of `line`**
 - **Controller:** `<mj-chart type="line" ...>`
 - **Purpose:** Compare multiple continuous trends over a shared time axis.
-- **Decomposition:** Same as Line chart.
 - **JSON shape:**
   ```json
   {
@@ -75,7 +75,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `area` — **Primary renderer**
 - **Controller:** `<mj-chart type="area" ...>`
 - **Purpose:** Show a trend and emphasise the magnitude of values below (or above) the line.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time + value), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -101,7 +100,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `area` — **Variant of `area`**
 - **Controller:** `<mj-chart type="area" stack="stack" ...>`
 - **Purpose:** Show how multiple series contribute to a cumulative total over time.
-- **Decomposition:** Same as Area chart.
 - **JSON shape:**
   ```json
   {
@@ -126,7 +124,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `area` — **Variant of `area`**
 - **Controller:** `<mj-chart type="area" stack="stack100" ...>`
 - **Purpose:** Show proportional composition of multiple series over time, always summing to 100%.
-- **Decomposition:** Same as Area chart.
 - **JSON shape:** Same multi-series `series[].points: [{x, y}]` shape as Stacked Area; normalization is applied in the model layer.
 - **SVG primitives:** `<path>`, `<text>`, `<line>`, `<g>`
 - **Orientation:** `vertical` / `horizontal`
@@ -142,7 +139,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `step` — **Primary renderer**
 - **Controller:** `<mj-chart type="step" ...>`
 - **Purpose:** Visualise values that remain constant between discrete change points (e.g. interest rates, threshold changes, inventory levels).
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time + value), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -176,7 +172,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `sparkline` — **Primary renderer**
 - **Controller:** `<mj-chart type="sparkline" ...>`
 - **Purpose:** Provide a compact, word-sized trend summary embedded inline in text, tables, or dashboards — no axes, no legend, minimal chrome.
-- **Decomposition:** `mj-chart-plot` only (no axes, no legend, no title). `mj-chart-tooltip` is optional. `mj-chart-data-table` is always present but visually hidden.
 - **JSON shape:**
   ```json
   {
@@ -205,7 +200,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `ohlc` — **Primary renderer**
 - **Controller:** `<mj-chart type="ohlc" style="candlestick" ...>`
 - **Purpose:** Visualise financial price movement — open, high, low, and close — with filled bodies distinguishing bullish from bearish sessions.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time + value), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-annotation`, `mj-chart-data-table`. Volume sub-plot: second `mj-chart-plot` with its own value axis sharing the same time axis. No `mj-chart-legend` (usually single instrument).
 - **JSON shape:**
   ```json
   {
@@ -232,7 +226,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `ohlc` — **Variant of `ohlc`**
 - **Controller:** `<mj-chart type="ohlc" style="ohlc" ...>`
 - **Purpose:** Show open-high-low-close financial data using the classic OHLC tick-bar style instead of filled candlestick bodies.
-- **Decomposition:** Same as Candlestick chart.
 - **JSON shape:** Identical to Candlestick — `candles: [{t, o, h, l, c, v}]`.
 - **SVG primitives:** `<line>` (vertical range bar from `l` to `h`; left tick at `o`; right tick at `c`), `<g>`, `<text>`
 - **Orientation:** `vertical` only.
@@ -248,7 +241,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `gantt` — **Primary renderer** (`charts/core/renderers/gantt.js`). The full entry — data fields, options, events and parts — is in [`12-project-schedule.md`](12-project-schedule.md#gantt-chart--project-bar-chart-schedule-chart); this is a summary for the time-series view.
 - **Controller:** `<mj-chart type="gantt" ...>`; `<mj-gantt-chart>` is a convenience wrapper for this type (WW-1498).
 - **Purpose:** Display project tasks, dependencies, and milestones on a horizontal time axis to communicate schedule and progress.
-- **Decomposition:** drawn by the renderer; `mj-chart-legend` lists the groups, `mj-chart-title` / `mj-chart-data-table` bind as parts.
 - **JSON shape:**
   ```json
   {
@@ -280,7 +272,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `timeline` — **Primary renderer** (`charts/core/renderers/timeline.js`; `milestone` is its diamond variant). The full entry is in [`12-project-schedule.md`](12-project-schedule.md#timeline--event-timeline-horizontal-timeline).
 - **Controller:** `<mj-chart type="timeline" ...>`
 - **Purpose:** Plot discrete events at their chronological positions on a time axis, emphasising sequence and temporal relationships rather than numeric magnitude.
-- **Decomposition:** drawn by the renderer; `mj-chart-legend` lists the statuses (else kinds, else lanes), `mj-chart-title` / `mj-chart-data-table` bind as parts.
 - **JSON shape:**
   ```json
   {
@@ -309,7 +300,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `horizon` — **Primary renderer**
 - **Controller:** `<mj-chart type="horizon" ...>`
 - **Purpose:** Display many time series in a compact vertical stack by folding and layering area bands, enabling dense comparative views that would be unreadable as overlapping lines.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (kind="time" side="bottom"), `mj-chart-axis` (kind="category" side="start" — row labels), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`. No `mj-chart-legend` (color encodes magnitude bands — a band legend `mj-chart-annotation` is used instead).
 - **JSON shape:**
   ```json
   {
@@ -337,7 +327,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `streamgraph` — **Primary renderer**
 - **Controller:** `<mj-chart type="streamgraph" ...>`
 - **Purpose:** Show flowing composition of multiple categories over time using a symmetric, organic layout that emphasises the shape and rhythm of change rather than absolute values.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (kind="time" side="bottom"), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-legend`, `mj-chart-data-table`. No value axis (y-values are layout positions, not meaningful magnitudes).
 - **JSON shape:**
   ```json
   {
@@ -365,7 +354,6 @@ names map to **nine primary renderers** after consolidation.
 - **Renderer / `type`:** `bump` — **Primary renderer**
 - **Controller:** `<mj-chart type="bump" ...>`
 - **Purpose:** Track how ranked positions of competing items change across discrete time periods or categories, making rank crossings and trends immediately visible.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (kind="time" or "category" side="bottom"), `mj-chart-axis` (kind="value" side="start" — rank axis, inverted so rank 1 is at top), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {

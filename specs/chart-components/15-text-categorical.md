@@ -1,9 +1,11 @@
 # Text & Categorical Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 ---
 
@@ -11,7 +13,6 @@
 - **Renderer / `type`:** `word-cloud` — **Primary renderer** (`wordcloud.js`)
 - **Controller:** `<mj-chart type="word-cloud" ...>`
 - **Purpose:** Display a corpus of terms sized by frequency or weight — communicates the relative prominence of words in a body of text at a glance.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -40,7 +41,6 @@
 - **Renderer / `type`:** `bar` — **Primary renderer**
 - **Controller:** `<mj-chart type="bar" ...>`
 - **Purpose:** Compare values across discrete categories using proportional rectangular bars — the canonical chart for categorical frequency comparison.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category, `side="bottom"` for vertical / `side="start"` for horizontal), `mj-chart-axis` (value, `side="start"` for vertical / `side="bottom"` for horizontal), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -64,7 +64,6 @@
 - **Renderer / `type`:** `bar` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="bar" group="stack" ...>`
 - **Purpose:** Show how a total is composed of multiple series contributions across categories — reveals both part-to-whole structure and cross-category trends simultaneously.
-- **Decomposition:** Same as **Bar Chart** above. `mj-chart-legend` is particularly important for distinguishing stacked segments.
 - **JSON shape:**
   ```json
   {
@@ -90,7 +89,6 @@
 - **Renderer / `type`:** `mosaic` — **Primary renderer**
 - **Controller:** `<mj-chart type="mosaic" ...>`
 - **Purpose:** Display the joint distribution of two categorical variables — cell width encodes the marginal frequency of one variable, cell height encodes the conditional frequency of the other.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x-category with proportional `band` widths, `side="bottom"`), `mj-chart-axis` (y-percentage 0–100 %, `side="start"`), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -116,7 +114,6 @@
 - **Renderer / `type`:** `upset` — **Primary renderer**
 - **Controller:** `<mj-chart type="upset" ...>`
 - **Purpose:** Visualize the sizes of all intersections among three or more sets in a scalable matrix layout — the UpSet design is far more readable than a multi-set Venn diagram.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (intersection-size value, `side="start"`), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -148,7 +145,6 @@
 - **Renderer / `type`:** `venn` — **Primary renderer**
 - **Controller:** `<mj-chart type="venn" ...>`
 - **Purpose:** Show set overlap between two (or three) sets using overlapping circles — communicates which items belong exclusively to each set and which are shared.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -175,7 +171,6 @@
 - **Renderer / `type`:** `euler` — **Variant of `venn`**
 - **Controller:** `<mj-chart type="euler" ...>`
 - **Purpose:** Draw an area-proportional set diagram where circles (or ellipses) are positioned so their overlapping areas approximate the actual intersection sizes — more precise than a conventional Venn diagram but still intuitive.
-- **Decomposition:** Same as **Venn Diagram** above.
 - **JSON shape:** Identical to the **Venn Diagram** JSON shape; the renderer uses the same envelope with an optional `"proportional": true` flag (default for Euler).
   ```json
   {
@@ -207,7 +202,6 @@
 - **Renderer / `type`:** `matrix` — **Primary renderer**
 - **Controller:** `<mj-chart type="matrix" ...>`
 - **Purpose:** Display relationships between two categorical dimensions using a grid of marks (circles, squares, or color fills) sized or colored by a third numeric measure.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x-category, `side="bottom"`), `mj-chart-axis` (y-category, `side="start"`), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -235,7 +229,6 @@
 - **Renderer / `type`:** `sentiment` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="sentiment" ...>`
 - **Purpose:** Show the proportion of positive, neutral, and negative sentiment across categories (topics, products, time periods) — used for survey, review, and social-listening analytics.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category, `side="start"` for horizontal default), `mj-chart-axis` (value −100 % to +100 %, `side="bottom"`), `mj-chart-grid` (zero-line), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {

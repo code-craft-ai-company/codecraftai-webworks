@@ -1,9 +1,11 @@
 # Part-to-Whole Charts
 
 > Catalog of part-to-whole chart types for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 ---
 
@@ -12,7 +14,6 @@
 - **Renderer / `type`:** `pie` — **Primary renderer**
 - **Controller:** `<mj-chart type="pie" ...>`
 - **Purpose:** Compare parts of a whole when there are a small number of slices and relative proportion is the primary message.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`
 - **JSON shape:**
   ```json
   {
@@ -39,7 +40,6 @@
 - **Renderer / `type`:** `pie` — **Variant of `pie`**
 - **Controller:** `<mj-chart type="pie" inner-radius="0.5" ...>`
 - **Purpose:** Same as pie chart but reserves a center area, typically used for a summary KPI label or total annotation.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`
 - **JSON shape:** Identical to the `pie` renderer. The `inner-radius` attribute (0–1 as a fraction of outer radius, default `0.5`) activates donut mode; no JSON change is required.
   ```json
   {
@@ -65,7 +65,6 @@
 - **Renderer / `type`:** `bar` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="bar" group="stack" orientation="vertical" ...>`
 - **Purpose:** Show how each category is composed of multiple sub-series, and compare absolute totals across categories.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`, `mj-chart-annotation`
 - **JSON shape:** Standard common envelope with multiple series:
   ```json
   {
@@ -92,7 +91,6 @@
 - **Renderer / `type`:** `bar` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="bar" group="stack100" orientation="vertical" ...>`
 - **Purpose:** Compare the relative composition across categories when absolute magnitudes are less important than proportional breakdown.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value, value axis labeled 0–100%), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`
 - **JSON shape:** Identical to the stacked bar. `chartmodel.js` normalizes each stack to 100% when `group="stack100"`.
   ```json
   {
@@ -119,7 +117,6 @@
 - **Renderer / `type`:** `treemap` — **Primary renderer**
 - **Controller:** `<mj-chart type="treemap" layout="squarify" ...>`
 - **Purpose:** Visualize hierarchical part-to-whole data where area encodes magnitude and nesting encodes hierarchy; effective for spotting dominant nodes.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-legend`
 - **JSON shape:** Hierarchical family shape (plan §3.4):
   ```json
   {
@@ -159,7 +156,7 @@
   - Sunburst chart uses the same hierarchical layout engine with a polar projection (see entry below).
 - **Events:** `mj-chart-node-click` `{ name, value, depth, path }` (each rectangle; `path` lists the names from the root).
 - **Phase:** P2
-- **Notes:** Layout algorithm lives in `charts/core/hierarchylayout.js` (shared with Sunburst). Colors are assigned by `ordinal-color` scale at depth 1; child nodes are tinted lighter. Breadcrumb drill-down is an optional overlay using `mj-chart-annotation`.
+- **Notes:** Layout algorithm lives in `charts/core/hierarchylayout.js` (shared with Sunburst). Colors are assigned by `ordinal-color` scale at depth 1; child nodes are tinted lighter. There is no breadcrumb or drill-down: a click on a rectangle only emits `mj-chart-node-click`.
 
 ---
 
@@ -168,7 +165,6 @@
 - **Renderer / `type`:** `sunburst` — **Variant of `treemap`**
 - **Controller:** `<mj-chart type="sunburst" ...>`
 - **Purpose:** Show hierarchical proportions in a radial layout where each ring represents one level of the hierarchy; supports drill-down interaction.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-legend`
 - **JSON shape:** Identical hierarchical shape as Treemap (`root` with recursive `children` and leaf `value`).
   ```json
   {
@@ -204,7 +200,6 @@
 - **Renderer / `type`:** `waffle` — **Primary renderer**
 - **Controller:** `<mj-chart type="waffle" ...>`
 - **Purpose:** Communicate a percentage or progress in a visually approachable grid of equal units; favored for dashboards and infographics over precise comparisons.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-legend`, `mj-chart-value-labels`
 - **JSON shape:**
   ```json
   {
@@ -230,7 +225,6 @@
 - **Renderer / `type`:** `marimekko` — **Primary renderer**
 - **Controller:** `<mj-chart type="marimekko" ...>`
 - **Purpose:** Show composition across two categorical dimensions simultaneously: bar width encodes the category's share of the whole, while bar segments show the internal breakdown.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value axis: 0–100%), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-legend`, `mj-chart-value-labels`
 - **JSON shape:**
   ```json
   {
@@ -258,7 +252,6 @@
 - **Renderer / `type`:** `mosaic` — **Primary renderer**
 - **Controller:** `<mj-chart type="mosaic" ...>`
 - **Purpose:** Visualize the relationship and interaction between two categorical variables using area-encoded cells, similar to a Marimekko but emphasizing statistical frequency rather than business composition.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (both axes categorical), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-legend`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -285,7 +278,6 @@
 - **Renderer / `type`:** `waterfall` — **Primary renderer**
 - **Controller:** `<mj-chart type="waterfall" ...>`
 - **Purpose:** Show how an initial value is increased or decreased by a series of intermediate positive and negative contributions, arriving at a final total.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
