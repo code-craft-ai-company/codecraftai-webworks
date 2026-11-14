@@ -8,8 +8,8 @@
 ---
 
 ### Word Cloud  *(tag cloud, text cloud, wordle)*
-- **Renderer / `type`:** `wordcloud` — **Primary renderer**
-- **Controller:** `<mj-chart type="wordcloud" ...>`
+- **Renderer / `type`:** `word-cloud` — **Primary renderer** (`wordcloud.js`)
+- **Controller:** `<mj-chart type="word-cloud" ...>`
 - **Purpose:** Display a corpus of terms sized by frequency or weight — communicates the relative prominence of words in a body of text at a glance.
 - **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**

@@ -92,8 +92,8 @@ icon arrays and small-multiples tables.
 ---
 
 ### Bar-in-cell table  *(inline bar table, magnitude table)*
-- **Renderer / `type`:** `bar-cell-table` — **Primary renderer**
-- **Controller:** `<mj-chart type="bar-cell-table" ...>`
+- **Renderer / `type`:** `bar-in-cell` — **Primary renderer** (`heatmaptable.js`, shared with `heatmap-table` and `conditional-format-table`)
+- **Controller:** `<mj-chart type="bar-in-cell" ...>`
 - **Purpose:** Render a DOM table where one or more numeric columns are replaced
   by miniature horizontal bars, enabling compact side-by-side magnitude
   comparisons across rows without leaving tabular alignment.
@@ -122,7 +122,7 @@ icon arrays and small-multiples tables.
   negative segments).
 - **Phase:** P5
 - **Notes:** Each cell flagged `"render": "bar"` receives an inline `<svg>` from
-  the `bar-cell-table` cell-renderer. Bars share the same domain across all rows
+  the `bar-in-cell` cell-renderer. Bars share the same domain across all rows
   in that column (set by `column.domain` or auto-computed from data). This is
   a DOM-first table; the bar SVGs are decorative and `aria-hidden`; the numeric
   value is present as accessible text inside the `<td>`.
@@ -164,8 +164,8 @@ icon arrays and small-multiples tables.
 ---
 
 ### Conditional formatting table  *(highlight table, rules-based table)*
-- **Renderer / `type`:** `cf-table` — **Primary renderer**
-- **Controller:** `<mj-chart type="cf-table" ...>`
+- **Renderer / `type`:** `conditional-format-table` — **Primary renderer** (`heatmaptable.js`)
+- **Controller:** `<mj-chart type="conditional-format-table" ...>`
 - **Purpose:** Emphasize patterns in tabular data by applying color, icon, or
   typographic highlights to cells that satisfy declarative rules, analogous to
   spreadsheet conditional formatting.

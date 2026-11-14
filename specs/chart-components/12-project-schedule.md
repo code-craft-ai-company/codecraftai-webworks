@@ -285,16 +285,17 @@
   ```
   Fields: `columns` array; each column has `name`, optional `wip-limit`, and `items` array. Each item has `id`, `label`, optional `assignee` and `priority`.
 - **SVG primitives:** `<rect>` (column background lane), `<rect>` (item card), `<text>` (item label, assignee, column header), `<line>` (WIP-limit indicator), `<g>` (per-column and per-item groups)
-- **Orientation:** `horizontal` (columns left-to-right, items stacked vertically within each column). A `vertical` layout (columns stacked top-to-bottom, items arranged horizontally) is supported for narrow viewports.
-- **Variants / modes:** `count-only` mode renders a simple bar chart of item counts per column (reusing the `bar` renderer) when item-level detail is not needed.
+- **Orientation:** `horizontal` (registered default; columns left-to-right, items stacked vertically within each column) | `vertical` (columns stacked top-to-bottom as rows, cards flowing across). With no `orientation` attribute, a chart narrower than 480 px with more than 2 columns uses the vertical layout automatically.
+- **Variants / modes:** `variant="count"` draws a bar per column of its item count with the WIP limit marked as a dashed line (an over-limit column's bar in `--mj-color-danger`), when item-level detail is not needed; it is drawn by `kanban.js`, not the `bar` renderer. Cards that do not fit a column are summarised by a focusable "+N more" mark; every card is listed in the data table.
+- **Events:** `mj-chart-card-click` `{ column, id, label }`; `mj-chart-overflow-click` `{ column, hidden, items }` (the "+N more" mark); `mj-chart-column-click` `{ column, count, wipLimit }` (count variant).
 - **Phase:** P3
 - **Notes:** The Kanban chart is the only chart in this category whose primary visual is a card-based layout rather than a Cartesian plot. Item cards are `<rect>` + `<text>` groups; priority is encoded by a left-border colour stripe and an `aria-label` (not colour alone). WIP-limit violations are flagged by changing the column background colour using a `--mj-chart-wip-exceeded` token and adding an `aria-alert` annotation. Uses `band` scale for columns. The `mj-chart-annotation kind="line"` draws the WIP limit bar.
 
 ---
 
 ### Resource Allocation Chart  *(resource heatmap, staffing chart, capacity chart)*
-- **Renderer / `type`:** `resource` — **Primary renderer**
-- **Controller:** `<mj-chart type="resource" ...>`
+- **Renderer / `type`:** `resource-allocation` — **Primary renderer** (`charts/core/renderers/resource.js`)
+- **Controller:** `<mj-chart type="resource-allocation" ...>`
 - **Purpose:** Show how people or resources are allocated across tasks or projects over time; reveals over-allocation, under-utilisation, and scheduling conflicts.
 - **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, top; category/resource, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-brush`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
@@ -325,6 +326,7 @@
   Fields: `resources` array; each resource has `id`, `label`, `capacity` (1.0 = full-time), and `allocations` array. Each allocation has `task` name, `start`/`end` ISO dates, and `load` (fraction of capacity, 0–1; values > 1 indicate over-allocation).
 - **SVG primitives:** `<rect>` (allocation bar per task, width proportional to duration and height/opacity proportional to load), `<line>` (capacity ceiling), `<text>` (resource labels, task names, date ticks), `<g>` (per-resource row groups)
 - **Orientation:** `horizontal` only — resource rows run left-to-right along the time axis, mirroring Gantt chart conventions.
-- **Variants / modes:** `style="heatmap"` collapses each resource row to a single heat-colour band (colour encodes total load percentage) instead of stacked allocation bars, useful for many resources over long time horizons. Colour also varies by pattern/texture under `forced-colors` mode.
+- **Variants / modes:** `variant="heatmap"` collapses each resource row to a single band whose colour shows the utilisation (summed load / capacity) of each period — under 50 %, 50–89 %, 90–100 %, over capacity (`--mj-color-danger`) — instead of stacked allocation bars, useful for many resources over long time horizons.
+- **Events:** `mj-chart-allocation-click` — allocation bars `{ resource, task, start, end, load }`; heatmap cells `{ resource, start, end, load, utilization }`; over-capacity flags `{ resource, start, end, load, overAllocated }`.
 - **Phase:** P3
 - **Notes:** Uses `time` scale on the horizontal axis and `band` scale on the vertical (resource/row) axis. Over-allocation (`load` sum > `capacity` in an interval) is highlighted using `--mj-chart-overload` colour token and an `aria-label` warning; pattern fill is used alongside colour. `mj-chart-brush` enables horizontal time-range zoom. The renderer stacks multiple allocation bars vertically within a single resource row when tasks overlap in time.

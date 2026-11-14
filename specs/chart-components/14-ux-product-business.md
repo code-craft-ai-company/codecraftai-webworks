@@ -199,8 +199,8 @@
 ---
 
 ### User Journey Map  *(journey map, experience map, UX flow)*
-- **Renderer / `type`:** `journey` — **Primary renderer**
-- **Controller:** `<mj-chart type="journey" ...>`
+- **Renderer / `type`:** `user-journey` — **Primary renderer** (`journey.js`)
+- **Controller:** `<mj-chart type="user-journey" ...>`
 - **Purpose:** Visualize discrete steps (or phases) in a user experience, with a sentiment or quality score at each step — used for qualitative UX storytelling alongside quantitative data.
 - **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category/steps, `side="bottom"`), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**

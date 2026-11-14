@@ -23,8 +23,10 @@
  *
  * Options:
  *   cap-width   width of the whisker end-caps in px (default 8)
- *   null-value  reference value (confidence-interval; default 0); on
- *               errorbar a reference line is drawn only when it is given
+ *   null-value  reference value, drawn as a dashed line and kept in the
+ *               value domain (confidence-interval: default 0, always
+ *               shown). Without it errorbar draws a solid zero line when
+ *               zero is inside the value domain.
  *
  * Events:
  *   mj-chart-errorbar-click { series, category, value, low, high }

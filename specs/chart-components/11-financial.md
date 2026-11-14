@@ -8,8 +8,8 @@
 ---
 
 ### Candlestick Chart  *(Japanese candlestick, OHLC candle)*
-- **Renderer / `type`:** `ohlc` — **Primary renderer**
-- **Controller:** `<mj-chart type="ohlc" style="candle" ...>`
+- **Renderer / `type`:** `candlestick` — **Variant of `ohlc`** (`ohlc.js` registers both keys)
+- **Controller:** `<mj-chart type="candlestick" ...>` (same drawing as `<mj-chart type="ohlc" variant="candle" ...>`)
 - **Purpose:** Visualise stock or asset price movement over time; body encodes open-to-close range, wicks encode high/low extremes.
 - **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, bottom; value, start), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-brush`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:**
@@ -22,25 +22,25 @@
   }
   ```
   Fields: `t` — ISO-8601 date/datetime; `o` open; `h` high; `l` low; `c` close; `v` volume (optional).
-- **SVG primitives:** `<rect>` (candle body), `<line>` (upper and lower wicks), `<g>` (per-candle group), `<text>` (axis labels)
+- **SVG primitives:** `<rect>` (candle body — hollow when close ≥ open, filled when close < open), `<line>` (upper and lower wicks), `<g>` (per-candle group), `<text>` (axis labels)
 - **Orientation:** vertical (time → x, price → y); horizontal layout is `n/a` — price candles have no conventional horizontal form.
-- **Variants / modes:** `style="candle"` (default, filled body) vs `style="ohlc"` (tick-bar form — see OHLC chart below).
+- **Variants / modes:** The drawing follows the type key — `candlestick` draws bodies and wicks, `ohlc` draws tick bars — and `variant="ohlc" | "candle"` overrides it (`variant="candlestick"` reads as `candle`), so `type="candlestick" variant="ohlc"` draws the OHLC chart below.
 - **Phase:** P3
-- **Notes:** Uses `time` scale on the category axis and `linear` scale on the value axis. Bullish candles (close ≥ open) and bearish candles (close < open) are coloured from `--mj-chart-positive` / `--mj-chart-negative` design tokens so no meaning is encoded by color alone — tooltip and `aria-label` carry directional text. Volume bars may be overlaid at reduced opacity in the lower portion of the same plot or via a companion `mj-chart` controller sharing the time scale. The `mj-chart-brush` allows zooming the time window.
+- **Notes:** Uses `time` scale on the category axis and `linear` scale on the value axis. Bullish candles (close ≥ open) and bearish candles (close < open) are coloured from `--mj-color-success` / `--mj-color-danger` and are hollow / filled, so no meaning is encoded by color alone — tooltip and `aria-label` carry directional text. Volume bars may be overlaid at reduced opacity in the lower portion of the same plot or via a companion `mj-chart` controller sharing the time scale. The `mj-chart-brush` allows zooming the time window.
 
 ---
 
 ### OHLC Chart  *(open-high-low-close bar chart, bar chart)*
-- **Renderer / `type`:** `ohlc` — **Variant of `ohlc`**
-- **Controller:** `<mj-chart type="ohlc" style="ohlc" ...>`
+- **Renderer / `type`:** `ohlc` — **Primary renderer** (`ohlc.js`, shared with `candlestick`)
+- **Controller:** `<mj-chart type="ohlc" ...>` (tick bars are the `ohlc` key's default drawing)
 - **Purpose:** Display open-high-low-close prices as vertical tick bars; preferred when many bars are shown at high density.
 - **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, bottom; value, start), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-brush`, `mj-chart-annotation`, `mj-chart-data-table`
 - **JSON shape:** Identical to Candlestick — same `candles` array.
 - **SVG primitives:** `<line>` (vertical range line), `<line>` (left tick = open), `<line>` (right tick = close), `<g>` (per-bar group)
 - **Orientation:** vertical only — same rationale as Candlestick.
-- **Variants / modes:** `style="candle"` switches to Candlestick rendering; no separate renderer code required.
+- **Variants / modes:** `variant="candle"` switches to Candlestick rendering (as `type="candlestick"` does); `variant="ohlc"` forces tick bars on a `candlestick` chart; no separate renderer code required.
 - **Phase:** P3
-- **Notes:** Shares the `ohlc` renderer module entirely; `style` attribute selects the drawing subroutine. Positive/negative colouring uses the same token pair as the Candlestick.
+- **Notes:** Shares the `ohlc` renderer module entirely; the type key, overridden by the `variant` attribute, selects the drawing subroutine. Positive/negative colouring uses the same token pair as the Candlestick.
 
 ---
 
@@ -229,9 +229,9 @@
   `baseline` is the central reference value; `low`/`high` define the extent of each bar on either side.
 - **SVG primitives:** `<rect>` (left/negative bar), `<rect>` (right/positive bar), `<line>` (centre baseline), `<text>` (labels), `<g>`
 - **Orientation:** `horizontal` only — the defining characteristic of a tornado chart is horizontal diverging bars sorted top-to-bottom by spread magnitude.
-- **Variants / modes:** `style="butterfly"` renders the two bars symmetrically mirrored around the centre axis (demographic pyramid style) when `low`/`high` are magnitudes rather than absolute values.
+- **Variants / modes:** `variant="butterfly"` treats `low` / `high` as magnitudes drawn to the left and right of `baseline` (population pyramid, two-sided comparison); rows keep the data order (no spread sort), values show as magnitudes on both sides, and the legend names default to "Left" / "Right" (`low_label` / `high_label` override them; tornado defaults are "Low input" / "High input").
 - **Phase:** P2
-- **Notes:** Uses `linear` scale on the value axis (diverging, centred on `baseline`), and `band` scale on the category axis. The renderer sorts rows by `(high - low)` descending before drawing so that the widest bar is always at the top. The centre baseline is drawn via `mj-chart-annotation kind="line"`.
+- **Notes:** Uses `linear` scale on the value axis (diverging, centred on `baseline`), and `band` scale on the category axis. Without `variant="butterfly"` the renderer sorts rows by `(high - low)` descending before drawing so that the widest bar is always at the top. The centre baseline is drawn via `mj-chart-annotation kind="line"`.
 
 ---
 

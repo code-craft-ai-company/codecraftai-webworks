@@ -8,10 +8,11 @@
 Several entries in this category relate to renderers defined elsewhere:
 Node-link diagram, matrix plot, and edge bundling all reuse or extend the
 network renderer family (see also category 8 — Flow & process). Nightingale
-rose and coxcomb reuse the `radial` / `polar-bar` renderer (see also category
-4). Faceted chart / small multiples is a meta-layout that tiles any renderer
-and relates to the `small-multiples-table` entry in category 16. These
-relationships are noted per entry.
+rose and coxcomb are drawn by the polar-family renderer (`polar.js`, type
+keys `nightingale` and its alias `coxcomb`; see also category 13). Faceted
+chart / small multiples is a meta-layout that tiles any renderer and relates
+to the `small-multiples-table` entry in category 16. These relationships are
+noted per entry.
 
 ---
 
@@ -328,8 +329,8 @@ relationships are noted per entry.
 ---
 
 ### Nightingale rose chart  *(polar area chart, coxcomb — equal-angle variant)*
-- **Renderer / `type`:** `polar-bar` — **Primary renderer**
-- **Controller:** `<mj-chart type="polar-bar" ...>`
+- **Renderer / `type`:** `nightingale` — **Variant of `polar`** (`polar.js`; `coxcomb` is an alias key for the same chart)
+- **Controller:** `<mj-chart type="nightingale" ...>`
 - **Purpose:** Compare values across categories arranged around a circle by
   encoding magnitude as the radius of equal-angle sectors, combining the
   readability of a bar chart with a circular layout that emphasizes cyclicality
@@ -351,37 +352,38 @@ relationships are noted per entry.
   with SVG arc commands `A`); `<text>` (category labels at sector midpoints,
   radially placed); `<line>` (radial grid spokes, optional).
 - **Orientation:** `n/a` (radial layout)
-- **Variants / modes:** `mode="stacked"` stacks series radially per sector;
-  `mode="grouped"` places series side-by-side within each sector; the `coxcomb`
-  catalog entry maps to `mode="proportional"` — see below.
+- **Variants / modes:** None — series always stack radially per sector (no
+  `mode` attribute; side-by-side grouping is not implemented). The `coxcomb`
+  key draws this same equal-angle chart; the proportional-angle Coxcomb entry
+  below is not implemented.
 - **Phase:** P5
 - **Notes:** Each sector subtends an equal angle (`2π / N` where N = category
-  count). Radius is mapped by a `linear` or `sqrt` scale from data value to
-  pixel radius. Stacked and grouped modes follow the same stacking logic as the
-  `bar` renderer but applied radially. The radial axis is drawn by a specialized
-  configuration of `<mj-chart-axis kind="radial">`.
+  count). Radius is mapped by a `sqrt` scale from data value to pixel radius,
+  so sector area encodes value. Series stack radially within each sector. The
+  radial axis is drawn by a specialized configuration of
+  `<mj-chart-axis kind="radial">`.
 
 ---
 
 ### Coxcomb chart  *(polar proportional chart — proportional-angle variant)*
-- **Renderer / `type`:** `polar-bar` — **Variant of `polar-bar`**
-- **Controller:** `<mj-chart type="polar-bar" mode="proportional" ...>`
+- **Renderer / `type`:** not implemented — the registered `coxcomb` key is an alias of `nightingale` and draws the equal-angle rose above, not this proportional-angle variant
+- **Controller:** none yet (`<mj-chart type="coxcomb" ...>` draws the equal-angle Nightingale rose)
 - **Purpose:** Like the Nightingale rose but with sector angles proportional to
   category values (rather than equal-angle sectors), so that both angle and
   radius encode magnitude — analogous to a polar pie chart.
 - **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
   `mj-chart-tooltip`
-- **JSON shape:** identical to `polar-bar` (common envelope with `categories`
+- **JSON shape:** identical to `nightingale` (common envelope with `categories`
   and `series[].values`).
 - **SVG primitives:** `<path>` (arc-wedge with both angle and radius varying per
   category); `<text>` (category labels).
 - **Orientation:** `n/a`
-- **Variants / modes:** satisfied by `mode="proportional"` on the `polar-bar`
-  renderer.
+- **Variants / modes:** planned as a proportional-angle mode of the
+  `nightingale` renderer; `polar.js` reads no `mode` attribute today.
 - **Phase:** P5
-- **Notes:** In `mode="proportional"` both the angle subtended and the radius
-  encode value magnitude, making it a doubly-encoded variant. The distinction
-  from the Nightingale rose is one arithmetic difference in the arc path
+- **Notes:** In the planned proportional mode both the angle subtended and the
+  radius encode value magnitude, making it a doubly-encoded variant. The
+  distinction from the Nightingale rose is one arithmetic difference in the arc path
   computation; no new renderer file is needed. Historically also called a
   "coxcomb chart" after Florence Nightingale's diagram of the causes of
   mortality. Relationship to the `pie` renderer: coxcomb uses radial bars; pie
@@ -557,7 +559,7 @@ relationships are noted per entry.
 - **Orientation:** `n/a`
 - **Variants / modes:** `mode="radar"` (filled polygon, same as the `radar`
   renderer but as a miniature tiled glyph); `mode="star"` (line spokes without
-  fill); `mode="bar-glyph"` (radial bars per axis, similar to `polar-bar`).
+  fill); `mode="bar-glyph"` (radial bars per axis, similar to `nightingale`).
 - **Phase:** P5
 - **Notes:** The `radar` renderer (category 4) is the full-sized single-observation
   variant; the `glyph` renderer tiles many miniature instances. Axis values are
