@@ -103,9 +103,10 @@ jobs:
       - name: Setup the Virtual Environment
         # The 'test' extra brings the testbase runner (and Playwright, used
         # by the browser-tests job); 'templating' brings both template
-        # engines so the adapter tests run. The pydantic, gevent, toml and
-        # shell extras are not installed here: the suite has not been run
-        # with them yet.
+        # engines so the adapter tests run. Pydantic comes with the dev
+        # dependency group, so the Pydantic schema tests run. The gevent,
+        # toml and shell extras are not installed here: the suite has not
+        # been run with them yet.
         run: |
           python ./development/setup-environment
           poetry install --extras "templating test"

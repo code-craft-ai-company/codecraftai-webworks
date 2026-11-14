@@ -14,12 +14,13 @@ __credits__ = []
 
 import dataclasses
 import enum
+import functools
 import logging
 import typing
 
 from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Tuple, Type, get_origin, get_args
+from typing import Annotated, Any, Dict, List, Tuple, Type, get_origin, get_args
 from uuid import UUID
 
 from ccai.webworks.endpoints.rest.exceptions import ValidationError
@@ -52,6 +53,76 @@ def _is_pydantic_model_type(obj_type: Type) -> bool:
         return isinstance(obj_type, type) and issubclass(obj_type, BaseModel)
     except ImportError:
         return False
+
+
+def _skip_before_model_validator(cls, data: Any) -> Any:
+    """Stand-in for a ``mode="before"`` model validator in a partial model."""
+    return data
+
+
+def _skip_after_model_validator(self) -> Any:
+    """Stand-in for a ``mode="after"`` model validator in a partial model."""
+    return self
+
+
+def _skip_wrap_model_validator(cls, data: Any, handler: Any) -> Any:
+    """Stand-in for a ``mode="wrap"`` model validator in a partial model."""
+    return handler(data)
+
+
+@functools.lru_cache(maxsize=256)
+def _partial_pydantic_model(schema: Type) -> Type:
+    """
+        Derive the model a PATCH body is validated with from a Pydantic model.
+
+        The derived model is a subclass of ``schema`` in which no field is
+        required: a required field gets a default of None that is never
+        validated or returned. Everything that checks one field is inherited
+        and runs on each field the body sends: its type, its ``Field()``
+        constraints and alias, its field validators, and the model's policy
+        for unknown keys (``extra``). Model validators are replaced, by name,
+        with ones that do nothing: they check the whole resource, which a
+        partial body is not (validate it after merging, in
+        ``partial_update()``, or name a ``partial_update_schema``).
+
+        Args:
+            schema: Pydantic model class.
+
+        Returns:
+            The derived model class, built once per schema.
+    """
+    from pydantic import Field, create_model, model_validator
+
+    overrides: Dict[str, Any] = {}
+    for field_name, field_info in schema.model_fields.items():
+        if field_info.is_required():
+            # The original FieldInfo in Annotated keeps the constraints and
+            # alias; the assigned Field only makes the field optional.
+            overrides[field_name] = (
+                Annotated[field_info.annotation, field_info],
+                Field(default=None, validate_default=False),
+            )
+
+    stand_ins = {
+        "before": classmethod(_skip_before_model_validator),
+        "after": _skip_after_model_validator,
+        "wrap": classmethod(_skip_wrap_model_validator),
+    }
+    validators: Dict[str, Any] = {}
+    decorators = getattr(schema, "__pydantic_decorators__", None)
+    if decorators is not None:
+        for validator_name, decorator in decorators.model_validators.items():
+            mode = decorator.info.mode
+            validators[validator_name] = model_validator(mode=mode)(stand_ins[mode])
+
+    partial_model = create_model(
+        f"{schema.__name__}Partial",
+        __base__=schema,
+        __module__=schema.__module__,
+        __validators__=validators,
+        **overrides,
+    )
+    return partial_model
 
 
 def _is_optional_type(field_type: Type) -> bool:
@@ -127,7 +198,9 @@ class Validator:
                 partial: If True, required fields are optional (for PATCH operations).
             
             Returns:
-                Validated and coerced data as schema instance.
+                Validated and coerced data as a schema instance; with
+                partial=True, a dict of the validated fields present in
+                data (by field name).
             
             Raises:
                 ValidationError: If validation fails with field-level error details.
@@ -189,7 +262,8 @@ class Validator:
             Validate using Pydantic model.
             
             Uses Pydantic's model_validate() for validation. For partial updates,
-            creates a modified model with all fields optional.
+            validates with a derived model in which no field is required (see
+            _validate_pydantic_partial).
             
             Args:
                 data: Data to validate (should be a dict).
@@ -197,7 +271,8 @@ class Validator:
                 partial: If True, all required fields become optional.
             
             Returns:
-                Validated Pydantic model instance.
+                Validated Pydantic model instance, or for partial=True a dict
+                of the validated fields present in data.
             
             Raises:
                 ValidationError: On validation errors with field details.
@@ -218,8 +293,6 @@ class Validator:
             from pydantic import ValidationError as PydanticValidationError
             
             if partial:
-                # For partial validation, we validate only the provided fields
-                # by creating a partial model or using model_construct with validation
                 return self._validate_pydantic_partial(data, schema)
             else:
                 return schema.model_validate(data)
@@ -231,83 +304,44 @@ class Validator:
                 field_errors=field_errors
             )
     
-    def _validate_pydantic_partial(self, data: Dict[str, Any], schema: Type) -> Any:
+    def _validate_pydantic_partial(self, data: Dict[str, Any], schema: Type) -> Dict[str, Any]:
         """
-            Validate partial data against Pydantic model.
-            
-            For partial updates, only validates the fields that are present
-            in the data, allowing required fields to be omitted.
-            
+            Validate partial data against a Pydantic model.
+
+            Each field present in the data is validated as a full request
+            would validate it -- type, ``Field()`` constraints, field
+            validators, a nested model in full -- and a field that is absent
+            is not required. Unknown keys follow the model's ``extra``
+            setting. Model validators do not run; they check a whole
+            resource.
+
             Args:
                 data: Partial data to validate.
                 schema: Pydantic model class.
-            
+
             Returns:
-                Pydantic model instance with only provided fields set.
-            
+                Dict of the validated values of the fields present in the
+                data, by field name, in the model's field order; with
+                ``extra="allow"`` the unknown keys follow.
+
             Raises:
-                ValidationError: On validation errors for provided fields.
+                pydantic.ValidationError: On validation errors for provided
+                                          fields (converted by the caller).
         """
-        # Get model fields
-        model_fields = schema.model_fields
-        
-        # Validate each provided field individually
-        field_errors: List[FieldError] = []
-        validated_data: Dict[str, Any] = {}
-        
-        for field_name, value in data.items():
-            if field_name not in model_fields:
-                # Unknown field - could be an error or ignored based on model config
-                # For now, we'll include it and let Pydantic handle extra fields
-                validated_data[field_name] = value
-                continue
-            
-            field_info = model_fields[field_name]
-            field_type = field_info.annotation
-            
-            # Validate the individual field value
-            try:
-                # For nested Pydantic models, recursively validate
-                if _is_pydantic_model_type(field_type):
-                    if isinstance(value, dict):
-                        validated_data[field_name] = self._validate_pydantic(value, field_type, partial=False)
-                    else:
-                        validated_data[field_name] = value
-                else:
-                    validated_data[field_name] = value
-            except ValidationError as e:
-                # Prefix field errors with current field name
-                for fe in e.field_errors:
-                    prefixed_field = f"{field_name}.{fe.field}" if fe.field != "$" else field_name
-                    field_errors.append(FieldError(
-                        field=prefixed_field,
-                        code=fe.code,
-                        message=fe.message
-                    ))
-        
-        if field_errors:
-            raise ValidationError(
-                message="Request validation failed",
-                field_errors=field_errors
-            )
-        
-        # Use model_construct to create instance without full validation
-        # but we've already validated the provided fields
-        try:
-            # Try to validate with only the provided fields
-            # Create a temporary dict with defaults for missing required fields
-            return schema.model_construct(**validated_data)
-        except Exception as e:
-            raise ValidationError(
-                message=f"Failed to construct partial model: {e}",
-                field_errors=[
-                    FieldError(
-                        field="$",
-                        code="construction_error",
-                        message=str(e)
-                    )
-                ]
-            )
+        partial_model = _partial_pydantic_model(schema)
+        instance = partial_model.model_validate(data)
+
+        fields_set = instance.model_fields_set
+        validated: Dict[str, Any] = {}
+        for field_name in partial_model.model_fields:
+            if field_name in fields_set:
+                validated[field_name] = getattr(instance, field_name)
+
+        extra = instance.model_extra
+        if extra:
+            validated.update(extra)
+
+        return validated
     
     def _convert_pydantic_errors(self, pydantic_error) -> List[FieldError]:
         """

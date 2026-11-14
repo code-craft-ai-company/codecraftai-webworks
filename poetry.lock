@@ -4,14 +4,14 @@
 name = "annotated-types"
 version = "0.8.0"
 description = "Reusable constraint types to use with typing.Annotated"
-optional = true
+optional = false
 python-versions = ">=3.10"
-groups = ["main"]
-markers = "extra == \"pydantic\""
+groups = ["main", "dev"]
 files = [
     {file = "annotated_types-0.8.0-py3-none-any.whl", hash = "sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0"},
     {file = "annotated_types-0.8.0.tar.gz", hash = "sha256:13b2beaad985e05e2d6407ee4c4f35590b11f8d693a258a561055cac8f64cab7"},
 ]
+markers = {main = "extra == \"pydantic\""}
 
 [[package]]
 name = "asttokens"
@@ -1128,14 +1128,14 @@ files = [
 name = "pydantic"
 version = "2.14.3"
 description = "Data validation using Python type hints"
-optional = true
+optional = false
 python-versions = ">=3.10"
-groups = ["main"]
-markers = "extra == \"pydantic\""
+groups = ["main", "dev"]
 files = [
     {file = "pydantic-2.14.3-py3-none-any.whl", hash = "sha256:3f7b347782ab7e4cf4c798496ae3a82787d9f21ec12676a9c564355eeef8daa8"},
     {file = "pydantic-2.14.3.tar.gz", hash = "sha256:1054f237f4d4733e5a30e1e2333bd33a2004ab9ab1510bd053a9a31bb48e232d"},
 ]
+markers = {main = "extra == \"pydantic\""}
 
 [package.dependencies]
 annotated-types = ">=0.6.0"
@@ -1151,10 +1151,9 @@ timezone = ["tzdata ; platform_system == \"Windows\""]
 name = "pydantic-core"
 version = "2.50.4"
 description = "Core functionality for Pydantic validation and serialization"
-optional = true
+optional = false
 python-versions = ">=3.10"
-groups = ["main"]
-markers = "extra == \"pydantic\""
+groups = ["main", "dev"]
 files = [
     {file = "pydantic_core-2.50.4-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:83d2beac85b757bfc404c5c0612df51c4ef33bbb7be65cf4a96b4da7cbc4ff4f"},
     {file = "pydantic_core-2.50.4-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:76e0065998159244ff4c097a6c05ff08019c6fbb6e597a85846e73044f0215b3"},
@@ -1297,6 +1296,7 @@ files = [
     {file = "pydantic_core-2.50.4-pp311-pypy311_pp80-win_amd64.whl", hash = "sha256:3e0b395648c6cb871bceb2906907f255dc876ec425f2d5b024e129985cea8519"},
     {file = "pydantic_core-2.50.4.tar.gz", hash = "sha256:aead3b74b68396bf0feab5d57e050b730ded7df55853c1e048a87e00aaf033c6"},
 ]
+markers = {main = "extra == \"pydantic\""}
 
 [package.dependencies]
 typing-extensions = ">=4.16.0"
@@ -1555,25 +1555,25 @@ version = "4.16.0"
 description = "Backported and Experimental Type Hints for Python 3.9+"
 optional = false
 python-versions = ">=3.9"
-groups = ["main"]
-markers = "python_version == \"3.10\" or extra == \"pydantic\" or extra == \"shell\" and python_version < \"3.12\""
+groups = ["main", "dev"]
 files = [
     {file = "typing_extensions-4.16.0-py3-none-any.whl", hash = "sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"},
     {file = "typing_extensions-4.16.0.tar.gz", hash = "sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5"},
 ]
+markers = {main = "python_version == \"3.10\" or extra == \"pydantic\" or extra == \"shell\" and python_version < \"3.12\""}
 
 [[package]]
 name = "typing-inspection"
 version = "0.4.5"
 description = "Runtime typing introspection tools"
-optional = true
+optional = false
 python-versions = ">=3.10"
-groups = ["main"]
-markers = "extra == \"pydantic\""
+groups = ["main", "dev"]
 files = [
     {file = "typing_inspection-0.4.5-py3-none-any.whl", hash = "sha256:bc210535442b39e1bf2805e0c7a17dfd6a4ace760c84c7f7d16245d23a6b1c39"},
     {file = "typing_inspection-0.4.5.tar.gz", hash = "sha256:7f16c411e7930dc79596d42ab44672a3fe5f60eb34b781a1647e7872363120c7"},
 ]
+markers = {main = "extra == \"pydantic\""}
 
 [package.dependencies]
 typing-extensions = ">=4.15.0"
@@ -1723,4 +1723,4 @@ toml = ["tomli", "tomli-w"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4.0"
-content-hash = "d4ba0563e6fe2bdc9919393990563dfe4e857fea5f6123394c252483bcc1c11c"
+content-hash = "1d30eef67486915092409b08203c7eed960a759401d7813e6b94eae3cf9cbfdd"

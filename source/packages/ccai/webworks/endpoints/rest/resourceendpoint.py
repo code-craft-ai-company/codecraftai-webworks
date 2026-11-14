@@ -187,7 +187,11 @@ class ResourceEndpoint(RestEndpoint):
             Args:
                 id: Resource identifier from the path parameter.
                 payload: Deserialized partial request body. Only fields present
-                         in the payload should be updated.
+                         in the payload should be updated. Validated against
+                         request_schema, it is a dict of the fields the body
+                         sent, by field name (a dataclass or Pydantic schema
+                         alike); against partial_update_schema, an instance
+                         of that schema.
             
             Returns:
                 The updated resource object to be serialized and returned.
