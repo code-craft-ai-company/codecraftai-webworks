@@ -361,7 +361,7 @@ COMPONENTS = [
         css_properties=[
             ("--mj-select-border-radius", "Corner radius of the trigger and the popup (default `--mj-radius-md`)."),
             ("--mj-select-popup-min-width", "Minimum popup width (default: the trigger's width)."),
-            ("--mj-select-popup-max-height", "Maximum popup height before it scrolls (default 18rem)."),
+            ("--mj-select-popup-max-height", "Maximum height of the option list before it scrolls (default 18rem)."),
             ("--mj-select-option-padding", "Padding of option rows (default `--mj-space-2` `--mj-space-3`)."),
         ],
     ),

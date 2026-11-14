@@ -87,13 +87,25 @@ const STYLES = `
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+/*
+ * The empty message is a sibling of the listbox (a listbox owns only options
+ * and groups) laid over the top of the empty box. A click on its text falls
+ * through to the listbox; slotted elements such as links still take it.
+ */
+.frame { position: relative; }
 .empty {
+  position: absolute;
+  inset-block-start: 1px;
+  inset-inline: 1px;
   padding: var(--mj-space-4);
   color: var(--mj-text-muted);
   text-align: center;
   font-size: var(--mj-font-size-sm);
+  pointer-events: none;
 }
-:host([disabled]) .listbox { opacity: 0.55; pointer-events: none; }
+.empty ::slotted(*) { pointer-events: auto; }
+:host([disabled]) .listbox,
+:host([disabled]) .empty { opacity: 0.55; pointer-events: none; }
 :host([invalid]) .listbox { border-color: var(--mj-color-danger); }
 :host(:state(user-invalid)) .listbox { border-color: var(--mj-color-danger); }
 `;
@@ -163,19 +175,25 @@ export class MjListbox extends FormControlMixin(MjElement) {
 
   render() {
     const markup = `
-      <div
-        class="listbox"
-        part="listbox"
-        id="${this._listboxId}"
-        role="listbox"
-        tabindex="0"
-      ></div>
+      <div class="frame">
+        <div
+          class="listbox"
+          part="listbox"
+          id="${this._listboxId}"
+          role="listbox"
+          tabindex="0"
+        ></div>
+        <div class="empty" part="empty" id="${this._listboxId}-empty" hidden>
+          <slot name="empty"></slot>
+        </div>
+      </div>
     `
     return markup
   }
 
   afterRender() {
     this._el = this.$(".listbox")
+    this._emptyEl = this.$(".empty")
     this.listen(this._el, "keydown", this._onKeydown.bind(this))
     this.listen(this._el, "click", this._onClick.bind(this))
     this.listen(this._el, "focus", this._onFocus.bind(this))
@@ -357,19 +375,17 @@ export class MjListbox extends FormControlMixin(MjElement) {
     this._el.replaceChildren()
     this._optionData = []
 
-    if (optionEls.length === 0) {
-      const empty = document.createElement("div")
-      empty.className = "empty"
-      empty.setAttribute("part", "empty")
-      const slot = document.createElement("slot")
-      slot.name = "empty"
-      slot.textContent = t("mj.select.noOptions")
-      empty.appendChild(slot)
-      this._el.appendChild(empty)
+    /* The empty message is outside the listbox and describes it while shown. */
+    const isEmpty = optionEls.length === 0
+    this._emptyEl.hidden = isEmpty === false
+    if (isEmpty === true) {
+      this._emptyEl.querySelector("slot").textContent = t("mj.select.noOptions")
+      this._el.setAttribute("aria-describedby", this._emptyEl.id)
       this._focusedIndex = -1
       this._el.removeAttribute("aria-activedescendant")
       return
     }
+    this._el.removeAttribute("aria-describedby")
 
     /* <mj-optgroup> element -> the group node built for it. */
     const groupNodes = new Map()

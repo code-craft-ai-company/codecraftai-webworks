@@ -259,7 +259,8 @@ export class MjFeed extends MjElement {
       name = parts.join(" ").trim()
     }
 
-    if (name.length > 0) {
+    /* Only the feed takes the name: without its role (empty) the container is a plain div. */
+    if (name.length > 0 && this._feedEl.hasAttribute("role") === true) {
       this._feedEl.setAttribute("aria-label", name)
     } else {
       this._feedEl.removeAttribute("aria-label")
@@ -494,6 +495,7 @@ export class MjFeed extends MjElement {
     } else {
       this._feedEl.setAttribute("role", "feed")
     }
+    this._syncAccessibleName()
     return
   }
 

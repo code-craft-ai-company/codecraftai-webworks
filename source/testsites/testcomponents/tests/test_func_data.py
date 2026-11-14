@@ -25,6 +25,7 @@
 
 import ccai.testbase as testbase
 
+from testcomponents.harness.browsers import expect
 from testcomponents.harness.factories import create_page
 
 
@@ -225,6 +226,107 @@ def test_mj_table_programmatic_rows_update(page, base_url):
         "return el.shadowRoot.querySelector('tbody tr:not(.empty-row) th').textContent.trim(); }"
     )
     assert first_cell == "Cherry"
+
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_mj_table_hidden_column_label_still_names_the_header(page, base_url):
+    """
+        A column with ``labelHidden: true`` keeps its label for screen
+        readers only: the header has an accessible name (axe
+        empty-table-header) but no visible text, and the stacked layout shows
+        no line label for it.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    frame = _open(page, base_url, "mj-table")
+    _inject(
+        frame,
+        """() => {
+            document.body.innerHTML = '<mj-table id="hl" caption="Tasks"></mj-table>';
+            const el = document.getElementById('hl');
+            el.columns = [
+                { key: 'title', label: 'Title' },
+                { key: 'open', label: 'Actions', labelHidden: true }
+            ];
+            el.rows = [{ title: 'Write docs', open: 'Open' }];
+        }""",
+    )
+    frame.wait_for_function(
+        "() => document.getElementById('hl').shadowRoot.querySelectorAll('thead th').length === 2",
+        timeout=5000,
+    )
+
+    expect(frame.get_by_role("columnheader", name="Actions")).to_have_count(1)
+    result = frame.evaluate(
+        """() => {
+            const root = document.getElementById('hl').shadowRoot;
+            const label = root.querySelectorAll('thead th')[1].querySelector('.sr-label');
+            const box = label.getBoundingClientRect();
+            return {
+                text: label.textContent,
+                width: box.width,
+                dataLabel: root.querySelector('tbody td').getAttribute('data-label'),
+            };
+        }"""
+    )
+    assert result["text"] == "Actions", result
+    assert result["width"] <= 1, result
+    assert result["dataLabel"] == "", result
+
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_mj_table_wrapper_takes_focus_when_rows_overflow_a_sticky_header(page, base_url):
+    """
+        A ``sticky-header`` table scrolls vertically inside its bounded
+        wrapper. Once rows overflow it the wrapper becomes a focusable, named
+        region (axe scrollable-region-focusable) and ``mj-table-overflow``
+        fires; it stops being one when the rows fit again.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    frame = _open(page, base_url, "mj-table")
+    result = frame.evaluate(
+        """async () => {
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            document.body.innerHTML =
+                '<mj-table id="sh" caption="Build log" sticky-header style="--mj-table-max-height: 160px"></mj-table>';
+            const el = document.getElementById('sh');
+            const events = [];
+            el.addEventListener('mj-table-overflow', (event) => events.push(event.detail.overflowing));
+            el.columns = [{ key: 'step', label: 'Step' }, { key: 'state', label: 'State' }];
+            const rows = (count) => Array.from({ length: count }, (_, i) => ({ step: 'Step ' + i, state: 'ok' }));
+            const wrapper = el.shadowRoot.querySelector('.scroll-wrapper');
+            const read = () => ({
+                tabIndex: wrapper.getAttribute('tabindex'),
+                role: wrapper.getAttribute('role'),
+                label: wrapper.getAttribute('aria-label'),
+            });
+            el.rows = rows(2);
+            await wait(200);
+            const fits = read();
+            el.rows = rows(30);
+            await wait(200);
+            const overflows = read();
+            el.rows = rows(2);
+            await wait(200);
+            return { fits: fits, overflows: overflows, fitsAgain: read(), events: events };
+        }"""
+    )
+
+    assert result["fits"] == {"tabIndex": None, "role": None, "label": None}, result
+    assert result["overflows"] == {"tabIndex": "0", "role": "region", "label": "Build log"}, result
+    assert result["fitsAgain"] == {"tabIndex": None, "role": None, "label": None}, result
+    assert result["events"][-2:] == [True, False], result
 
     return
 
@@ -708,6 +810,84 @@ def test_mj_data_table_auto_height_grids_report_no_resize_observer_error(page, b
     style = page.evaluate("() => document.getElementById('pg-style').value")
     assert "280px" not in style and "170px" not in style, style
     assert [message for message in messages if "ResizeObserver" in message] == [], messages
+
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_mj_data_table_header_shares_the_row_scroller_and_holds_the_tab_stop(page, base_url):
+    """
+        The header rows sit inside the scroll container of the rows and stick
+        to its top, so the grid's one tab stop (a header cell at first) is
+        inside the region that scrolls (axe scrollable-region-focusable).
+        Scrolled down and sideways, the header stays on top and its cells and
+        filters stay aligned with the row cells; Ctrl+End shows the last row
+        below the header, not under it; the grid without a height of its own
+        is as tall as its header and rows up to --mj-dt-body-max-height.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    frame = _open(page, base_url, "mj-data-table")
+    result = frame.evaluate(
+        """async () => {
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            document.body.innerHTML =
+                '<mj-data-table id="hs" filterable sortable style="width: 320px; --mj-dt-body-max-height: 200px"></mj-data-table>';
+            const el = document.getElementById('hs');
+            el.columns = ['a', 'b', 'c', 'd'].map((key) => ({ key: key, label: key.toUpperCase(), width: '160px' }));
+            el.rows = Array.from({ length: 60 }, (_, i) => ({ a: 'a' + i, b: 'b' + i, c: 'c' + i, d: 'd' + i }));
+            await wait(300);
+            const sr = el.shadowRoot;
+            const body = sr.querySelector('.body-scroll');
+            const header = sr.querySelector('.header-viewport');
+            const rowHeight = sr.querySelector('.row').offsetHeight;
+            const aligned = () => {
+                const firstRow = Array.from(sr.querySelectorAll('.row')).sort((x, y) => x.offsetTop - y.offsetTop)[0];
+                const left = (node) => Math.round(node.getBoundingClientRect().left);
+                const heads = Array.from(sr.querySelectorAll('.header-cell')).map(left);
+                const filters = Array.from(sr.querySelectorAll('.filter-cell')).map(left);
+                const cells = Array.from(firstRow.children).map(left);
+                return JSON.stringify(heads) === JSON.stringify(cells) && JSON.stringify(filters) === JSON.stringify(cells);
+            };
+            const headerOnTop = () => Math.abs(header.getBoundingClientRect().top - body.getBoundingClientRect().top) < 1;
+            const initial = {
+                tabStopInScroller: body.contains(sr.querySelector('[tabindex="0"]')),
+                tabStopIsHeader: sr.querySelector('[tabindex="0"]').classList.contains('header-cell'),
+                bodyHeight: body.offsetHeight,
+                headerHeight: header.offsetHeight,
+            };
+            body.scrollTop = 400;
+            body.scrollLeft = 10000;
+            await wait(150);
+            const scrolled = { scrollLeft: body.scrollLeft > 0, headerOnTop: headerOnTop(), aligned: aligned() };
+            body.scrollLeft = 0;
+            sr.querySelector('[tabindex="0"]').focus();
+            sr.activeElement.dispatchEvent(new KeyboardEvent('keydown',
+                { key: 'End', ctrlKey: true, bubbles: true, composed: true, cancelable: true }));
+            await wait(200);
+            const cellBox = sr.activeElement.getBoundingClientRect();
+            const bodyBox = body.getBoundingClientRect();
+            const atEnd = {
+                rowIndex: sr.activeElement.parentElement.getAttribute('data-row-index'),
+                belowHeader: cellBox.top >= header.getBoundingClientRect().bottom - 1,
+                insideBody: cellBox.bottom <= bodyBox.top + body.clientHeight + 1,
+                tabStopInScroller: body.contains(sr.querySelector('[tabindex="0"]')),
+            };
+            return { rowHeight: rowHeight, initial: initial, scrolled: scrolled, atEnd: atEnd };
+        }"""
+    )
+
+    initial = result["initial"]
+    assert initial["tabStopInScroller"] is True, result
+    assert initial["tabStopIsHeader"] is True, result
+    assert initial["bodyHeight"] == initial["headerHeight"] + 200, result
+    assert result["scrolled"] == {"scrollLeft": True, "headerOnTop": True, "aligned": True}, result
+    assert result["atEnd"] == {
+        "rowIndex": "59", "belowHeader": True, "insideBody": True, "tabStopInScroller": True,
+    }, result
 
     return
 

@@ -21,6 +21,7 @@ import { MjElement, nextId } from "../core/mjelement.js";
 import { FormControlMixin } from "../core/forminternals.js";
 import { html } from "../core/html.js";
 import { t } from "../core/intl.js";
+import { announce } from "../core/announcer.js";
 
 const STYLES = `
 :host {
@@ -364,6 +365,10 @@ export class MjSearchInput extends FormControlMixin(MjElement) {
         this._suggestMode = true
       }
       this._renderPopup()
+      /* Said once when loading starts, while the user is in the field. */
+      if (newValue !== null && oldValue === null && this.shadowRoot.activeElement === this._input) {
+        announce(t("mj.searchInput.loadingSuggestions"))
+      }
     }
     this._syncAll()
     return
@@ -814,7 +819,11 @@ export class MjSearchInput extends FormControlMixin(MjElement) {
       const message = document.createElement("div")
       message.className = "loading-msg"
       message.setAttribute("part", "loading")
-      message.setAttribute("role", "status")
+      /*
+       * A listbox owns only options: the message is not one of its items.
+       * It is announced through the shared live region when loading starts.
+       */
+      message.setAttribute("role", "none")
       message.textContent = t("mj.searchInput.loadingSuggestions")
       this._popup.appendChild(message)
       this._popup.setAttribute("aria-busy", "true")

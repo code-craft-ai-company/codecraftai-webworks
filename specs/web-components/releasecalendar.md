@@ -159,7 +159,8 @@ each `mj-period-change`; the adapter is called with `{ start, end }` ISO strings
 
 ## 13. Accessibility
 
-- Root: `role="region"` with `aria-label` = "Release calendar, {month year} –
+- Root: `role="group"` (not a region landmark, which every calendar on a page would repeat) with
+  `aria-label` = "Release calendar, {month year} –
   {n} events".
 - Calendar grid inherits the `grid` role from the §5.8 Calendar grid component;
   each day cell is `role="gridcell"`.

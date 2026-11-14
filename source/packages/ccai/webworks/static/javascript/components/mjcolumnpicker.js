@@ -130,7 +130,8 @@ const STYLES = `
 
 .col-checkbox { flex-shrink: 0; accent-color: var(--mj-cp-checked-color, var(--mj-accent)); }
 .col-label { flex: 1; font-size: var(--mj-font-size-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.col-label.hidden-col { opacity: 0.5; }
+/* Muted, not faded: the label of a hidden column is still a control and keeps 4.5:1. */
+.col-label.hidden-col { color: var(--mj-text-muted); }
 
 .panel-footer {
   display: flex;

@@ -287,6 +287,7 @@ export class MjTreeSelector extends FormControlMixin(MjElement) {
                 tabindex="0"
                 aria-label="${label}"
             ></div>
+            <div part="empty" id="${this._treeId}-empty" hidden><slot name="empty"></slot></div>
             <div id="${this._liveId}" aria-live="polite" aria-atomic="true" class="sr-only"></div>
         `;
     }
@@ -623,12 +624,23 @@ export class MjTreeSelector extends FormControlMixin(MjElement) {
             treeEl.removeAttribute('aria-multiselectable');
         }
 
-        if (this._nodes.length === 0) {
-            treeEl.innerHTML = String(html`<div part="empty"><slot name="empty">${t('mj.treeSelector.empty')}</slot></div>`);
+        /*
+         * A tree owns only tree items and groups, so the empty message is a
+         * sibling of the tree (it may hold any slotted content) and describes
+         * the tree while it is shown.
+         */
+        const emptyEl = this.$('[part="empty"]');
+        const isEmpty = this._nodes.length === 0;
+        emptyEl.hidden = isEmpty === false;
+        if (isEmpty === true) {
+            treeEl.replaceChildren();
+            emptyEl.querySelector('slot').textContent = t('mj.treeSelector.empty');
+            treeEl.setAttribute('aria-describedby', emptyEl.id);
             this._focusedId = null;
             this._updateTabindex();
             return;
         }
+        treeEl.removeAttribute('aria-describedby');
 
         this._rowSeq = 0;
         treeEl.innerHTML = String(this._renderNodes(this._nodes, 1, new Set()));

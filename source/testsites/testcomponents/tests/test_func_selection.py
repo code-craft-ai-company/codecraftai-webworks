@@ -3633,6 +3633,139 @@ def test_transfer_list_labels_are_not_parsed_as_markup(base_url: str, page) -> N
     return
 
 
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_empty_listbox_select_and_tree_keep_their_message_out_of_the_items(base_url: str, page) -> None:
+    """
+    An empty mj-listbox, mj-select and mj-tree-selector keep their empty
+    message out of the listbox or tree element, which may own only options
+    or tree items (axe aria-required-children): the element stays empty, and
+    the message is a sibling that is shown and describes it. Once an item
+    arrives the message is hidden and the description goes away.
+
+    :param base_url: The running site URL fixture.
+    :param page: Playwright page fixture.
+    """
+
+    markup = (
+        '<mj-listbox id="lb" label="Fruits"></mj-listbox>'
+        '<mj-select id="sel" label="Fruit"></mj-select>'
+        '<mj-tree-selector id="tree" aria-label="Folders"></mj-tree-selector>'
+    )
+    load_fixture(page, base_url, markup, ["mj-listbox", "mj-select", "mj-tree-selector"])
+
+    result = page.evaluate(
+        """async () => {
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            await wait(150);
+            const read = (host, selector) => {
+                const root = document.getElementById(host).shadowRoot;
+                const owner = root.querySelector(selector);
+                const describedBy = owner.getAttribute("aria-describedby");
+                const message = describedBy === null ? null : root.getElementById(describedBy);
+                return {
+                    children: owner.childNodes.length,
+                    message: message === null ? null : {
+                        inside: owner.contains(message),
+                        hidden: message.hidden,
+                        text: message.querySelector("slot").assignedNodes({ flatten: true })
+                            .map((node) => node.textContent).join("").trim().length > 0,
+                    },
+                };
+            };
+            const empty = {
+                listbox: read("lb", "[role=listbox]"),
+                select: read("sel", "[role=listbox]"),
+                tree: read("tree", "[role=tree]"),
+            };
+            for (const host of ["lb", "sel"]) {
+                const option = document.createElement("mj-option");
+                option.setAttribute("value", "apple");
+                option.textContent = "Apple";
+                document.getElementById(host).appendChild(option);
+            }
+            document.getElementById("tree").nodes = [{ id: "docs", label: "Docs" }];
+            await wait(150);
+            const filled = (host, selector, part) => {
+                const root = document.getElementById(host).shadowRoot;
+                const message = root.querySelector(`[part="${part}"]`);
+                return {
+                    describedBy: root.querySelector(selector).getAttribute("aria-describedby"),
+                    messageHidden: message === null || message.hidden === true,
+                };
+            };
+            return {
+                empty: empty,
+                filled: {
+                    listbox: filled("lb", "[role=listbox]", "empty"),
+                    select: filled("sel", "[role=listbox]", "no-results"),
+                    tree: filled("tree", "[role=tree]", "empty"),
+                },
+            };
+        }"""
+    )
+
+    for name in ("listbox", "select", "tree"):
+        expected = {"children": 0, "message": {"inside": False, "hidden": False, "text": True}}
+        assert result["empty"][name] == expected, result
+        assert result["filled"][name] == {"describedBy": None, "messageHidden": True}, result
+
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_select_listbox_is_the_scroll_container_of_its_popup(base_url: str, page) -> None:
+    """
+    With more options than fit in ``--mj-select-popup-max-height`` the listbox
+    the combobox controls scrolls, not the popup around it (axe treats a
+    combobox's listbox as reachable through the combobox), and moving the
+    active option with the keyboard scrolls it into view.
+
+    :param base_url: The running site URL fixture.
+    :param page: Playwright page fixture.
+    """
+
+    options = "".join(f'<mj-option value="o{index}">Option {index}</mj-option>' for index in range(40))
+    markup = f'<mj-select id="many" label="Many">{options}</mj-select>'
+    load_fixture(page, base_url, markup, ["mj-select"])
+
+    result = page.evaluate(
+        """async () => {
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            const host = document.getElementById("many");
+            await wait(100);
+            const root = host.shadowRoot;
+            const trigger = root.querySelector("[role=combobox]");
+            trigger.focus();
+            trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+            await wait(100);
+            for (let step = 0; step < 30; step = step + 1) {
+                trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+            }
+            await wait(100);
+            const popup = root.querySelector(".popup");
+            const listbox = root.querySelector("[role=listbox]");
+            const active = root.getElementById(trigger.getAttribute("aria-activedescendant"));
+            const listBox = listbox.getBoundingClientRect();
+            const activeBox = active.getBoundingClientRect();
+            return {
+                open: host.hasAttribute("open"),
+                controls: trigger.getAttribute("aria-controls") === listbox.id,
+                listboxScrolls: listbox.scrollHeight > listbox.clientHeight && listbox.scrollTop > 0,
+                popupScrolls: popup.scrollHeight > popup.clientHeight,
+                activeInView: activeBox.top >= listBox.top - 1 && activeBox.bottom <= listBox.bottom + 1,
+            };
+        }"""
+    )
+
+    assert result == {
+        "open": True, "controls": True, "listboxScrolls": True, "popupScrolls": False, "activeInView": True,
+    }, result
+
+    return
+
+
 if __name__ == "__main__":
     from ccai.testbase.entrypoints import generic_test_entrypoint
     generic_test_entrypoint()

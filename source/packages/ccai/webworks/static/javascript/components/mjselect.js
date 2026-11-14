@@ -82,14 +82,21 @@ const STYLES = `
   box-shadow: var(--mj-elevation-2);
   /* At least as wide as the trigger (--_anchor-width, set on open) unless the page says otherwise. */
   min-inline-size: var(--mj-select-popup-min-width, var(--_anchor-width, 0px));
-  max-height: var(--mj-select-popup-max-height, 18rem);
-  overflow-y: auto;
   z-index: var(--mj-layer-popover);
   display: none;
 }
 :host([open]) .popup { display: block; }
 
-.listbox { padding: var(--mj-space-1) 0; }
+/*
+ * The listbox scrolls, not the popup around it: the element the combobox
+ * controls is the scroll container, which its arrow keys scroll.
+ */
+.listbox {
+  padding: var(--mj-space-1) 0;
+  max-height: var(--mj-select-popup-max-height, 18rem);
+  overflow-y: auto;
+}
+.listbox:empty { padding: 0; }
 
 .option {
   display: flex;
@@ -217,6 +224,9 @@ export class MjSelect extends FormControlMixin(MjElement) {
           role="listbox"
           tabindex="-1"
         ></div>
+        <div class="no-results" part="no-results" id="${this._listboxId}-empty" hidden>
+          <slot name="no-results"></slot>
+        </div>
       </div>
     `
     return markup
@@ -226,6 +236,7 @@ export class MjSelect extends FormControlMixin(MjElement) {
     this._trigger = this.$(".trigger")
     this._popup = this.$(".popup")
     this._listbox = this.$(".listbox")
+    this._noResults = this.$(".no-results")
     this._nameEl = this.$(`#${this._labelId}`)
 
     this.listen(this._trigger, "click", this._onTriggerClick.bind(this))
@@ -401,17 +412,19 @@ export class MjSelect extends FormControlMixin(MjElement) {
     this._listbox.replaceChildren()
     this._optionData = []
 
-    if (optionEls.length === 0) {
-      const empty = document.createElement("div")
-      empty.className = "no-results"
-      empty.setAttribute("part", "no-results")
-      const slot = document.createElement("slot")
-      slot.name = "no-results"
-      slot.textContent = t("mj.select.noOptions")
-      empty.appendChild(slot)
-      this._listbox.appendChild(empty)
+    /*
+     * A listbox owns only options and groups, so the empty message is a
+     * sibling of the listbox in the popup (it may hold any slotted content)
+     * and describes the listbox while it is shown.
+     */
+    const isEmpty = optionEls.length === 0
+    this._noResults.hidden = isEmpty === false
+    if (isEmpty === true) {
+      this._noResults.querySelector("slot").textContent = t("mj.select.noOptions")
+      this._listbox.setAttribute("aria-describedby", this._noResults.id)
       return
     }
+    this._listbox.removeAttribute("aria-describedby")
 
     /* <mj-optgroup> element -> the group node built for it. */
     const groupNodes = new Map()

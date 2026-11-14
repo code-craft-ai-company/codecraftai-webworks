@@ -2176,16 +2176,24 @@ _FOOTER_NAV = ComponentDoc(
         ComponentExample(
             key="variants",
             title="Centered and minimal",
-            description="<p><code>variant=\"centered\"</code> and <code>variant=\"minimal\"</code> (a single column).</p>",
+            description=(
+                "<p><code>variant=\"centered\"</code> and <code>variant=\"minimal\"</code> (a single column). "
+                "A page has one page-level footer, so each demo sits in its own section, where a footer is not "
+                "the page's <code>contentinfo</code> landmark.</p>"
+            ),
             html=_block("""
                 <div class="stack">
-                  <mj-footer-nav variant="centered" copyright="Northwind Ltd" nav-label="Centered footer">
-                    <strong slot="brand">Northwind</strong>
-                    <nav aria-label="Legal"><ul class="legal-links"><li><a href="#privacy">Privacy</a></li><li><a href="#terms">Terms</a></li></ul></nav>
-                  </mj-footer-nav>
-                  <mj-footer-nav variant="minimal" copyright="Northwind Ltd" nav-label="Minimal footer">
-                    <nav aria-label="Help"><ul><li><a href="#help">Help centre</a></li><li><a href="#contact">Contact</a></li></ul></nav>
-                  </mj-footer-nav>
+                  <section aria-label="Centered variant">
+                    <mj-footer-nav variant="centered" copyright="Northwind Ltd" nav-label="Centered footer">
+                      <strong slot="brand">Northwind</strong>
+                      <nav aria-label="Legal"><ul class="legal-links"><li><a href="#privacy">Privacy</a></li><li><a href="#terms">Terms</a></li></ul></nav>
+                    </mj-footer-nav>
+                  </section>
+                  <section aria-label="Minimal variant">
+                    <mj-footer-nav variant="minimal" copyright="Northwind Ltd" nav-label="Minimal footer">
+                      <nav aria-label="Help"><ul><li><a href="#help">Help centre</a></li><li><a href="#contact">Contact</a></li></ul></nav>
+                    </mj-footer-nav>
+                  </section>
                 </div>
             """),
             css=_FOOTER_CSS + ".stack { display: grid; gap: var(--mj-space-4); }\n.legal-links { justify-content: center; }\n",

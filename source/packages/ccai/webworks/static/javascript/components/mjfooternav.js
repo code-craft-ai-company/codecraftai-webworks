@@ -2,14 +2,17 @@
  * mjfooternav.js
  *
  * <mj-footer-nav> -- site-wide footer with grouped navigation links.
- * Renders a <footer role="contentinfo"> landmark containing <nav> column groups.
+ * Renders a <footer> containing <nav> column groups: the page's contentinfo
+ * landmark when it is not inside article, aside, main, nav or section.
  * Handles multi-column layout and optional copyright/legal bar.
  *
  * A click on any link inside the footer (groups, brand, social, legal) is
  * announced with the cancelable `mj-footer-nav-navigate` event through one
  * delegated listener on the host.
  *
- * WAI-ARIA: footer role="contentinfo"; each group is nav aria-label.
+ * WAI-ARIA: the footer's own role (contentinfo at page level); each group is
+ * nav aria-label. No explicit role="contentinfo": a footer nav placed inside
+ * a section or an article is not the page footer.
  */
 
 import { MjElement } from "../core/mjelement.js";
@@ -90,7 +93,7 @@ export class MjFooterNav extends MjElement {
   render() {
     /* The label and the copyright text are applied in afterRender. */
     const markup = html`
-      <footer role="contentinfo">
+      <footer>
         <div class="root" part="root">
           <div class="brand-area" part="brand"><slot name="brand"></slot></div>
           <div class="social-area" part="social"><slot name="social"></slot></div>

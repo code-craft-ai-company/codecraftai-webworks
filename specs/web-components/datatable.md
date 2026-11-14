@@ -33,11 +33,13 @@ correct choice.
 - **Toolbar area** — slot for `<mj-column-picker>`, `<mj-bulk-action-bar>`, search,
   and custom actions above the grid.
 - **Column header row** — each header cell contains: sort indicator, resize handle,
-  drag handle, pin toggle, and an optional per-column filter input.
+  drag handle, pin toggle, and an optional per-column filter input. The header rows
+  are inside the body's scroll container and stick to its top: they scroll sideways
+  with the rows, and the grid's tab stop is always inside the region that scrolls.
 - **Pinned-left / pinned-right regions** — sticky column groups rendered in their
   own scroll-synchronized `<div>` elements.
-- **Scrollable body** — virtualized row container; only the visible window of rows
-  is in the DOM.
+- **Scrollable body** (`::part(body)`) — the scroll container of the header rows and
+  the virtualized rows; only the visible window of rows is in the DOM.
 - **Virtual row** — one `role="row"` element per rendered slot; recycled via pool.
 - **Cell** — `role="gridcell"`; in edit mode becomes an editable region or hosts an
   input control.

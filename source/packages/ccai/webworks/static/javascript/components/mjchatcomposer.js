@@ -92,9 +92,12 @@ const STYLES = `
 
 .input-textarea::placeholder { color: var(--mj-text-muted); }
 
-:host([disabled]) .input-textarea,
-:host([loading]) .input-textarea {
+:host([disabled]) .input-textarea {
   opacity: 0.55;
+}
+/* Sending: the text is read-only, not inactive, so it stays readable (muted, 4.5:1) rather than faded. */
+:host([loading]) .input-textarea {
+  color: var(--mj-text-muted);
 }
 
 :host([disabled]) .composer-root {
@@ -369,7 +372,7 @@ export class MjChatComposer extends MjElement {
 
   render() {
     const markup = html`
-      <div class="composer-root" role="form" part="root">
+      <div class="composer-root" part="root">
         <div class="reply-preview" part="reply-preview" hidden role="note"
              aria-label="${t("mj.chatComposer.replyPreviewLabel")}">
           <span class="reply-preview-text" part="reply-preview-text"></span>
@@ -488,7 +491,19 @@ export class MjChatComposer extends MjElement {
     const loading = this.hasAttribute("loading")
     const busy = disabled === true || loading === true
 
-    this._root.setAttribute("aria-label", label)
+    /*
+     * role="form" is a landmark and must be named. Only a label the page
+     * gives makes the composer one, so several composers with the default
+     * name do not repeat the same landmark; without it the root is a plain
+     * container. The textarea always carries the name.
+     */
+    if (this.hasAttribute("label") === true) {
+      this._root.setAttribute("role", "form")
+      this._root.setAttribute("aria-label", label)
+    } else {
+      this._root.removeAttribute("role")
+      this._root.removeAttribute("aria-label")
+    }
     this._root.setAttribute("aria-busy", loading === true ? "true" : "false")
     this._textarea.setAttribute("placeholder", placeholder)
     this._textarea.setAttribute("aria-label", label)

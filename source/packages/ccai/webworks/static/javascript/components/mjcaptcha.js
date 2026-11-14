@@ -251,12 +251,16 @@ export class MjCaptcha extends FormControlMixin(MjElement) {
   _syncAll() {
     const label = this.getAttribute("label") || ""
     const helpText = this.getAttribute("help-text") || ""
-    const required = this.hasAttribute("required")
     const disabled = this._isDisabled()
 
     this._labelEl.textContent = label
     this._helpEl.textContent = helpText
-    this._containerEl.setAttribute("aria-required", required === true ? "true" : "false")
+    /*
+     * `aria-required` is not allowed on the group role, so the required
+     * state is not put on the container: it is enforced through validity
+     * (valueMissing, reportValidity()) and the visible label should say
+     * that the verification is required.
+     */
     this._containerEl.setAttribute("aria-disabled", disabled === true ? "true" : "false")
     this._containerEl.toggleAttribute("data-disabled", disabled === true)
     this._updateDescribedBy()

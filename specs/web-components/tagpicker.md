@@ -118,7 +118,7 @@
 | Max count reached | Input stays focusable and is described by the max-count hint; suggestions do not open | Live region: "Maximum N tags reached" when an add is attempted |
 | Token focused | Token has focus ring | Natural tab focus on token remove button |
 | Disabled | Container muted; no interactions | `aria-disabled="true"` |
-| Readonly | Tokens shown without remove buttons | `aria-readonly="true"` |
+| Readonly | Tokens shown without remove buttons | The combobox input is `readonly` |
 | Invalid | Error border on container | `aria-invalid="true"` |
 
 ## 11. Behavior & interactions

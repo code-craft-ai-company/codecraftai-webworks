@@ -2236,6 +2236,45 @@ def test_feed_takes_its_name_from_the_host(page, base_url):
     return
 
 
+@testbase.attach.parameter(create_page, identifier="page")
+def test_empty_feed_container_takes_no_name_until_it_is_a_feed(page, base_url):
+    """
+        An empty feed that is not loading has no role on its container, so
+        the host's name is not put there (axe aria-prohibited-attr); once an
+        item arrives the container is the feed again and is named.
+
+        :param page: The Playwright page fixture.
+        :param base_url: The site base URL fixture.
+    """
+
+    html = '<mj-feed id="ef" aria-label="Team updates"></mj-feed>'
+    frame = _render_custom_html(
+        page, base_url, group="layout", anchor_tag="mj-feed", html=html
+    )
+    _wait_for_upgrade(frame, "#ef", ".items-container")
+
+    result = frame.evaluate(
+        """async () => {
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            const feed = document.getElementById("ef");
+            const container = () => feed.shadowRoot.querySelector(".items-container");
+            const read = () => ({ role: container().getAttribute("role"), label: container().getAttribute("aria-label") });
+            await wait(50);
+            const empty = read();
+            const item = document.createElement("article");
+            item.innerHTML = "<h3>One</h3>";
+            feed.appendChild(item);
+            await wait(100);
+            return { empty: empty, filled: read() };
+        }"""
+    )
+
+    assert result["empty"] == {"role": None, "label": None}, result
+    assert result["filled"] == {"role": "feed", "label": "Team updates"}, result
+
+    return
+
+
 # ---------------------------------------------------------------------------
 # mj-media-object
 # ---------------------------------------------------------------------------

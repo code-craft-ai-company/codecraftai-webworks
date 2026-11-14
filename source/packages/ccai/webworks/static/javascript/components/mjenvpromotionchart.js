@@ -115,7 +115,7 @@ export class MjEnvPromotionChart extends PmChartElement {
 
   render() {
     const markup = html`
-      <div class="wrapper" part="wrapper" role="region" aria-label="${t("mj.envPromotionChart.label")}">
+      <div class="wrapper" part="wrapper" role="group" aria-label="${t("mj.envPromotionChart.label")}">
         <div class="toolbar header">
           <strong class="toolbar-title">${t("mj.envPromotionChart.title")}</strong>
           <span class="artifact-label"></span>

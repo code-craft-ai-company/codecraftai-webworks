@@ -16,6 +16,7 @@ import ccai.testbase as testbase
 
 from testcomponents.harness.browsers import expect
 from testcomponents.harness.factories import create_page
+from testcomponents.harness.fixtures import load_fixture
 
 
 # ---------------------------------------------------------------------------
@@ -3786,6 +3787,48 @@ def test_character_counter_emits_mj_count_change(base_url, page):
     events = _get_events(frame=frame)
     count_events = [e for e in events if e["name"] == "mj-count-change"]
     assert len(count_events) > 0
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_search_input_loading_message_is_announced_not_owned_by_the_listbox(page, base_url):
+    """
+        While mj-search-input loads suggestions its listbox shows a message
+        that is not an option (role none, axe aria-required-children), and
+        the start of loading is announced through the shared polite live
+        region while the user is in the field.
+
+        :param page: The Playwright page fixture.
+        :param base_url: The site base URL fixture.
+    """
+
+    load_fixture(page, base_url, '<mj-search-input id="si" label="Search"></mj-search-input>', ["mj-search-input"])
+    page.locator("#si input").focus()
+
+    result = page.evaluate(
+        """async () => {
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            const host = document.getElementById("si");
+            host.setAttribute("loading", "");
+            await wait(150);
+            const popup = host.shadowRoot.querySelector(".popup");
+            const regions = Array.from(document.querySelectorAll('[aria-live="polite"]'))
+                .filter((region) => region.getRootNode() === document);
+            return {
+                popupRole: popup.getAttribute("role"),
+                popupHidden: popup.hidden,
+                childRoles: Array.from(popup.children).map((child) => child.getAttribute("role")),
+                announced: regions.map((region) => region.textContent),
+            };
+        }"""
+    )
+
+    assert result["popupRole"] == "listbox", result
+    assert result["popupHidden"] is False, result
+    assert result["childRoles"] == ["none"], result
+    assert "Loading suggestions…" in result["announced"], result
+
     return
 
 

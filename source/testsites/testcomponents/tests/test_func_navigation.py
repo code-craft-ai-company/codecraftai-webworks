@@ -2402,7 +2402,9 @@ def test_skip_link_bare_id_target_focuses_target(page, base_url):
 @testbase.attach.parameter(create_page, identifier="page")
 def test_footer_nav_renders_contentinfo_landmark(page, base_url):
     """
-        mj-footer-nav renders a <footer role=contentinfo> landmark.
+        mj-footer-nav renders a <footer> that is the contentinfo landmark at
+        page level and not inside a section, the way a native footer is
+        (there is no explicit role="contentinfo").
 
         :param page: Playwright page fixture.
         :param base_url: Site base URL fixture.
@@ -2410,15 +2412,22 @@ def test_footer_nav_renders_contentinfo_landmark(page, base_url):
 
     frame = _open_component(page=page, base_url=base_url, tag="mj-footer-nav")
     frame.wait_for_function(
-        "() => document.querySelector('mj-footer-nav') !== null",
+        "() => customElements.get('mj-footer-nav') !== undefined",
         timeout=5000,
     )
-
-    has_footer = frame.evaluate(
-        "() => { const el = document.querySelector('mj-footer-nav'); "
-        "return el.shadowRoot.querySelector('footer[role=\"contentinfo\"]') !== null; }"
+    frame.evaluate(
+        """async () => {
+            document.body.innerHTML =
+                '<section aria-label="Demo"><mj-footer-nav nav-label="Nested"></mj-footer-nav></section>'
+                + '<mj-footer-nav nav-label="Page"></mj-footer-nav>';
+            await new Promise((resolve) => setTimeout(resolve, 200));
+        }"""
     )
-    assert has_footer is True, "mj-footer-nav should render footer[role=contentinfo]"
+
+    landmarks = frame.get_by_role("contentinfo")
+    expect(landmarks).to_have_count(1)
+    owner = landmarks.evaluate("(footer) => footer.getRootNode().host.getAttribute('nav-label')")
+    assert owner == "Page", f"Expected only the page-level footer nav to be contentinfo, got {owner}"
     return
 
 

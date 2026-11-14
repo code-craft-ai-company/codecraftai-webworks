@@ -564,7 +564,17 @@ export class MjUploadButton extends MjElement {
             } else {
                 this._button.removeAttribute("disabled");
             }
-            this._button.setAttribute("aria-busy", this.hasAttribute("loading") === true ? "true" : "false");
+            /*
+             * While loading the button keeps focus but takes no click, so it
+             * is reported as unavailable as well as busy.
+             */
+            const loading = this.hasAttribute("loading") === true;
+            this._button.setAttribute("aria-busy", loading === true ? "true" : "false");
+            if (loading === true && disabled === false) {
+                this._button.setAttribute("aria-disabled", "true");
+            } else {
+                this._button.removeAttribute("aria-disabled");
+            }
             /*
              * `aria-required` is not allowed on the button role, so the
              * required state is not put on the button: it is enforced

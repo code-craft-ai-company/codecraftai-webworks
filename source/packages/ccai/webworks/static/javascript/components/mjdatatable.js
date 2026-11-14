@@ -53,9 +53,18 @@ const STYLES = `
   outline: none;
 }
 
+/*
+ * The header rows sit inside the body's scroll container and stick to its
+ * top: they scroll sideways with the rows, and the grid's tab stop (a header
+ * cell or a data cell) is always inside the region that scrolls. The header
+ * is as wide as the columns, so its background and border follow the rows.
+ */
 .header-viewport {
-  overflow: hidden;
-  flex-shrink: 0;
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  inline-size: max-content;
+  min-inline-size: 100%;
   background: var(--mj-dt-header-bg, var(--mj-bg-subtle));
   border-block-end: 2px solid var(--mj-border-strong);
 }
@@ -125,15 +134,22 @@ const STYLES = `
 }
 
 /*
- * Without an explicit host height the body is as tall as its rows up to
- * --mj-dt-body-max-height, then it scrolls. A host with its own height wins:
- * the body grows or shrinks to fill it.
+ * Without an explicit host height the body is as tall as its header and rows,
+ * with the rows up to --mj-dt-body-max-height, then it scrolls. A host with
+ * its own height wins: the body grows or shrinks to fill it.
+ * --mj-dt-content-height (header and rows) and --_dt-header-height are set by
+ * the component; the scroll padding keeps a row scrolled into view from
+ * ending up under the sticky header.
  */
 .body-scroll {
-  flex: 1 1 min(var(--mj-dt-content-height, 0px), var(--mj-dt-body-max-height, 400px));
+  flex: 1 1 min(
+    var(--mj-dt-content-height, 0px),
+    calc(var(--mj-dt-body-max-height, 400px) + var(--_dt-header-height, 0px))
+  );
   min-block-size: 0;
   overflow: auto;
   position: relative;
+  scroll-padding-block-start: var(--_dt-header-height, 0px);
 }
 
 .body-inner { position: relative; }
@@ -201,7 +217,23 @@ const STYLES = `
   color: var(--mj-text-muted);
 }
 
-:host([loading]) .body-scroll { opacity: 0.5; pointer-events: none; }
+/*
+ * Loading: the rows stay readable (a fade would take muted cells under 4.5:1)
+ * and take no input; the header's bottom border pulses in the accent colour,
+ * and the grid reports aria-busy.
+ */
+:host([loading]) .body-inner { pointer-events: none; }
+:host([loading]) .header-viewport {
+  border-block-end-color: var(--mj-accent);
+  animation: mj-dt-loading 1.2s ease-in-out infinite alternate;
+}
+@keyframes mj-dt-loading {
+  from { border-block-end-color: var(--mj-border-strong); }
+  to { border-block-end-color: var(--mj-accent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :host([loading]) .header-viewport { animation: none; }
+}
 `;
 
 const DEFAULT_COLUMN_WIDTH = "160px";
@@ -428,10 +460,10 @@ export class MjDataTable extends MjElement {
       <div class="toolbar" part="toolbar"><slot name="toolbar"></slot></div>
       <div class="grid-root" part="grid-root" role="grid"
            aria-rowcount="-1" aria-colcount="0">
-        <div class="header-viewport">
-          <div class="header-row" part="header-row" role="row" aria-rowindex="1"></div>
-        </div>
         <div class="body-scroll" part="body">
+          <div class="header-viewport">
+            <div class="header-row" part="header-row" role="row" aria-rowindex="1"></div>
+          </div>
           <div class="body-inner" part="body-inner"></div>
         </div>
       </div>
@@ -466,7 +498,6 @@ export class MjDataTable extends MjElement {
 
     this.listen(this._gridRoot, "keydown", this._onGridKeydown.bind(this))
     this.listen(this._bodyScroll, "scroll", this._onScroll.bind(this))
-    this.listen(this._headerViewport, "scroll", this._onHeaderScroll.bind(this))
 
     /* One delegated listener per interaction instead of one per cell. */
     this.listen(this._bodyInner, "click", this._onBodyClick.bind(this))
@@ -757,8 +788,8 @@ export class MjDataTable extends MjElement {
   }
 
   /*
-   * Keep the body as wide as the columns and the header aligned with it
-   * (same width, same horizontal offset, room for the vertical scrollbar).
+   * Keep the rows as wide as the columns. The header shares the rows' scroll
+   * container, so it needs no alignment of its own.
    */
   _syncColumnMetrics() {
     const headerCells = this._headerRow.querySelectorAll(".header-cell")
@@ -767,14 +798,36 @@ export class MjDataTable extends MjElement {
       totalWidth = totalWidth + headerCells[i].offsetWidth
     }
     this._bodyInner.style.minWidth = totalWidth > 0 ? `${totalWidth}px` : ""
+    return
+  }
 
-    const gutter = this._bodyScroll.offsetWidth - this._bodyScroll.clientWidth
-    const gutterCss = gutter > 0 ? `${gutter}px` : "0"
-    this._headerRow.style.paddingInlineEnd = gutterCss
-    if (this._filterRow !== null) {
-      this._filterRow.style.paddingInlineEnd = gutterCss
+  /* Height of the sticky header rows (column headers and filters). */
+  _headerHeight() {
+    const height = this._headerViewport.offsetHeight
+    return height
+  }
+
+  /*
+   * Height of the part of the scroll container that shows rows: below the
+   * sticky header. 400 before the container has been laid out.
+   */
+  _rowViewHeight() {
+    const clientHeight = this._bodyScroll.clientHeight
+    let height = 400
+    if (clientHeight > 0) {
+      height = Math.max(0, clientHeight - this._headerHeight())
     }
-    this._headerViewport.scrollLeft = this._bodyScroll.scrollLeft
+    return height
+  }
+
+  /*
+   * Size the scroll container for `contentHeight` px of rows (or empty state)
+   * below the header; see the .body-scroll rule.
+   */
+  _setContentHeight(contentHeight) {
+    const headerHeight = this._headerHeight()
+    this._bodyScroll.style.setProperty("--_dt-header-height", `${headerHeight}px`)
+    this._bodyScroll.style.setProperty("--mj-dt-content-height", `${headerHeight + contentHeight}px`)
     return
   }
 
@@ -950,10 +1003,14 @@ export class MjDataTable extends MjElement {
 
     const scrollHeight = this._vw.scrollHeight()
     this._bodyInner.style.height = `${scrollHeight}px`
-    this._bodyScroll.style.setProperty("--mj-dt-content-height", `${scrollHeight}px`)
+    this._setContentHeight(scrollHeight)
     this._syncEmptyState()
 
-    const viewH = this._bodyScroll.clientHeight || 400
+    /*
+     * The rows start below the header in the scroll container, so a
+     * scrollTop is also the offset of the first row in view.
+     */
+    const viewH = this._rowViewHeight()
     const win = this._vw.range(this._bodyScroll.scrollTop, viewH)
 
     /* The focused row stays rendered while scrolled away so focus survives. */
@@ -1116,7 +1173,7 @@ export class MjDataTable extends MjElement {
     /* Fallback content of the slot: shown unless the host slots its own. */
     const fallback = this._emptyEl.querySelector("slot")
     fallback.textContent = this.getAttribute("empty-label") || t("core.noResults")
-    this._bodyScroll.style.setProperty("--mj-dt-content-height", `${this._emptyEl.offsetHeight}px`)
+    this._setContentHeight(this._emptyEl.offsetHeight)
     return
   }
 
@@ -1142,16 +1199,21 @@ export class MjDataTable extends MjElement {
     }
     let lastHeight = -1
     let lastWidth = -1
+    let lastHeaderHeight = -1
     const observer = new ResizeObserver(() => {
       const height = this._bodyScroll.clientHeight
       const width = this._bodyScroll.clientWidth
-      if (height !== lastHeight || width !== lastWidth) {
+      const headerHeight = this._headerHeight()
+      if (height !== lastHeight || width !== lastWidth || headerHeight !== lastHeaderHeight) {
         lastHeight = height
         lastWidth = width
+        lastHeaderHeight = headerHeight
         this._scheduleRowRender()
       }
     })
     observer.observe(this._bodyScroll)
+    /* The header can change height on its own (fonts, a wrapped filter row). */
+    observer.observe(this._headerViewport)
     this.onTeardown(() => { observer.disconnect() })
     return
   }
@@ -1260,7 +1322,7 @@ export class MjDataTable extends MjElement {
     if (row >= 0) {
       const rowH = this._vw.rowHeight
       const top = row * rowH
-      const viewH = this._bodyScroll.clientHeight
+      const viewH = this._rowViewHeight()
       if (top < this._bodyScroll.scrollTop) {
         this._bodyScroll.scrollTop = top
       } else if (top + rowH > this._bodyScroll.scrollTop + viewH) {
@@ -1691,20 +1753,9 @@ export class MjDataTable extends MjElement {
 
   /* ----- scrolling ----- */
 
+  /* The rows in view are rendered on the next frame. */
   _onScroll() {
-    /* The header follows horizontal scrolling at once; rows on the next frame. */
-    if (this._headerViewport.scrollLeft !== this._bodyScroll.scrollLeft) {
-      this._headerViewport.scrollLeft = this._bodyScroll.scrollLeft
-    }
     this._scheduleRowRender()
-    return
-  }
-
-  /* Focusing a clipped header cell scrolls the header; the body follows. */
-  _onHeaderScroll() {
-    if (this._bodyScroll.scrollLeft !== this._headerViewport.scrollLeft) {
-      this._bodyScroll.scrollLeft = this._headerViewport.scrollLeft
-    }
     return
   }
 
@@ -1742,7 +1793,7 @@ export class MjDataTable extends MjElement {
 
     const cur = this._focus
     const lastRow = this._total - 1
-    const pageRows = Math.max(1, Math.floor(this._bodyScroll.clientHeight / this._vw.rowHeight) - 1)
+    const pageRows = Math.max(1, Math.floor(this._rowViewHeight() / this._vw.rowHeight) - 1)
     const withCtrl = event.ctrlKey === true || event.metaKey === true
     let nextRow = cur.row
     let nextCol = cur.col

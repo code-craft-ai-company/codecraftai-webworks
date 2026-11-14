@@ -1228,11 +1228,8 @@ export class MjTagPicker extends FormControlMixin(MjElement) {
             } else {
                 container.removeAttribute('aria-disabled');
             }
-            if (readonly) {
-                container.setAttribute('aria-readonly', 'true');
-            } else {
-                container.removeAttribute('aria-readonly');
-            }
+            /* Read-only is exposed by the combobox input (input.readOnly);
+               the container has no role that takes aria-readonly. */
         }
 
         const hint = this.$('[part="max-count"]');

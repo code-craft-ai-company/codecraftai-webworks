@@ -309,7 +309,7 @@ table.columns = [
   { key: "title", label: "Title", rowHeader: true },
   { key: "status", label: "Status", render: (row) => pill(row.status) },
   { key: "points", label: "Points", cellAttrs: () => ({ part: "td num" }) },
-  { key: "open", label: "", render: (row) => link(row) }
+  { key: "open", label: "Actions", labelHidden: true, render: (row) => link(row) }
 ]
 table.rowAttrs = (row) => ({
   "data-task-id": row.id,
@@ -2745,7 +2745,7 @@ auto.addEventListener("mj-layout-change", (event) => {
   border-radius: var(--mj-radius-md);
   --mj-md-divider-width: 6px;
   --mj-md-divider-color: var(--mj-border-strong);
-  --mj-md-selected-item-bg: var(--mj-color-accent-100);
+  --mj-md-selected-item-bg: color-mix(in srgb, var(--mj-accent) 22%, var(--mj-surface));
   --mj-md-detail-bg: var(--mj-bg-subtle);
 }
 .pad { padding: var(--mj-space-4); }""",
@@ -3370,7 +3370,7 @@ const selected = new Set()
 const rows = Array.from({ length: 40 }, (_, i) => ({ id: "msg-" + (i + 1), subject: "Message " + (i + 1), from: ["Ana", "Ben", "Cai", "Dee"][i % 4] }))
 table.columns = [
   {
-    key: "pick", label: "", rowHeader: false, width: "3rem",
+    key: "pick", label: "Select", labelHidden: true, rowHeader: false, width: "3rem",
     render: (row) => {
       const selector = document.createElement("mj-row-selector")
       selector.value = row.id
@@ -3997,7 +3997,7 @@ syncHeader()
 const chosen = new Set(["db-02"])
 table.columns = [
   {
-    key: "select", label: "", rowHeader: false, width: "3rem",
+    key: "select", label: "Restart", labelHidden: true, rowHeader: false, width: "3rem",
     render: (row) => {
       const selector = document.createElement("mj-row-selector")
       selector.value = row.host

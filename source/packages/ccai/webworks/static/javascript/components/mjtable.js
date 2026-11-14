@@ -10,11 +10,13 @@
  * <table> child, which is read once into columns and rows (so the page still
  * shows a plain table when scripting is unavailable).
  *
- * Column options: `{ key, label, width?, rowHeader?, priority?, render?,
- * cellClass?, cellAttrs? }`. The first column is the row header (`<th
+ * Column options: `{ key, label, labelHidden?, width?, rowHeader?, priority?,
+ * render?, cellClass?, cellAttrs? }`. The first column is the row header (`<th
  * scope="row">`) unless it sets `rowHeader: false`; any column may opt in with
  * `rowHeader: true`. With `responsive="priority"` the columns with the highest
  * `priority` number are hidden first when the table does not fit.
+ * `labelHidden: true` keeps the label for screen readers only (a selection or
+ * action column with no visible heading still has a named header).
  */
 
 import { MjElement, nextId } from "../core/mjelement.js";
@@ -112,7 +114,8 @@ tbody th { font-weight: var(--mj-table-row-header-weight, var(--mj-font-weight-m
 
 .col-hidden { display: none; }
 
-.summary {
+.summary,
+.sr-label {
   position: absolute;
   width: 1px; height: 1px;
   overflow: hidden;
@@ -516,6 +519,13 @@ export class MjTable extends MjElement {
       })
     })
     this._resizeObserver.observe(this._wrapper)
+    /*
+     * The table also changes size without a render (web fonts, custom
+     * elements in cells upgrading), and a sticky-header wrapper at its max
+     * height then keeps its size. The passes above hide and show columns
+     * within one task, so an unchanged net size is not reported.
+     */
+    this._resizeObserver.observe(this._table)
     this.onTeardown(() => {
       this._resizeObserver.disconnect()
       if (this._resizeFrame !== 0) {
@@ -607,11 +617,15 @@ export class MjTable extends MjElement {
 
   /*
    * The wrapper is a focusable, labelled region only while the table
-   * overflows it (so keyboard users can scroll it); `mj-table-overflow`
-   * fires when that state changes.
+   * overflows it (so keyboard users can scroll it): wider than the wrapper,
+   * or taller than a bounded wrapper (sticky-header, --mj-table-max-height).
+   * `mj-table-overflow` fires when that state changes.
    */
   _checkOverflow() {
-    const isOverflowing = this._table.scrollWidth > this._wrapper.clientWidth
+    const isWider = this._table.scrollWidth > this._wrapper.clientWidth
+    /* 1px of slack: the two heights round differently at fractional zoom. */
+    const isTaller = this._wrapper.scrollHeight > this._wrapper.clientHeight + 1
+    const isOverflowing = isWider === true || isTaller === true
     if (isOverflowing === true) {
       this._wrapper.setAttribute("role", "region")
       this._wrapper.setAttribute("aria-label", this._accessibleName())
@@ -697,7 +711,14 @@ export class MjTable extends MjElement {
       const th = document.createElement("th")
       th.setAttribute("scope", "col")
       th.setAttribute("part", "th")
-      th.textContent = this._columnLabel(col)
+      if (col.labelHidden === true) {
+        const label = document.createElement("span")
+        label.className = "sr-label"
+        label.textContent = this._columnLabel(col)
+        th.appendChild(label)
+      } else {
+        th.textContent = this._columnLabel(col)
+      }
       if (col.width !== undefined && col.width !== null) {
         th.style.width = typeof col.width === "number" ? `${col.width}px` : String(col.width)
       }
@@ -743,8 +764,8 @@ export class MjTable extends MjElement {
         _fillCell(cell, value, row, col, rowIdx)
         _applyCellHooks(cell, row, col, rowIdx)
 
-        /* Shown as the line label when responsive="stack" is active. */
-        cell.setAttribute("data-label", this._columnLabel(col))
+        /* Shown as the line label when responsive="stack" is active (not for a hidden label). */
+        cell.setAttribute("data-label", col.labelHidden === true ? "" : this._columnLabel(col))
 
         tr.appendChild(cell)
       }

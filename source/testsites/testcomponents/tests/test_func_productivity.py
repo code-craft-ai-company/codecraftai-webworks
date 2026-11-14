@@ -4596,6 +4596,52 @@ def test_chat_composer_emoji_button_inserts_emoji(page, base_url: str) -> None:
     return
 
 
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_chat_composer_is_a_form_landmark_only_with_a_label(page, base_url: str) -> None:
+    """
+        A composer is a named ``form`` landmark only when the page gives it a
+        ``label``; without one its root has no role, so several composers do
+        not repeat an unnamed landmark (axe landmark-unique). The textarea is
+        named either way, and setting or removing ``label`` later follows.
+
+        :param page: The Playwright page.
+        :param base_url: The site base URL.
+    """
+
+    frame = _open_component(page, base_url, "mj-chat-composer")
+    state = frame.evaluate('''async () => {
+        const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        document.body.innerHTML = '<mj-chat-composer id="plain"></mj-chat-composer>'
+            + '<mj-chat-composer id="plain-2"></mj-chat-composer>'
+            + '<mj-chat-composer id="named" label="Reply to Ana"></mj-chat-composer>';
+        await wait(200);
+        const read = (id) => {
+            const root = document.getElementById(id).shadowRoot;
+            const part = root.querySelector("[part=root]");
+            return { role: part.getAttribute("role"), label: part.getAttribute("aria-label"),
+                     textarea: root.querySelector("textarea").getAttribute("aria-label") };
+        };
+        const initial = { plain: read("plain"), named: read("named") };
+        document.getElementById("plain").setAttribute("label", "New message");
+        document.getElementById("named").removeAttribute("label");
+        await wait(50);
+        return { initial: initial, labelled: read("plain"), unlabelled: read("named") };
+    }''')
+
+    assert state["initial"]["plain"]["role"] is None, state
+    assert state["initial"]["plain"]["label"] is None, state
+    assert state["initial"]["plain"]["textarea"] == "Message composer", state
+    assert state["initial"]["named"] == {"role": "form", "label": "Reply to Ana", "textarea": "Reply to Ana"}, state
+    assert state["labelled"] == {"role": "form", "label": "New message", "textarea": "New message"}, state
+    assert state["unlabelled"]["role"] is None, state
+    assert state["unlabelled"]["label"] is None, state
+
+    expect(frame.get_by_role("form")).to_have_count(1)
+
+    return
+
+
 # ---------------------------------------------------------------------------
 # mj-chat-message
 # ---------------------------------------------------------------------------

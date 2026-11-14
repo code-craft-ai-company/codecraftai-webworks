@@ -241,7 +241,7 @@ export class MjFilePicker extends FormControlMixin(MjElement) {
 
   render() {
     const markup = html`
-      <div class="dropzone" part="dropzone" role="region" aria-label="${t("mj.filePicker.dropzoneRegion")}" tabindex="0">
+      <div class="dropzone" part="dropzone" role="group" aria-label="${t("mj.filePicker.dropzoneRegion")}" tabindex="0">
         <span class="dropzone-icon" part="dropzone-icon" aria-hidden="true">
           <slot name="icon">📁</slot>
         </span>

@@ -86,8 +86,9 @@ ${PM_CHART_STYLES}
 .day-cell:focus { outline: none; }
 .day-cell:focus-visible { outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring); outline-offset: calc(0px - var(--mj-focus-ring-width)); }
 .day-cell.today { background: var(--mj-color-info-surface); }
-.day-cell.other-month .day-num { opacity: 0.6; }
-.day-num { font-size: var(--mj-font-size-xs); color: var(--mj-text-muted); margin-block-end: 2px; }
+/* Days of the month in --mj-text, the neighbouring months' days muted: both keep 4.5:1. */
+.day-num { font-size: var(--mj-font-size-xs); color: var(--mj-text); margin-block-end: 2px; }
+.day-cell.other-month .day-num { color: var(--mj-text-muted); }
 .day-cell.today .day-num { font-weight: var(--mj-font-weight-bold); color: var(--mj-color-info); }
 .event-chip { display: flex; align-items: center; gap: 3px; inline-size: 100%; font: inherit; font-size: 11px; border-radius: 3px; padding: 1px 4px; margin-block-end: 2px; min-block-size: 20px; cursor: pointer; border: 1px solid transparent; text-align: start; }
 .event-chip:focus-visible { outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring); outline-offset: 1px; }
@@ -121,7 +122,7 @@ export class MjReleaseCalendar extends PmChartElement {
 
   render() {
     const markup = html`
-      <div class="wrapper" part="wrapper" role="region" aria-label="${t("mj.releaseCalendar.label")}">
+      <div class="wrapper" part="wrapper" role="group" aria-label="${t("mj.releaseCalendar.label")}">
         <div class="cal-header" part="nav-controls">
           <button class="nav-btn prev-btn" type="button" aria-label="${t("mj.releaseCalendar.previousMonth")}">&#x2039;</button>
           <span class="cal-title" aria-live="polite"></span>

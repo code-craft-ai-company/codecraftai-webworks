@@ -173,7 +173,8 @@ patch the affected environment column without full re-render.
 
 ## 13. Accessibility
 
-- Root: `role="img"` with `aria-label` = "Environment promotion chart:
+- Root: `role="group"` (it holds interactive columns and gate buttons, which `img` would hide, and it is not a
+  region landmark, which every chart on a page would repeat) with `aria-label` = "Environment promotion chart:
   {artifact-id}, {n} environments, {m} pending gates".
 - Environment columns: `role="button"` with `aria-label` = "{env name},
   version: {version}, health: {healthy|degraded|down}, gate: {status}".

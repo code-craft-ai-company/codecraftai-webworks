@@ -458,7 +458,7 @@ export class MjMarkdownEditor extends FormControlMixin(MjElement) {
           <div class="divider" part="divider" aria-hidden="true" hidden></div>
           <div class="preview-pane" part="preview-pane"
             id="${this._previewId}"
-            role="region"
+            role="group"
             aria-label="${t("mj.markdownEditor.previewLabel")}"
             hidden>
             <div class="preview-content" part="preview-content"></div>

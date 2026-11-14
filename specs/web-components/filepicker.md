@@ -133,7 +133,8 @@
 | `Delete` / `Backspace` | Focused file item | Remove that file from the list |
 
 ## 13. Accessibility
-- Dropzone container has `role="region"` with `aria-label` (e.g., "File upload dropzone").
+- Dropzone container has `role="group"` with `aria-label` (e.g., "File upload dropzone"); a group rather
+  than a region landmark, since every picker on a page would otherwise repeat the same landmark.
 - The "Choose files" button is a `<button>` with a clear `aria-label` that includes what types are accepted.
 - The hidden native `<input type="file">` is programmatically associated and triggered by the button; it is `aria-hidden="true"`.
 - Each file item in the list has an accessible name combining the file name and its status.
