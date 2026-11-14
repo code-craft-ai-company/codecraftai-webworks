@@ -1,204 +1,114 @@
 /*
  * violin.js
  *
- * Violin plot renderer — mirrored KDE silhouette per group.
+ * Violin plot renderer — mirrored kernel density silhouette per group.
  *
  * Registers: "violin"
  *
  * ctx.model.series data shape:
  *   series[].groups[]: { category, samples: [n, …] }
+ *   categories (optional): display order; derived from the groups when
+ *   omitted. Non-finite samples are missing data and ignored.
+ *
+ * Each group's density is evaluated on its own range (three bandwidths
+ * past its data), so a tight group is not aliased by a coarse shared grid
+ * and no outline runs along the whole axis.
  *
  * Relevant ctx.attrs:
- *   show-box     "true" — embed a miniature box plot inside each violin
- *   show-points  "true" — overlay raw sample points
- *   half         "true" — render right half only (half-violin)
- *   bandwidth    KDE bandwidth override
+ *   show-box      boolean — embed a miniature box plot inside each violin
+ *   show-points   boolean — overlay the raw observations
+ *   half          boolean — draw the right (or lower) half only
+ *   bandwidth     KDE bandwidth in data units (Silverman's rule otherwise)
+ *   violin-scale  "area" (default: every violin encloses the same area, so
+ *                 widths compare densities) | "width" (every violin is as
+ *                 wide as its band)
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, formatNumber, smoothPath } from "../svgdraw.js";
-import { linearScale, bandScale, niceTicks } from "../scales.js";
+import { svgEl, formatNumber, linePath } from "../svgdraw.js";
+import { linearScale, bandScale } from "../scales.js";
+import {
+  summarize, sortNumbers, silvermanBandwidth, gaussianDensity, linspace, isFiniteNumber,
+  groupCategories, seriesGroups, hasGroupData, axisLayer, drawTicks, drawCategoryLabels,
+  tickCount, activateOnKey, focusableMark, TEXT_COLOR, SURFACE_COLOR, fitDomain
+} from "./diststats.js";
+import { booleanOption } from "../chartoptions.js";
+
+const KDE_POINTS = 81;
+const KDE_TAIL_BANDWIDTHS = 3;
 
 
-/* ── KDE helpers ─────────────────────────────────────────────────────────── */
+/* ── drawing ─────────────────────────────────────────────────────────────── */
 
-function _silvermanBw(samples) {
-  const n = samples.length
-  if (n < 2) { return 1 }
-  let mean = 0
-  for (let i = 0; i < n; i = i + 1) { mean = mean + samples[i] }
-  mean = mean / n
-  let variance = 0
-  for (let i = 0; i < n; i = i + 1) {
-    const diff = samples[i] - mean
-    variance = variance + diff * diff
-  }
-  const std = Math.sqrt(variance / (n - 1))
-  const sorted = samples.slice().sort((a, b) => a - b)
-  const q1 = sorted[Math.floor(n * 0.25)]
-  const q3 = sorted[Math.floor(n * 0.75)]
-  const iqr = q3 - q1
-  const spread = Math.min(std, iqr / 1.34)
-  const bw = 0.9 * spread * Math.pow(n, -0.2)
-  return bw > 0 ? bw : 1
-}
-
-
-function _gaussianKernel(u) {
-  return Math.exp(-0.5 * u * u) / Math.sqrt(2 * Math.PI)
-}
-
-
-function _kde(samples, bw, evalPoints) {
+function _orient(horizontal, along, across) {
   /*
-   * Evaluate KDE density at each eval point.
-   * :returns: Array of density values parallel to evalPoints.
+   * A point at value pixel `along` and cross pixel `across`.
    */
-  const n = samples.length
-  const densities = []
-  for (let ei = 0; ei < evalPoints.length; ei = ei + 1) {
-    const x = evalPoints[ei]
-    let sum = 0
-    for (let si = 0; si < n; si = si + 1) {
-      sum = sum + _gaussianKernel((x - samples[si]) / bw)
-    }
-    densities.push(sum / (n * bw))
+  if (horizontal === true) {
+    return { x: along, y: across }
   }
-  return densities
+  return { x: across, y: along }
 }
 
 
-function _quantile(sorted, p) {
-  const n = sorted.length
-  if (n === 0) { return 0 }
-  if (n === 1) { return sorted[0] }
-  const index = p * (n - 1)
-  const lo = Math.floor(index)
-  const hi = Math.ceil(index)
-  const frac = index - lo
-  return sorted[lo] * (1 - frac) + sorted[hi] * frac
-}
-
-
-/* ── violin drawing ──────────────────────────────────────────────────────── */
-
-function _drawViolin(plot, samples, bandCenter, halfWidth, valScale, ctx, seriesIndex, horizontal, halfViolin, evalPoints, densities, maxDensity) {
+function _drawSilhouette(group, violin, center, halfWidth, densityScale, valScale, horizontal, halfViolin, color) {
   /*
-   * Draw one violin shape (mirrored KDE path) centered on bandCenter.
+   * The violin outline: densities mirrored around the band centre.
    */
-  const color = ctx.colorFor(seriesIndex)
-  const densityScale = maxDensity > 0 ? halfWidth / maxDensity : 1
-
-  /* Build left (negative offset) and right (positive offset) sides. */
-  const rightPoints = []
-  const leftPoints = []
-
-  for (let i = 0; i < evalPoints.length; i = i + 1) {
-    const v = evalPoints[i]
-    const d = densities[i] * densityScale
-
-    if (horizontal === true) {
-      const y = valScale(v)
-      rightPoints.push({ x: bandCenter + d, y: y })
-      leftPoints.push({ x: bandCenter - d, y: y })
-    } else {
-      const y = valScale(v)
-      rightPoints.push({ x: bandCenter + d, y: y })
-      leftPoints.push({ x: bandCenter - d, y: y })
-    }
+  const upper = []
+  const lower = []
+  for (let index = 0; index < violin.xs.length; index = index + 1) {
+    const along = valScale(violin.xs[index])
+    const offset = Math.min(violin.ys[index] * densityScale, halfWidth)
+    upper.push(_orient(horizontal, along, center + offset))
+    lower.push(_orient(horizontal, along, center - offset))
   }
-
-  /* Combine: right side top-to-bottom, left side reversed (bottom-to-top). */
-  let allPoints = null
+  let outline = null
   if (halfViolin === true) {
-    /* Right half only. */
-    const topAnchor = rightPoints[0]
-    const botAnchor = rightPoints[rightPoints.length - 1]
-    allPoints = [
-      { x: bandCenter, y: topAnchor.y },
-      ...rightPoints,
-      { x: bandCenter, y: botAnchor.y }
-    ]
+    const first = violin.xs[0]
+    const last = violin.xs[violin.xs.length - 1]
+    outline = [_orient(horizontal, valScale(first), center)].concat(upper,
+      [_orient(horizontal, valScale(last), center)])
   } else {
-    allPoints = [
-      ...rightPoints,
-      ...leftPoints.slice().reverse()
-    ]
+    outline = upper.concat(lower.slice().reverse())
   }
-
-  /* Close path. */
-  const pathD = smoothPath(allPoints) + " Z"
-  const violinPath = svgEl("path", {
-    d: pathD, fill: color, opacity: 0.55,
-    stroke: color, "stroke-width": 1.5
-  }, [])
-  violinPath.setAttribute("part", "violin")
-  plot.appendChild(violinPath)
+  group.appendChild(svgEl("path", {
+    d: linePath(outline) + " Z",
+    fill: color, "fill-opacity": 0.45, stroke: color, "stroke-width": 1.5,
+    "stroke-linejoin": "round", part: "violin"
+  }, []))
   return
 }
 
 
-function _drawMiniBox(plot, samples, bandCenter, halfWidth, valScale, horizontal) {
+function _drawMiniBox(group, summary, center, halfWidth, valScale, horizontal) {
   /*
-   * Draw a miniature box plot (IQR rect + median line + whiskers) inside violin.
+   * A miniature box plot (IQR box, median, whiskers) inside the violin.
    */
-  const sorted = samples.slice().sort((a, b) => a - b)
-  const q1 = _quantile(sorted, 0.25)
-  const median = _quantile(sorted, 0.5)
-  const q3 = _quantile(sorted, 0.75)
-  const iqr = q3 - q1
-  const wLo = q1 - 1.5 * iqr
-  const wHi = q3 + 1.5 * iqr
-  const inliers = sorted.filter((v) => v >= wLo && v <= wHi)
-  const wMin = inliers.length > 0 ? inliers[0] : q1
-  const wMax = inliers.length > 0 ? inliers[inliers.length - 1] : q3
+  const boxHalf = Math.max(halfWidth * 0.18, 2)
+  const q1 = valScale(summary.q1)
+  const q3 = valScale(summary.q3)
+  const box = horizontal === true
+    ? svgEl("rect", { x: Math.min(q1, q3), y: center - boxHalf, width: Math.abs(q3 - q1), height: boxHalf * 2 })
+    : svgEl("rect", { x: center - boxHalf, y: Math.min(q1, q3), width: boxHalf * 2, height: Math.abs(q3 - q1) })
+  box.setAttribute("fill", SURFACE_COLOR)
+  box.setAttribute("stroke", TEXT_COLOR)
+  box.setAttribute("stroke-width", "1.25")
+  box.setAttribute("part", "violin-box")
 
-  const boxHalf = halfWidth * 0.25
-  const iqrColor = "var(--mj-text, #14181f)"
-
-  if (horizontal === true) {
-    plot.appendChild(svgEl("rect", {
-      x: valScale(q1), y: bandCenter - boxHalf,
-      width: Math.abs(valScale(q3) - valScale(q1)), height: boxHalf * 2,
-      fill: "var(--mj-bg, #ffffff)", stroke: iqrColor, "stroke-width": 1.5, rx: 1
-    }, []))
-    plot.appendChild(svgEl("line", {
-      x1: valScale(median), y1: bandCenter - boxHalf,
-      x2: valScale(median), y2: bandCenter + boxHalf,
-      stroke: iqrColor, "stroke-width": 2
-    }, []))
-    plot.appendChild(svgEl("line", {
-      x1: valScale(wMin), y1: bandCenter,
-      x2: valScale(q1), y2: bandCenter,
-      stroke: iqrColor, "stroke-width": 1
-    }, []))
-    plot.appendChild(svgEl("line", {
-      x1: valScale(q3), y1: bandCenter,
-      x2: valScale(wMax), y2: bandCenter,
-      stroke: iqrColor, "stroke-width": 1
-    }, []))
-  } else {
-    plot.appendChild(svgEl("rect", {
-      x: bandCenter - boxHalf, y: Math.min(valScale(q1), valScale(q3)),
-      width: boxHalf * 2, height: Math.abs(valScale(q3) - valScale(q1)),
-      fill: "var(--mj-bg, #ffffff)", stroke: iqrColor, "stroke-width": 1.5, rx: 1
-    }, []))
-    plot.appendChild(svgEl("line", {
-      x1: bandCenter - boxHalf, y1: valScale(median),
-      x2: bandCenter + boxHalf, y2: valScale(median),
-      stroke: iqrColor, "stroke-width": 2
-    }, []))
-    plot.appendChild(svgEl("line", {
-      x1: bandCenter, y1: valScale(wMin),
-      x2: bandCenter, y2: valScale(q1),
-      stroke: iqrColor, "stroke-width": 1
-    }, []))
-    plot.appendChild(svgEl("line", {
-      x1: bandCenter, y1: valScale(q3),
-      x2: bandCenter, y2: valScale(wMax),
-      stroke: iqrColor, "stroke-width": 1
-    }, []))
-  }
+  const whiskerLow = _orient(horizontal, valScale(summary.whiskerLow), center)
+  const whiskerHigh = _orient(horizontal, valScale(summary.whiskerHigh), center)
+  group.appendChild(svgEl("line", {
+    x1: whiskerLow.x, y1: whiskerLow.y, x2: whiskerHigh.x, y2: whiskerHigh.y,
+    stroke: TEXT_COLOR, "stroke-width": 1
+  }, []))
+  group.appendChild(box)
+  const medianA = _orient(horizontal, valScale(summary.median), center - boxHalf)
+  const medianB = _orient(horizontal, valScale(summary.median), center + boxHalf)
+  group.appendChild(svgEl("line", {
+    x1: medianA.x, y1: medianA.y, x2: medianB.x, y2: medianB.y,
+    stroke: TEXT_COLOR, "stroke-width": 2, part: "violin-median"
+  }, []))
   return
 }
 
@@ -210,205 +120,161 @@ export function render(ctx) {
    * Render a violin plot.
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
   const model = ctx.model
   const horizontal = ctx.orientation === "horizontal"
-  const showBox = ctx.attrs("show-box", "false") === "true"
-  const showPoints = ctx.attrs("show-points", "false") === "true"
-  const halfViolin = ctx.attrs("half", "false") === "true"
-  const bwOverride = parseFloat(ctx.attrs("bandwidth", "0")) || 0
+  const showBox = booleanOption(ctx, "show-box", false)
+  const showPoints = booleanOption(ctx, "show-points", false)
+  const halfViolin = booleanOption(ctx, "half", false)
+  const widthMode = ctx.attrs("violin-scale", "area") === "width" ? "width" : "area"
+  const bandwidthAttr = parseFloat(ctx.attrs("bandwidth", ""))
+  const bandwidthOverride = isFiniteNumber(bandwidthAttr) === true && bandwidthAttr > 0 ? bandwidthAttr : 0
 
   const root = svgEl("g", { part: "plot" }, [])
-
-  const series = model.series
-  const categories = model.categories
-  if (series === null || series === undefined || series.length === 0) {
-    return root
-  }
-  if (categories === null || categories === undefined || categories.length === 0) {
+  const series = Array.isArray(model.series) === true ? model.series : []
+  const categories = groupCategories(model)
+  if (series.length === 0 || categories.length === 0) {
     return root
   }
 
-  /* Compute global value extent across all series+groups. */
+  /* One density per group, each on its own range. */
+  const violins = []
   let valMin = Infinity
   let valMax = -Infinity
+  let maxDensity = 0
   for (let si = 0; si < series.length; si = si + 1) {
-    const groups = series[si].groups || []
+    const groups = seriesGroups(series[si])
     for (let gi = 0; gi < groups.length; gi = gi + 1) {
-      const samples = groups[gi].samples || []
-      for (let vi = 0; vi < samples.length; vi = vi + 1) {
-        if (samples[vi] < valMin) { valMin = samples[vi] }
-        if (samples[vi] > valMax) { valMax = samples[vi] }
-      }
-    }
-  }
-  if (valMin === Infinity) {
-    return root
-  }
-  const pad = (valMax - valMin) * 0.1 || 1
-  valMin = valMin - pad
-  valMax = valMax + pad
-
-  const evalCount = 60
-  const evalPoints = []
-  for (let i = 0; i <= evalCount; i = i + 1) {
-    evalPoints.push(valMin + (valMax - valMin) * (i / evalCount))
-  }
-
-  /* Pre-compute per-group KDE and find global max density for scale. */
-  let globalMaxDensity = 0
-  const kdeCache = []
-  for (let si = 0; si < series.length; si = si + 1) {
-    const groups = series[si].groups || []
-    const seriesKde = []
-    for (let gi = 0; gi < groups.length; gi = gi + 1) {
-      const samples = groups[gi].samples || []
-      if (samples.length < 2) {
-        seriesKde.push(null)
+      const sorted = sortNumbers(groups[gi].samples)
+      if (sorted.length === 0) {
         continue
       }
-      const bw = bwOverride > 0 ? bwOverride : _silvermanBw(samples)
-      const densities = _kde(samples, bw, evalPoints)
-      const localMax = Math.max(...densities)
-      if (localMax > globalMaxDensity) { globalMaxDensity = localMax }
-      seriesKde.push(densities)
+      const bandwidth = bandwidthOverride > 0 ? bandwidthOverride : silvermanBandwidth(sorted)
+      const xs = linspace(sorted[0] - KDE_TAIL_BANDWIDTHS * bandwidth,
+        sorted[sorted.length - 1] + KDE_TAIL_BANDWIDTHS * bandwidth, KDE_POINTS)
+      const ys = gaussianDensity(sorted, bandwidth, xs)
+      let peak = 0
+      for (let index = 0; index < ys.length; index = index + 1) {
+        peak = Math.max(peak, ys[index])
+      }
+      maxDensity = Math.max(maxDensity, peak)
+      valMin = Math.min(valMin, xs[0])
+      valMax = Math.max(valMax, xs[xs.length - 1])
+      violins.push({
+        seriesIndex: si, category: groups[gi].category, samples: sorted,
+        bandwidth: bandwidth, xs: xs, ys: ys, peak: peak, summary: summarize(sorted, 1.5)
+      })
     }
-    kdeCache.push(seriesKde)
   }
-  if (globalMaxDensity === 0) { globalMaxDensity = 1 }
+  if (violins.length === 0) {
+    return root
+  }
 
-  const margin = { top: 16, right: 16, bottom: 40, left: 52 }
+  const margin = { top: 16, right: 16, bottom: 40, left: horizontal === true ? 96 : 56 }
   const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
+  const valueCount = tickCount(horizontal === true ? plotW : plotH, horizontal === true ? 70 : 40)
+  const domain = fitDomain(valMin, valMax, valueCount)
 
-  const cat = bandScale(categories, [0, horizontal ? plotH : plotW], 0.15)
-  const val = horizontal
-    ? linearScale([valMin, valMax], [0, plotW])
-    : linearScale([valMin, valMax], [plotH, 0])
+  const cat = bandScale(categories, [0, horizontal === true ? plotH : plotW], 0.15)
+  const val = horizontal === true
+    ? linearScale(domain, [0, plotW])
+    : linearScale(domain, [plotH, 0])
 
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
+  const plot = svgEl("g", { transform: `translate(${margin.left},${margin.top})` }, [])
   root.appendChild(plot)
-
-  /* Value axis gridlines. */
-  const ticks = niceTicks(valMin, valMax, 5)
-  for (let ti = 0; ti < ticks.length; ti = ti + 1) {
-    const tick = ticks[ti]
-    if (horizontal === true) {
-      const x = val(tick)
-      plot.appendChild(svgEl("line", {
-        x1: x, y1: 0, x2: x, y2: plotH,
-        stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-      }, []))
-      plot.appendChild(svgEl("text", {
-        x: x, y: plotH + 16, "text-anchor": "middle",
-        "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-      }, formatNumber(tick)))
-    } else {
-      const y = val(tick)
-      plot.appendChild(svgEl("line", {
-        x1: 0, y1: y, x2: plotW, y2: y,
-        stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-      }, []))
-      plot.appendChild(svgEl("text", {
-        x: -8, y: y + 4, "text-anchor": "end",
-        "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-      }, formatNumber(tick)))
-    }
+  const axes = axisLayer(plot)
+  if (horizontal === true) {
+    drawTicks(axes, val, { side: "bottom", extent: plotH, count: valueCount })
+  } else {
+    drawTicks(axes, val, { side: "left", extent: plotW, count: valueCount })
   }
+  drawCategoryLabels(axes, categories.map((category, index) => ({ text: category, center: cat.centerAt(index) })),
+    horizontal === true ? "left" : "bottom", horizontal === true ? 0 : plotH,
+    horizontal === true ? margin.left - 12 : cat.step())
 
-  /* Category labels. */
-  for (let ci = 0; ci < categories.length; ci = ci + 1) {
-    const category = categories[ci]
-    const bandCenter = cat(category) + cat.bandwidth() / 2
-    if (horizontal === true) {
-      plot.appendChild(svgEl("text", {
-        x: -8, y: bandCenter + 4, "text-anchor": "end",
-        "font-size": 11, fill: "var(--mj-text, #14181f)"
-      }, String(category)))
-    } else {
-      plot.appendChild(svgEl("text", {
-        x: bandCenter, y: plotH + 18, "text-anchor": "middle",
-        "font-size": 11, fill: "var(--mj-text, #14181f)"
-      }, String(category)))
+  const marks = svgEl("g", { part: "marks" }, [])
+  plot.appendChild(marks)
+  const clusterWidth = cat.bandwidth() / series.length
+  const halfWidth = Math.max(clusterWidth * 0.46, 1)
+
+  for (let vi = 0; vi < violins.length; vi = vi + 1) {
+    const violin = violins[vi]
+    const position = cat.indexOf(violin.category)
+    if (position < 0) {
+      continue
     }
-  }
+    const entry = series[violin.seriesIndex]
+    const color = ctx.colorFor(entry.name)
+    const bandStart = cat.at(position) + violin.seriesIndex * clusterWidth
+    const center = halfViolin === true ? bandStart + clusterWidth * 0.1 : bandStart + clusterWidth / 2
+    const reach = halfViolin === true ? clusterWidth * 0.85 : halfWidth
+    const peak = widthMode === "width" ? violin.peak : maxDensity
+    const densityScale = peak > 0 ? reach / peak : 0
+    const group = svgEl("g", { part: "violin-group" }, [])
 
-  const bandwidth = cat.bandwidth()
-  const clusterWidth = series.length > 1 ? bandwidth / series.length : bandwidth
-  const halfWidthPx = clusterWidth * 0.45
+    _drawSilhouette(group, violin, center, reach, densityScale, val, horizontal, halfViolin, color)
+    if (showBox === true) {
+      _drawMiniBox(group, violin.summary, center, reach, val, horizontal)
+    } else {
+      const medianA = _orient(horizontal, val(violin.summary.median), center - (halfViolin === true ? 0 : 4))
+      const medianB = _orient(horizontal, val(violin.summary.median), center + 4)
+      group.appendChild(svgEl("line", {
+        x1: medianA.x, y1: medianA.y, x2: medianB.x, y2: medianB.y,
+        stroke: TEXT_COLOR, "stroke-width": 2, part: "violin-median"
+      }, []))
+    }
 
-  for (let si = 0; si < series.length; si = si + 1) {
-    const s = series[si]
-    const groups = s.groups || []
-    const clusterOffset = series.length > 1 ? si * clusterWidth : 0
-
-    for (let gi = 0; gi < groups.length; gi = gi + 1) {
-      const group = groups[gi]
-      const densities = kdeCache[si][gi]
-      if (densities === null) { continue }
-
-      const bandStart = cat(group.category)
-      const bandCenter = bandStart + clusterOffset + clusterWidth / 2
-
-      _drawViolin(plot, group.samples, bandCenter, halfWidthPx, val, ctx, si,
-        horizontal, halfViolin, evalPoints, densities, globalMaxDensity)
-
-      if (showBox === true) {
-        _drawMiniBox(plot, group.samples, bandCenter, halfWidthPx, val, horizontal)
+    if (showPoints === true) {
+      for (let pi = 0; pi < violin.samples.length; pi = pi + 1) {
+        const seed = Math.sin((pi + 1) * 12.9898 + vi * 78.233) * 43758.5453
+        const unit = seed - Math.floor(seed)
+        const offset = halfViolin === true ? -(unit * 0.6 + 0.15) * clusterWidth * 0.1 - 3
+          : (unit - 0.5) * reach * 0.5
+        const point = _orient(horizontal, val(violin.samples[pi]), center + offset)
+        group.appendChild(svgEl("circle", {
+          cx: point.x, cy: point.y, r: 2.25, fill: color, "fill-opacity": 0.7, part: "violin-point"
+        }, []))
       }
+    }
 
-      if (showPoints === true) {
-        const samples = group.samples || []
-        const color = ctx.colorFor(si)
-        for (let pi = 0; pi < samples.length; pi = pi + 1) {
-          const seed = Math.sin(pi * 9301 + 49297) * 0.5 + 0.5
-          const jitter = (seed - 0.5) * halfWidthPx * 0.4
-          const px = horizontal ? val(samples[pi]) : bandCenter + jitter
-          const py = horizontal ? bandCenter + jitter : val(samples[pi])
-          const dot = svgEl("circle", {
-            cx: px, cy: py, r: 2.5,
-            fill: color, opacity: 0.6
-          }, [])
-          plot.appendChild(dot)
-        }
-      }
-
-      /* Interactive overlay. */
-      const hitX = horizontal ? val(valMin) : bandStart + clusterOffset
-      const hitY = horizontal ? bandStart + clusterOffset : val(valMax)
-      const hitW = horizontal ? Math.abs(val(valMax) - val(valMin)) : clusterWidth
-      const hitH = horizontal ? clusterWidth : Math.abs(val(valMax) - val(valMin))
-      const hitRect = svgEl("rect", {
-        x: hitX, y: hitY, width: hitW, height: hitH, fill: "transparent"
-      }, [])
-      hitRect.setAttribute("part", "violin-hit")
-      hitRect.setAttribute("tabindex", "0")
-      hitRect.setAttribute("role", "img")
-      hitRect.setAttribute("aria-label", `${s.name}, ${group.category} violin`)
-      hitRect.appendChild(svgEl("title", null, `${s.name} — ${group.category}`))
-      const handlerGroup = group
-      const handlerSeries = s
-      const clickHandler = () => {
-        ctx.emit("mj-chart-violin-click", {
-          series: handlerSeries.name, category: handlerGroup.category
-        })
-      }
-      hitRect.addEventListener("click", clickHandler)
-      hitRect.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          clickHandler()
-        }
+    /* Focusable hit area over the silhouette's own extent. */
+    const from = val(violin.xs[0])
+    const to = val(violin.xs[violin.xs.length - 1])
+    const crossStart = halfViolin === true ? center : center - reach
+    const crossSize = halfViolin === true ? reach : reach * 2
+    const hit = horizontal === true
+      ? svgEl("rect", { x: Math.min(from, to), y: crossStart, width: Math.abs(to - from), height: crossSize })
+      : svgEl("rect", { x: crossStart, y: Math.min(from, to), width: crossSize, height: Math.abs(to - from) })
+    hit.setAttribute("fill", "transparent")
+    hit.setAttribute("part", "violin-hit")
+    const summary = violin.summary
+    focusableMark(hit, `${entry.name}, ${violin.category}: ${formatNumber(summary.count)} observations, ` +
+      `median ${formatNumber(summary.median)}, quartiles ${formatNumber(summary.q1)}–${formatNumber(summary.q3)}, ` +
+      `range ${formatNumber(summary.min)}–${formatNumber(summary.max)}`)
+    const handlerViolin = violin
+    activateOnKey(hit, () => {
+      ctx.emit("mj-chart-violin-click", {
+        series: entry.name, category: handlerViolin.category,
+        median: handlerViolin.summary.median, bandwidth: handlerViolin.bandwidth
       })
-      plot.appendChild(hitRect)
-    }
+    })
+    group.appendChild(hit)
+    marks.appendChild(group)
   }
 
+  ctx.setTable({
+    columns: ["Series", "Category", "Count", "Min", "Q1", "Median", "Q3", "Max", "Bandwidth"],
+    rows: violins.map((violin) => [
+      series[violin.seriesIndex].name, String(violin.category), violin.summary.count,
+      violin.summary.min, violin.summary.q1, violin.summary.median, violin.summary.q3,
+      violin.summary.max, violin.bandwidth
+    ]),
+    caption: "Distribution summary per group"
+  })
   return root
 }
 
 
-registerRenderer("violin", render)
+registerRenderer("violin", render, { isEmpty: (model) => hasGroupData(model, true) === false })

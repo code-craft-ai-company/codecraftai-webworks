@@ -1525,3 +1525,151 @@ def test_property_audit_log_completeness_violation():
                 raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Bounded store, retention, failing destinations and background writing
+# =============================================================================
+
+import os
+import tempfile
+
+from ccai.webworks.security.auditlogger import FileAuditDestination
+
+
+def _log_events(audit_logger, count):
+    """
+        Log ``count`` successful authentication events.
+    """
+    for index in range(count):
+        context = SecurityContext(user_id="user-{}".format(index))
+        audit_logger.log_authentication(context=context, provider="test", success=True)
+    return
+
+
+def test_logger_keeps_at_most_max_entries_in_memory():
+    """
+        The in-memory store is bounded: the oldest entries are dropped.
+    """
+    audit_logger = AuditLogger(max_entries=5)
+
+    _log_events(audit_logger, 12)
+
+    entries = audit_logger.query()
+
+    assert len(entries) == 5, f"Expected 5 entries, got {len(entries)}"
+    assert entries[-1].user_id == "user-11", f"Expected the newest entry last, got {entries[-1].user_id}"
+    assert entries[0].user_id == "user-7", f"Expected the oldest kept entry first, got {entries[0].user_id}"
+    return
+
+
+def test_logger_default_store_is_bounded():
+    """
+        Without configuration the store has a limit.
+    """
+    audit_logger = AuditLogger()
+
+    assert audit_logger._entries.maxlen is not None, "The default store must be bounded"
+    return
+
+
+def test_logger_drops_entries_older_than_retention():
+    """
+        Entries older than the retention period are no longer returned.
+    """
+    audit_logger = AuditLogger(retention=timedelta(hours=1))
+
+    old_entry = AuditEntry(
+        timestamp=datetime.now(timezone.utc) - timedelta(hours=2),
+        event_type="authentication",
+        outcome="success",
+        user_id="old-user",
+        endpoint=None,
+        policy=None,
+        reason=None,
+        ip_address=None,
+        user_agent=None,
+        request_id=None,
+        correlation_id=None,
+    )
+    audit_logger._entries.append(old_entry)
+
+    _log_events(audit_logger, 1)
+
+    user_ids = [entry.user_id for entry in audit_logger.query()]
+
+    assert user_ids == ["user-0"], f"Expected the expired entry to be dropped, got {user_ids}"
+    return
+
+
+def test_failing_destination_does_not_fail_the_request():
+    """
+        A destination that raises does not interrupt the caller, and the
+        other destinations are still written.
+    """
+    written = []
+
+    class FailingDestination:
+        def write(self, entry):
+            raise OSError("disk full")
+
+    class RecordingDestination:
+        def write(self, entry):
+            written.append(entry)
+
+    audit_logger = AuditLogger(destinations=[FailingDestination(), RecordingDestination()])
+
+    _log_events(audit_logger, 1)
+
+    assert len(written) == 1, f"Expected the healthy destination to be written, got {len(written)}"
+    assert len(audit_logger.query()) == 1, "The entry should still be stored"
+    return
+
+
+def test_background_logger_writes_destinations_off_the_calling_thread():
+    """
+        With background=True destinations are written by a worker thread;
+        flush waits for them.
+    """
+    import threading
+
+    writer_threads = []
+
+    class RecordingDestination:
+        def write(self, entry):
+            writer_threads.append(threading.get_ident())
+
+    audit_logger = AuditLogger(destinations=[RecordingDestination()], background=True)
+
+    try:
+        _log_events(audit_logger, 3)
+        audit_logger.flush()
+    finally:
+        audit_logger.close()
+
+    assert len(writer_threads) == 3, f"Expected 3 writes, got {len(writer_threads)}"
+    assert threading.get_ident() not in writer_threads, "Destinations were written on the calling thread"
+    return
+
+
+def test_file_destination_appends_one_json_line_per_entry():
+    """
+        The file destination writes each entry as one line of JSON.
+    """
+    directory = tempfile.mkdtemp()
+    file_path = os.path.join(directory, "audit.log")
+
+    try:
+        audit_logger = AuditLogger(destinations=[FileAuditDestination(file_path)])
+        _log_events(audit_logger, 2)
+
+        with open(file_path, "r", encoding="utf-8") as log_file:
+            lines = [line for line in log_file.read().splitlines() if line]
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        os.rmdir(directory)
+
+    assert len(lines) == 2, f"Expected 2 lines, got {len(lines)}"
+    assert json.loads(lines[0])["user_id"] == "user-0", f"Unexpected first line {lines[0]}"
+    return

@@ -11,9 +11,14 @@
 
 import os
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ccai.webworks.extensibility.exceptions import ExtensionConfigurationError
+
+
+#: The section of the application configuration that holds the extension
+#: settings and, under each extension's name, that extension's configuration.
+EXTENSIONS_CONFIG_SECTION = "extensions"
 
 
 def load_extension_config(
@@ -24,9 +29,19 @@ def load_extension_config(
         Load extension-specific configuration from the application config.
 
         Configuration is namespaced under ``extensions.<extension_name>``
-        in the application configuration dictionary. If the application
-        config is not a dict or the extension namespace is not present,
-        an empty dictionary is returned.
+        in the application configuration. Two shapes of application
+        configuration are read:
+
+        * a nested dictionary: ``{"extensions": {"<name>": {...}}}``;
+        * a configuration registry with dot-notation keys -- the
+          :class:`ConfigRegistry` a web application loads, which flattens a
+          nested settings file into keys such as
+          ``extensions.<name>.<setting>`` and offers them through
+          ``items()``. The keys under the extension's namespace are
+          collected and nested again.
+
+        If the extension namespace is not present, or the configuration is
+        neither shape, an empty dictionary is returned.
 
         :param extension_name: The name of the extension.
         :param app_config: The application configuration object.
@@ -35,18 +50,57 @@ def load_extension_config(
     """
     ext_config: Dict[str, Any] = {}
 
-    if not isinstance(app_config, dict):
-        return ext_config
-
-    extensions_section = app_config.get("extensions", None)
-    if not isinstance(extensions_section, dict):
-        return ext_config
-
-    ext_specific = extensions_section.get(extension_name, None)
-    if isinstance(ext_specific, dict):
-        ext_config = dict(ext_specific)
+    if isinstance(app_config, dict):
+        extensions_section = app_config.get(EXTENSIONS_CONFIG_SECTION, None)
+        if isinstance(extensions_section, dict):
+            ext_specific = extensions_section.get(extension_name, None)
+            if isinstance(ext_specific, dict):
+                ext_config = dict(ext_specific)
+    else:
+        items_method = getattr(app_config, "items", None)
+        if callable(items_method):
+            pairs = items_method()
+            if isinstance(pairs, list):
+                ext_config = _collect_namespaced_keys(extension_name, pairs)
 
     return ext_config
+
+
+def _collect_namespaced_keys(extension_name: str, pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    """
+        Collect an extension's settings from dot-notation configuration keys
+        and nest them again: ``extensions.<name>.db.host`` becomes
+        ``{"db": {"host": ...}}``.
+
+        :param extension_name: The name of the extension.
+        :param pairs: The configuration as ``(key, value)`` pairs.
+
+        :returns: The extension's configuration dictionary.
+    """
+    rtnval: Dict[str, Any] = {}
+
+    prefix = "{}.{}.".format(EXTENSIONS_CONFIG_SECTION, extension_name)
+
+    for pair in pairs:
+        key, value = pair
+        if not isinstance(key, str) or not key.startswith(prefix):
+            continue
+
+        relative_key = key[len(prefix):]
+        parts = relative_key.split(".")
+
+        current = rtnval
+        for part in parts[:-1]:
+            child = current.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                current[part] = child
+            current = child
+
+        last_part = parts[-1]
+        current[last_part] = value
+
+    return rtnval
 
 
 def apply_config_defaults(

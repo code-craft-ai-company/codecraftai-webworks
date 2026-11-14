@@ -6,6 +6,8 @@ This document specifies the requirements for the Production Server feature. This
 
 The feature enables reliable, scalable, and observable deployment of web applications with support for multiple worker processes, various concurrency models, and comprehensive monitoring and logging capabilities.
 
+The production server is built on the built-in WSGI server (`ccai.webworks.wsgi`) and serves a WebApplication through its `wsgi_app` (revision of November 2026, audit finding WW-0174). It is run with `webworks prodserve` (every `--option` below is an option of that command, and a key of the `prodserver` configuration section) or with `ProductionServer(app, ServerConfig(...)).serve()`. The status of each requirement after the revision is listed at the end of this document.
+
 ## Glossary
 
 - **Production_Server**: A server optimized for production deployment with features like worker management, graceful shutdown, and observability.
@@ -51,7 +53,7 @@ The feature enables reliable, scalable, and observable deployment of web applica
 4. DURING graceful shutdown, THE Production_Server SHALL allow in-flight requests to complete.
 5. THE Production_Server SHALL support `--graceful-timeout` option to limit the graceful shutdown period.
 6. IF graceful timeout is exceeded, THEN THE Production_Server SHALL forcefully terminate remaining workers.
-7. WHEN SIGHUP is received, THE Production_Server SHALL reload configuration without dropping connections.
+7. WHEN SIGHUP is received, THE Production_Server SHALL replace its workers without dropping connections: the `on_reload` hook runs, new workers start, the old ones stop gracefully. (The server's own options are fixed at start; an application loaded by the workers from a factory is loaded again.)
 8. THE Production_Server SHALL log shutdown progress including pending request counts.
 
 ### Requirement 3: Concurrency Options
@@ -62,12 +64,12 @@ The feature enables reliable, scalable, and observable deployment of web applica
 
 1. THE Production_Server SHALL support multi-process concurrency via `--workers` option.
 2. THE Production_Server SHALL support multi-thread concurrency via `--threads` option.
-3. THE Production_Server SHALL support async/await concurrency for ASGI applications.
+3. THE Production_Server SHALL support async/await concurrency for ASGI applications. (Every worker class serves ASGI applications through the WSGI layer's ASGI bridge, whose event loop runs in each worker.)
 4. THE Production_Server SHALL support combining processes and threads via `--workers` and `--threads` together.
 5. WHEN `--worker-class` is specified, THE Production_Server SHALL use the specified worker implementation.
 6. THE Production_Server SHALL provide sync worker class for WSGI applications.
-7. THE Production_Server SHALL provide async worker class for ASGI applications.
-8. THE Production_Server SHALL support gevent worker class when gevent is installed.
+7. THE Production_Server SHALL serve ASGI applications with its worker classes. (There is no separate `async` worker class; see 3.3.)
+8. THE Production_Server SHALL support gevent worker class when gevent is installed, and SHALL refuse to start with a ConfigurationError naming the `gevent` extra when it is selected and gevent is not installed.
 
 ### Requirement 4: Connection Management
 
@@ -172,7 +174,7 @@ The feature enables reliable, scalable, and observable deployment of web applica
 5. THE Production_Server SHALL support TLS 1.2 and TLS 1.3 protocols.
 6. THE Production_Server SHALL reject connections using deprecated SSL/TLS versions.
 7. THE Production_Server SHALL support `--ssl-version` option to set minimum TLS version.
-8. WHEN SSL is configured, THE Production_Server SHALL redirect HTTP to HTTPS if `--ssl-redirect` is enabled.
+8. WHEN `--ssl-redirect` is enabled, THE Production_Server SHALL redirect requests made over HTTP to HTTPS (301), whether TLS is terminated by the server or by a proxy in front of it that reports the client's scheme in `X-Forwarded-Proto`.
 
 ### Requirement 11: Resource Limits
 
@@ -204,3 +206,18 @@ The feature enables reliable, scalable, and observable deployment of web applica
 7. THE Production_Server SHALL support `--on-exit` hook for cleanup on shutdown.
 8. IF application loading fails, THEN THE Production_Server SHALL exit with non-zero status and error message.
 
+## Implementation Status (November 2026)
+
+Every criterion is implemented on the real request path unless noted here.
+
+| Criterion | Status |
+|---|---|
+| 1.7 timeout per request | A WebApplication served through the ASGI bridge is answered 504 when its handler does not start a response within `--timeout`; `--timeout` is also the socket I/O timeout. A worker whose thread hangs inside a plain WSGI application is not killed. |
+| 2.7 SIGHUP | Workers are replaced (see the criterion); the server's options are not re-read. |
+| 3.3, 3.7 async | No `async` worker class; ASGI applications run on the ASGI bridge's event loop in every worker. |
+| 3.8 gevent | Implemented (the WSGI worker after `gevent.monkey.patch_all()`), not exercised by the test suite because gevent is not installed in the development environment. |
+| 6.7, 6.8 StatsD | `MetricsCollector.send_to_statsd()` and the options exist; the server does not send to StatsD by itself. |
+| 7.5 `--log-config` | Not implemented. |
+| 8.5, 8.8 tracing | The `traceparent` parent span ID is taken over; spans are exported to backends registered with `RequestTracer.register_export_backend` (in code); no OpenTelemetry exporter is bundled. |
+| 11.6 file descriptor limits | Not implemented beyond `--max-connections` per worker. |
+| 9.x, 10.x on Windows | The production server forks its workers, so it runs on POSIX only; on Windows `serve()` raises ConfigurationError. |

@@ -18,6 +18,7 @@ from ccai.webworks.endpoints import (
     EndpointRegistrationError,
     EndpointRegistry,
     RateLimit,
+    RestBlueprint,
 )
 
 
@@ -797,4 +798,226 @@ def test_attach_child_parent_placement_without_path_raises():
     if raised is None:
         raise AssertionError("Expected EndpointRegistrationError for a placement without path or leaf")
     
+    return
+
+
+# =============================================================================
+# attach_child re-places the child's own handlers
+# =============================================================================
+
+def _dispatch_get(router, path):
+    """Send a GET for ``path`` through a Dispatcher over ``router`` and return the response."""
+    from ccai.webworks.routing.dispatcher import Dispatcher
+    from ccai.webworks.routing.request import Request
+
+    dispatcher = Dispatcher(router)
+    response = dispatcher.dispatch(Request("GET", path))
+    return response
+
+
+def test_attach_child_route_serves_the_childs_handler():
+    """A route from ParentBP.attach_child(Child), registered via ParentBP.register(router), runs the child's handler."""
+    import json
+
+    from ccai.webworks.routing.router import Router
+
+    class ParentBlueprint(Blueprint):
+        base_path = "/api"
+
+    class ChildBlueprint(Blueprint):
+        base_path = "/items"
+
+    @ChildBlueprint.attach_at(leaf="list", methods=["GET"])
+    def list_items(request):
+        return {"items": [1, 2]}
+
+    ParentBlueprint.attach_child(ChildBlueprint)
+
+    router = Router()
+    ParentBlueprint.register(router)
+    response = _dispatch_get(router, "/api/items/list")
+
+    if response.status_code != 200:
+        raise AssertionError(f"Expected 200 from the child's handler, got {response.status_code}: {response.body!r}")
+
+    if json.loads(response.body) != {"items": [1, 2]}:
+        raise AssertionError(f"Expected the child handler's result, got {response.body!r}")
+
+    return
+
+
+def test_attach_child_places_handlers_under_the_placement_path():
+    """Each handler the child declared is re-placed with the child's base swapped for the placement path."""
+
+    class ParentBlueprint(Blueprint):
+        base_path = "/api"
+
+    class ChildBlueprint(Blueprint):
+        base_path = "/items"
+
+    @ChildBlueprint.attach_at(leaf="list", methods=["GET"])
+    def list_items(request):
+        return {}
+
+    @ChildBlueprint.attach_at(path="{item_id}", methods=["DELETE"])
+    def delete_item(request):
+        return {}
+
+    ParentBlueprint.attach_child(ChildBlueprint)
+
+    placed = sorted((descriptor.path, tuple(descriptor.methods)) for descriptor in ParentBlueprint.register())
+    expected = [("/api/items/list", ("GET",)), ("/api/items/{item_id}", ("DELETE",))]
+
+    if placed != expected:
+        raise AssertionError(f"Expected {expected}, got {placed}")
+
+    return
+
+
+def test_attach_child_keeps_the_childs_own_descriptors_unchanged():
+    """Re-placing under a parent does not move the route the child declared for itself."""
+
+    class ParentBlueprint(Blueprint):
+        base_path = "/api"
+
+    class ChildBlueprint(Blueprint):
+        base_path = "/items"
+
+    @ChildBlueprint.attach_at(leaf="list", methods=["GET"])
+    def list_items(request):
+        return {}
+
+    ParentBlueprint.attach_child(ChildBlueprint)
+
+    child_paths = [descriptor.path for descriptor in ChildBlueprint.register()]
+
+    if child_paths != ["/items/list"]:
+        raise AssertionError(f"Expected the child's own path to stay '/items/list', got {child_paths}")
+
+    return
+
+
+def test_attach_child_placed_handler_inherits_parent_policy():
+    """A re-placed handler requires the parent's roles as well as its own."""
+
+    class ParentBlueprint(Blueprint):
+        base_path = "/admin"
+        access_policy = AccessPolicy(roles=["admin"])
+
+    class ChildBlueprint(Blueprint):
+        base_path = "/reports"
+
+    @ChildBlueprint.attach_at(leaf="daily", methods=["GET"], access_policy=AccessPolicy(scopes=["reports:read"]))
+    def daily_report(request):
+        return {}
+
+    ParentBlueprint.attach_child(ChildBlueprint)
+
+    placed = ParentBlueprint.register()[0]
+    policy = placed.constraints.access_policy
+
+    if "admin" not in policy.roles:
+        raise AssertionError(f"Expected the parent's role 'admin' on the placed handler, got {policy.roles}")
+
+    if "reports:read" not in policy.scopes:
+        raise AssertionError(f"Expected the handler's own scope to be kept, got {policy.scopes}")
+
+    return
+
+
+def test_attach_child_placement_is_not_registered_when_handlers_are_placed():
+    """The placement descriptor is not returned by register() once real handlers stand in its place."""
+
+    class ParentBlueprint(Blueprint):
+        base_path = "/api"
+
+    class ChildBlueprint(Blueprint):
+        base_path = "/items"
+
+    @ChildBlueprint.attach_at(path="/", methods=["GET"])
+    def items_root(request):
+        return {}
+
+    placement = ParentBlueprint.attach_child(ChildBlueprint)
+
+    registered = ParentBlueprint.register()
+    for descriptor in registered:
+        if descriptor is placement:
+            raise AssertionError("The placement must not be registered beside the handler placed at the same path")
+
+    if [descriptor.path for descriptor in registered] != ["/api/items"]:
+        raise AssertionError(f"Expected one route at '/api/items', got {[d.path for d in registered]}")
+
+    return
+
+
+def test_attach_child_on_rest_blueprint_records_placed_handlers():
+    """RestBlueprint inherits Endpoint.attach_child, which now records the placed handlers for register()."""
+
+    class ParentRestBlueprint(RestBlueprint):
+        base_path = "/v1"
+
+    class ChildRestBlueprint(RestBlueprint):
+        base_path = "/users"
+
+    @ChildRestBlueprint.attach_at(leaf="me", methods=["GET"])
+    def current_user(request):
+        return {}
+
+    ParentRestBlueprint.attach_child(ChildRestBlueprint)
+
+    paths = [descriptor.path for descriptor in ParentRestBlueprint.register()]
+
+    if paths != ["/v1/users/me"]:
+        raise AssertionError(f"Expected ['/v1/users/me'] from register(), got {paths}")
+
+    return
+
+
+def test_attach_child_placement_handler_explains_a_child_without_handlers():
+    """Calling the stand-in handler of a placement names the child that declared no handlers."""
+
+    class ParentBlueprint(Blueprint):
+        base_path = "/api"
+
+    class EmptyChild(Endpoint):
+        base_leaf = "nothing"
+
+    placement = ParentBlueprint.attach_child(EmptyChild)
+
+    try:
+        placement.handler(None)
+    except EndpointRegistrationError as err:
+        if "EmptyChild" not in str(err):
+            raise AssertionError(f"Expected the error to name the child, got: {err}")
+    else:
+        raise AssertionError("Expected EndpointRegistrationError from a placement with no handler behind it")
+
+    return
+
+
+def test_attach_child_nested_children_are_placed_under_the_whole_chain():
+    """Attaching leaves first, then the middle blueprint to the root, serves the leaf under every prefix."""
+
+    class RootBlueprint(Blueprint):
+        base_path = "/api"
+
+    class V1Blueprint(Blueprint):
+        base_path = "/v1"
+
+    class UsersBlueprint(Blueprint):
+        base_path = "/users"
+
+    @UsersBlueprint.attach_at(leaf="me", methods=["GET"])
+    def current_user(request):
+        return {}
+
+    V1Blueprint.attach_child(UsersBlueprint)
+    RootBlueprint.attach_child(V1Blueprint)
+
+    paths = [descriptor.path for descriptor in RootBlueprint.register()]
+
+    if paths != ["/api/v1/users/me"]:
+        raise AssertionError(f"Expected ['/api/v1/users/me'], got {paths}")
+
     return

@@ -448,3 +448,101 @@ def test_secure_filename_drops_disallowed_characters():
         raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Limits
+# =============================================================================
+
+from ccai.webworks.routing.exceptions import PayloadTooLarge
+
+
+def test_parse_multipart_refuses_more_parts_than_allowed():
+    """
+        A body with more parts than max_parts is refused with 413 before it
+        is parsed.
+    """
+    boundary = "limitboundary"
+    fields = [("field{}".format(index), "v") for index in range(20)]
+    body = _build_multipart_body(boundary, fields, [])
+    content_type = "multipart/form-data; boundary={}".format(boundary)
+
+    raised = None
+    try:
+        parse_multipart(body, content_type, max_parts=10)
+    except PayloadTooLarge as exc:
+        raised = exc
+
+    assert raised is not None, "Expected PayloadTooLarge for too many parts"
+    assert raised.status_code == 413, f"Expected status 413, got {raised.status_code}"
+    return
+
+
+def test_parse_multipart_accepts_parts_up_to_the_limit():
+    """
+        A body with exactly max_parts parts is parsed.
+    """
+    boundary = "limitboundary"
+    fields = [("field{}".format(index), "v") for index in range(10)]
+    body = _build_multipart_body(boundary, fields, [])
+    content_type = "multipart/form-data; boundary={}".format(boundary)
+
+    result = parse_multipart(body, content_type, max_parts=10)
+
+    assert len(result.form_parts) == 10, f"Expected 10 fields, got {len(result.form_parts)}"
+    return
+
+
+def test_parse_multipart_refuses_body_larger_than_allowed():
+    """
+        A body larger than max_body_size is refused with 413.
+    """
+    boundary = "limitboundary"
+    body = _build_multipart_body(boundary, [("field", "x" * 200)], [])
+    content_type = "multipart/form-data; boundary={}".format(boundary)
+
+    raised = False
+    try:
+        parse_multipart(body, content_type, max_body_size=100)
+    except PayloadTooLarge:
+        raised = True
+
+    assert raised, "Expected PayloadTooLarge for an oversized body"
+    return
+
+
+def test_parse_multipart_refuses_form_field_larger_than_allowed():
+    """
+        A form field larger than max_field_size is refused with 413.
+    """
+    boundary = "limitboundary"
+    body = _build_multipart_body(boundary, [("field", "x" * 200)], [])
+    content_type = "multipart/form-data; boundary={}".format(boundary)
+
+    raised = False
+    try:
+        parse_multipart(body, content_type, max_field_size=50)
+    except PayloadTooLarge:
+        raised = True
+
+    assert raised, "Expected PayloadTooLarge for an oversized form field"
+    return
+
+
+def test_parse_multipart_default_part_limit_bounds_small_field_flood():
+    """
+        The default limits refuse a small body made of thousands of fields.
+    """
+    boundary = "floodboundary"
+    fields = [("f{}".format(index), "") for index in range(2000)]
+    body = _build_multipart_body(boundary, fields, [])
+    content_type = "multipart/form-data; boundary={}".format(boundary)
+
+    raised = False
+    try:
+        parse_multipart(body, content_type)
+    except PayloadTooLarge:
+        raised = True
+
+    assert raised, "Expected the default part limit to refuse 2000 fields"
+    return

@@ -603,3 +603,166 @@ def test_activity_resets_timeout():
         raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# PIN Security and Evaluation Context Tests
+# =============================================================================
+
+def _debugger_with_session(pin=None, frame_locals=None, frame_globals=None):
+    """
+        Create an enabled debugger with one session of one frame.
+
+        :returns: A tuple of (debugger, session_id).
+    """
+    debugger = InteractiveDebugger(pin=pin, enabled=True)
+
+    frames = [FrameInfo(filename="app.py", lineno=10, function="handler")]
+
+    session_id = debugger.create_session(
+        ValueError("boom"),
+        frames,
+        frame_locals=frame_locals if frame_locals is not None else [{}],
+        frame_globals=frame_globals,
+    )
+
+    return debugger, session_id
+
+
+def test_pin_is_generated_when_none_is_given():
+    """
+        Test that a debugger created without a PIN generates a random one.
+    """
+    first = InteractiveDebugger(enabled=True)
+    second = InteractiveDebugger(enabled=True)
+
+    if not isinstance(first.pin, str) or len(first.pin) < 9:
+        errmsg = "Expected a generated PIN, got {!r}".format(first.pin)
+        raise AssertionError(errmsg)
+
+    if first.pin == second.pin:
+        errmsg = "Expected two debuggers to generate different PINs."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_empty_pin_is_refused():
+    """
+        Test that a debugger cannot be created with an empty PIN.
+    """
+    raised = False
+
+    try:
+        InteractiveDebugger(pin="", enabled=True)
+    except ValueError:
+        raised = True
+
+    if raised is not True:
+        errmsg = "Expected ValueError for an empty PIN."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_missing_pin_does_not_authorise():
+    """
+        Test that presenting no PIN is rejected even when the debugger
+        was created without one.
+    """
+    debugger, session_id = _debugger_with_session(pin=None)
+
+    result = debugger.evaluate(session_id, 0, "1 + 1", None)
+
+    if result.get("error") != INVALID_PIN_MESSAGE:
+        errmsg = "Expected the invalid PIN error for pin=None, got {}".format(result)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_debugger_locks_after_repeated_wrong_pins():
+    """
+        Test that after repeated wrong PINs the debugger refuses even
+        the right PIN.
+    """
+    debugger, session_id = _debugger_with_session(pin="right-pin")
+
+    for _ in range(5):
+        debugger.evaluate(session_id, 0, "1", "wrong-pin")
+
+    if debugger.locked is not True:
+        errmsg = "Expected the debugger to be locked after 5 wrong PINs."
+        raise AssertionError(errmsg)
+
+    result = debugger.evaluate(session_id, 0, "1", "right-pin")
+
+    if "result" in result:
+        errmsg = "Expected the right PIN to be refused once locked, got {}".format(result)
+        raise AssertionError(errmsg)
+
+    frames_result = debugger.get_frames(session_id, "right-pin")
+
+    if "frames" in frames_result:
+        errmsg = "Expected get_frames to be refused once locked, got {}".format(frames_result)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_right_pin_resets_the_failed_attempt_count():
+    """
+        Test that a correct PIN clears earlier failed attempts.
+    """
+    debugger, session_id = _debugger_with_session(pin="right-pin")
+
+    for _ in range(4):
+        debugger.evaluate(session_id, 0, "1", "wrong-pin")
+
+    debugger.evaluate(session_id, 0, "1", "right-pin")
+
+    for _ in range(4):
+        debugger.evaluate(session_id, 0, "1", "wrong-pin")
+
+    if debugger.locked is not False:
+        errmsg = "Expected the debugger not to be locked: the count was reset by a right PIN."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_evaluate_can_use_builtin_functions():
+    """
+        Test that an expression can call built-in functions on the
+        frame's local variables.
+    """
+    debugger, session_id = _debugger_with_session(
+        pin="pin", frame_locals=[{"items": [3, 1, 2]}],
+    )
+
+    result = debugger.evaluate(session_id, 0, "len(items)", "pin")
+
+    if result.get("result") != "3":
+        errmsg = "Expected result '3' for len(items), got {}".format(result)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_evaluate_sees_the_frame_globals():
+    """
+        Test that an expression can use the global names of the frame.
+    """
+    debugger, session_id = _debugger_with_session(
+        pin="pin",
+        frame_locals=[{"count": 2}],
+        frame_globals=[{"MULTIPLIER": 21}],
+    )
+
+    result = debugger.evaluate(session_id, 0, "count * MULTIPLIER", "pin")
+
+    if result.get("result") != "42":
+        errmsg = "Expected result '42', got {}".format(result)
+        raise AssertionError(errmsg)
+
+    return

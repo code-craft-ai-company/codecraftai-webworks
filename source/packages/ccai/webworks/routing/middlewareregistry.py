@@ -245,6 +245,14 @@ class MiddlewareRegistry:
             Compose the effective pipeline for a request by combining
             global, then blueprint, then route middleware.
 
+            The order inside each scope was decided when the middleware was
+            registered -- by priority and by ``before:``/``after:``
+            placement -- and is kept as it is. The scopes are appended one
+            after the other and never sorted against each other, so global
+            middleware always runs before blueprint middleware and
+            blueprint middleware before route middleware, whatever their
+            priorities.
+
             :param blueprint_name: The blueprint name for blueprint-scoped
                 middleware. None if no blueprint applies.
             :param route_path: The route path for route-scoped middleware.
@@ -256,33 +264,15 @@ class MiddlewareRegistry:
         pipeline = MiddlewarePipeline()
 
         # Add global middleware first
-        for entry in self._global:
-            pipeline.add(
-                entry.middleware,
-                name=entry.name,
-                priority=entry.priority,
-                scope=entry.scope,
-            )
+        pipeline.extend(self._global)
 
         # Add blueprint middleware second
         if blueprint_name is not None:
-            for entry in self._blueprint.get(blueprint_name, []):
-                pipeline.add(
-                    entry.middleware,
-                    name=entry.name,
-                    priority=entry.priority,
-                    scope=entry.scope,
-                )
+            pipeline.extend(self._blueprint.get(blueprint_name, []))
 
         # Add route middleware last
         if route_path is not None:
-            for entry in self._route.get(route_path, []):
-                pipeline.add(
-                    entry.middleware,
-                    name=entry.name,
-                    priority=entry.priority,
-                    scope=entry.scope,
-                )
+            pipeline.extend(self._route.get(route_path, []))
 
         return pipeline
 

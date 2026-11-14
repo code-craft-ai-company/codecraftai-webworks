@@ -62,6 +62,12 @@ def _open_chart(page, base_url: str, tag: str):
         arg=tag,
         timeout=15000,
     )
+    # The example's script runs as a module after the upgrade and assigns the
+    # data; wait for it so a test's own assignment is not overwritten later.
+    frame.wait_for_function(
+        "() => window.mjSandbox !== undefined && window.mjSandbox.ready === true",
+        timeout=15000,
+    )
     return frame
 
 

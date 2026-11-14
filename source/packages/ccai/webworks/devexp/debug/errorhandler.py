@@ -10,6 +10,10 @@
 
     The :class:`FrameInfo` dataclass captures information about a single
     stack frame including source context and local variables.
+
+    Request headers, request bodies and local variables that carry
+    credentials are masked before they are logged or rendered (see
+    :mod:`ccai.webworks.devexp.debug.redaction`).
 """
 
 import html
@@ -18,7 +22,14 @@ import os
 import traceback
 import uuid
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
+
+from ccai.webworks.devexp.debug.redaction import REDACTED
+from ccai.webworks.devexp.debug.redaction import get_header
+from ccai.webworks.devexp.debug.redaction import is_sensitive_name
+from ccai.webworks.devexp.debug.redaction import redact_body
+from ccai.webworks.devexp.debug.redaction import redact_data
+from ccai.webworks.devexp.debug.redaction import redact_headers
 
 
 logger = logging.getLogger(__name__)
@@ -140,6 +151,9 @@ DEFAULT_PRODUCTION_TITLE = "Server Error"
 DEFAULT_PRODUCTION_MESSAGE = "An unexpected error occurred. Please try again later."
 """Default user-friendly message for production error pages."""
 
+TEMPLATE_PLACEHOLDERS = ("error_title", "error_message", "error_id", "status_code")
+"""Names of the placeholders a custom error template may contain, written as ``{name}``."""
+
 STATUS_CODE_MESSAGES = {
     400: ("Bad Request", "The request could not be understood by the server."),
     403: ("Forbidden", "You do not have permission to access this resource."),
@@ -245,7 +259,9 @@ class DebugErrorHandler:
             :param status_code: The HTTP status code to associate with the template.
             :param template_content: The HTML template content string. The template
                 may contain the placeholders ``{error_title}``, ``{error_message}``,
-                ``{error_id}``, and ``{status_code}``.
+                ``{error_id}``, and ``{status_code}``. Only these four are
+                substituted; every other brace is left as written, so the
+                template may contain CSS and JavaScript.
         """
         self._custom_templates[status_code] = template_content
         return
@@ -503,43 +519,86 @@ class DebugErrorHandler:
 
             :returns: The HTML string for the production error page.
         """
-        # Check for custom template first
-        if status_code in self._custom_templates:
-            title, message = self._get_status_message(status_code)
-            template = self._custom_templates[status_code]
-            page_html = template.format(
-                error_title=html.escape(title),
-                error_message=html.escape(message),
-                error_id=html.escape(error_id),
-                status_code=status_code,
-            )
+        title, message = self._get_status_message(status_code)
+
+        values = {
+            "error_title": html.escape(title),
+            "error_message": html.escape(message),
+            "error_id": html.escape(error_id),
+            "status_code": str(status_code),
+        }
+
+        template = self._find_custom_template(status_code)
+
+        if template is not None:
+            page_html = self._substitute_placeholders(template, values)
             return page_html
 
-        # Check for template file on disk
-        if self._template_path is not None:
-            template_file = os.path.join(
-                self._template_path, "{}.html".format(status_code),
-            )
-            if os.path.isfile(template_file):
-                title, message = self._get_status_message(status_code)
-                with open(template_file, "r", encoding="utf-8") as fh:
-                    template = fh.read()
-                page_html = template.format(
-                    error_title=html.escape(title),
-                    error_message=html.escape(message),
-                    error_id=html.escape(error_id),
-                    status_code=status_code,
-                )
-                return page_html
-
         # Default production page
-        title, message = self._get_status_message(status_code)
-        page_html = _PRODUCTION_PAGE_TEMPLATE.format(
-            error_title=html.escape(title),
-            error_message=html.escape(message),
-            error_id=html.escape(error_id),
-            status_code=status_code,
+        page_html = _PRODUCTION_PAGE_TEMPLATE.format(**values)
+
+        return page_html
+
+    def _find_custom_template(self, status_code: int) -> Optional[str]:
+        """
+            Find the custom error template for a status code.
+
+            A template registered with :meth:`register_template` takes
+            precedence over a ``<status_code>.html`` file in the template
+            path. A template file that cannot be read is logged and
+            ignored, so the built-in page is served instead of a second
+            error.
+
+            :param status_code: The HTTP status code.
+
+            :returns: The template text, or ``None`` to use the built-in page.
+        """
+        if status_code in self._custom_templates:
+            return self._custom_templates[status_code]
+
+        if self._template_path is None:
+            return None
+
+        template_file = os.path.join(
+            self._template_path, "{}.html".format(status_code),
         )
+
+        if not os.path.isfile(template_file):
+            return None
+
+        template = None
+
+        try:
+            with open(template_file, "r", encoding="utf-8") as fh:
+                template = fh.read()
+        except (OSError, UnicodeDecodeError) as err:
+            logger.error(
+                "Custom error template '%s' could not be read (%s: %s). Using the built-in error page.",
+                template_file,
+                type(err).__name__,
+                err,
+            )
+
+        return template
+
+    def _substitute_placeholders(self, template: str, values: Dict[str, str]) -> str:
+        """
+            Substitute the named placeholders of a custom error template.
+
+            Only ``{error_title}``, ``{error_message}``, ``{error_id}`` and
+            ``{status_code}`` are replaced. The template is not treated as
+            a format string, so literal braces in CSS or JavaScript, and
+            placeholders that do not exist, are left exactly as written.
+
+            :param template: The template text.
+            :param values: The value for each placeholder name.
+
+            :returns: The rendered page.
+        """
+        page_html = template
+
+        for name in TEMPLATE_PLACEHOLDERS:
+            page_html = page_html.replace("{" + name + "}", values[name])
 
         return page_html
 
@@ -620,9 +679,11 @@ class DebugErrorHandler:
                 is the index of the target line within the list.
         """
         try:
-            with open(filename, "r", encoding="utf-8") as fh:
+            # A source file in another encoding still yields readable
+            # context; undecodable bytes are shown as replacement characters.
+            with open(filename, "r", encoding="utf-8", errors="replace") as fh:
                 all_lines = fh.readlines()
-        except (OSError, IOError):
+        except (OSError, ValueError):
             return [], 0
 
         total_lines = len(all_lines)
@@ -640,7 +701,9 @@ class DebugErrorHandler:
 
             Each variable value is converted to its string representation.
             Values that raise exceptions during conversion are replaced
-            with an error placeholder.
+            with an error placeholder. A variable whose name marks it as a
+            credential (``password``, ``api_key``, ``token`` and the like)
+            is masked, and so are credential fields inside dictionaries.
 
             :param frame: The frame object from the traceback.
 
@@ -649,8 +712,15 @@ class DebugErrorHandler:
         local_vars = {}
 
         for var_name, var_value in frame.f_locals.items():
+            if is_sensitive_name(var_name):
+                local_vars[var_name] = REDACTED
+                continue
+
             try:
-                str_value = repr(var_value)
+                if isinstance(var_value, (Mapping, list, tuple)):
+                    str_value = repr(redact_data(var_value))
+                else:
+                    str_value = repr(var_value)
                 # Truncate very long values
                 if len(str_value) > 200:
                     str_value = str_value[:200] + "..."
@@ -665,43 +735,58 @@ class DebugErrorHandler:
     # Request Info Extraction
     # -------------------------------------------------------------------------
 
-    def _extract_request_info(self, request: Any) -> Dict[str, Any]:
+    def _extract_request_info(self, request: Any, include_body: bool = True) -> Dict[str, Any]:
         """
             Extract request information from a request object or dictionary.
 
             Supports both dictionary-style requests and objects with
             method, path, headers, and body attributes.
 
+            Credentials never leave this method: header values such as
+            ``Authorization`` and ``Cookie`` are masked, and credential
+            fields in a JSON or form body are masked by name.
+
             :param request: The request object or dictionary.
+            :param include_body: Whether to include the (redacted) body.
+                When ``False`` only the size of the body is reported.
 
             :returns: A dictionary of request attribute name-value pairs.
         """
         info = {}
 
         if isinstance(request, dict):
-            info["Method"] = request.get("method", "UNKNOWN")
-            info["Path"] = request.get("path", "/")
+            has_method = True
+            has_path = True
+            method = request.get("method", "UNKNOWN")
+            path = request.get("path", "/")
             headers = request.get("headers", {})
-            if isinstance(headers, dict):
-                for hdr_name, hdr_value in headers.items():
-                    info["Header: {}".format(hdr_name)] = hdr_value
             body = request.get("body", "")
-            if body:
-                info["Body"] = str(body)
         else:
-            if hasattr(request, "method"):
-                info["Method"] = getattr(request, "method", "UNKNOWN")
-            if hasattr(request, "path"):
-                info["Path"] = getattr(request, "path", "/")
-            if hasattr(request, "headers"):
-                headers = getattr(request, "headers", {})
-                if isinstance(headers, dict):
-                    for hdr_name, hdr_value in headers.items():
-                        info["Header: {}".format(hdr_name)] = hdr_value
-            if hasattr(request, "body"):
-                body = getattr(request, "body", "")
-                if body:
-                    info["Body"] = str(body)
+            has_method = hasattr(request, "method")
+            has_path = hasattr(request, "path")
+            method = getattr(request, "method", "UNKNOWN")
+            path = getattr(request, "path", "/")
+            headers = getattr(request, "headers", {})
+            body = getattr(request, "body", "")
+
+        if has_method:
+            info["Method"] = method
+
+        if has_path:
+            info["Path"] = path
+
+        if not isinstance(headers, dict):
+            headers = {}
+
+        for hdr_name, hdr_value in redact_headers(headers).items():
+            info["Header: {}".format(hdr_name)] = hdr_value
+
+        if body:
+            if include_body:
+                content_type = get_header(headers, "content-type")
+                info["Body"] = str(redact_body(body, content_type))
+            else:
+                info["Body"] = "<{} bytes, not logged>".format(len(body))
 
         return info
 
@@ -720,13 +805,16 @@ class DebugErrorHandler:
 
             This is called in production mode to ensure error details
             are captured in the server logs even though they are not
-            displayed to the user.
+            displayed to the user. Credential headers are masked and the
+            request body is not written to the log at all, only its size:
+            a production log is read by more people than the request was
+            meant for.
 
             :param request: The request object or dictionary.
             :param exception: The exception that was raised.
             :param error_id: The unique error reference ID.
         """
-        request_info = self._extract_request_info(request)
+        request_info = self._extract_request_info(request, include_body=False)
         tb_text = traceback.format_exception(
             type(exception), exception, exception.__traceback__,
         )

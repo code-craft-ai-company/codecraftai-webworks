@@ -11,9 +11,10 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 import dataclasses
+import inspect
 import os
 
-from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, TypeVar
 
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.constraints import EndpointConstraints
@@ -21,18 +22,41 @@ from ccai.webworks.endpoints.descriptor import (
     ENDPOINT_DECLARED_ATTR,
     ENDPOINT_DESCRIPTORS_ATTR,
     ENDPOINT_PARENT_PLACEMENT_EXTRA,
+    REST_ERROR_MAP_TYPES_EXTRA,
+    REST_REQUEST_SCHEMA_TYPE_EXTRA,
+    REST_RESPONSE_SCHEMA_TYPE_EXTRA,
     declare_on_class,
     EndpointDescriptor,
-    mark_handler
+    mark_handler,
+    record_rest_processing
 )
 from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.exceptions import EndpointRegistrationError
+from ccai.webworks.endpoints.merging import ConstraintMerger
 from ccai.webworks.endpoints.ratelimit import RateLimit
+from ccai.webworks.endpoints.typeinspection import dataclass_to_json_schema, type_to_json_schema
 from ccai.webworks.security.decorators import HANDLER_POLICY_ATTR
 
 
 # Type variable for preserving function signatures in decorators
 F = TypeVar("F", bound=Callable[..., Any])
+
+
+#: Attribute set on the stand-in handler of a placement descriptor -- the
+#: descriptor ``attach_child`` returns to say *where* a child was placed. A
+#: placement is not a route: the child's own handlers are re-placed under it
+#: and those are what a router serves.
+UNROUTED_PLACEMENT_ATTR = "__webworks_unrouted_placement__"
+
+#: Attribute, stored in a class's own ``__dict__``, caching the descriptors
+#: whose class-body handlers were bound for that class. Keyed by the id of
+#: the declared descriptor so repeated ``register()`` calls return the same
+#: objects.
+BOUND_DESCRIPTORS_ATTR = "__webworks_bound_descriptors__"
+
+#: Attribute, stored in a class's own ``__dict__``, holding the instance
+#: that class-body handlers taking ``self`` are bound to.
+HANDLER_INSTANCE_ATTR = "__webworks_handler_instance__"
 
 
 
@@ -53,6 +77,12 @@ class Endpoint:
             version: Default API version string.
             tags: Default documentation tags.
             serializers: Default serializer configuration.
+            rest_processing: Default for ``attach_at(rest_processing=...)``:
+                whether a handler declared with REST metadata (a request
+                schema, a response schema or an error map) is served
+                through the REST request/response processing. True; the
+                authentication blueprints set it to False because their
+                handlers parse the body and shape the response themselves.
     """
     
     # Class-level defaults that subclasses can override
@@ -62,6 +92,7 @@ class Endpoint:
     version: Optional[str] = None
     tags: List[str] = []
     serializers: Dict[str, Any] = {}
+    rest_processing: bool = True
 
     # Blueprint-related attributes (used by attach_child)
     base_path: Optional[str] = None
@@ -152,25 +183,35 @@ class Endpoint:
                 # ``cls`` or its ancestors.)
                 continue
 
+            descriptors = cls._find_descriptors_for_handler(handler)
+            if len(descriptors) == 0:
+                continue
+
+            # The decorator ran against the ancestor, so the descriptor
+            # carries the ancestor's access policy and rate limit, not
+            # this subclass's. Merge this class's in now; otherwise a
+            # blueprint that declares ``access_policy`` and writes its
+            # handlers in its own body would serve them unprotected.
+            cls._apply_class_constraints(descriptors)
+
+            # A blueprint claims the routes written in its body.
+            cls._claim_ancestor_descriptors(descriptors, owner)
+
             corrected_path = cls._compose_path_for_attach(
                 leaf=metadata.get("leaf"),
                 path=metadata.get("path"),
                 absolute=bool(metadata.get("absolute")),
             )
-            if corrected_path is None:
-                continue
 
-            descriptors = cls._find_descriptors_for_handler(handler)
-            if len(descriptors) == 0:
-                continue
-
-            for descriptor in descriptors:
-                # The descriptor is still only a mark on the handler at this
-                # point -- no registry has collected it yet -- so correcting
-                # the path is a plain assignment. Previously this had to
-                # reach into the global registry and move index entries,
-                # because registration had already happened at decoration.
-                descriptor.path = corrected_path
+            if corrected_path is not None:
+                for descriptor in descriptors:
+                    # The descriptor is still only a mark on the handler at
+                    # this point -- no registry has collected it yet -- so
+                    # correcting the path is a plain assignment. Previously
+                    # this had to reach into the global registry and move
+                    # index entries, because registration had already
+                    # happened at decoration.
+                    descriptor.path = corrected_path
 
             # Anchor the marker to the resolved subclass so deeper
             # subclasses that don't override this method won't try
@@ -178,6 +219,55 @@ class Endpoint:
             # only inspects ``cls.__dict__`` — but explicit is
             # better.)
             metadata["owner"] = cls
+
+        return
+
+    @classmethod
+    def _claim_ancestor_descriptors(cls, descriptors: List[EndpointDescriptor], owner: type) -> None:
+        """
+            Hook for subclasses: take ownership of descriptors that a
+            handler in this class's body declared through an ancestor's
+            ``attach_at``. A plain endpoint records nothing; a blueprint
+            records its name (see :class:`Blueprint`).
+
+            :param descriptors: The descriptors to update in place.
+            :param owner: The ancestor class ``attach_at`` ran against.
+        """
+        return
+
+    @classmethod
+    def _apply_class_constraints(cls, descriptors: List[EndpointDescriptor]) -> None:
+        """
+            Merge this class's access policy and rate limit into descriptors
+            that were declared through an ancestor.
+
+            Merging follows the blueprint composition rules: roles and scopes
+            accumulate (unless the class sets ``replace_roles`` or
+            ``replace_scopes``) and the most restrictive rate limit wins, so
+            the result is never weaker than what the class declares.
+
+            :param descriptors: The descriptors to update in place.
+        """
+        if cls.access_policy is None and cls.rate_limit is None:
+            return
+
+        for descriptor in descriptors:
+            merged_policy = ConstraintMerger.merge_access_policies(
+                parent=cls.access_policy,
+                child=descriptor.constraints.access_policy,
+                replace_roles=bool(getattr(cls, "replace_roles", False)),
+                replace_scopes=bool(getattr(cls, "replace_scopes", False))
+            )
+            merged_rate_limit = ConstraintMerger.merge_rate_limits(
+                parent=cls.rate_limit,
+                child=descriptor.constraints.rate_limit
+            )
+            descriptor.constraints = EndpointConstraints(
+                access_policy=merged_policy,
+                rate_limit=merged_rate_limit,
+                scopes=merged_policy.scopes if merged_policy else [],
+                roles=merged_policy.roles if merged_policy else []
+            )
 
         return
 
@@ -353,6 +443,181 @@ class Endpoint:
         return rtnval
 
     @classmethod
+    def routable_descriptors(cls, include_declared: bool = True) -> List[EndpointDescriptor]:
+        """
+            The descriptors of this class in the form a router can serve.
+
+            This is :meth:`marked_descriptors` with one difference. A handler
+            written in a class body is stored on its descriptor as the plain
+            function, so a method declared ``def thing(self, request)`` would
+            be called with the request in the ``self`` position. Here such a
+            handler is bound first -- a method taking ``self`` to an instance
+            of the class it is written in, a ``classmethod`` to that class --
+            and the descriptor returned for it is a copy carrying the bound
+            handler. The declared descriptor, which is the mark on the
+            function, is left untouched.
+
+            A handler inherited from a base class is bound to the base class
+            that defines it, not to this subclass. Its route was resolved
+            against that base class's path and is one route however many
+            subclasses inherit it, so every subclass returns the same
+            descriptor object for it and a registry given both the base and
+            a subclass registers the route once.
+
+            Static methods, and class-body functions that do not take
+            ``self``, are returned as declared.
+
+            :param include_declared: Include the free functions declared
+                through this class (``cls.attach_at(...)`` at module level).
+                A registry walking the classes of a module passes False,
+                because those functions are members of their own module and
+                are collected from there.
+
+            :returns: Descriptors ready for a router, in the order of
+                      :meth:`marked_descriptors`.
+
+            :raises EndpointRegistrationError: If a handler takes ``self``
+                and the class that defines it cannot be instantiated without
+                arguments.
+        """
+        rtnval: List[EndpointDescriptor] = []
+        seen: List[int] = []
+
+        for klass in cls.__mro__:
+            for value in list(vars(klass).values()):
+                handler = value
+                if isinstance(handler, (classmethod, staticmethod)):
+                    handler = handler.__func__
+                if not callable(handler):
+                    continue
+                for descriptor in getattr(handler, ENDPOINT_DESCRIPTORS_ATTR, ()):
+                    if id(descriptor) in seen:
+                        continue
+                    seen.append(id(descriptor))
+                    binder = cls
+                    if isinstance(klass, type) and issubclass(klass, Endpoint):
+                        binder = klass
+                    rtnval.append(binder._bind_class_body_descriptor(descriptor, value))
+
+        if include_declared:
+            for descriptor in cls.__dict__.get(ENDPOINT_DECLARED_ATTR, ()):
+                if id(descriptor) in seen:
+                    continue
+                seen.append(id(descriptor))
+                rtnval.append(descriptor)
+
+        return rtnval
+
+    @classmethod
+    def _bind_class_body_descriptor(cls, descriptor: EndpointDescriptor, member: Any) -> EndpointDescriptor:
+        """
+            Give a descriptor declared in a class body a handler the
+            dispatcher can call with just the request.
+
+            :param descriptor: The descriptor as declared.
+            :param member: The class attribute the handler was found as: the
+                           function itself, or its ``classmethod`` /
+                           ``staticmethod`` wrapper.
+
+            :returns: ``descriptor`` when its handler needs no binding,
+                      otherwise a copy of it holding the bound handler.
+        """
+        if isinstance(member, staticmethod):
+            return descriptor
+
+        if descriptor.handler is not getattr(member, "__func__", member):
+            # The descriptor does not hold the function this attribute
+            # wraps (a placement, or one already bound); leave it alone.
+            return descriptor
+
+        binds_to_class = isinstance(member, classmethod)
+        if not binds_to_class and not cls._handler_takes_self(descriptor.handler):
+            return descriptor
+
+        cache: Optional[Dict[int, Tuple[EndpointDescriptor, EndpointDescriptor]]]
+        cache = cls.__dict__.get(BOUND_DESCRIPTORS_ATTR)
+        if cache is None:
+            cache = {}
+            setattr(cls, BOUND_DESCRIPTORS_ATTR, cache)
+
+        cached = cache.get(id(descriptor))
+        if cached is not None and cached[0] is descriptor:
+            bound_descriptor = cached[1]
+            # The declared descriptor is the source of truth for everything
+            # but the handler; carry over a path corrected since the copy.
+            bound_descriptor.path = descriptor.path
+            bound_descriptor.leaf = descriptor.leaf
+            return bound_descriptor
+
+        if binds_to_class:
+            bound_handler = descriptor.handler.__get__(cls, cls)
+        else:
+            bound_handler = descriptor.handler.__get__(cls._handler_instance(), cls)
+
+        bound_descriptor = dataclasses.replace(descriptor, handler=bound_handler)
+        cache[id(descriptor)] = (descriptor, bound_descriptor)
+
+        return bound_descriptor
+
+    @staticmethod
+    def _handler_takes_self(handler: Callable[..., Any]) -> bool:
+        """
+            Whether a class-body function is an instance method, judged the
+            way Python programmers judge it: its first parameter is ``self``.
+
+            :param handler: The function found in a class body.
+
+            :returns: True when the first positional parameter is named
+                      ``self``.
+        """
+        try:
+            parameters = list(inspect.signature(handler).parameters.values())
+        except (TypeError, ValueError):
+            return False
+
+        if len(parameters) == 0:
+            return False
+
+        rtnval = parameters[0].name == "self"
+        return rtnval
+
+    @classmethod
+    def _handler_instance(cls) -> Any:
+        """
+            The instance of this class that handlers taking ``self`` are
+            bound to. Created on first use and kept, so every handler of the
+            class shares one instance.
+
+            :returns: An instance of this class.
+
+            :raises EndpointRegistrationError: If the class cannot be
+                instantiated without arguments.
+        """
+        instance = cls.__dict__.get(HANDLER_INSTANCE_ATTR)
+        if instance is not None:
+            return instance
+
+        try:
+            instance = cls()
+        except TypeError as exc:
+            errmsg_lines = [
+                f"Cannot bind the instance-method handlers of '{cls.__name__}':",
+                f"the class cannot be instantiated without arguments ({exc}).",
+                "Give the class a no-argument constructor, or declare the handlers "
+                "with @staticmethod so they do not take 'self'.",
+            ]
+            errmsg = os.linesep.join(errmsg_lines)
+            raise EndpointRegistrationError(
+                message=errmsg,
+                endpoint=cls,
+                missing_fields=[]
+            ) from exc
+
+        setattr(cls, HANDLER_INSTANCE_ATTR, instance)
+
+        return instance
+
+    @classmethod
     def attach_at(
         cls,
         leaf: Optional[str] = None,
@@ -367,6 +632,7 @@ class Endpoint:
         error_map: Optional[Dict[int, Type]] = None,
         doc: Optional[Doc] = None,
         on_conflict: str = "error",
+        rest_processing: Optional[bool] = None,
         **extras
     ) -> Callable[[F], F]:
         """
@@ -391,6 +657,16 @@ class Endpoint:
             :param error_map: Mapping of status codes to error schemas.
             :param doc: Documentation object with summary/description.
             :param on_conflict: "error" to raise on conflict, "replace" to override.
+            :param rest_processing: Whether a handler declared with REST
+                metadata (``request_schema``, ``response_schema`` or
+                ``error_map``) is served through the REST request/response
+                processing when a web application serves it: content
+                negotiation (406/415), body validation (400, the payload is
+                read with ``get_rest_payload(request)``), serialization of
+                the result and the ``RESTError`` error body. Pass False for
+                a handler that parses the body and shapes the response
+                itself; its schemas then only document it. None takes the
+                class attribute :attr:`rest_processing` (True).
             :param extras: Additional kwargs stored in descriptor.extras.
             
             :returns: Decorator that returns the original function unchanged.
@@ -398,6 +674,8 @@ class Endpoint:
             :raises EndpointRegistrationError: If mandatory metadata missing.
             :raises EndpointConflictError: If path+method conflicts with existing.
         """
+        merged_rest_processing = rest_processing if rest_processing is not None else cls.rest_processing
+
         def decorator(func: F) -> F:
             # Validate mandatory metadata
             if leaf is None and path is None:
@@ -440,16 +718,27 @@ class Endpoint:
             
             # Add REST-specific extras if provided
             if request_schema is not None or response_schema is not None or error_map is not None:
+                # The inspected JSON-schema dict is what documentation
+                # exports read. The schema class itself is kept beside it:
+                # validating a request body and generating an OpenAPI
+                # component both need the class, which cannot be recovered
+                # from the dict.
                 rest_extras: Dict[str, Any] = {}
                 if request_schema is not None:
                     rest_extras["request_schema"] = cls._inspect_schema(request_schema)
+                    rest_extras[REST_REQUEST_SCHEMA_TYPE_EXTRA] = request_schema
                 if response_schema is not None:
                     rest_extras["response_schema"] = cls._inspect_schema(response_schema)
+                    rest_extras[REST_RESPONSE_SCHEMA_TYPE_EXTRA] = response_schema
                 if error_map is not None:
                     rest_extras["error_map"] = {
                         code: cls._inspect_schema(schema)
                         for code, schema in error_map.items()
                     }
+                    rest_extras[REST_ERROR_MAP_TYPES_EXTRA] = dict(error_map)
+                # Whether the route is served through the REST processing
+                # (the default) or opted out of it.
+                record_rest_processing(rest_extras, merged_rest_processing)
                 extras_dict["rest"] = rest_extras
             
             # Store serializers in extras if class has them
@@ -514,6 +803,14 @@ class Endpoint:
             This method creates a descriptor for the child endpoint with
             paths computed relative to the parent's base_path/base_leaf.
             Constraints are merged following inheritance rules.
+
+            The descriptor returned is the *placement*: it records where the
+            child sits and what it inherits. The routes themselves come from
+            the child: every handler the child has declared with
+            ``attach_at`` is re-placed under the placement, keeping its own
+            handler, and recorded against this class -- see
+            :meth:`_place_child_handlers`. Declare a child's handlers before
+            attaching it.
             
             Nested attachment: when this endpoint was itself attached to a
             parent, pass the descriptor that attachment returned as
@@ -635,17 +932,14 @@ class Endpoint:
         if parent_placement is not None:
             extras_dict[ENDPOINT_PARENT_PLACEMENT_EXTRA] = placement_base
         
-        # Create a placeholder handler for the child descriptor
-        # The actual handler will be set when the child is decorated
-        def placeholder_handler() -> None:
-            pass
-        
-        placeholder_handler.__name__ = f"{child_endpoint.__name__}_child"
-        placeholder_handler.__module__ = child_endpoint.__module__
-        
+        # The placement descriptor says where the child was placed and what
+        # it inherits. It is not itself a route, so it gets a stand-in
+        # handler that explains that if anything ever calls it.
+        placement_handler = cls._make_placement_handler(child_endpoint)
+
         # Create the descriptor
         descriptor = EndpointDescriptor(
-            handler=placeholder_handler,
+            handler=placement_handler,
             module=child_endpoint.__module__,
             leaf=final_leaf,
             path=final_path,
@@ -656,9 +950,226 @@ class Endpoint:
             doc=kwargs.get("doc"),
             extras=extras_dict
         )
-        
+
+        # Re-place the child's own handlers under the placement and record
+        # them against this class, so `cls.register()` returns routes that
+        # serve the child's real handlers.
+        cls._place_child_handlers(
+            child_endpoint=child_endpoint,
+            placement=descriptor,
+            merge_tags=merge_tags,
+            replace_scopes=replace_scopes,
+            replace_roles=replace_roles
+        )
+
         return descriptor
-    
+
+    @classmethod
+    def _make_placement_handler(cls, child_endpoint: Type["Endpoint"]) -> Callable[..., Any]:
+        """
+            Build the stand-in handler carried by a placement descriptor.
+
+            A placement has no handler of its own: the child's handlers are
+            re-placed under it by :meth:`_place_child_handlers`. If a
+            placement is routed anyway -- the child declared no handlers, so
+            there was nothing to re-place -- a request for it fails with an
+            error that names the child, instead of an unrelated TypeError.
+
+            :param child_endpoint: The child endpoint class being attached.
+
+            :returns: The stand-in handler, marked with
+                      :data:`UNROUTED_PLACEMENT_ATTR`.
+        """
+        def placement_handler(request: Any = None) -> None:
+            errmsg_lines = [
+                f"No handler is attached for the child endpoint '{child_endpoint.__name__}'.",
+                "attach_child() re-places the handlers a child declares with attach_at(); "
+                f"'{child_endpoint.__name__}' declared none before it was attached.",
+            ]
+            errmsg = os.linesep.join(errmsg_lines)
+            raise EndpointRegistrationError(
+                message=errmsg,
+                endpoint=child_endpoint,
+                missing_fields=["handler"]
+            )
+
+        placement_handler.__name__ = f"{child_endpoint.__name__}_child"
+        placement_handler.__module__ = child_endpoint.__module__
+        setattr(placement_handler, UNROUTED_PLACEMENT_ATTR, True)
+
+        return placement_handler
+
+    @classmethod
+    def _place_child_handlers(
+        cls,
+        child_endpoint: Type["Endpoint"],
+        placement: EndpointDescriptor,
+        merge_tags: bool = False,
+        replace_scopes: bool = False,
+        replace_roles: bool = False
+    ) -> List[EndpointDescriptor]:
+        """
+            Re-place the handlers a child endpoint declared under the path
+            its parent placed it at.
+
+            Each descriptor the child declared (see
+            :meth:`routable_descriptors`) yields a new descriptor that keeps
+            the child's handler, methods, documentation and extras, moves the
+            path under the placement, and merges the placement's constraints,
+            tags and version with the handler's own. The new descriptors are
+            recorded against this class, so ``cls.register()`` returns them.
+            The child's own descriptors are not changed: the child can still
+            be served at its own path, or attached to another parent.
+
+            Only the handlers the child has declared when this is called are
+            re-placed; attach a child after its handlers are defined.
+
+            :param child_endpoint: The child endpoint class being attached.
+            :param placement: The placement descriptor built by
+                              ``attach_child`` for this child.
+            :param merge_tags: If True, the placement's tags are appended to
+                               each handler's tags.
+            :param replace_scopes: If True, a handler's scopes replace the
+                                   placement's instead of accumulating.
+            :param replace_roles: If True, a handler's roles replace the
+                                  placement's instead of accumulating.
+
+            :returns: The re-placed descriptors, in declaration order.
+        """
+        rtnval: List[EndpointDescriptor] = []
+
+        if not hasattr(child_endpoint, "routable_descriptors"):
+            return rtnval
+
+        placement_path = placement.path
+        if placement_path is None and placement.leaf is not None:
+            placement_path = f"/{placement.leaf}"
+        if placement_path is None:
+            placement_path = "/"
+
+        child_base: Optional[str] = None
+        child_base_path = getattr(child_endpoint, "base_path", None)
+        child_base_leaf = getattr(child_endpoint, "base_leaf", None)
+        if child_base_path is not None:
+            child_base = "/" + child_base_path.strip("/")
+        elif child_base_leaf is not None:
+            child_base = "/" + child_base_leaf.strip("/")
+
+        for child_descriptor in child_endpoint.routable_descriptors():
+            if getattr(child_descriptor.handler, UNROUTED_PLACEMENT_ATTR, False) is True:
+                # A placement the child holds for a handler-less child of
+                # its own; there is nothing behind it to serve.
+                continue
+
+            placed_path = cls._compute_placed_path(
+                placement_path=placement_path,
+                child_base=child_base,
+                child_descriptor=child_descriptor
+            )
+
+            merged_policy = ConstraintMerger.merge_access_policies(
+                parent=placement.constraints.access_policy,
+                child=child_descriptor.constraints.access_policy,
+                replace_roles=replace_roles,
+                replace_scopes=replace_scopes
+            )
+            merged_rate_limit = ConstraintMerger.merge_rate_limits(
+                parent=placement.constraints.rate_limit,
+                child=child_descriptor.constraints.rate_limit
+            )
+            placed_constraints = EndpointConstraints(
+                access_policy=merged_policy,
+                rate_limit=merged_rate_limit,
+                scopes=merged_policy.scopes if merged_policy else [],
+                roles=merged_policy.roles if merged_policy else []
+            )
+
+            placed_tags = ConstraintMerger.merge_tags(
+                parent=list(placement.tags),
+                child=list(child_descriptor.tags),
+                merge=merge_tags,
+                replace=False
+            )
+
+            placed_version = child_descriptor.version
+            if placed_version is None:
+                placed_version = placement.version
+
+            placed_extras: Dict[str, Any] = dict(child_descriptor.extras)
+            placed_extras[ENDPOINT_PARENT_PLACEMENT_EXTRA] = placement_path.rstrip("/")
+
+            placed = EndpointDescriptor(
+                handler=child_descriptor.handler,
+                module=child_descriptor.module,
+                leaf=None,
+                path=placed_path,
+                methods=list(child_descriptor.methods),
+                version=placed_version,
+                tags=placed_tags,
+                constraints=placed_constraints,
+                doc=child_descriptor.doc,
+                extras=placed_extras,
+                on_conflict=child_descriptor.on_conflict
+            )
+
+            declare_on_class(cls, placed)
+            rtnval.append(placed)
+
+        return rtnval
+
+    @staticmethod
+    def _compute_placed_path(
+        placement_path: str,
+        child_base: Optional[str],
+        child_descriptor: EndpointDescriptor
+    ) -> str:
+        """
+            Compute where a child's handler lives once the child is placed.
+
+            The handler keeps its position relative to the child: the child's
+            own base prefix, when the handler's path carries it, is replaced
+            by the placement path. A handler declared ``absolute=True``, or
+            one already under the placement path, keeps its path.
+
+            :param placement_path: The path the child was placed at.
+            :param child_base: The child's own base path with a leading
+                               slash and no trailing one, or None.
+            :param child_descriptor: The descriptor the child declared.
+
+            :returns: The path of the re-placed handler.
+        """
+        declared_path = child_descriptor.path
+        if declared_path is None and child_descriptor.leaf is not None:
+            declared_path = f"/{child_descriptor.leaf}"
+        if declared_path is None:
+            declared_path = "/"
+        if not declared_path.startswith("/"):
+            declared_path = f"/{declared_path}"
+
+        if child_descriptor.extras.get("absolute") is True:
+            return declared_path
+
+        placement_base = placement_path.rstrip("/")
+
+        if declared_path == placement_base or declared_path.startswith(f"{placement_base}/"):
+            return declared_path
+
+        relative_path = declared_path
+        if child_base is not None:
+            if declared_path == child_base:
+                relative_path = ""
+            elif declared_path.startswith(f"{child_base}/"):
+                relative_path = declared_path[len(child_base):]
+
+        if relative_path == "/":
+            relative_path = ""
+
+        rtnval = f"{placement_base}{relative_path}"
+        if len(rtnval) == 0:
+            rtnval = "/"
+
+        return rtnval
+
     @classmethod
     def _placement_base_path(cls, parent_placement: EndpointDescriptor) -> str:
         """
@@ -796,59 +1307,26 @@ class Endpoint:
     def _dataclass_to_schema(cls, schema: Type) -> Dict[str, Any]:
         """
             Convert a dataclass to a JSON schema representation.
-            
+
+            Field annotations are resolved first, so postponed annotations
+            (``from __future__ import annotations``), PEP 604 unions and
+            nested dataclasses are described by their real types.
+
             :param schema: The dataclass type to convert.
-            
+
             :returns: Dictionary containing JSON schema information.
         """
-        properties: Dict[str, Any] = {}
-        required: List[str] = []
-        
-        for field_name, field_info in schema.__dataclass_fields__.items():
-            field_type = field_info.type
-            properties[field_name] = cls._type_to_schema(field_type)
-            
-            # Check if field has a default — a field is required when
-            # both .default and .default_factory are the MISSING sentinel.
-            if (field_info.default is dataclasses.MISSING
-                    and field_info.default_factory is dataclasses.MISSING):
-                required.append(field_name)
-        
-        result: Dict[str, Any] = {
-            "type": "object",
-            "properties": properties,
-        }
-        
-        if required:
-            result["required"] = required
-        
-        return result
-    
+        rtnval = dataclass_to_json_schema(schema)
+        return rtnval
+
     @classmethod
     def _type_to_schema(cls, field_type: Any) -> Dict[str, Any]:
         """
             Convert a Python type to a JSON schema type.
-            
+
             :param field_type: The Python type to convert.
-            
+
             :returns: Dictionary containing JSON schema type information.
         """
-        # Handle basic types
-        type_mapping = {
-            str: {"type": "string"},
-            int: {"type": "integer"},
-            float: {"type": "number"},
-            bool: {"type": "boolean"},
-            list: {"type": "array"},
-            dict: {"type": "object"},
-        }
-        
-        if field_type in type_mapping:
-            return type_mapping[field_type]
-        
-        # Handle string type annotations
-        if isinstance(field_type, str):
-            return {"type": "string"}
-        
-        # Default to string for unknown types
-        return {"type": "string"}
+        rtnval = type_to_json_schema(field_type)
+        return rtnval

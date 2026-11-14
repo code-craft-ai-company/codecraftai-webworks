@@ -126,16 +126,26 @@ embedded third-party iframes (YouTube, Vimeo) — those require their own SDK wr
 - `::part(fullscreen-btn)`, `::part(transcript)`, `::part(poster)`
 
 **Custom properties**
+The picture, the control bar and the loading / error overlays sit on a dark
+surround in both themes, so their colors are component custom properties (the
+fallback in the CSS is the default), not page tokens. The transcript panel is page
+content and follows the theme tokens.
+
 | Property | Default | Description |
 |----------|---------|-------------|
-| `--mj-player-controls-bg` | `rgba(0,0,0,0.7)` | Control bar background |
-| `--mj-player-controls-color` | `var(--mj-color-text-on-dark)` | Icon/text color in control bar |
-| `--mj-player-seek-color` | `var(--mj-color-primary)` | Filled portion of seek bar |
-| `--mj-player-seek-height` | `4px` | Seek bar track height |
+| `--mj-player-bg` | `#000` | Background of the player (behind the picture) |
 | `--mj-player-radius` | `var(--mj-radius-md)` | Corner radius of the media container |
+| `--mj-player-controls-bg` | `rgba(0, 0, 0, 0.75)` | Control bar background |
+| `--mj-player-controls-color` | `#fff` | Icon/text color in control bar |
+| `--mj-player-track-bg` | `rgba(255, 255, 255, 0.3)` | Track of the seek and volume sliders |
+| `--mj-player-seek-color` | `var(--mj-accent)` | Filled portion (accent color) of the seek and volume sliders |
+| `--mj-player-seek-height` | `4px` | Seek bar track height |
+| `--mj-player-loading-bg` | `rgba(0, 0, 0, 0.4)` | Loading overlay background (behind the spinner) |
+| `--mj-player-error-bg` | `rgba(0, 0, 0, 0.6)` | Error overlay background (video) |
+| `--mj-player-overlay-color` | `#fff` | Spinner and error text color |
 | `--mj-player-transcript-height` | `12rem` | Height of the transcript panel |
-| `--mj-player-transcript-bg` | `var(--mj-color-surface-1)` | Transcript panel background |
-| `--mj-player-active-cue-color` | `var(--mj-color-primary)` | Highlight color for active transcript cue |
+| `--mj-player-transcript-bg` | `var(--mj-surface)` | Transcript panel background |
+| `--mj-player-active-cue-color` | `var(--mj-accent)` | Highlight color for active transcript cue |
 
 ## 10. States
 

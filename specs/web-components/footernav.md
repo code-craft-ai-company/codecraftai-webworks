@@ -15,7 +15,7 @@
 
 ## 1. Purpose
 `<mj-footer-nav>` renders grouped secondary navigation links inside a
-`<footer role="contentinfo">` landmark. It organizes links into named column
+`<footer>`, the page's `contentinfo` landmark at page level. It organizes links into named column
 groups, handles responsive reflow from multi-column to stacked layout on narrow
 viewports, and optionally renders legal/copyright text and social links.
 
@@ -27,7 +27,8 @@ navigation (About, Legal, Help, Social) organized into logical groups.
 or section — use a plain `<nav>` or `<mj-link>` elements.
 
 ## 3. Anatomy
-- **Host / `<footer>`** — `<footer role="contentinfo">` landmark.
+- **Host / `<footer>`** — `<footer>` without an explicit role: `contentinfo` when it is not inside `article`,
+  `aside`, `main`, `nav` or `section` (the scoping applies through the shadow boundary).
 - **Column groups** (`::part(group)`) — each `<mj-footer-nav-group>` renders a
   `<nav aria-label>` column with a heading and list of links.
 - **Group heading** (`::part(group-heading)`) — `<h3>` (or configured heading
@@ -127,8 +128,8 @@ or section — use a plain `<nav>` or `<mj-link>` elements.
 | `Shift+Tab` | Reverse focus order |
 
 ## 13. Accessibility
-- The host renders as `<footer role="contentinfo">`; only one `contentinfo`
-  landmark per page is expected.
+- The host renders a `<footer>` with its implicit role, so it is the `contentinfo` landmark at page level and
+  not inside sectioning content; only one `contentinfo` landmark per page is expected.
 - Each link group is wrapped in `<nav aria-label="{groupTitle}">` so screen
   readers can navigate between landmark regions within the footer.
 - Group headings (`<h3>` by default, configurable via `heading-level`) are
@@ -181,7 +182,7 @@ N/A — `<mj-footer-nav>` is a navigation landmark component.
   detected when this component connects.
 
 ## 19. Acceptance criteria
-- [ ] Renders `<footer role="contentinfo">` landmark.
+- [ ] Renders a `<footer>` that is the `contentinfo` landmark at page level and not inside a `section`.
 - [ ] Each link group wrapped in `<nav aria-label="{groupTitle}">`.
 - [ ] Multi-column layout at wide viewports; stacked at narrow viewports.
 - [ ] `columns` attribute controls grid column count.

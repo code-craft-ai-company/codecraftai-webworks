@@ -11,15 +11,35 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
-from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING
+import re
 
-from ccai.webworks.endpoints.descriptor import mark_handler
+from typing import Any, Callable, Dict, List, Optional, Type, TYPE_CHECKING
+
+from ccai.webworks.endpoints.constraints import EndpointConstraints
+from ccai.webworks.endpoints.descriptor import (
+    REST_MANAGED_EXTRA,
+    REST_QUERY_PARAMS_EXTRA,
+    REST_REQUEST_SCHEMA_TYPE_EXTRA,
+    REST_RESPONSE_SCHEMA_TYPE_EXTRA,
+    EndpointDescriptor,
+    mark_handler
+)
+from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.restendpoint import RestEndpoint
+from ccai.webworks.endpoints.rest.middleware import (
+    RESTMiddleware,
+    create_rest_middleware,
+    get_rest_payload,
+)
 from ccai.webworks.endpoints.rest.models import ErrorMapping
 
 if TYPE_CHECKING:
-    from ccai.webworks.endpoints.descriptor import EndpointDescriptor
     from ccai.webworks.endpoints.router import Router
+
+
+# Extracts the parameter name from a path parameter specification such as
+# "{id}" or "{id:int}".
+_ID_PARAM_PATTERN = re.compile(r"^\{(\w+)(?::\w+)?\}$")
 
 
 # HTTP method to CRUD operation mapping
@@ -75,6 +95,8 @@ class ResourceEndpoint(RestEndpoint):
             error_map: Mapping of exception types to ErrorMapping for custom
                        error handling.
             status_code: Override default status code for responses.
+            debug_errors: If True, 500 responses include the exception
+                          details. Leave False in production.
     """
     
     # Resource configuration
@@ -92,6 +114,7 @@ class ResourceEndpoint(RestEndpoint):
     
     # Response configuration
     status_code: Optional[int] = None
+    debug_errors: bool = False
     
     def get(self, id: Any) -> Any:
         """
@@ -164,7 +187,11 @@ class ResourceEndpoint(RestEndpoint):
             Args:
                 id: Resource identifier from the path parameter.
                 payload: Deserialized partial request body. Only fields present
-                         in the payload should be updated.
+                         in the payload should be updated. Validated against
+                         request_schema, it is a dict of the fields the body
+                         sent, by field name (a dataclass or Pydantic schema
+                         alike); against partial_update_schema, an instance
+                         of that schema.
             
             Returns:
                 The updated resource object to be serialized and returned.
@@ -322,20 +349,6 @@ class ResourceEndpoint(RestEndpoint):
             return (None, False)
 
     @classmethod
-    def get_default_status_code(cls, method: str) -> int:
-        """
-            Get the default HTTP status code for a method.
-
-            Args:
-                method: HTTP method string (e.g., "GET", "POST").
-
-            Returns:
-                Default status code for the method (e.g., 200, 201, 204).
-        """
-        return METHOD_STATUS_CODES.get(method.upper(), 200)
-
-    
-    @classmethod
     def get_effective_allowed_methods(cls) -> List[str]:
         """
             Get the effective list of allowed HTTP methods.
@@ -351,6 +364,245 @@ class ResourceEndpoint(RestEndpoint):
         return list(cls.allowed_methods)
     
     @classmethod
+    def create_middleware(cls) -> RESTMiddleware:
+        """
+            Create the REST middleware that processes this resource's
+            requests: content negotiation, request validation, response
+            serialization, status code selection and the REST error model.
+
+            Override to supply custom serializers, a custom validator or
+            application-wide error mappings.
+
+            Returns:
+                The RESTMiddleware the generated route handlers run inside.
+        """
+        rtnval = create_rest_middleware(debug=cls.debug_errors)
+        return rtnval
+
+    @classmethod
+    def get_id_param_name(cls) -> str:
+        """
+            Get the name of the path parameter that carries the resource
+            identifier, taken from ``id_param`` (``"{id:int}"`` -> ``"id"``).
+
+            Returns:
+                The path parameter name.
+
+            Raises:
+                ValueError: If ``id_param`` is not a single path parameter
+                            placeholder.
+        """
+        match = _ID_PARAM_PATTERN.match(cls.id_param)
+        if match is None:
+            raise ValueError(
+                f"{cls.__name__}.id_param must be a path parameter such as "
+                f"'{{id}}' or '{{id:int}}', got '{cls.id_param}'"
+            )
+
+        rtnval = match.group(1)
+        return rtnval
+
+    @classmethod
+    def build_route_constraints(cls) -> EndpointConstraints:
+        """
+            Build the constraints every route of this resource carries,
+            from the class's access policy and rate limit.
+
+            Returns:
+                The EndpointConstraints for the resource's routes.
+        """
+        rtnval = EndpointConstraints(
+            access_policy=cls.access_policy,
+            rate_limit=cls.rate_limit,
+            scopes=cls.access_policy.scopes if cls.access_policy else [],
+            roles=cls.access_policy.roles if cls.access_policy else []
+        )
+        return rtnval
+
+    @classmethod
+    def build_route_extras(
+        cls,
+        with_request_schema: bool = True,
+        with_response_schema: bool = True,
+        query_params: Optional[Dict[str, Type]] = None
+    ) -> Dict[str, Any]:
+        """
+            Build the ``extras`` of a route descriptor for this resource.
+
+            The route is stamped as a REST endpoint whose handler runs the
+            REST processing pipeline, and carries the resource's schemas
+            both as inspected JSON schema (for documentation) and as the
+            schema classes (for validation and OpenAPI components).
+
+            Args:
+                with_request_schema: Include the request schema. False for
+                                     routes that take no body, or a body of
+                                     another shape.
+                with_response_schema: Include the response schema. False for
+                                      routes whose response has another shape.
+                query_params: Query parameters the route reads, as a mapping
+                              of name to Python type.
+
+            Returns:
+                A new extras dictionary.
+        """
+        rest_extras: Dict[str, Any] = {REST_MANAGED_EXTRA: True}
+
+        if with_request_schema and cls.request_schema is not None:
+            rest_extras["request_schema"] = cls._inspect_rest_schema(cls.request_schema)
+            rest_extras[REST_REQUEST_SCHEMA_TYPE_EXTRA] = cls.request_schema
+
+        if with_response_schema and cls.response_schema is not None:
+            rest_extras["response_schema"] = cls._inspect_rest_schema(cls.response_schema)
+            rest_extras[REST_RESPONSE_SCHEMA_TYPE_EXTRA] = cls.response_schema
+
+        if query_params is not None and len(query_params) > 0:
+            rest_extras[REST_QUERY_PARAMS_EXTRA] = dict(query_params)
+
+        rtnval: Dict[str, Any] = {
+            "endpoint_type": "rest",
+            "rest": rest_extras,
+        }
+        return rtnval
+
+    @classmethod
+    def build_route(
+        cls,
+        instance: "ResourceEndpoint",
+        middleware: RESTMiddleware,
+        operation: Callable[[Any], Any],
+        name: str,
+        path: str,
+        methods: List[str],
+        summary: str,
+        extras: Dict[str, Any]
+    ) -> EndpointDescriptor:
+        """
+            Build the descriptor for one route of this resource.
+
+            ``operation`` is written against the resource (it reads the
+            path parameter, the query string and the validated payload from
+            the request and calls a CRUD method). It is wrapped so that the
+            route's handler has the shape the dispatcher calls -- it takes
+            the request and returns a response -- with REST processing
+            applied around the operation.
+
+            Args:
+                instance: The resource endpoint instance the route serves.
+                middleware: The REST middleware to run the operation inside.
+                operation: Callable taking the request and returning the
+                           operation's result.
+                name: Name for the generated handler, used in documentation
+                      and diagnostics.
+                path: URL path pattern of the route.
+                methods: HTTP methods of the route.
+                summary: One-line summary for documentation.
+                extras: The descriptor extras (see :meth:`build_route_extras`).
+
+            Returns:
+                The EndpointDescriptor for the route.
+        """
+        operation.__name__ = name
+        operation.__module__ = cls.__module__
+
+        handler = middleware.wrap_handler(operation, endpoint=instance)
+
+        descriptor = EndpointDescriptor(
+            handler=handler,
+            module=cls.__module__,
+            leaf=None,
+            path=path,
+            methods=list(methods),
+            version=cls.version,
+            tags=list(cls.tags),
+            constraints=cls.build_route_constraints(),
+            doc=Doc(summary=summary),
+            extras=extras
+        )
+
+        # The handler needs the descriptor to find the route's schemas, and
+        # the descriptor needs the handler to be built.
+        handler.descriptor = descriptor
+
+        return descriptor
+
+    @classmethod
+    def build_routes(
+        cls,
+        instance: "ResourceEndpoint",
+        middleware: RESTMiddleware
+    ) -> List[EndpointDescriptor]:
+        """
+            Build the descriptors for this resource's CRUD routes.
+
+            Two routes are built, according to ``allowed_methods``:
+
+            1. Collection route: /{resource_name} for POST (create)
+            2. Item route: /{resource_name}/{id_param} for GET, PUT, PATCH, DELETE
+
+            Subclasses extend this to add routes of their own.
+
+            Args:
+                instance: The resource endpoint instance the routes serve.
+                middleware: The REST middleware to run the operations inside.
+
+            Returns:
+                List of EndpointDescriptor objects, one per route.
+        """
+        descriptors: List[EndpointDescriptor] = []
+        allowed = [method.upper() for method in cls.get_effective_allowed_methods()]
+        resource_title = cls.resource_name.replace("_", " ").replace("-", " ").title()
+
+        # Collection route for POST (create)
+        if "POST" in allowed:
+            def create_operation(request: Any) -> Any:
+                return instance.create(get_rest_payload(request))
+
+            descriptors.append(cls.build_route(
+                instance=instance,
+                middleware=middleware,
+                operation=create_operation,
+                name=f"create_{cls.resource_name}",
+                path=f"/{cls.resource_name}",
+                methods=["POST"],
+                summary=f"Create {resource_title}",
+                extras=cls.build_route_extras()
+            ))
+
+        # Item route for GET, PUT, PATCH, DELETE
+        item_methods = [m for m in allowed if m in ["GET", "PUT", "PATCH", "DELETE"]]
+
+        if len(item_methods) > 0:
+            id_name = cls.get_id_param_name()
+
+            def item_operation(request: Any) -> Any:
+                resource_id = request.path_params[id_name]
+                operation_name = METHOD_TO_OPERATION.get(str(request.method).upper())
+                if operation_name == "get":
+                    return instance.get(resource_id)
+                elif operation_name == "update":
+                    return instance.update(resource_id, get_rest_payload(request))
+                elif operation_name == "partial_update":
+                    return instance.partial_update(resource_id, get_rest_payload(request))
+                elif operation_name == "delete":
+                    return instance.delete(resource_id)
+                else:
+                    raise ValueError(f"Unknown operation for method: {request.method}")
+
+            descriptors.append(cls.build_route(
+                instance=instance,
+                middleware=middleware,
+                operation=item_operation,
+                name=f"{cls.resource_name}_item",
+                path=f"/{cls.resource_name}/{cls.id_param}",
+                methods=item_methods,
+                summary=f"{resource_title} item",
+                extras=cls.build_route_extras()
+            ))
+
+        return descriptors
+
+    @classmethod
     def register(cls, router: Optional["Router"] = None) -> List["EndpointDescriptor"]:
         """
             Register CRUD routes based on allowed_methods configuration.
@@ -360,10 +612,20 @@ class ResourceEndpoint(RestEndpoint):
             
             1. Collection route: /{resource_name} for POST (create)
             2. Item route: /{resource_name}/{id_param} for GET, PUT, PATCH, DELETE
+
+            Each route's handler takes the request, as the dispatcher calls
+            it. It reads the resource identifier from the path parameters,
+            validates the request body into ``request_schema`` (partially
+            for PATCH, or against ``partial_update_schema``), calls the CRUD
+            method, and returns a response with the serialized result, the
+            status code for the method (201 with a Location header for a
+            create, 204 for a delete) or a RESTError body when the
+            operation raises.
             
             Args:
-                router: Optional router to register with. If not provided,
-                        uses the global EndpointRegistry.
+                router: Optional router to add the routes to. If not
+                        provided, the descriptors are only returned; add
+                        them to a registry with ``EndpointRegistry.register``.
             
             Returns:
                 List of registered EndpointDescriptor objects.
@@ -371,111 +633,23 @@ class ResourceEndpoint(RestEndpoint):
             Raises:
                 ValueError: If resource_name is not configured.
         """
-        from ccai.webworks.endpoints.descriptor import EndpointDescriptor
-        from ccai.webworks.endpoints.constraints import EndpointConstraints
-        from ccai.webworks.endpoints.registry import EndpointRegistry
-        
         if not cls.resource_name:
             raise ValueError(
                 f"{cls.__name__} must define resource_name for route registration"
             )
-        
-        descriptors: List[EndpointDescriptor] = []
-        allowed = cls.get_effective_allowed_methods()
-        
-        # Build constraints
-        constraints = EndpointConstraints(
-            access_policy=cls.access_policy,
-            rate_limit=cls.rate_limit,
-            scopes=cls.access_policy.scopes if cls.access_policy else [],
-            roles=cls.access_policy.roles if cls.access_policy else []
-        )
-        
-        # Build extras with REST schema info
-        extras: Dict[str, Any] = {}
-        rest_extras: Dict[str, Any] = {}
-        
-        if cls.request_schema is not None:
-            rest_extras["request_schema"] = cls._inspect_rest_schema(cls.request_schema)
-        
-        if cls.response_schema is not None:
-            rest_extras["response_schema"] = cls._inspect_rest_schema(cls.response_schema)
-        
-        if rest_extras:
-            extras["rest"] = rest_extras
-        
-        # Collection route for POST (create)
-        if "POST" in allowed:
-            collection_path = f"/{cls.resource_name}"
-            
-            # Create a handler wrapper for create
-            instance = cls()
-            
-            def create_handler(payload: Any) -> Any:
-                return instance.create(payload)
-            
-            collection_descriptor = EndpointDescriptor(
-                handler=create_handler,
-                module=cls.__module__,
-                leaf=None,
-                path=collection_path,
-                methods=["POST"],
-                version=cls.version,
-                tags=list(cls.tags),
-                constraints=constraints,
-                doc=None,
-                extras=extras
-            )
-            
+
+        # One endpoint instance and one middleware serve all the routes
+        instance = cls()
+        middleware = cls.create_middleware()
+
+        descriptors = cls.build_routes(instance, middleware)
+
+        for descriptor in descriptors:
             if router is not None:
-                router.add_route(collection_descriptor)
+                router.add_endpoint(descriptor)
             else:
-                mark_handler(collection_descriptor.handler, collection_descriptor)
-            
-            descriptors.append(collection_descriptor)
-        
-        # Item route for GET, PUT, PATCH, DELETE
-        item_methods = [m for m in allowed if m in ["GET", "PUT", "PATCH", "DELETE"]]
-        
-        if item_methods:
-            item_path = f"/{cls.resource_name}/{cls.id_param}"
-            
-            # Create a handler wrapper for item operations
-            instance = cls()
-            
-            def item_handler(id: Any, method: str, payload: Any = None) -> Any:
-                operation = METHOD_TO_OPERATION.get(method)
-                if operation == "get":
-                    return instance.get(id)
-                elif operation == "update":
-                    return instance.update(id, payload)
-                elif operation == "partial_update":
-                    return instance.partial_update(id, payload)
-                elif operation == "delete":
-                    return instance.delete(id)
-                else:
-                    raise ValueError(f"Unknown operation for method: {method}")
-            
-            item_descriptor = EndpointDescriptor(
-                handler=item_handler,
-                module=cls.__module__,
-                leaf=None,
-                path=item_path,
-                methods=item_methods,
-                version=cls.version,
-                tags=list(cls.tags),
-                constraints=constraints,
-                doc=None,
-                extras=extras
-            )
-            
-            if router is not None:
-                router.add_route(item_descriptor)
-            else:
-                mark_handler(item_descriptor.handler, item_descriptor)
-            
-            descriptors.append(item_descriptor)
-        
+                mark_handler(descriptor.handler, descriptor)
+
         return descriptors
 
 

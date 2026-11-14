@@ -458,3 +458,279 @@ def test_attach_blueprint_before_startup_queues_and_flushes():
         reset_webapp_persona()
 
     return
+
+
+# =============================================================================
+# attach_route metadata
+# =============================================================================
+
+from ccai.webworks.endpoints.accesspolicy import AccessPolicy
+from ccai.webworks.endpoints.doc import Doc
+from ccai.webworks.security.decorators import require_roles
+
+
+def test_attach_route_records_access_policy_on_descriptor():
+    """
+        The access_policy given to attach_route is stored on the route's
+        descriptor, where the dispatcher enforces it.
+    """
+    app = _create_app()
+    patch = None
+
+    try:
+        policy = AccessPolicy(roles=["admin"])
+
+        @app.attach_route("/admin", access_policy=policy)
+        def admin_home(request):
+            return {"area": "admin"}
+
+        patch = _startup_app(app)
+
+        match = app.router.match(Request(method="GET", path="/admin"))
+
+        if match.descriptor.constraints.access_policy != policy:
+            errmsg = (
+                "Expected the descriptor to carry the access policy, got "
+                f"{match.descriptor.constraints.access_policy!r}"
+            )
+            raise AssertionError(errmsg)
+
+        if match.descriptor.constraints.roles != ["admin"]:
+            errmsg = f"Expected the roles to be listed, got {match.descriptor.constraints.roles!r}"
+            raise AssertionError(errmsg)
+
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_attach_route_honors_security_decorator_on_handler():
+    """
+        A policy attached by a stacked @require_roles is recorded on the
+        descriptor of a route registered with attach_route.
+    """
+    app = _create_app()
+    patch = None
+
+    try:
+        @app.attach_route("/decorated")
+        @require_roles("system-admin")
+        def decorated(request):
+            return {"ok": True}
+
+        patch = _startup_app(app)
+
+        match = app.router.match(Request(method="GET", path="/decorated"))
+        policy = match.descriptor.constraints.access_policy
+
+        if policy is None or policy.roles != ("system-admin",):
+            errmsg = f"Expected the decorator's policy on the descriptor, got {policy!r}"
+            raise AssertionError(errmsg)
+
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_attach_route_records_tags_and_doc():
+    """
+        Tags and documentation given to attach_route reach the descriptor.
+    """
+    app = _create_app()
+    patch = None
+
+    try:
+        @app.attach_route("/tagged", tags=["reports"], doc=Doc(summary="Tagged route"))
+        def tagged(request):
+            return {"ok": True}
+
+        patch = _startup_app(app)
+
+        match = app.router.match(Request(method="GET", path="/tagged"))
+
+        if match.descriptor.tags != ["reports"]:
+            errmsg = f"Expected tags ['reports'], got {match.descriptor.tags!r}"
+            raise AssertionError(errmsg)
+
+        if match.descriptor.doc is None or match.descriptor.doc.summary != "Tagged route":
+            errmsg = f"Expected the doc to be recorded, got {match.descriptor.doc!r}"
+            raise AssertionError(errmsg)
+
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_attach_route_rejects_unknown_keyword_argument():
+    """
+        A keyword argument attach_route does not know is an error, so a
+        mistyped access_policy can not silently leave a route unprotected.
+    """
+    app = _create_app()
+
+    try:
+        raised = False
+
+        try:
+            app.attach_route("/typo", acess_policy=AccessPolicy(roles=["admin"]))
+        except TypeError:
+            raised = True
+
+        if not raised:
+            errmsg = "Expected TypeError for an unknown keyword argument"
+            raise AssertionError(errmsg)
+
+    finally:
+        reset_webapp_persona()
+
+    return
+
+
+# =============================================================================
+# Routes added outside the registry are recorded in it
+# =============================================================================
+
+def _registered_paths(app):
+    """
+        The paths of the descriptors in the application's registry.
+
+        :param app: The WebApplication.
+
+        :returns: Sorted list of paths.
+    """
+    rtnval = sorted(descriptor.path for descriptor in app.registry.collect())
+    return rtnval
+
+
+def test_attach_route_records_the_route_in_the_registry():
+    """
+        Test that routes added with ``attach_route`` before and after
+        ``startup()`` are in the application's registry, which the OpenAPI
+        document and the security map are built from.
+    """
+    app = _create_app()
+    patch = None
+
+    try:
+        @app.attach_route("/early")
+        def early(request):
+            return {}
+
+        patch = _startup_app(app)
+
+        @app.attach_route("/late")
+        def late(request):
+            return {}
+
+        paths = _registered_paths(app)
+        if paths != ["/early", "/late"]:
+            errmsg = f"Expected both routes in the registry, got {paths}"
+            raise AssertionError(errmsg)
+
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_attach_blueprint_records_the_blueprint_routes_in_the_registry():
+    """
+        Test that the routes of blueprints mounted before and after
+        ``startup()`` are in the application's registry.
+    """
+    from ccai.webworks.endpoints.blueprint import Blueprint
+
+    class EarlyRegistryBlueprint(Blueprint):
+        base_path = "/early-bp"
+
+    @EarlyRegistryBlueprint.attach_at(leaf="items", methods=["GET"])
+    def early_items(request):
+        return {}
+
+    class LateRegistryBlueprint(Blueprint):
+        base_path = "/late-bp"
+
+    @LateRegistryBlueprint.attach_at(leaf="items", methods=["GET"])
+    def late_items(request):
+        return {}
+
+    app = _create_app()
+    patch = None
+
+    try:
+        app.attach_blueprint_to_route(EarlyRegistryBlueprint)
+        patch = _startup_app(app)
+        app.attach_blueprint_to_route(LateRegistryBlueprint)
+
+        paths = _registered_paths(app)
+        if paths != ["/early-bp/items", "/late-bp/items"]:
+            errmsg = f"Expected both blueprints' routes in the registry, got {paths}"
+            raise AssertionError(errmsg)
+
+        match = app.router.match(Request(method="GET", path="/late-bp/items"))
+        if match is None:
+            raise AssertionError("Expected the late blueprint's route to be routable")
+
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_attach_blueprint_accepts_a_configured_instance():
+    """
+        Test that a configured blueprint instance, whose ``register`` serves
+        the instance itself, can be mounted and is routable.
+    """
+    from ccai.webworks.endpoints.descriptor import EndpointDescriptor
+
+    class ConfiguredBlueprint:
+        def __init__(self, path):
+            self._path = path
+            return
+
+        def handle(self, request):
+            return {"path": self._path}
+
+        def register(self, router=None):
+            descriptor = EndpointDescriptor(
+                handler=self.handle, module=__name__, path=self._path, methods=["GET"]
+            )
+            if router is not None:
+                router.add_endpoint(descriptor)
+            return [descriptor]
+
+    app = _create_app()
+    patch = None
+
+    try:
+        patch = _startup_app(app)
+        app.attach_blueprint_to_route(ConfiguredBlueprint("/configured"))
+
+        match = app.router.match(Request(method="GET", path="/configured"))
+        if match is None:
+            raise AssertionError("Expected the configured instance's route to be routable")
+
+        if _registered_paths(app) != ["/configured"]:
+            errmsg = f"Expected the instance's route in the registry, got {_registered_paths(app)}"
+            raise AssertionError(errmsg)
+
+    finally:
+        if patch is not None:
+            patch.deactivate()
+        reset_webapp_persona()
+
+    return

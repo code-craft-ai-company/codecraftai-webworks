@@ -5,15 +5,22 @@
     jwks_endpoint, as well as the id_token inclusion in token responses.
 """
 
+import json
 import time
 
-from ccai.webworks.authentication.bearer import decode_jwt
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+from ccai.webworks.security import jsonwebtoken
+from ccai.webworks.authentication.core import AuthenticationContext, Principal
 from ccai.webworks.authentication.blueprints.oidc import OIDCBlueprint
 
 
 # =============================================================================
 # Test Helpers
 # =============================================================================
+
+
+RESOURCE_OWNER = Principal(identifier="resource-owner-1")
 
 
 class MockJsonRequest:
@@ -26,12 +33,38 @@ class MockJsonRequest:
                  host="example.com", subject=None):
         self._data = data or {}
         self.query_params = query_params or {}
+
+        # The identity the authentication middleware established: the
+        # named subject when a test supplies one, otherwise the resource
+        # owner the authorization endpoint issues codes for.
+        principal = RESOURCE_OWNER
+        if subject is not None:
+            principal = Principal(identifier=subject)
+
+        self.auth = AuthenticationContext(principal=principal, scheme="Test")
         self.scheme = scheme
         self.host = host
         self.subject = subject
 
     def json(self):
         return self._data
+
+
+# One RSA key for the whole module: generating a key per blueprint class
+# would dominate the run time. ID tokens are signed with it and verified
+# against the JWKS the blueprint publishes, the way a relying party does.
+TEST_SIGNING_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+def _decode_id_token(blueprint, id_token):
+    """
+        Verify an ID token against the blueprint's published JWKS and
+        return its claims.
+    """
+    jwks = blueprint.jwks_endpoint(MockJsonRequest())["body"]
+    key_set = jsonwebtoken.JsonWebKeySet.import_key_set(jwks)
+    decoded = jsonwebtoken.decode(id_token, key=key_set, algorithms=["RS256"])
+    return dict(decoded.claims)
 
 
 def _create_fresh_blueprint(
@@ -75,6 +108,7 @@ def _create_fresh_blueprint(
 
     FreshBlueprint.issuer = issuer
     FreshBlueprint.jwks = jwks
+    FreshBlueprint.id_token_signing_key = TEST_SIGNING_KEY
     FreshBlueprint.id_token_lifetime = id_token_lifetime
     FreshBlueprint.claim_mappings = claim_mappings
 
@@ -260,17 +294,24 @@ def test_jwks_returns_configured_keys():
         errmsg = "Expected status 200, got {}".format(response["status"])
         raise AssertionError(errmsg)
 
-    if response["body"] != test_jwks:
-        errmsg = "Expected JWKS body to match configured keys"
+    # The signing key comes first, followed by the configured keys
+    keys = response["body"]["keys"]
+
+    if keys[1:] != test_jwks["keys"]:
+        errmsg = "Expected the configured keys after the signing key, got {!r}".format(keys)
+        raise AssertionError(errmsg)
+
+    if keys[0].get("kty") != "RSA" or keys[0].get("alg") != "RS256":
+        errmsg = "Expected the RS256 signing key first, got {!r}".format(keys[0])
         raise AssertionError(errmsg)
 
     return
 
 
-def test_jwks_returns_empty_keys_when_not_configured():
+def test_jwks_returns_signing_key_when_no_extra_keys_configured():
     """
-        When no JWKS is configured, the endpoint should return an
-        empty keys array.
+        When no additional JWKS is configured, the endpoint should return
+        exactly the public key ID tokens are signed with.
     """
     blueprint = _create_fresh_blueprint(jwks=None)
 
@@ -281,10 +322,16 @@ def test_jwks_returns_empty_keys_when_not_configured():
         errmsg = "Expected status 200, got {}".format(response["status"])
         raise AssertionError(errmsg)
 
-    if response["body"] != {"keys": []}:
-        errmsg = "Expected empty keys array, got {!r}".format(
-            response["body"]
-        )
+    keys = response["body"]["keys"]
+
+    if len(keys) != 1:
+        errmsg = "Expected exactly the signing key, got {!r}".format(keys)
+        raise AssertionError(errmsg)
+
+    public_numbers = TEST_SIGNING_KEY.public_key().public_numbers()
+    modulus = jsonwebtoken.base64url_decode(keys[0]["n"])
+    if int.from_bytes(modulus, "big") != public_numbers.n:
+        errmsg = "Expected the published key to be the signing key's public half"
         raise AssertionError(errmsg)
 
     return
@@ -464,6 +511,7 @@ def test_token_response_includes_id_token():
         "code": code,
         "redirect_uri": redirect_uri,
         "client_id": client_id,
+        "client_secret": "test-secret",
     })
     token_response = blueprint.token(token_request)
 
@@ -481,12 +529,7 @@ def test_token_response_includes_id_token():
 
     # Decode and verify the id_token claims
     id_token = body["id_token"]
-    claims = decode_jwt(
-        id_token,
-        "test-oidc-secret",
-        algorithms=["HS256"],
-        verify_exp=False
-    )
+    claims = _decode_id_token(blueprint, id_token)
 
     required_claims = ["iss", "sub", "aud", "exp", "iat"]
     for claim_name in required_claims:
@@ -549,17 +592,13 @@ def test_token_response_id_token_has_correct_expiration():
         "code": code,
         "redirect_uri": redirect_uri,
         "client_id": client_id,
+        "client_secret": "test-secret",
     })
     token_response = blueprint.token(token_request)
     after_time = int(time.time())
 
     id_token = token_response["body"]["id_token"]
-    claims = decode_jwt(
-        id_token,
-        "test-oidc-secret",
-        algorithms=["HS256"],
-        verify_exp=False
-    )
+    claims = _decode_id_token(blueprint, id_token)
 
     expected_min = before_time + id_token_lifetime
     expected_max = after_time + id_token_lifetime
@@ -592,8 +631,9 @@ def test_claim_mappings_applied_to_id_token():
         }
     }
 
+    # Claims are looked up for the user the ID token is about
     users = {
-        client_id: {
+        RESOURCE_OWNER.identifier: {
             "full_name": "Test User",
             "mail": "test@example.com",
         }
@@ -630,16 +670,12 @@ def test_claim_mappings_applied_to_id_token():
         "code": code,
         "redirect_uri": redirect_uri,
         "client_id": client_id,
+        "client_secret": "test-secret",
     })
     token_response = blueprint.token(token_request)
 
     id_token = token_response["body"]["id_token"]
-    claims = decode_jwt(
-        id_token,
-        "test-oidc-secret",
-        algorithms=["HS256"],
-        verify_exp=False
-    )
+    claims = _decode_id_token(blueprint, id_token)
 
     if claims.get("name") != "Test User":
         errmsg = "Expected name='Test User' in id_token, got {!r}".format(
@@ -711,6 +747,204 @@ def test_oidc_inherits_oauth2_revoke():
         errmsg = "Expected status 200 from inherited revoke, got {}".format(
             response["status"]
         )
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# ID Token Contents and Verifiability
+# =============================================================================
+
+OIDC_REDIRECT_URI = "https://app.example.com/callback"
+
+OIDC_CLIENT = {
+    "client_id": "test-client",
+    "client_secret": "test-secret",
+    "redirect_uris": [OIDC_REDIRECT_URI],
+    "grant_types": ["authorization_code"],
+    "scopes": ["openid", "profile"],
+}
+
+
+def _obtain_id_token(blueprint, nonce=None, token_request_headers=None):
+    """
+        Run the authorization code flow for the resource owner and return
+        the ID token of the token response.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    query_params = {
+        "response_type": "code",
+        "client_id": "test-client",
+        "redirect_uri": OIDC_REDIRECT_URI,
+        "scope": "openid",
+    }
+    if nonce is not None:
+        query_params["nonce"] = nonce
+
+    auth_response = blueprint.authorize(MockJsonRequest(query_params=query_params))
+    code = parse_qs(urlparse(auth_response["headers"]["Location"]).query)["code"][0]
+
+    token_request = MockJsonRequest(data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": OIDC_REDIRECT_URI,
+        "client_id": "test-client",
+        "client_secret": "test-secret",
+    })
+    if token_request_headers is not None:
+        token_request.headers = token_request_headers
+
+    token_response = blueprint.token(token_request)
+
+    if token_response["status"] != 200:
+        errmsg = "Expected status 200 from the token endpoint, got {} {!r}".format(
+            token_response["status"], token_response["body"]
+        )
+        raise AssertionError(errmsg)
+
+    return token_response["body"]["id_token"]
+
+
+def test_id_token_identifies_user_to_client():
+    """
+        The ID token's subject is the authenticated user and its audience
+        is the client the token was issued to.
+    """
+    blueprint = _create_fresh_blueprint(
+        issuer="https://auth.example.com",
+        clients={"test-client": dict(OIDC_CLIENT)}
+    )
+
+    claims = _decode_id_token(blueprint, _obtain_id_token(blueprint))
+
+    if claims["sub"] != RESOURCE_OWNER.identifier:
+        errmsg = "Expected sub {!r}, got {!r}".format(RESOURCE_OWNER.identifier, claims["sub"])
+        raise AssertionError(errmsg)
+
+    if claims["aud"] != "test-client":
+        errmsg = "Expected aud 'test-client', got {!r}".format(claims["aud"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_id_token_echoes_nonce_of_authorization_request():
+    """
+        The nonce of the authorization request is echoed in the ID token,
+        which is what lets a relying party bind the token to its request.
+    """
+    blueprint = _create_fresh_blueprint(
+        issuer="https://auth.example.com",
+        clients={"test-client": dict(OIDC_CLIENT)}
+    )
+
+    claims = _decode_id_token(blueprint, _obtain_id_token(blueprint, nonce="n-0S6_WzA2Mj"))
+
+    if claims.get("nonce") != "n-0S6_WzA2Mj":
+        errmsg = "Expected the nonce to be echoed, got {!r}".format(claims.get("nonce"))
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_id_token_is_signed_with_asymmetric_key_named_in_jwks():
+    """
+        The ID token is an RS256 token whose key id is published at the
+        JWKS endpoint; it does not verify with the shared JWT secret.
+    """
+    blueprint = _create_fresh_blueprint(
+        issuer="https://auth.example.com",
+        clients={"test-client": dict(OIDC_CLIENT)}
+    )
+
+    id_token = _obtain_id_token(blueprint)
+
+    header = json.loads(jsonwebtoken.base64url_decode(id_token.split(".")[0]))
+
+    if header.get("alg") != "RS256":
+        errmsg = "Expected alg RS256, got {!r}".format(header.get("alg"))
+        raise AssertionError(errmsg)
+
+    published = blueprint.jwks_endpoint(MockJsonRequest())["body"]["keys"]
+    published_key_ids = [key.get("kid") for key in published]
+
+    if header.get("kid") not in published_key_ids:
+        errmsg = "Expected kid {!r} to be published, got {!r}".format(
+            header.get("kid"), published_key_ids
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_id_token_issuer_matches_discovery_document():
+    """
+        Without a configured issuer, the iss claim equals the issuer the
+        discovery document advertises for the same host.
+    """
+    blueprint = _create_fresh_blueprint(
+        issuer=None,
+        clients={"test-client": dict(OIDC_CLIENT)}
+    )
+
+    host_headers = {"Host": "id.example.com:8443"}
+
+    discovery_request = MockJsonRequest()
+    discovery_request.headers = host_headers
+    advertised_issuer = blueprint.discovery(discovery_request)["body"]["issuer"]
+
+    id_token = _obtain_id_token(blueprint, token_request_headers=host_headers)
+    claims = _decode_id_token(blueprint, id_token)
+
+    if advertised_issuer != "https://id.example.com:8443":
+        errmsg = "Expected the issuer to come from the Host header, got {!r}".format(advertised_issuer)
+        raise AssertionError(errmsg)
+
+    if claims["iss"] != advertised_issuer:
+        errmsg = "Expected iss {!r} to match discovery, got {!r}".format(
+            advertised_issuer, claims["iss"]
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_discovery_advertises_id_token_signing_algorithm():
+    """
+        The discovery document names the algorithm ID tokens are really
+        signed with.
+    """
+    blueprint = _create_fresh_blueprint(issuer="https://auth.example.com")
+
+    body = blueprint.discovery(MockJsonRequest())["body"]
+
+    if body["id_token_signing_alg_values_supported"] != ["RS256"]:
+        errmsg = "Expected ['RS256'], got {!r}".format(
+            body["id_token_signing_alg_values_supported"]
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_blueprint_generates_signing_key_when_none_is_configured():
+    """
+        Without a configured signing key the blueprint signs with a key it
+        generates and publishes, so tokens still verify against its JWKS.
+    """
+    blueprint = _create_fresh_blueprint(
+        issuer="https://auth.example.com",
+        clients={"test-client": dict(OIDC_CLIENT)}
+    )
+    blueprint.id_token_signing_key = None
+
+    id_token = _obtain_id_token(blueprint)
+    claims = _decode_id_token(blueprint, id_token)
+
+    if claims["aud"] != "test-client":
+        errmsg = "Expected the token to verify against the published key"
         raise AssertionError(errmsg)
 
     return

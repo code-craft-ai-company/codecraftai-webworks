@@ -4,9 +4,14 @@
  * <mj-list> -- semantic list primitive rendering ordered (<ol>), unordered
  * (<ul>), or description (<dl>) lists with token-driven spacing, optional
  * dividers, nested level support, and item-click events.
+ *
+ * Items come from light-DOM <li> children (default slot) or from the `items`
+ * property: `{ label, href?, action?, icon?, description?, children? }`.
+ * `href` values pass through `safeUrl`, so `javascript:` URLs are inert.
  */
 
 import { MjElement } from "../core/mjelement.js";
+import { safeUrl } from "../core/html.js";
 
 const STYLES = `
 :host {
@@ -35,7 +40,7 @@ ol[data-marker="roman"]   { list-style: lower-roman; padding-inline-start: var(-
 /* role="list" is added when marker="none" for Safari */
 ul[role="list"], ol[role="list"] { list-style: none; padding-inline-start: 0; }
 
-li {
+li, ::slotted(li) {
   padding: 0;
   line-height: var(--mj-line-height);
 }
@@ -54,6 +59,8 @@ li a:focus-visible, li button:focus-visible {
   outline-offset: var(--mj-focus-ring-offset);
 }
 
+.item-icon { margin-inline-end: var(--mj-space-2); }
+
 :host([density="compact"]) ul,
 :host([density="compact"]) ol { gap: var(--mj-list-gap-compact, 2px); }
 
@@ -62,10 +69,19 @@ li a:focus-visible, li button:focus-visible {
 
 :host([nested]) { padding-inline-start: var(--mj-list-indent, 20px); }
 
-hr.divider {
-  border: none;
-  border-top: 1px solid var(--mj-list-divider-color, var(--mj-border));
-  margin: 0;
+/* Dividers are borders on the items, so the list holds nothing but <li>. */
+:host([dividers]) li + li,
+:host([dividers]) ::slotted(li:not(:first-child)) {
+  border-block-start: 1px solid var(--mj-list-divider-color, var(--mj-border));
+  padding-block-start: var(--mj-list-gap, 6px);
+}
+:host([dividers][density="compact"]) li + li,
+:host([dividers][density="compact"]) ::slotted(li:not(:first-child)) {
+  padding-block-start: var(--mj-list-gap-compact, 2px);
+}
+:host([dividers][density="spacious"]) li + li,
+:host([dividers][density="spacious"]) ::slotted(li:not(:first-child)) {
+  padding-block-start: var(--mj-list-gap-spacious, 12px);
 }
 
 dl {
@@ -84,6 +100,9 @@ dd {
 }
 `;
 
+/* Attributes a nested list takes over from the list that contains it. */
+const INHERITED_ATTRIBUTES = ["marker", "density", "dividers"];
+
 export class MjList extends MjElement {
   static tagName = "mj-list";
   static styles = STYLES;
@@ -92,20 +111,64 @@ export class MjList extends MjElement {
   constructor() {
     super()
     this._items = []
+    this._listEl = null
   }
 
   render() {
     const type = this.getAttribute("type") || "unordered"
+    let markup = `<ul part="list"><slot></slot></ul>`
     if (type === "description") {
-      return `<dl part="list" role="list"><slot></slot></dl>`
+      markup = `<dl part="list"><slot></slot></dl>`
+    } else if (type === "ordered") {
+      markup = `<ol part="list"><slot></slot></ol>`
     }
-    if (type === "ordered") {
-      return `<ol part="list"><slot></slot></ol>`
-    }
-    return `<ul part="list"><slot></slot></ul>`
+    return markup
   }
 
   afterRender() {
+    /* One delegated listener serves every link / button item. */
+    this.listen(this.shadowRoot, "click", this._onClick.bind(this))
+    this._bindList()
+    return
+  }
+
+  onAttributeChanged(name, oldValue, newValue) {
+    if (this._listEl === undefined || this._listEl === null) {
+      return
+    }
+    if (name === "type") {
+      const wantedTag = this._tagForType()
+      if (this._listEl.localName !== wantedTag) {
+        /* A different list element is needed; rebuild it and its content. */
+        this.shadowRoot.innerHTML = this.render()
+        this._bindList()
+      }
+    }
+    if (name === "marker") {
+      this._syncMarker()
+    }
+    if (name === "start" || name === "reversed") {
+      this._syncListAttrs()
+    }
+    if (name === "marker" || name === "density" || name === "dividers") {
+      this._syncNestedLists()
+    }
+    return
+  }
+
+  _tagForType() {
+    const type = this.getAttribute("type") || "unordered"
+    let tag = "ul"
+    if (type === "description") {
+      tag = "dl"
+    } else if (type === "ordered") {
+      tag = "ol"
+    }
+    return tag
+  }
+
+  /* Pick up the list element of the current shadow tree and fill it. */
+  _bindList() {
     this._listEl = this.$("ul") || this.$("ol") || this.$("dl")
     this._syncMarker()
     this._syncListAttrs()
@@ -116,26 +179,17 @@ export class MjList extends MjElement {
     return
   }
 
-  onAttributeChanged(name, oldValue, newValue) {
-    if (this._listEl === undefined || this._listEl === null) {
+  _syncMarker() {
+    const tag = this._listEl.localName
+    if (tag === "dl") {
+      /* A description list keeps its native semantics and has no marker. */
+      this._listEl.removeAttribute("data-marker")
+      this._listEl.removeAttribute("role")
       return
     }
-    if (name === "type") {
-      const markup = this.render()
-      this.shadowRoot.innerHTML = markup
-      this._listEl = this.$("ul") || this.$("ol") || this.$("dl")
-    }
-    if (name === "marker") {
-      this._syncMarker()
-    }
-    if (name === "start" || name === "reversed") {
-      this._syncListAttrs()
-    }
-    return
-  }
 
-  _syncMarker() {
-    const marker = this.getAttribute("marker") || "bullet"
+    const fallback = tag === "ol" ? "decimal" : "bullet"
+    const marker = this.getAttribute("marker") || fallback
     this._listEl.setAttribute("data-marker", marker)
     if (marker === "none") {
       this._listEl.setAttribute("role", "list")
@@ -146,10 +200,6 @@ export class MjList extends MjElement {
   }
 
   _syncListAttrs() {
-    const type = this.getAttribute("type") || "unordered"
-    if (type !== "ordered") {
-      return
-    }
     const ol = this.$("ol")
     if (ol === null) {
       return
@@ -157,6 +207,8 @@ export class MjList extends MjElement {
     const start = this.getAttribute("start")
     if (start !== null && start.length > 0) {
       ol.setAttribute("start", start)
+    } else {
+      ol.removeAttribute("start")
     }
     const reversed = this.hasAttribute("reversed")
     if (reversed === true) {
@@ -167,29 +219,45 @@ export class MjList extends MjElement {
     return
   }
 
+  /* Copy marker, density and dividers onto a nested list. */
+  _applyInheritedAttributes(nested) {
+    for (let i = 0; i < INHERITED_ATTRIBUTES.length; i = i + 1) {
+      const name = INHERITED_ATTRIBUTES[i]
+      const value = this.getAttribute(name)
+      if (value !== null) {
+        nested.setAttribute(name, value)
+      } else {
+        nested.removeAttribute(name)
+      }
+    }
+    return
+  }
+
+  _syncNestedLists() {
+    const nestedLists = this._listEl.querySelectorAll("mj-list")
+    for (let i = 0; i < nestedLists.length; i = i + 1) {
+      this._applyInheritedAttributes(nestedLists[i])
+    }
+    return
+  }
+
   _renderItems() {
     const type = this.getAttribute("type") || "unordered"
-    this._listEl.innerHTML = ""
+    this._listEl.replaceChildren()
 
     if (type === "description") {
       this._renderDescriptionItems()
-      return
+    } else {
+      for (let idx = 0; idx < this._items.length; idx = idx + 1) {
+        const item = this._items[idx]
+        const li = this._buildListItem(item, idx)
+        this._listEl.appendChild(li)
+      }
     }
 
-    const dividers = this.hasAttribute("dividers")
-
-    for (let idx = 0; idx < this._items.length; idx = idx + 1) {
-      const item = this._items[idx]
-      const li = this._buildListItem(item, idx)
-      this._listEl.appendChild(li)
-
-      if (dividers === true && idx < this._items.length - 1) {
-        const hr = document.createElement("hr")
-        hr.className = "divider"
-        hr.setAttribute("part", "divider")
-        hr.setAttribute("aria-hidden", "true")
-        this._listEl.appendChild(hr)
-      }
+    if (this._items.length === 0) {
+      /* No data items: light-DOM <li> children show through the slot again. */
+      this._listEl.appendChild(document.createElement("slot"))
     }
     return
   }
@@ -197,30 +265,38 @@ export class MjList extends MjElement {
   _buildListItem(item, idx) {
     const li = document.createElement("li")
     li.setAttribute("part", "item")
+    const label = item.label !== undefined && item.label !== null ? String(item.label) : ""
+
+    if (item.icon !== undefined && item.icon !== null && item.icon !== "") {
+      const icon = document.createElement("span")
+      icon.className = "item-icon"
+      icon.setAttribute("part", "item-icon")
+      icon.setAttribute("aria-hidden", "true")
+      icon.textContent = String(item.icon)
+      li.appendChild(icon)
+    }
 
     if (item.href !== undefined && item.href !== null) {
       const a = document.createElement("a")
-      a.href = item.href
-      a.textContent = item.label
-      this.listen(a, "click", () => {
-        this.emit("mj-item-click", { index: idx, label: item.label, href: item.href })
-      })
+      a.setAttribute("href", safeUrl(item.href))
+      a.setAttribute("data-item-index", String(idx))
+      a.textContent = label
       li.appendChild(a)
     } else if (item.action !== undefined) {
       const btn = document.createElement("button")
-      btn.textContent = item.label
-      this.listen(btn, "click", () => {
-        this.emit("mj-item-click", { index: idx, label: item.label })
-      })
+      btn.type = "button"
+      btn.setAttribute("data-item-index", String(idx))
+      btn.textContent = label
       li.appendChild(btn)
     } else {
-      li.textContent = item.label
+      li.appendChild(document.createTextNode(label))
     }
 
     if (item.children !== undefined && item.children !== null && item.children.length > 0) {
       const nested = document.createElement("mj-list")
       nested.setAttribute("nested", "")
       nested.setAttribute("type", this.getAttribute("type") || "unordered")
+      this._applyInheritedAttributes(nested)
       li.appendChild(nested)
       nested.items = item.children
     }
@@ -236,7 +312,7 @@ export class MjList extends MjElement {
       dt.textContent = item.label
       this._listEl.appendChild(dt)
 
-      if (item.description !== undefined) {
+      if (item.description !== undefined && item.description !== null) {
         const descriptions = Array.isArray(item.description) ? item.description : [item.description]
         for (let di = 0; di < descriptions.length; di = di + 1) {
           const dd = document.createElement("dd")
@@ -246,6 +322,29 @@ export class MjList extends MjElement {
         }
       }
     }
+    return
+  }
+
+  _onClick(event) {
+    const target = event.target
+    if (!(target instanceof Element)) {
+      return
+    }
+    const control = target.closest("[data-item-index]")
+    if (control === null) {
+      return
+    }
+    const idx = parseInt(control.getAttribute("data-item-index"), 10)
+    const item = this._items[idx]
+    if (item === undefined) {
+      return
+    }
+
+    const detail = { index: idx, label: item.label }
+    if (control.localName === "a") {
+      detail.href = item.href
+    }
+    this.emit("mj-item-click", detail)
     return
   }
 

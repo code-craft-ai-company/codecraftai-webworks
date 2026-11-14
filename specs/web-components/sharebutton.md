@@ -4,8 +4,7 @@
 - **Class / file:** `MjShareButton` / `mjsharebutton.js`
 - **Category:** Buttons & actions (§5.3)
 - **Primary or Variant:** Primary
-- **Synonyms covered:** Share button, Download button (as a related concept — see §2),
-  Upload button (relationship noted — see §2)
+- **Synonyms covered:** Share button
 - **Phase:** P1
 - **Status:** Planned
 
@@ -26,12 +25,10 @@ pattern for the entire library.
 ## 2. When to use / when not to use
 
 Use for sharing a URL or piece of content to external destinations. For downloading
-a file: use a plain `<a download href="…">` wrapped as `<mj-button>` — a download
-anchor, not this component (the catalog notes the Download button is conceptually
-related but is satisfied by `<mj-button>` wrapping a real anchor with the `download`
-attribute). For uploading: use `<mj-file-picker>` — the Upload button concept in the
-catalog is the trigger for that component, not this one. Do not use `<mj-share-button>`
-for in-app clipboard operations — use `<mj-copy-button>`.
+a file use `<mj-download-button>` (`downloadbutton.md`), not this component. For
+uploading use `<mj-upload-button>` (`uploadbutton.md`) for the compact button form or
+`<mj-file-picker>` for a file list with previews and progress. Do not use
+`<mj-share-button>` for in-app clipboard operations — use `<mj-copy-button>`.
 
 ## 3. Anatomy
 

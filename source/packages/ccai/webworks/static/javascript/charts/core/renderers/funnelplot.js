@@ -10,29 +10,93 @@
  *   series: [{ name, points: [{ x, y, label? }] }]
  *   funnel?: {
  *     summary_effect: number,
- *     pseudo_ci: [{ se, lower, upper }]
+ *     pseudo_ci?: [{ se, lower, upper }]
  *   }
  *
  *   x     — study effect estimate
- *   y     — standard error (precision); y-axis is INVERTED (0 at top)
- *   label — optional point label
+ *   y     — standard error; the y-axis is INVERTED (SE 0, the most
+ *           precise, at the top)
+ *   label — optional study label
  *
- *   funnel.summary_effect  — pooled effect; vertical reference line
- *   funnel.pseudo_ci       — pre-computed funnel bounds at each SE level
- *     se    — standard error level (y-axis position)
- *     lower — lower bound of funnel at this se
- *     upper — upper bound of funnel at this se
+ *   funnel.summary_effect  — pooled effect: the vertical reference line,
+ *                            drawn whenever it is a number
+ *   funnel.pseudo_ci       — funnel bounds at each SE level; when it is
+ *                            missing the 95% funnel summary +/- 1.96 x SE
+ *                            is drawn from the summary effect
  *
- * ctx.attrs("contours", "false") — shade significance-level regions
- * ctx.attrs("labels", "false")   — render study point labels
+ * Options:
+ *   contours         contour-enhanced funnel: shades where a study would be
+ *                    significant against the null effect (`null-value`,
+ *                    default 0) at p < 0.05 and p < 0.01
+ *   null-value       the null effect of the contours (0 for differences
+ *                    and log ratios)
+ *   labels           study labels (placed right of the point, flipped left
+ *                    near the right edge, nudged or dropped on overlap)
  *
- * Note: y-axis is inverted — higher SE (less precise) at the bottom,
- * se = 0 (most precise) at the top.
+ * Events:
+ *   mj-chart-study-click { series, x, y, label }
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, formatNumber, escapeHtml } from "../svgdraw.js";
-import { linearScale, niceTicks } from "../scales.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
+import { linearScale, niceDomain, niceTicks } from "../scales.js";
+import { booleanOption } from "../chartoptions.js";
+
+
+const Z_95 = 1.959964;
+const Z_99 = 2.575829;
+const LABEL_FONT = 9;
+const CHAR_WIDTH = 0.56;
+
+const CONTOUR_BANDS = [
+  { label: "p < 0.01", color: "var(--mj-bg-muted, #eef0f3)" },
+  { label: "0.01 ≤ p < 0.05", color: "var(--mj-bg-subtle, #f8f9fb)" }
+];
+
+
+function _number(value) {
+  /*
+   * A finite number from a number or numeric string, else null.
+   */
+  if (value === null || value === undefined || value === "" || typeof value === "boolean") {
+    return null
+  }
+  const numeric = Number(value)
+  const result = Number.isFinite(numeric) === true ? numeric : null
+  return result
+}
+
+
+function _funnelBounds(funnel, summary, seMax) {
+  /*
+   * The funnel bounds to draw: the data's pseudo_ci sorted by SE, else the
+   * 95% funnel around the summary effect.
+   *
+   * :returns: [{ se, lower, upper }] (possibly empty).
+   */
+  const bounds = []
+  if (funnel !== null && Array.isArray(funnel.pseudo_ci) === true) {
+    for (let index = 0; index < funnel.pseudo_ci.length; index = index + 1) {
+      const entry = funnel.pseudo_ci[index]
+      if (entry === null || typeof entry !== "object") {
+        continue
+      }
+      const se = _number(entry.se)
+      const lower = _number(entry.lower)
+      const upper = _number(entry.upper)
+      if (se !== null && lower !== null && upper !== null) {
+        bounds.push({ se: se, lower: lower, upper: upper })
+      }
+    }
+    bounds.sort((a, b) => a.se - b.se)
+  }
+  if (bounds.length < 2 && summary !== null) {
+    bounds.length = 0
+    bounds.push({ se: 0, lower: summary, upper: summary })
+    bounds.push({ se: seMax, lower: summary - Z_95 * seMax, upper: summary + Z_95 * seMax })
+  }
+  return bounds
+}
 
 
 export function render(ctx) {
@@ -42,213 +106,243 @@ export function render(ctx) {
    * :param ctx: The renderer context.
    * :returns: An <g> SVGElement.
    */
-  const raw = ctx.raw
-  const showContours = ctx.attrs("contours", "false") === "true"
-  const showLabels = ctx.attrs("labels", "false") === "true"
+  const raw = ctx.raw !== null && ctx.raw !== undefined ? ctx.raw : {}
+  const showContours = booleanOption(ctx, "contours", false)
+  const showLabels = booleanOption(ctx, "labels", false)
+  const nullAttr = _number(ctx.attrs("null-value", null))
+  const nullValue = nullAttr !== null ? nullAttr : 0
 
   const root = svgEl("g", { part: "plot" }, [])
 
-  if (raw === null || raw === undefined) {
-    return root
+  const funnel = raw.funnel !== null && typeof raw.funnel === "object" ? raw.funnel : null
+  const summary = funnel !== null ? _number(funnel.summary_effect) : null
+
+  /* Studies. */
+  const series = []
+  const rawSeries = Array.isArray(raw.series) === true ? raw.series : []
+  for (let s = 0; s < rawSeries.length; s = s + 1) {
+    const entry = rawSeries[s]
+    if (entry === null || typeof entry !== "object") {
+      continue
+    }
+    const points = []
+    const source = Array.isArray(entry.points) === true ? entry.points : []
+    for (let p = 0; p < source.length; p = p + 1) {
+      const point = source[p]
+      if (point === null || typeof point !== "object") {
+        continue
+      }
+      const x = _number(point.x)
+      const y = _number(point.y)
+      if (x === null || y === null || y < 0) {
+        continue
+      }
+      points.push({ source: point, x: x, y: y,
+        label: point.label !== undefined && point.label !== null ? String(point.label) : "" })
+    }
+    series.push({ name: entry.name !== undefined ? String(entry.name) : `Series ${s + 1}`, points: points })
   }
 
-  const series = Array.isArray(raw.series) ? raw.series : []
-  const funnel = (raw.funnel !== null && raw.funnel !== undefined) ? raw.funnel : null
-
-  if (series.length === 0) {
-    return root
+  ctx.setTable({
+    columns: ["Study", "Series", "Effect", "Standard error"],
+    rows: [].concat(...series.map((entry) => entry.points.map((point) => [
+      point.label, entry.name, point.x, point.y
+    ])))
+  })
+  const legend = series.length > 1 ? series.map((entry) => ({ label: entry.name, series: entry.name })) : []
+  if (showContours === true) {
+    for (let b = 0; b < CONTOUR_BANDS.length; b = b + 1) {
+      legend.push({ label: CONTOUR_BANDS[b].label, color: CONTOUR_BANDS[b].color })
+    }
   }
+  ctx.setLegend(legend)
 
-  /* Collect all x and y values. */
+  /* Domains. */
   let xMin = Infinity
   let xMax = -Infinity
-  let yMin = 0
-  let yMax = -Infinity
-
+  let seMax = 0
   for (let s = 0; s < series.length; s = s + 1) {
-    const points = Array.isArray(series[s].points) ? series[s].points : []
-    for (let p = 0; p < points.length; p = p + 1) {
-      const px = Number(points[p].x)
-      const py = Number(points[p].y)
-      if (px < xMin) {
-        xMin = px
-      }
-      if (px > xMax) {
-        xMax = px
-      }
-      if (py > yMax) {
-        yMax = py
-      }
+    for (let p = 0; p < series[s].points.length; p = p + 1) {
+      const point = series[s].points[p]
+      xMin = Math.min(xMin, point.x)
+      xMax = Math.max(xMax, point.x)
+      seMax = Math.max(seMax, point.y)
     }
   }
-
-  /* Expand x domain to encompass funnel bounds. */
+  if (xMin === Infinity && summary === null) {
+    return root
+  }
   if (funnel !== null && Array.isArray(funnel.pseudo_ci) === true) {
     for (let c = 0; c < funnel.pseudo_ci.length; c = c + 1) {
-      const bound = funnel.pseudo_ci[c]
-      if (bound.lower < xMin) {
-        xMin = bound.lower
-      }
-      if (bound.upper > xMax) {
-        xMax = bound.upper
-      }
-      if (Number(bound.se) > yMax) {
-        yMax = Number(bound.se)
+      const se = funnel.pseudo_ci[c] !== null && typeof funnel.pseudo_ci[c] === "object"
+        ? _number(funnel.pseudo_ci[c].se) : null
+      if (se !== null) {
+        seMax = Math.max(seMax, se)
       }
     }
   }
-
-  if (xMin === Infinity || xMin === xMax) {
-    xMin = -1
-    xMax = 1
+  if (seMax <= 0) {
+    seMax = 1
   }
-  if (yMax <= 0) {
-    yMax = 1
+  const bounds = _funnelBounds(funnel, summary, seMax)
+  for (let b = 0; b < bounds.length; b = b + 1) {
+    xMin = Math.min(xMin, bounds[b].lower)
+    xMax = Math.max(xMax, bounds[b].upper)
   }
-
-  /* Pad x domain slightly. */
+  if (summary !== null) {
+    xMin = Math.min(xMin, summary)
+    xMax = Math.max(xMax, summary)
+  }
+  if (xMin === xMax) {
+    xMin = xMin - 1
+    xMax = xMax + 1
+  }
   const xPad = (xMax - xMin) * 0.05
-  xMin = xMin - xPad
-  xMax = xMax + xPad
+  const xDomain = niceDomain(xMin - xPad, xMax + xPad, 5)
+  const yDomain = niceDomain(0, seMax, 5)
 
-  const margin = { top: 16, right: 16, bottom: 40, left: 64 }
+  const margin = { top: 16, right: 16, bottom: 44, left: 60 }
   const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
 
-  /* y-axis is inverted: SE=0 at top (y=0), max SE at bottom (y=plotH). */
-  const xScale = linearScale([xMin, xMax], [0, plotW])
-  const yScale = linearScale([0, yMax], [0, plotH])
+  /* y is inverted: SE 0 at the top. */
+  const xScale = linearScale(xDomain, [0, plotW])
+  const yScale = linearScale(yDomain, [0, plotH])
 
   const plot = svgEl("g", {
     transform: `translate(${margin.left},${margin.top})`
   }, [])
   root.appendChild(plot)
+  const clipId = "mj-funnel-plot-clip"
+  plot.appendChild(svgEl("clipPath", { id: clipId }, [
+    svgEl("rect", { x: 0, y: 0, width: plotW, height: plotH }, [])
+  ]))
+  const shading = svgEl("g", { "aria-hidden": "true", "clip-path": `url(#${clipId})` }, [])
+  const axis = svgEl("g", { "aria-hidden": "true" }, [])
+  const overlay = svgEl("g", { "aria-hidden": "true", "clip-path": `url(#${clipId})` }, [])
+  const marks = svgEl("g", null, [])
+  const labels = svgEl("g", { "aria-hidden": "true" }, [])
+  plot.appendChild(shading)
+  plot.appendChild(axis)
+  plot.appendChild(overlay)
+  plot.appendChild(marks)
+  plot.appendChild(labels)
 
-  /* Y-axis gridlines + tick labels (SE, 0 at top). */
-  const yTicks = niceTicks(0, yMax, 5)
+  /* Contour-enhanced shading around the null effect. */
+  if (showContours === true) {
+    const seBottom = yDomain[1]
+    const wedge = (z) => {
+      const points = `${xScale(nullValue)},${yScale(0)} ` +
+        `${xScale(nullValue + z * seBottom)},${yScale(seBottom)} ` +
+        `${xScale(nullValue - z * seBottom)},${yScale(seBottom)}`
+      return points
+    }
+    shading.appendChild(svgEl("rect", {
+      x: 0, y: 0, width: plotW, height: plotH, fill: CONTOUR_BANDS[0].color
+    }, []))
+    shading.appendChild(svgEl("polygon", { points: wedge(Z_99), fill: CONTOUR_BANDS[1].color }, []))
+    shading.appendChild(svgEl("polygon", { points: wedge(Z_95), fill: "var(--mj-surface, #ffffff)" }, []))
+  }
+
+  const yTicks = niceTicks(yDomain[0], yDomain[1], 5)
   for (let t = 0; t < yTicks.length; t = t + 1) {
-    const tick = yTicks[t]
-    const y = yScale(tick)
-    plot.appendChild(svgEl("line", {
+    const y = yScale(yTicks[t])
+    axis.appendChild(svgEl("line", {
       x1: 0, y1: y, x2: plotW, y2: y,
       stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
     }, []))
-    plot.appendChild(svgEl("text", {
+    axis.appendChild(svgEl("text", {
       x: -8, y: y + 4, "text-anchor": "end",
       "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-    }, formatNumber(tick)))
+    }, formatNumber(yTicks[t])))
   }
-
-  /* X-axis gridlines + tick labels. */
-  const xTicks = niceTicks(xMin, xMax, 5)
+  const xTicks = niceTicks(xDomain[0], xDomain[1], Math.max(4, Math.floor(plotW / 80)))
   for (let t = 0; t < xTicks.length; t = t + 1) {
-    const tick = xTicks[t]
-    const x = xScale(tick)
-    plot.appendChild(svgEl("line", {
+    const x = xScale(xTicks[t])
+    axis.appendChild(svgEl("line", {
       x1: x, y1: 0, x2: x, y2: plotH,
       stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
     }, []))
-    plot.appendChild(svgEl("text", {
+    axis.appendChild(svgEl("text", {
       x: x, y: plotH + 16, "text-anchor": "middle",
       "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-    }, formatNumber(tick)))
+    }, formatNumber(xTicks[t])))
   }
-
-  /* Axis labels. */
-  plot.appendChild(svgEl("text", {
+  axis.appendChild(svgEl("text", {
     x: plotW / 2, y: plotH + 34, "text-anchor": "middle",
     "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-  }, "Effect Estimate"))
-  plot.appendChild(svgEl("text", {
+  }, "Effect estimate"))
+  axis.appendChild(svgEl("text", {
     transform: `translate(-44,${plotH / 2}) rotate(-90)`,
     "text-anchor": "middle",
     "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-  }, "Standard Error"))
+  }, "Standard error"))
 
-  /* Funnel boundary paths and optional contour shading. */
-  if (funnel !== null && Array.isArray(funnel.pseudo_ci) === true) {
-    const pseudo = funnel.pseudo_ci.slice()
-    /* Sort by se ascending so paths render from top (se=0) downward. */
-    pseudo.sort((a, b) => Number(a.se) - Number(b.se))
-
-    if (pseudo.length >= 2) {
-      /* Build the upper boundary line (lower bound → converges upward). */
-      let lowerD = `M${xScale(pseudo[0].lower).toFixed(2)},${yScale(Number(pseudo[0].se)).toFixed(2)}`
-      let upperD = `M${xScale(pseudo[0].upper).toFixed(2)},${yScale(Number(pseudo[0].se)).toFixed(2)}`
-      for (let c = 1; c < pseudo.length; c = c + 1) {
-        lowerD = lowerD +
-          ` L${xScale(pseudo[c].lower).toFixed(2)},${yScale(Number(pseudo[c].se)).toFixed(2)}`
-        upperD = upperD +
-          ` L${xScale(pseudo[c].upper).toFixed(2)},${yScale(Number(pseudo[c].se)).toFixed(2)}`
+  /* Funnel boundaries and the summary effect. */
+  if (bounds.length >= 2) {
+    const edge = (key) => {
+      let d = ""
+      for (let b = 0; b < bounds.length; b = b + 1) {
+        d = d + `${b === 0 ? "M" : " L"}${xScale(bounds[b][key]).toFixed(2)},${yScale(bounds[b].se).toFixed(2)}`
       }
-
-      /* Optional contour fill between funnel lines. */
-      if (showContours === true) {
-        /* Build closed funnel polygon. */
-        let contourD = lowerD
-        for (let c = pseudo.length - 1; c >= 0; c = c - 1) {
-          contourD = contourD +
-            ` L${xScale(pseudo[c].upper).toFixed(2)},${yScale(Number(pseudo[c].se)).toFixed(2)}`
-        }
-        contourD = contourD + " Z"
-        plot.appendChild(svgEl("path", {
-          d: contourD,
-          fill: "var(--mj-color-accent-500, #2563eb)", opacity: 0.07
-        }, []))
-      }
-
-      /* Funnel boundary strokes. */
-      plot.appendChild(svgEl("path", {
-        d: lowerD, fill: "none",
-        stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5,
-        "stroke-dasharray": "5 3"
-      }, []))
-      plot.appendChild(svgEl("path", {
-        d: upperD, fill: "none",
-        stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5,
-        "stroke-dasharray": "5 3"
-      }, []))
+      return d
     }
-
-    /* Vertical summary-effect reference line. */
-    const xSummary = xScale(funnel.summary_effect)
-    plot.appendChild(svgEl("line", {
+    overlay.appendChild(svgEl("path", {
+      d: edge("lower"), fill: "none",
+      stroke: "var(--mj-text-muted, #6b7280)", "stroke-width": 1.25, "stroke-dasharray": "5 3"
+    }, []))
+    overlay.appendChild(svgEl("path", {
+      d: edge("upper"), fill: "none",
+      stroke: "var(--mj-text-muted, #6b7280)", "stroke-width": 1.25, "stroke-dasharray": "5 3"
+    }, []))
+  }
+  if (summary !== null) {
+    const xSummary = xScale(summary)
+    overlay.appendChild(svgEl("line", {
       x1: xSummary, y1: 0, x2: xSummary, y2: plotH,
-      stroke: "var(--mj-color-accent-500, #2563eb)", "stroke-width": 1.5
+      stroke: "var(--mj-text, #14181f)", "stroke-width": 1.5
     }, []))
   }
 
-  /* Draw study point scatter. */
+  /* Studies; labels avoid each other and the right edge. */
+  const placed = []
+  const overlaps = (box) => {
+    for (let k = 0; k < placed.length; k = k + 1) {
+      const other = placed[k]
+      if (box.x1 < other.x2 && box.x2 > other.x1 && box.y1 < other.y2 && box.y2 > other.y1) {
+        return true
+      }
+    }
+    return false
+  }
+  /* Every point is an obstacle for every label. */
   for (let s = 0; s < series.length; s = s + 1) {
-    const serie = series[s]
-    const points = Array.isArray(serie.points) ? serie.points : []
-    const color = ctx.colorFor(serie.name)
-
-    for (let p = 0; p < points.length; p = p + 1) {
-      const pt = points[p]
-      const px = xScale(Number(pt.x))
-      const py = yScale(Number(pt.y))
-      const ptLabel = pt.label ? String(pt.label) : ""
-      const ariaLabel = ptLabel !== ""
-        ? `${ptLabel}: effect=${formatNumber(pt.x)}, SE=${formatNumber(pt.y)}`
-        : `effect=${formatNumber(pt.x)}, SE=${formatNumber(pt.y)}`
+    for (let p = 0; p < series[s].points.length; p = p + 1) {
+      const px = xScale(series[s].points[p].x)
+      const py = yScale(series[s].points[p].y)
+      placed.push({ x1: px - 5, x2: px + 5, y1: py - 5, y2: py + 5 })
+    }
+  }
+  for (let s = 0; s < series.length; s = s + 1) {
+    const entry = series[s]
+    const color = ctx.colorFor(entry.name)
+    for (let p = 0; p < entry.points.length; p = p + 1) {
+      const point = entry.points[p]
+      const px = xScale(point.x)
+      const py = yScale(point.y)
+      const ariaLabel = (point.label !== "" ? `${point.label}: ` : "") +
+        `effect ${formatNumber(point.x)}, SE ${formatNumber(point.y)}`
 
       const circle = svgEl("circle", {
-        cx: px, cy: py, r: 5,
-        fill: color,
-        part: "study",
-        tabindex: "0",
-        role: "img",
-        "aria-label": ariaLabel
+        cx: px, cy: py, r: 4.5, fill: color,
+        stroke: "var(--mj-surface, #ffffff)", "stroke-width": 1,
+        part: "study", tabindex: "0", role: "img", "aria-label": ariaLabel
       }, [])
       circle.appendChild(svgEl("title", null, ariaLabel))
-
+      const emitPoint = point
       const handler = () => {
         ctx.emit("mj-chart-study-click", {
-          series: serie.name,
-          x: pt.x,
-          y: pt.y,
-          label: pt.label
+          series: entry.name, x: emitPoint.x, y: emitPoint.y, label: emitPoint.source.label
         })
       }
       circle.addEventListener("click", handler)
@@ -258,25 +352,41 @@ export function render(ctx) {
           handler()
         }
       })
+      marks.appendChild(circle)
 
-      plot.appendChild(circle)
-
-      /* Optional point labels. */
-      if (showLabels === true && ptLabel !== "") {
-        plot.appendChild(svgEl("text", {
-          x: px + 7, y: py + 4,
-          "font-size": 9, fill: "var(--mj-text-muted, #6b7280)"
-        }, escapeHtml(ptLabel)))
+      if (showLabels === true && point.label !== "") {
+        const width = point.label.length * LABEL_FONT * CHAR_WIDTH
+        const candidates = [
+          { x: px + 7, anchor: "start", dy: 0 },
+          { x: px - 7, anchor: "end", dy: 0 },
+          { x: px + 7, anchor: "start", dy: -10 },
+          { x: px + 7, anchor: "start", dy: 10 },
+          { x: px - 7, anchor: "end", dy: -10 },
+          { x: px - 7, anchor: "end", dy: 10 }
+        ]
+        for (let c = 0; c < candidates.length; c = c + 1) {
+          const candidate = candidates[c]
+          const x1 = candidate.anchor === "start" ? candidate.x : candidate.x - width
+          const box = { x1: x1, x2: x1 + width, y1: py + candidate.dy - 6, y2: py + candidate.dy + 4 }
+          if (box.x1 < -margin.left + 2 || box.x2 > plotW + margin.right - 2 || overlaps(box) === true) {
+            continue
+          }
+          placed.push(box)
+          labels.appendChild(svgEl("text", {
+            x: candidate.x, y: py + candidate.dy + 3, "text-anchor": candidate.anchor,
+            "font-size": LABEL_FONT, fill: "var(--mj-text-muted, #6b7280)"
+          }, point.label))
+          break
+        }
       }
     }
   }
 
-  /* Axis baselines. */
-  plot.appendChild(svgEl("line", {
+  axis.appendChild(svgEl("line", {
     x1: 0, y1: plotH, x2: plotW, y2: plotH,
     stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
   }, []))
-  plot.appendChild(svgEl("line", {
+  axis.appendChild(svgEl("line", {
     x1: 0, y1: 0, x2: 0, y2: plotH,
     stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
   }, []))

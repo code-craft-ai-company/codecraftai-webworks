@@ -63,7 +63,7 @@ links. **Do not use** for flat or two-level navigation — use `<mj-side-nav>`.
 |----------|------|-------------|
 | `currentItem` | `Element \| null` | Read-only; the `<mj-tree-nav-item>` with `aria-current="page"` |
 | `expandedItems` | `Element[]` | Read-only list of all currently expanded parent items |
-| `activeItem` | `Element \| null` | The item with current keyboard focus (`aria-activedescendant` target) |
+| `activeItem` | `Element \| null` | The item holding the roving tab stop (`tabindex="0"`); it has DOM focus while the tree is focused |
 
 ## 7. Slots
 | Slot | Description |
@@ -108,16 +108,29 @@ links. **Do not use** for flat or two-level navigation — use `<mj-side-nav>`.
 - **expanded** — parent item child group is visible; toggle has `aria-expanded="true"`.
 - **collapsed** — parent item child group is hidden; toggle has `aria-expanded="false"`.
 - **current** — item matching the current URL has `aria-current="page"` and active token styling.
-- **focused** — the keyboard-active item is tracked via `aria-activedescendant`.
+- **focused** — the keyboard-active item holds DOM focus and the roving tab stop (`tabindex="0"`, `data-active="true"`).
 - **hover** — row shows hover background token.
 - **disabled** — item link is `aria-disabled="true"`; not navigable.
 - **loading** — a lazy-loaded subtree is pending; toggle shows spinner.
 
 ## 11. Behavior & interactions
-- The tree uses `role="tree"` with `aria-activedescendant` on the tree element
-  to track keyboard focus; the tree element itself receives DOM focus (`tabindex="0"`).
-- Individual items are not directly focusable; they are identified by `id` and
-  referenced via `aria-activedescendant`.
+- Keyboard focus is real DOM focus that roves over the `role="treeitem"` items
+  (roving tabindex). `aria-activedescendant` is not used: the `role="tree"`
+  element lives in the shadow root and the items are the author's light-DOM
+  `<li>` elements, and an ID reference cannot cross that boundary.
+- The tree element itself is not focusable (no `tabindex`). Each item gets
+  `tabindex="-1"` (an author-supplied `tabindex` is kept), and exactly one
+  visible item -- the active item -- has `tabindex="0"` and `data-active="true"`,
+  so the tree is a single Tab stop. Item links and toggle buttons get
+  `tabindex="-1"` so they add no Tab stops of their own.
+- Moving the active item (arrow keys, Home/End, type-ahead, click) sets
+  `tabindex="-1"` on the previous item, `tabindex="0"` on the new one, calls
+  `focus()` on it and scrolls its row into view; `mj-tree-nav-focus` fires when
+  the active item changes. Focus arriving by Tab or pointer (`focusin`) makes
+  that item the active one without moving focus again.
+- Initial tab stop: the current-page item when visible, else the first item.
+  When the active item is hidden by collapsing an ancestor, the tab stop moves
+  to its nearest visible ancestor (taking focus if the hidden item had it).
 - Expand/collapse: clicking the toggle button or Arrow Right/Left toggles the
   child group. Collapsing animates with a CSS height transition respecting
   `prefers-reduced-motion`.
@@ -135,8 +148,8 @@ links. **Do not use** for flat or two-level navigation — use `<mj-side-nav>`.
 ## 12. Keyboard interaction
 | Key | Action |
 |-----|--------|
-| `Tab` | Moves DOM focus into the tree (single tab stop); Tab again moves out |
-| `Arrow Down` | Moves `aria-activedescendant` to next visible item in the flattened tree order |
+| `Tab` | Moves DOM focus to the active item (the tree's single tab stop); Tab again moves out |
+| `Arrow Down` | Moves focus (and the tab stop) to the next visible item in the flattened tree order |
 | `Arrow Up` | Moves to previous visible item |
 | `Arrow Right` | Expands a collapsed parent item; if already expanded, moves to first child |
 | `Arrow Left` | Collapses an expanded parent item; if already collapsed, moves to parent item |
@@ -148,9 +161,11 @@ links. **Do not use** for flat or two-level navigation — use `<mj-side-nav>`.
 | Character key | Type-ahead: moves to next item whose label starts with that character |
 
 ## 13. Accessibility
-- Root element: `<ul role="tree" aria-label="{nav-label}" tabindex="0" aria-activedescendant="{activeId}">`.
-- Each parent item: `<li role="treeitem" aria-expanded="{expanded}" aria-level="{n}" aria-setsize="{m}" aria-posinset="{i}" id="{id}">`.
-- Each leaf item: `<li role="treeitem" aria-level="{n}" aria-setsize="{m}" aria-posinset="{i}" id="{id}">`.
+- Root element: `<ul role="tree" aria-label="{nav-label}">` in the shadow root; no `tabindex` and no `aria-activedescendant`.
+- Each parent item: `<li role="treeitem" aria-expanded="{expanded}" aria-level="{n}" aria-setsize="{m}" aria-posinset="{i}" id="{id}" tabindex="{0|-1}">`.
+- Each leaf item: `<li role="treeitem" aria-level="{n}" aria-setsize="{m}" aria-posinset="{i}" id="{id}" tabindex="{0|-1}">`.
+- Focus: roving tabindex -- the focused `treeitem` itself holds DOM focus, so
+  screen readers announce it directly; only the active item has `tabindex="0"`.
 - Current page item: `aria-current="page"` on the `role="treeitem"` element.
 - Child group: `<ul role="group">`.
 - Expand toggle is `aria-hidden="true"` because expand/collapse is signalled by
@@ -179,15 +194,14 @@ N/A — `<mj-tree-nav>` is a navigation component, not a form control.
 - Expanded/collapsed state in SSR: collapsed child lists have `hidden` attribute;
   expanded ones do not.
 - On upgrade: the component adds `role="tree"` / `role="treeitem"`, toggle
-  buttons, `aria-activedescendant` focus management, and animation — without
+  buttons, roving-tabindex focus management, and animation — without
   removing or cloning the link content.
 - `current` attribute in server markup triggers `auto-expand` of ancestor nodes
   after upgrade.
 
 ## 17. Dependencies
-- Section 6: Registry + base element helper, design-token stylesheet, focus
-  utilities (`aria-activedescendant` helper), localization hook, data-source
-  adapter (for lazy-loaded subtrees).
+- Section 6: Registry + base element helper, design-token stylesheet,
+  localization hook, data-source adapter (for lazy-loaded subtrees).
 - `<mj-tree-nav-item>` — companion element for individual tree nodes.
 - `<mj-spinner>` / `<mj-progress>` — used for lazy-load pending state.
 
@@ -214,7 +228,8 @@ N/A — `<mj-tree-nav>` is a navigation component, not a form control.
 - [ ] Each node: `role="treeitem"` with correct `aria-level`, `aria-setsize`, `aria-posinset`.
 - [ ] Current page item has `aria-current="page"` and active styling.
 - [ ] Parent nodes have `aria-expanded`; toggle button shows expand/collapse affordance.
-- [ ] Arrow Down/Up navigates visible items via `aria-activedescendant`.
+- [ ] Arrow Down/Up moves DOM focus over visible items (roving tabindex: one item `tabindex="0"`, the rest `-1`; no `aria-activedescendant`).
+- [ ] The tree is a single Tab stop; Tab lands on the active item (current-page item by default).
 - [ ] Arrow Right expands collapsed parent; Arrow Left collapses expanded parent.
 - [ ] Home/End jump to first/last visible item.
 - [ ] Enter navigates; Space toggles expand without navigating.

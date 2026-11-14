@@ -11,6 +11,9 @@
  * URL, or an inline <script type="application/json">. The coordinated parts
  * <mj-chart-title>, <mj-chart-legend> and <mj-chart-data-table> bind to a
  * controller by its id and can be placed/docked independently.
+ *
+ * A page can add its own chart type with registerRenderer(type, render,
+ * options); see core/renderregistry.js for the render context and options.
  */
 
 import { defineAll } from "../core/registry.js";
@@ -112,4 +115,7 @@ export const chartComponents = [
 /* Register the chart controller and parts (idempotent). */
 export const registeredChartTags = defineAll(chartComponents);
 
-export { rendererTypes, hasRenderer } from "./core/renderregistry.js";
+export {
+  rendererTypes, hasRenderer, registerRenderer, getRendererOptions
+} from "./core/renderregistry.js";
+export { SERIES_PALETTE, seriesColor } from "./core/scales.js";

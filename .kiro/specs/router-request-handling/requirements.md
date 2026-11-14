@@ -185,3 +185,18 @@ The router integrates with the EndpointRegistry to consume endpoint descriptors 
 
 </content>
 </invoke>
+
+### Requirement 12: Request Lifecycle Hooks
+
+**User Story:** As a framework user, I want the extensions of my application to run code around every request, so that cross-cutting concerns hook into the request path the same way under ASGI and WSGI.
+
+#### Acceptance Criteria
+
+1. THE Dispatcher SHALL accept the application's request lifecycle hooks and a first-request callable, and SHALL fire them identically in `dispatch` and `dispatch_async`.
+2. THE Dispatcher SHALL run the first-request work once, before the first request is processed: the first-request callable, then `before_first_request(request)`; concurrent first requests SHALL wait until it has finished.
+3. THE Dispatcher SHALL fire `before_request(request)` after publishing the canonical path and before the middleware pipeline; a response it returns SHALL be sent without running the pipeline.
+4. THE Dispatcher SHALL fire `on_request_error(request, exception)` for an exception nothing else handled, before turning it into the 500 response.
+5. THE Dispatcher SHALL fire `after_request(request, response)` with the response produced, and send the response the callbacks leave (a callback may return a replacement); the HEAD rule applies afterwards.
+6. THE Dispatcher SHALL fire `teardown_request(request, response, exception)` for every request, last.
+7. A failing `before_first_request`, `before_request` or `after_request` callback SHALL make the request a 500 response (reported to `on_request_error`); `ConfigurationError` and `SemanticError` SHALL propagate.
+8. WHEN no request lifecycle hook has a callback, THE Dispatcher SHALL take its plain path and execute no hook.

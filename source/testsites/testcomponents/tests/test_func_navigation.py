@@ -101,6 +101,47 @@ def test_link_renders_anchor(page, base_url):
 
 @testbase.mark_categories(categories=["functional"])
 @testbase.attach.parameter(create_page, identifier="page")
+def test_link_underline_covers_only_the_link_text(page, base_url):
+    """
+        An inline mj-link in running text renders no whitespace of its own
+        inside the anchor (it used to show as underlined spaces around the
+        text), and a standalone link without a prefix starts with its text
+        (the empty prefix wrapper takes no flex gap).
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<p>See the <mj-link id="inline" href="#p">pricing page</mj-link> for details.</p>'
+        '<mj-link id="standalone" variant="standalone" href="#s">All plans</mj-link>'
+    )
+    load_fixture(page, base_url, markup, ["mj-link"])
+
+    result = page.evaluate(
+        "function() {"
+        "  function measure(id) {"
+        "    var link = document.getElementById(id);"
+        "    var anchor = link.shadowRoot.querySelector('a').getBoundingClientRect();"
+        "    var range = document.createRange();"
+        "    range.selectNodeContents(link);"
+        "    var text = range.getBoundingClientRect();"
+        "    return { anchorStart: Math.round(anchor.left), anchorWidth: Math.round(anchor.width),"
+        "             textStart: Math.round(text.left), textWidth: Math.round(text.width) };"
+        "  }"
+        "  return { inline: measure('inline'), standalone: measure('standalone') };"
+        "}"
+    )
+    inline = result["inline"]
+    assert inline["anchorWidth"] == inline["textWidth"], "the inline anchor should be exactly as wide as its text: {}".format(inline)
+    assert inline["anchorStart"] == inline["textStart"], "no space should precede the link text: {}".format(inline)
+    standalone = result["standalone"]
+    assert standalone["anchorStart"] == standalone["textStart"], "an empty prefix should take no room: {}".format(standalone)
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
 def test_link_disabled_blocks_navigation(page, base_url):
     """
         A disabled mj-link sets aria-disabled=true on the inner anchor.
@@ -184,29 +225,171 @@ def test_link_fires_mj_link_click(page, base_url):
     return
 
 
-# ===========================================================================
-# mj-app-bar
-# ===========================================================================
+_INJECTION_PAYLOAD = "x'\"><img src=\"data:,x\" onerror=\"top.__hits=(top.__hits||0)+1\">"
+
 
 @testbase.mark_categories(categories=["functional"])
 @testbase.attach.parameter(create_page, identifier="page")
-def test_app_bar_renders_header_landmark(page, base_url):
+def test_link_href_is_sanitised_and_never_parsed_as_markup(page, base_url):
     """
-        mj-app-bar renders a <header role=banner> landmark.
+        An href carrying markup stays an attribute value, a javascript: URL is
+        neutralised, a link without href has none, and removing `external`
+        removes the new-tab target and rel.
 
         :param page: Playwright page fixture.
         :param base_url: Site base URL fixture.
     """
 
-    frame = _open_component(page=page, base_url=base_url, tag="mj-app-bar")
-    el = frame.locator("mj-app-bar").first
-    expect(el).to_be_visible()
-
-    has_header = frame.evaluate(
-        "() => { const el = document.querySelector('mj-app-bar'); "
-        "return el.shadowRoot.querySelector('div.root') !== null; }"
+    load_fixture(page, base_url, '<div id="host"></div>', ["mj-link"])
+    result = page.evaluate(
+        "function(payload) {"
+        "  var host = document.getElementById('host');"
+        "  var make = function(attrs) { var el = document.createElement('mj-link'); Object.keys(attrs).forEach(function(k) { el.setAttribute(k, attrs[k]); }); el.textContent = 'L'; host.appendChild(el); return el; };"
+        "  var inner = function(el) { return el.shadowRoot.querySelector('a'); };"
+        "  var injected = make({ href: payload });"
+        "  var script = make({ href: 'javascript:alert(1)' });"
+        "  var bare = make({});"
+        "  var ext = make({ href: '/x', external: '' });"
+        "  ext.removeAttribute('external');"
+        "  return {"
+        "    injectedHref: inner(injected).getAttribute('href') === payload,"
+        "    images: injected.shadowRoot.querySelectorAll('img').length,"
+        "    scriptHref: inner(script).getAttribute('href'),"
+        "    bareHref: inner(bare).getAttribute('href'),"
+        "    extTarget: inner(ext).getAttribute('target'), extRel: inner(ext).getAttribute('rel'),"
+        "    hits: window.__hits === undefined"
+        "  };"
+        "}",
+        _INJECTION_PAYLOAD,
     )
-    assert has_header is True, "mj-app-bar should render its root container"
+    assert result["injectedHref"] is True, "the href should be applied verbatim as an attribute"
+    assert result["images"] == 0, "the href must not be parsed as markup"
+    assert result["scriptHref"] == "#", "a javascript: URL must be neutralised"
+    assert result["bareHref"] is None, "a link without href should not link to the current page"
+    assert result["extTarget"] is None and result["extRel"] is None, "removing external should clear target and rel"
+    assert result["hits"] is True, "no injected handler may run"
+    return
+
+
+# ===========================================================================
+# mj-app-bar
+# ===========================================================================
+
+# The role="banner" elements an element is rendered inside (flat tree: through slots and shadow roots).
+# Playwright scopes a chained locator by DOM containment, which does not follow slot assignment.
+_BANNERS_AROUND = '''(id) => {
+    const banners = [];
+    let node = document.getElementById(id);
+    while (node !== null && node !== undefined) {
+        if (node instanceof Element && node.getAttribute("role") === "banner") {
+            banners.push(node.localName + "." + node.className.split(" ")[0]);
+        }
+        if (node.assignedSlot) { node = node.assignedSlot }
+        else if (node.parentNode instanceof ShadowRoot) { node = node.parentNode.host }
+        else { node = node.parentNode instanceof Element ? node.parentNode : null }
+    }
+    return banners;
+}'''
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_bar_renders_header_landmark(page, base_url):
+    """
+        mj-app-bar renders a <header role=banner> landmark that holds its
+        brand, navigation and actions (it used to render a plain div, so a
+        page built on it had no banner).
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-app-bar id="bar"><span slot="brand" id="brand">MyApp</span>'
+        '<a slot="navigation" href="#home" id="home">Home</a><button slot="actions" type="button" id="sign-in">Sign in</button></mj-app-bar>'
+        '<main><p>Content</p></main>'
+    )
+    load_fixture(page, base_url, markup, ["mj-app-bar"])
+    banner = page.get_by_role("banner")
+    expect(banner).to_have_count(1)
+    expect(banner.get_by_role("navigation")).to_have_count(1)
+    around = [page.evaluate(_BANNERS_AROUND, element_id) for element_id in ("brand", "home", "sign-in")]
+    assert around == [["header.root"], ["header.root"], ["header.root"]], around
+
+    root = page.evaluate(
+        "() => { const root = document.querySelector('#bar').shadowRoot.querySelector('[part=root]'); "
+        "return [root.localName, root.getAttribute('role')]; }"
+    )
+    assert root == ["header", "banner"], root
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_bar_page_has_one_banner(page, base_url):
+    """
+        A page has one banner: of two top-level bars only the first connected
+        one is the banner, a bar inside <main> or a <section> is never the
+        banner (its header gets role="none"), and when the banner bar is
+        removed the next top-level bar takes over.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-app-bar id="first"><span slot="brand">First</span></mj-app-bar>'
+        '<mj-app-bar id="second"><span slot="brand">Second</span></mj-app-bar>'
+        '<main><mj-app-bar id="in-main"><span slot="brand">In main</span></mj-app-bar>'
+        '<section aria-label="Demo"><mj-app-bar id="in-section"><span slot="brand">In section</span></mj-app-bar></section></main>'
+    )
+    load_fixture(page, base_url, markup, ["mj-app-bar"])
+    roles = (
+        "() => ['first', 'second', 'in-main', 'in-section'].map((id) => { const bar = document.getElementById(id); "
+        "return bar === null ? null : bar.shadowRoot.querySelector('[part=root]').getAttribute('role'); })"
+    )
+
+    expect(page.get_by_role("banner")).to_have_count(1)
+    assert page.evaluate(roles) == ["banner", "none", "none", "none"], page.evaluate(roles)
+
+    page.evaluate("() => document.getElementById('first').remove()")
+    page.wait_for_function("() => document.getElementById('second').shadowRoot.querySelector('[part=root]').getAttribute('role') === 'banner'",
+                           timeout=5000)
+    expect(page.get_by_role("banner")).to_have_count(1)
+    assert page.evaluate(roles) == [None, "banner", "none", "none"], page.evaluate(roles)
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_bar_in_app_shell_is_the_single_banner(page, base_url):
+    """
+        Slotted straight into an mj-app-shell's app-bar region the bar is the
+        page's banner (the shell adds none); wrapped in a plain element the
+        shell's region is the banner and the bar inside it is a plain header,
+        so there is never a second, nested banner.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    direct = (
+        '<mj-app-shell style="height:300px;"><mj-app-bar slot="app-bar" id="bar"><span slot="brand" id="brand">App</span></mj-app-bar>'
+        '<p>Main</p></mj-app-shell>'
+    )
+    load_fixture(page, base_url, direct, ["mj-app-bar", "mj-app-shell"])
+    expect(page.get_by_role("banner")).to_have_count(1)
+    page.wait_for_timeout(100)
+    assert page.evaluate(_BANNERS_AROUND, "brand") == ["header.root"], page.evaluate(_BANNERS_AROUND, "brand")
+
+    wrapped = (
+        '<mj-app-shell style="height:300px;"><div slot="app-bar"><mj-app-bar id="bar"><span slot="brand" id="brand">App</span></mj-app-bar></div>'
+        '<p>Main</p></mj-app-shell>'
+    )
+    load_fixture(page, base_url, wrapped, ["mj-app-bar", "mj-app-shell"])
+    page.wait_for_function("() => document.querySelector('#bar').shadowRoot.querySelector('[part=root]').getAttribute('role') === 'none'",
+                           timeout=5000)
+    expect(page.get_by_role("banner")).to_have_count(1)
+    assert page.evaluate(_BANNERS_AROUND, "brand") == ["div.app-bar"], page.evaluate(_BANNERS_AROUND, "brand")
     return
 
 
@@ -330,6 +513,129 @@ def test_app_bar_without_navigation_has_no_drawer_toggle_on_phones(page, base_ur
     markup = '<mj-app-bar><span slot="brand">App</span><button slot="actions">Sign out</button></mj-app-bar>'
     load_fixture(page, base_url, markup, ["mj-app-bar"])
     expect(page.locator("mj-app-bar").locator(".toggle")).to_be_hidden()
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_bar_drawer_shows_navigation_links_on_phones(page, base_url):
+    """
+        At phone width the drawer shows the links slotted into `navigation`
+        (it used to open empty); closed, the drawer is not displayed, and open
+        it is a modal dialog.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    page.set_viewport_size({"width": 390, "height": 800})
+    markup = (
+        '<mj-app-bar><span slot="brand">App</span>'
+        '<a slot="navigation" href="#home">Home</a><a slot="navigation" href="#docs">Docs</a></mj-app-bar>'
+    )
+    load_fixture(page, base_url, markup, ["mj-app-bar"])
+    home = page.get_by_role("link", name="Home")
+    expect(home).to_be_hidden()
+
+    page.locator("mj-app-bar").locator(".toggle").click()
+    expect(home).to_be_visible()
+    expect(page.get_by_role("dialog")).to_have_count(1)
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_bar_toggle_drives_enclosing_app_shell_nav(page, base_url):
+    """
+        Inside an mj-app-shell with navigation of its own, the app bar's
+        toggle opens and closes the shell's nav (not its own drawer) and its
+        aria-expanded follows the shell, including changes made by script.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    page.set_viewport_size({"width": 390, "height": 800})
+    markup = (
+        '<mj-app-shell id="shell" nav-mode="overlay" hide-nav-toggle>'
+        '<mj-app-bar slot="app-bar" id="bar"><span slot="brand">App</span>'
+        '<a slot="navigation" href="#home">Home</a></mj-app-bar>'
+        '<nav slot="nav"><a href="#a">Section A</a></nav><p>Main</p></mj-app-shell>'
+    )
+    load_fixture(page, base_url, markup, ["mj-app-bar", "mj-app-shell"])
+    toggle = page.locator("#bar").locator(".toggle")
+    expect(toggle).to_have_attribute("aria-expanded", "false")
+
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-expanded", "true")
+    state = page.evaluate(
+        "() => ({ shell: document.getElementById('shell').navOpen, bar: document.getElementById('bar').open })"
+    )
+    assert state == {"shell": True, "bar": False}
+
+    page.evaluate("() => { document.getElementById('shell').navOpen = false }")
+    expect(toggle).to_have_attribute("aria-expanded", "false")
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_app_bar_in_shell_offers_toggle_and_keeps_its_links_reachable(page, base_url):
+    """
+        Inside an mj-app-shell that owns the navigation and hides its own
+        toggle (hide-nav-toggle) the bar's toggle is shown wherever the
+        shell's nav can be toggled, also when the bar has no navigation of its
+        own, and the bar's own links stay in the bar (they used to sit in a
+        drawer that never opens). A static wide shell offers no toggle until
+        its nav-mode makes the nav toggleable, and a shell that shows its own
+        toggle gets no second one from the bar.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    page.set_viewport_size({"width": 1280, "height": 800})
+    markup = (
+        '<mj-app-shell id="shell" nav-mode="overlay" hide-nav-toggle>'
+        '<mj-app-bar slot="app-bar" id="bar"><span slot="brand">App</span>'
+        '<a slot="navigation" href="#docs">Docs</a><a slot="navigation" href="#help">Help</a></mj-app-bar>'
+        '<nav slot="nav"><a href="#a">Section A</a></nav><p>Main</p></mj-app-shell>'
+        '<mj-app-shell id="bare-shell" nav-mode="overlay" hide-nav-toggle>'
+        '<mj-app-bar slot="app-bar" id="bare-bar"><span slot="brand">Bare</span></mj-app-bar>'
+        '<nav slot="nav"><a href="#b">Section B</a></nav><p>Main</p></mj-app-shell>'
+        '<mj-app-shell id="static-shell" nav-open hide-nav-toggle>'
+        '<mj-app-bar slot="app-bar" id="static-bar"><span slot="brand">Static</span></mj-app-bar>'
+        '<nav slot="nav"><a href="#c">Section C</a></nav><p>Main</p></mj-app-shell>'
+        '<mj-app-shell id="own-toggle-shell" nav-mode="collapsible" nav-open>'
+        '<mj-app-bar slot="app-bar" id="own-toggle-bar"><span slot="brand">Own</span>'
+        '<a slot="navigation" href="#own">Own link</a></mj-app-bar>'
+        '<nav slot="nav"><a href="#d">Section D</a></nav><p>Main</p></mj-app-shell>'
+    )
+    load_fixture(page, base_url, markup, ["mj-app-bar", "mj-app-shell"])
+
+    expect(page.get_by_role("link", name="Docs")).to_be_visible()
+    expect(page.get_by_role("link", name="Help")).to_be_visible()
+
+    toggle = page.locator("#bar").locator(".toggle")
+    expect(toggle).to_be_visible()
+    toggle.click()
+    expect(toggle).to_have_attribute("aria-expanded", "true")
+    assert page.evaluate("() => document.getElementById('shell').navOpen") is True
+
+    bare_toggle = page.locator("#bare-bar").locator(".toggle")
+    expect(bare_toggle).to_be_visible()
+    bare_toggle.click()
+    assert page.evaluate("() => document.getElementById('bare-shell').navOpen") is True
+
+    static_toggle = page.locator("#static-bar").locator(".toggle")
+    expect(static_toggle).to_be_hidden()
+    page.evaluate("() => document.getElementById('static-shell').setAttribute('nav-mode', 'collapsible')")
+    expect(static_toggle).to_be_visible()
+
+    expect(page.locator("#own-toggle-bar").locator(".toggle")).to_be_hidden()
+    expect(page.get_by_role("link", name="Own link")).to_be_visible()
+    page.evaluate("() => document.getElementById('own-toggle-shell').setAttribute('hide-nav-toggle', '')")
+    expect(page.locator("#own-toggle-bar").locator(".toggle")).to_be_visible()
     return
 
 
@@ -469,6 +775,64 @@ def test_side_nav_overlay_drawer_closes_on_escape(page, base_url):
     return
 
 
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_side_nav_collapsed_keeps_visible_toggle(page, base_url):
+    """
+        A collapsed collapsible nav keeps its toggle visible (it used to shrink
+        to zero width with the toggle inside), its items leave the tab order,
+        and the toggle expands it again.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-side-nav mode="collapsible" persist-state="false" style="height:200px">'
+        '<a href="#one">One</a><a href="#two">Two</a></mj-side-nav>'
+    )
+    load_fixture(page, base_url, markup, ["mj-side-nav"])
+    toggle = page.locator("mj-side-nav").locator(".toggle-btn")
+    expect(toggle).to_be_visible()
+    expect(page.get_by_role("link", name="One")).to_be_hidden()
+
+    toggle.click()
+    expect(page.get_by_role("link", name="One")).to_be_visible()
+    toggle.click()
+    expect(toggle).to_be_visible()
+    expect(toggle).to_have_attribute("aria-expanded", "false")
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_side_nav_header_keys_are_not_hijacked(page, base_url):
+    """
+        Home / End typed into a header search field stay in that field; the
+        roving keys apply to the nav items only.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-side-nav><input slot="header" id="search" value="query">'
+        '<a href="#one">One</a><a href="#two">Two</a></mj-side-nav>'
+    )
+    load_fixture(page, base_url, markup, ["mj-side-nav"])
+    page.locator("#search").focus()
+    page.keyboard.press("End")
+    focused_after_end = page.evaluate("() => document.activeElement.id")
+
+    page.get_by_role("link", name="One").focus()
+    page.keyboard.press("ArrowDown")
+    focused_after_arrow = page.evaluate("() => document.activeElement.textContent")
+
+    assert focused_after_end == "search", "End in the header field should not move focus"
+    assert focused_after_arrow == "Two", "ArrowDown on an item should move to the next item"
+    return
+
+
 # ===========================================================================
 # mj-breadcrumb
 # ===========================================================================
@@ -478,11 +842,6 @@ def test_side_nav_overlay_drawer_closes_on_escape(page, base_url):
 def test_breadcrumb_nav_landmark(page, base_url):
     """
         mj-breadcrumb renders a <nav> landmark with an aria-label.
-
-        Note: the breadcrumb's slotted <a> elements are moved into shadow DOM
-        list items during _buildList, which triggers another slotchange that
-        clears the list. Testing the nav landmark is the reliable structural
-        assertion for this component.
 
         :param page: Playwright page fixture.
         :param base_url: Site base URL fixture.
@@ -552,6 +911,132 @@ def test_breadcrumb_separator_rendered(page, base_url):
         "return bc.shadowRoot.querySelectorAll('.separator').length; }"
     )
     assert sep_count >= 1, "breadcrumb should render at least one separator"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_breadcrumb_keeps_and_displays_slotted_links(page, base_url):
+    """
+        The catalog example keeps all four author links (they used to be
+        deleted by a self-triggered rebuild), shows each one, renders one
+        separator between each pair and marks the last crumb as the current
+        page without a link.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    frame = _open_component(page=page, base_url=base_url, tag="mj-breadcrumb")
+    frame.wait_for_function(
+        "() => document.querySelector('mj-breadcrumb') !== null",
+        timeout=5000,
+    )
+
+    result = frame.evaluate(
+        "function() {"
+        "  var bc = document.querySelector('mj-breadcrumb');"
+        "  var anchors = Array.from(bc.querySelectorAll('a'));"
+        "  return {"
+        "    count: anchors.length,"
+        "    shown: anchors.map(function(a) { return a.getBoundingClientRect().width > 0; }),"
+        "    separators: bc.shadowRoot.querySelectorAll('.separator').length,"
+        "    current: anchors.map(function(a) { return a.getAttribute('aria-current'); }),"
+        "    lastHref: anchors[anchors.length - 1].getAttribute('href')"
+        "  };"
+        "}"
+    )
+    assert result["count"] == 4, "all four slotted links should remain"
+    assert result["shown"] == [True, True, True, True], "every crumb should be displayed"
+    assert result["separators"] == 3, "one separator between each pair of crumbs"
+    assert result["current"] == [None, None, None, "page"], "only the last crumb is the current page"
+    assert result["lastHref"] is None, "the current crumb should not be a link"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_breadcrumb_expand_reveals_hidden_items_and_moves_focus(page, base_url):
+    """
+        With max-visible the middle crumbs collapse behind the ellipsis;
+        expanding reveals them and focuses the first revealed crumb, and a
+        crumb click emits the cancelable mj-breadcrumb-navigate.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-breadcrumb max-visible="2">'
+        '<a href="/">Home</a><a href="/a">A</a><a href="/b">B</a><a href="/c">C</a>'
+        '</mj-breadcrumb>'
+    )
+    load_fixture(page, base_url, markup, ["mj-breadcrumb"])
+    page.get_by_role("button", name="Show 2 hidden breadcrumbs").click()
+
+    result = page.evaluate(
+        "function() {"
+        "  var bc = document.querySelector('mj-breadcrumb');"
+        "  var detail = null;"
+        "  bc.addEventListener('mj-breadcrumb-navigate', function(e) { detail = e.detail.href; e.preventDefault(); });"
+        "  var focused = document.activeElement.textContent;"
+        "  var click = new MouseEvent('click', { bubbles: true, cancelable: true, composed: true });"
+        "  bc.querySelector('a[href=\"/b\"]').dispatchEvent(click);"
+        "  return {"
+        "    focused: focused,"
+        "    shown: Array.from(bc.querySelectorAll('a')).map(function(a) { return a.getBoundingClientRect().width > 0; }),"
+        "    navigated: detail, prevented: click.defaultPrevented"
+        "  };"
+        "}"
+    )
+    assert result["focused"] == "A", "focus should move to the first revealed crumb"
+    assert result["shown"] == [True, True, True, True], "all crumbs should show after expanding"
+    assert result["navigated"] == "/b", "a crumb click should emit mj-breadcrumb-navigate"
+    assert result["prevented"] is True, "canceling the event should stop the navigation"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_breadcrumb_max_visible_sets_the_number_of_visible_crumbs(page, base_url):
+    """
+        A collapsed trail shows `max-visible` crumbs: the first one and as
+        many trailing crumbs as fit, at least `always-show-last` (it used to
+        show only first + always-show-last).
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-breadcrumb id="deep" max-visible="4" always-show-last="2">'
+        '<a href="#1">Home</a><a href="#2">Electronics</a><a href="#3">Computers</a>'
+        '<a href="#4">Laptops</a><a href="#5">Ultrabooks</a><a href="#6">Aero 14</a>'
+        '</mj-breadcrumb>'
+        '<mj-breadcrumb id="no-first" max-visible="2" always-show-first="false">'
+        '<a href="#d">Drive</a><a href="#t">Team</a><a href="#g">Design</a><a href="#l">Logos</a>'
+        '</mj-breadcrumb>'
+        '<mj-breadcrumb id="guaranteed" max-visible="2" always-show-last="2">'
+        '<a href="#a">A</a><a href="#b">B</a><a href="#c">C</a><a href="#e">E</a><a href="#f">F</a>'
+        '</mj-breadcrumb>'
+    )
+    load_fixture(page, base_url, markup, ["mj-breadcrumb"])
+
+    shown = page.evaluate(
+        "function() {"
+        "  var result = {};"
+        "  document.querySelectorAll('mj-breadcrumb').forEach(function(trail) {"
+        "    result[trail.id] = Array.from(trail.querySelectorAll('a'))"
+        "      .filter(function(a) { return a.getBoundingClientRect().width > 0; })"
+        "      .map(function(a) { return a.textContent; });"
+        "  });"
+        "  return result;"
+        "}"
+    )
+    assert shown["deep"] == ["Home", "Laptops", "Ultrabooks", "Aero 14"], shown
+    assert shown["no-first"] == ["Design", "Logos"], shown
+    assert shown["guaranteed"] == ["A", "E", "F"], "first + always-show-last win over max-visible: {}".format(shown)
+    expect(page.locator("#deep").get_by_role("button", name="Show 2 hidden breadcrumbs")).to_be_visible()
     return
 
 
@@ -718,6 +1203,75 @@ def test_tabs_keyboard_dispatch_activates_tab(page, base_url):
     return
 
 
+_TABS_STATE_JS = """
+() => {
+    const tabs = Array.from(document.querySelectorAll('mj-tabs [slot="tab"]'));
+    const panels = Array.from(document.querySelector('mj-tabs').children).filter((c) => c.getAttribute('slot') !== 'tab');
+    return {
+        selected: tabs.map((t) => t.getAttribute('aria-selected')),
+        shown: panels.map((p) => p.hidden === false),
+        focused: tabs.indexOf(document.activeElement)
+    };
+}
+"""
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_tabs_click_activates_tab(page, base_url):
+    """
+        Clicking a tab selects it and shows its panel.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-tabs><button slot="tab">One</button><button slot="tab">Two</button>'
+        '<div>Panel one</div><div>Panel two</div></mj-tabs>'
+    )
+    load_fixture(page, base_url, markup, ["mj-tabs"])
+    page.get_by_role("tab", name="Two").click()
+
+    state = page.evaluate(_TABS_STATE_JS)
+    assert state["selected"] == ["false", "true"], "the clicked tab should be selected"
+    assert state["shown"] == [False, True], "the clicked tab's panel should be shown"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_tabs_arrow_moves_focus_and_selection_one_step_skipping_disabled(page, base_url):
+    """
+        One ArrowRight moves focus and selection together to the next enabled
+        tab; a disabled tab is skipped and cannot be selected by `selected`.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-tabs><button slot="tab" id="a">A</button><button slot="tab" id="b">B</button>'
+        '<button slot="tab" id="c" aria-disabled="true">C</button><button slot="tab" id="d">D</button>'
+        '<div>PA</div><div>PB</div><div>PC</div><div>PD</div></mj-tabs>'
+    )
+    load_fixture(page, base_url, markup, ["mj-tabs"])
+    page.locator("#a").focus()
+    page.keyboard.press("ArrowRight")
+    after_one = page.evaluate(_TABS_STATE_JS)
+    page.keyboard.press("ArrowRight")
+    after_two = page.evaluate(_TABS_STATE_JS)
+    page.evaluate("() => document.querySelector('mj-tabs').setAttribute('selected', 'a')")
+    after_attribute = page.evaluate(_TABS_STATE_JS)
+
+    assert after_one["focused"] == 1, "one ArrowRight should focus the second tab"
+    assert after_one["selected"] == ["false", "true", "false", "false"], "selection should follow focus"
+    assert after_two["focused"] == 3, "the disabled tab should be skipped"
+    assert after_two["selected"][3] == "true", "the tab after the disabled one should be selected"
+    assert after_attribute["selected"][0] == "true", "setting selected should select that tab"
+    return
+
+
 # ===========================================================================
 # mj-nav-stepper
 # ===========================================================================
@@ -828,6 +1382,87 @@ def test_nav_stepper_click_complete_step(page, base_url):
     )
     assert len(result["events"]) >= 1, "mj-nav-stepper-change should fire"
     assert result["current"] == "0", "current attribute should update to clicked step"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_nav_stepper_hides_source_and_tracks_status_changes(page, base_url):
+    """
+        The slotted step elements are not displayed next to the rendered
+        steps, a later status="error" re-renders that step, and a disabled step
+        cannot be activated.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-nav-stepper current="1" linear="false">'
+        '<span>Account</span><span id="profile">Profile</span><span status="disabled">Payment</span>'
+        '</mj-nav-stepper>'
+    )
+    load_fixture(page, base_url, markup, ["mj-nav-stepper"])
+    page.evaluate("() => document.getElementById('profile').setAttribute('status', 'error')")
+
+    result = page.evaluate(
+        "function() {"
+        "  var stepper = document.querySelector('mj-nav-stepper');"
+        "  var steps = stepper.shadowRoot.querySelectorAll('li.step');"
+        "  var buttons = stepper.shadowRoot.querySelectorAll('.step-btn');"
+        "  return {"
+        "    sourceShown: Array.from(stepper.children).some(function(c) { return c.getBoundingClientRect().width > 0; }),"
+        "    statuses: Array.from(steps).map(function(s) { return s.dataset.status; }),"
+        "    disabled: buttons[2].getAttribute('aria-disabled')"
+        "  };"
+        "}"
+    )
+    assert result["sourceShown"] is False, "slotted step sources should not be displayed"
+    assert result["statuses"] == ["complete", "error", "disabled"], "unexpected statuses {}".format(result["statuses"])
+    assert result["disabled"] == "true", "a disabled step should not be navigable"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_nav_stepper_current_past_last_step_fires_complete(page, base_url):
+    """
+        Moving `current` past the last step makes every step complete and
+        emits mj-nav-stepper-complete once per transition (it used to fire
+        only for status changes); a stepper that loads complete does not fire.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-nav-stepper id="flow" current="1"><span>One</span><span>Two</span><span>Three</span></mj-nav-stepper>'
+        '<mj-nav-stepper id="done" current="3"><span>One</span><span>Two</span><span>Three</span></mj-nav-stepper>'
+    )
+    load_fixture(page, base_url, markup, ["mj-nav-stepper"])
+
+    result = page.evaluate(
+        "async function() {"
+        "  var wait = function(ms) { return new Promise(function(done) { setTimeout(done, ms); }); };"
+        "  var flow = document.getElementById('flow');"
+        "  var done = document.getElementById('done');"
+        "  var fired = [];"
+        "  flow.addEventListener('mj-nav-stepper-complete', function(e) { fired.push(e.detail); });"
+        "  done.addEventListener('mj-nav-stepper-complete', function(e) { fired.push('done'); });"
+        "  done.setAttribute('current', '4');"
+        "  flow.setAttribute('current', '2');"
+        "  var atLast = fired.length;"
+        "  flow.setAttribute('current', '3');"
+        "  flow.setAttribute('current', '5');"
+        "  await wait(50);"
+        "  return { atLast: atLast, fired: fired, completed: flow.completedCount,"
+        "    statuses: Array.from(flow.shadowRoot.querySelectorAll('li.step')).map(function(s) { return s.dataset.status; }) };"
+        "}"
+    )
+    assert result["atLast"] == 0, "the last step being current is not completion"
+    assert result["fired"] == [{"completedCount": 3, "total": 3}], "complete should fire once: {}".format(result["fired"])
+    assert result["completed"] == 3
+    assert result["statuses"] == ["complete", "complete", "complete"]
     return
 
 
@@ -974,6 +1609,118 @@ def test_wizard_submit_fires_event(page, base_url):
 
     fired = frame.evaluate("() => window.__submitFired")
     assert fired is True, "mj-wizard-submit should fire when Submit is clicked on last step"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_wizard_page_loads_without_errors_or_focus_theft(page, base_url):
+    """
+        The catalog wizard page loads with no uncaught exception (the `current`
+        attribute round trip used to recurse until the stack overflowed) and
+        the wizard does not move focus on load.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    frame = _open_component(page=page, base_url=base_url, tag="mj-wizard")
+    frame.wait_for_function(
+        "() => document.querySelector('mj-wizard') !== null",
+        timeout=5000,
+    )
+    page.wait_for_timeout(300)
+
+    focused = frame.evaluate("() => document.activeElement.tagName")
+    assert errors == [], "loading the wizard page raised: {}".format(errors)
+    assert focused == "BODY", "the wizard should not take focus on load"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_wizard_validates_required_fields_and_follows_stepper_clicks(page, base_url):
+    """
+        In linear mode Next is blocked by an empty required input placed
+        directly in the step; clicking a completed step in the embedded stepper
+        goes back through mj-wizard-before-change with direction "jump".
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-wizard label="Sign up">'
+        '<section label="Account"><input id="email" required></section>'
+        '<section label="Profile"><p>Profile</p></section>'
+        '</mj-wizard>'
+    )
+    load_fixture(page, base_url, markup, ["mj-wizard"])
+
+    result = page.evaluate(
+        "function() {"
+        "  var wizard = document.querySelector('mj-wizard');"
+        "  var directions = [];"
+        "  wizard.addEventListener('mj-wizard-before-change', function(e) { directions.push(e.detail.direction); });"
+        "  var next = wizard.shadowRoot.querySelector('[data-action=\"next\"]');"
+        "  next.click();"
+        "  var blocked = wizard.getAttribute('current');"
+        "  document.getElementById('email').value = 'a@b.co';"
+        "  next.click();"
+        "  var advanced = wizard.getAttribute('current');"
+        "  var stepper = wizard.shadowRoot.querySelector('mj-nav-stepper');"
+        "  stepper.shadowRoot.querySelectorAll('.step-btn')[0].click();"
+        "  return { blocked: blocked, advanced: advanced, jumped: wizard.getAttribute('current'),"
+        "           stepper: stepper.getAttribute('current'), directions: directions };"
+        "}"
+    )
+    assert result["blocked"] == "0", "an empty required field should block Next"
+    assert result["advanced"] == "1", "Next should advance once the step is valid"
+    assert result["jumped"] == "0", "a stepper click should move the wizard"
+    assert result["stepper"] == "0", "the stepper should follow the wizard"
+    assert result["directions"] == ["next", "jump"], "unexpected directions {}".format(result["directions"])
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_wizard_side_stepper_puts_button_bar_under_the_content(page, base_url):
+    """
+        With stepper-position="side" the stepper is a column at the inline
+        start and the button bar sits under the step content in the other
+        column (it used to become a third column at the top).
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-wizard stepper-position="side" label="Checkout">'
+        '<section label="Cart"><p>Two items.</p></section>'
+        '<section label="Payment"><p>Card.</p></section>'
+        '</mj-wizard>'
+    )
+    load_fixture(page, base_url, markup, ["mj-wizard"])
+
+    boxes = page.evaluate(
+        "function() {"
+        "  var root = document.querySelector('mj-wizard').shadowRoot;"
+        "  function box(selector) {"
+        "    var r = root.querySelector(selector).getBoundingClientRect();"
+        "    return { left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom) };"
+        "  }"
+        "  return { stepper: box('.stepper-area'), content: box('.content'), bar: box('.nav-bar') };"
+        "}"
+    )
+    stepper = boxes["stepper"]
+    content = boxes["content"]
+    bar = boxes["bar"]
+    assert content["left"] >= stepper["right"], "the content should sit beside the stepper: {}".format(boxes)
+    assert bar["left"] == content["left"] and bar["right"] == content["right"], "the button bar should span the content column: {}".format(boxes)
+    assert bar["top"] >= content["bottom"], "the button bar should sit under the content: {}".format(boxes)
+    assert stepper["bottom"] == bar["bottom"], "the stepper column should run the full height: {}".format(boxes)
     return
 
 
@@ -1218,6 +1965,66 @@ def test_pagination_labels_are_words_not_catalog_keys(page, base_url):
     return
 
 
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_pagination_keeps_keyboard_focus_after_page_change(page, base_url):
+    """
+        Activating Next from the keyboard rebuilds the pager but leaves focus
+        on the new Next button, so it can be pressed again; the item range of
+        the last page stops at the last item.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = '<mj-pagination id="pager" page="1" total-items="97" page-size="10"></mj-pagination>'
+    load_fixture(page, base_url, markup, ["mj-pagination"])
+    page.get_by_role("button", name="Next", exact=True).focus()
+    page.keyboard.press("Enter")
+    page.keyboard.press("Enter")
+
+    result = page.evaluate(
+        "function() {"
+        "  var pager = document.getElementById('pager');"
+        "  var active = pager.shadowRoot.activeElement;"
+        "  var focusedPart = active !== null ? active.getAttribute('part') : null;"
+        "  pager.setAttribute('page', '10');"
+        "  return { page: pager.getAttribute('page'), focused: focusedPart, range: pager.pageRange };"
+        "}"
+    )
+    assert result["focused"] == "next", "focus should stay on the Next button"
+    assert result["range"] == [90, 96], "the last page range should end at item 96"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_pagination_href_template_renders_safe_links(page, base_url):
+    """
+        With href-template the page controls are links; a script URL template
+        is neutralised.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-pagination id="links" page="2" total-pages="3" href-template="?page={page}"></mj-pagination>'
+        '<mj-pagination id="bad" page="1" total-pages="2" href-template="javascript:alert({page})"></mj-pagination>'
+    )
+    load_fixture(page, base_url, markup, ["mj-pagination"])
+
+    result = page.evaluate(
+        "function() {"
+        "  var hrefs = function(id) { return Array.from(document.getElementById(id).shadowRoot.querySelectorAll('a.page-btn')).map(function(a) { return a.getAttribute('href'); }); };"
+        "  return { links: hrefs('links'), bad: hrefs('bad') };"
+        "}"
+    )
+    assert result["links"] == ["?page=1", "?page=2", "?page=3"], "page links should follow the template"
+    assert all(href == "#" for href in result["bad"]), "script URLs must not reach the links"
+    return
+
+
 # ---------------------------------------------------------------------------
 # Catalog strings: no component shows a raw "mj.*" key
 # ---------------------------------------------------------------------------
@@ -1275,6 +2082,67 @@ def test_navigation_components_show_no_raw_catalog_keys(page, base_url):
     load_fixture(page, base_url, markup, tags)
     found = page.evaluate(_RAW_KEY_SCAN_JS)
     assert found == [], "Raw catalog keys rendered: {}".format(found)
+    return
+
+
+_INJECTION_SCAN_JS = """
+(payload) => {
+    const quoted = payload.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    const text = payload.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const label = (names) => names.map((name) => name + '="' + quoted + '"').join(' ');
+    document.body.innerHTML = [
+        '<mj-link ' + label(['href', 'target', 'rel', 'download']) + '>' + text + '</mj-link>',
+        '<mj-app-bar ' + label(['nav-label']) + '><a slot="navigation" href="#">' + text + '</a></mj-app-bar>',
+        '<mj-side-nav ' + label(['nav-label']) + '><a href="#">' + text + '</a></mj-side-nav>',
+        '<mj-breadcrumb ' + label(['nav-label', 'separator']) + '><a href="#">' + text + '</a><a href="#">B</a></mj-breadcrumb>',
+        '<mj-tabs ' + label(['tablist-label', 'selected']) + '><button slot="tab">' + text + '</button><div>' + text + '</div></mj-tabs>',
+        '<mj-nav-stepper ' + label(['label']) + '><span>' + text + '</span></mj-nav-stepper>',
+        '<mj-wizard ' + label(['label', 'next-label', 'back-label', 'submit-label']) + '><section ' + label(['label']) + '>S</section></mj-wizard>',
+        '<mj-pagination total-pages="3" ' + label(['nav-label', 'href-template']) + '></mj-pagination>',
+        '<div id="toc-target"><h2>' + text + '</h2></div><mj-toc target="#toc-target" ' + label(['nav-label', 'heading', 'title']) + '></mj-toc>',
+        '<mj-skip-link ' + label(['target', 'label']) + '></mj-skip-link>',
+        '<mj-footer-nav ' + label(['nav-label', 'copyright']) + '><nav><strong>' + text + '</strong></nav></mj-footer-nav>',
+        '<button id="menu-trigger">' + text + '</button><mj-menu anchor="menu-trigger" ' + label(['label']) + ' open><div role="menuitem">' + text + '</div></mj-menu>',
+        '<mj-tree-nav ' + label(['nav-label', 'current']) + '><li><a href="#">' + text + '</a></li></mj-tree-nav>'
+    ].join('');
+    return new Promise((resolve) => {
+        setTimeout(() => {
+            let images = 0;
+            const visit = (root) => {
+                for (const el of root.querySelectorAll('*')) {
+                    if (el.shadowRoot) {
+                        images = images + el.shadowRoot.querySelectorAll('img').length;
+                        visit(el.shadowRoot);
+                    }
+                }
+            };
+            visit(document);
+            resolve({ hits: window.__hits === undefined ? 0 : window.__hits, shadowImages: images });
+        }, 500);
+    });
+}
+"""
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_navigation_components_do_not_parse_attribute_or_text_as_markup(page, base_url):
+    """
+        Every navigation component keeps attribute values and slotted text
+        that contain markup inert: no injected element appears in a shadow
+        root and no injected handler runs.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    tags = ["mj-link", "mj-app-bar", "mj-side-nav", "mj-breadcrumb", "mj-tabs", "mj-nav-stepper",
+            "mj-wizard", "mj-pagination", "mj-toc", "mj-skip-link", "mj-footer-nav", "mj-menu",
+            "mj-tree-nav"]
+    load_fixture(page, base_url, "", tags)
+    result = page.evaluate(_INJECTION_SCAN_JS, _INJECTION_PAYLOAD)
+    assert result["hits"] == 0, "an injected handler ran {} time(s)".format(result["hits"])
+    assert result["shadowImages"] == 0, "markup from an attribute or text reached a shadow root"
     return
 
 
@@ -1354,6 +2222,80 @@ def test_toc_link_click_fires_mj_toc_navigate(page, base_url):
     return
 
 
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_toc_nests_subheadings_and_slugs_non_latin_text(page, base_url):
+    """
+        Sub-headings are rendered as nested lists, a non-Latin heading gets a
+        non-empty id, and a generated id never repeats an id already in the
+        document.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<p id="intro">Elsewhere</p>'
+        '<div id="article"><h2>Введение</h2><h3>Detail</h3><h2>Intro</h2></div>'
+        '<mj-toc target="#article"></mj-toc>'
+    )
+    load_fixture(page, base_url, markup, ["mj-toc"])
+
+    result = page.evaluate(
+        "function() {"
+        "  var toc = document.querySelector('mj-toc');"
+        "  var nested = toc.shadowRoot.querySelectorAll('.list > li > .nested-list > li > a.anchor');"
+        "  return { ids: toc.sections.map(function(s) { return s.id; }), nested: nested.length };"
+        "}"
+    )
+    assert result["nested"] == 1, "the h3 should be rendered in a nested list under its h2"
+    assert result["ids"][0] == "введение", "a Cyrillic heading should keep its letters in the id"
+    assert result["ids"][2] != "intro", "a generated id must not duplicate an existing document id"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_toc_example_scroll_regions_are_keyboard_reachable(page, base_url):
+    """
+        The catalog examples whose article is its own scroll box make that
+        scroller a named tab stop (tabindex="0" and aria-label), so a
+        keyboard user can scroll it (axe scrollable-region-focusable).
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    findings = {}
+    for key in ("basic", "depth", "manual"):
+        page.goto(base_url + "/components/navigation/mj-toc?example=" + key)
+        handle = page.wait_for_selector("[data-testid=playground-preview]")
+        frame = handle.content_frame()
+        frame.wait_for_function(
+            """() => {
+                const toc = document.querySelector('mj-toc');
+                return toc !== null && toc.shadowRoot !== null;
+            }""",
+            timeout=15000,
+        )
+        findings[key] = frame.evaluate(
+            """() => Array.from(document.querySelectorAll('body *'))
+                .filter((node) => {
+                    const style = getComputedStyle(node);
+                    const scrolls = style.overflowY === 'auto' || style.overflowY === 'scroll';
+                    return scrolls === true && node.scrollHeight > node.clientHeight + 1;
+                })
+                .map((node) => ({ tabIndex: node.tabIndex, label: node.getAttribute('aria-label') || '' }))"""
+        )
+
+    for key, scrollers in findings.items():
+        assert len(scrollers) >= 1, findings
+        for scroller in scrollers:
+            assert scroller["tabIndex"] == 0 and len(scroller["label"]) > 0, findings
+
+    return
+
+
 # ===========================================================================
 # mj-skip-link
 # ===========================================================================
@@ -1421,6 +2363,37 @@ def test_skip_link_click_fires_activate_event(page, base_url):
     return
 
 
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_skip_link_bare_id_target_focuses_target(page, base_url):
+    """
+        A target written as a bare id gets a fragment href and activation
+        focuses that element (not an element whose tag has the same name).
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-skip-link target="main" variant="inline"></mj-skip-link>'
+        '<main>Wrong</main><div id="main">Right</div>'
+    )
+    load_fixture(page, base_url, markup, ["mj-skip-link"])
+
+    result = page.evaluate(
+        "function() {"
+        "  var anchor = document.querySelector('mj-skip-link').shadowRoot.querySelector('a');"
+        "  var click = new MouseEvent('click', { bubbles: true, cancelable: true, composed: true });"
+        "  anchor.dispatchEvent(click);"
+        "  return { href: anchor.getAttribute('href'), focused: document.activeElement.id, prevented: click.defaultPrevented };"
+        "}"
+    )
+    assert result["href"] == "#main", "a bare id target should become a fragment href"
+    assert result["focused"] == "main", "activation should focus the element with that id"
+    assert result["prevented"] is True, "the component handles the jump itself"
+    return
+
+
 # ===========================================================================
 # mj-footer-nav
 # ===========================================================================
@@ -1429,7 +2402,9 @@ def test_skip_link_click_fires_activate_event(page, base_url):
 @testbase.attach.parameter(create_page, identifier="page")
 def test_footer_nav_renders_contentinfo_landmark(page, base_url):
     """
-        mj-footer-nav renders a <footer role=contentinfo> landmark.
+        mj-footer-nav renders a <footer> that is the contentinfo landmark at
+        page level and not inside a section, the way a native footer is
+        (there is no explicit role="contentinfo").
 
         :param page: Playwright page fixture.
         :param base_url: Site base URL fixture.
@@ -1437,15 +2412,22 @@ def test_footer_nav_renders_contentinfo_landmark(page, base_url):
 
     frame = _open_component(page=page, base_url=base_url, tag="mj-footer-nav")
     frame.wait_for_function(
-        "() => document.querySelector('mj-footer-nav') !== null",
+        "() => customElements.get('mj-footer-nav') !== undefined",
         timeout=5000,
     )
-
-    has_footer = frame.evaluate(
-        "() => { const el = document.querySelector('mj-footer-nav'); "
-        "return el.shadowRoot.querySelector('footer[role=\"contentinfo\"]') !== null; }"
+    frame.evaluate(
+        """async () => {
+            document.body.innerHTML =
+                '<section aria-label="Demo"><mj-footer-nav nav-label="Nested"></mj-footer-nav></section>'
+                + '<mj-footer-nav nav-label="Page"></mj-footer-nav>';
+            await new Promise((resolve) => setTimeout(resolve, 200));
+        }"""
     )
-    assert has_footer is True, "mj-footer-nav should render footer[role=contentinfo]"
+
+    landmarks = frame.get_by_role("contentinfo")
+    expect(landmarks).to_have_count(1)
+    owner = landmarks.evaluate("(footer) => footer.getRootNode().host.getAttribute('nav-label')")
+    assert owner == "Page", f"Expected only the page-level footer nav to be contentinfo, got {owner}"
     return
 
 
@@ -1512,6 +2494,39 @@ def test_footer_nav_link_click_fires_navigate_event(page, base_url):
         "}"
     )
     assert fired is True, "mj-footer-nav-navigate should fire on link click"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_footer_nav_navigate_is_cancelable_and_names_group(page, base_url):
+    """
+        Canceling mj-footer-nav-navigate prevents the link's navigation, and the
+        event names the group by its heading.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-footer-nav copyright="Corp">'
+        '<nav><strong>Product</strong><ul><li><a href="#features" id="features-link">Features</a></li></ul></nav>'
+        '</mj-footer-nav>'
+    )
+    load_fixture(page, base_url, markup, ["mj-footer-nav"])
+
+    result = page.evaluate(
+        "function() {"
+        "  var footer = document.querySelector('mj-footer-nav');"
+        "  var group = null;"
+        "  footer.addEventListener('mj-footer-nav-navigate', function(e) { group = e.detail.group; e.preventDefault(); });"
+        "  var click = new MouseEvent('click', { bubbles: true, cancelable: true, composed: true });"
+        "  document.getElementById('features-link').dispatchEvent(click);"
+        "  return { group: group, prevented: click.defaultPrevented };"
+        "}"
+    )
+    assert result["group"] == "Product", "the event should name the group by its heading"
+    assert result["prevented"] is True, "canceling the event should prevent the link navigation"
     return
 
 
@@ -1678,6 +2693,191 @@ def test_menu_select_fires_event(page, base_url):
     return
 
 
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_menu_item_click_selects_and_closes_once(page, base_url):
+    """
+        A real pointer click on a slotted menu item emits mj-menu-select and
+        closes the menu with a single mj-menu-close whose reason is "select".
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<button id="trig">Options</button>'
+        '<mj-menu anchor="trig"><div role="menuitem">Edit</div><div role="menuitem">Delete</div></mj-menu>'
+    )
+    load_fixture(page, base_url, markup, ["mj-menu"])
+    page.evaluate(
+        "function() {"
+        "  window.__menuEvents = [];"
+        "  var menu = document.querySelector('mj-menu');"
+        "  menu.addEventListener('mj-menu-select', function(e) { window.__menuEvents.push('select:' + e.detail.value); });"
+        "  menu.addEventListener('mj-menu-close', function(e) { window.__menuEvents.push('close:' + e.detail.reason); });"
+        "  menu.setAttribute('open', '');"
+        "}"
+    )
+    page.get_by_role("menuitem", name="Delete").click()
+
+    result = page.evaluate(
+        "() => ({ events: window.__menuEvents, open: document.querySelector('mj-menu').hasAttribute('open') })"
+    )
+    assert result["events"] == ["select:Delete", "close:select"], (
+        "click should select the item and close once: {}".format(result["events"])
+    )
+    assert result["open"] is False, "the menu should be closed after selection"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_menu_radio_selection_unchecks_siblings(page, base_url):
+    """
+        Choosing a menuitemradio unchecks the other radios of its group, and
+        the open menu gives real focus to its first item.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<button id="trig">Size</button>'
+        '<mj-menu anchor="trig" close-on-select="false">'
+        '<div role="menuitemradio" aria-checked="true" id="small">Small</div>'
+        '<div role="menuitemradio" aria-checked="false" id="large">Large</div>'
+        '</mj-menu>'
+    )
+    load_fixture(page, base_url, markup, ["mj-menu"])
+    page.evaluate("() => document.querySelector('mj-menu').setAttribute('open', '')")
+    focused = page.evaluate("() => document.activeElement.id")
+    page.locator("#large").click()
+
+    result = page.evaluate(
+        "() => [document.getElementById('small').getAttribute('aria-checked'),"
+        " document.getElementById('large').getAttribute('aria-checked')]"
+    )
+    assert focused == "small", "opening the menu should focus its first item"
+    assert result == ["false", "true"], "only the chosen radio should stay checked"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_menu_styles_items_nested_in_groups(page, base_url):
+    """
+        Items, captions and dividers inside a slotted role="group" wrapper get
+        the same styles as direct children (they used to render as plain
+        divs), including the check mark of a checked radio item.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<button id="trig">Sort</button>'
+        '<mj-menu anchor="trig" open>'
+        '<div role="menuitem" id="direct">Refresh</div>'
+        '<div role="group" aria-label="Sort by">'
+        '<div role="presentation" id="caption">Sort by</div>'
+        '<div role="menuitemradio" aria-checked="true" id="nested">Name</div>'
+        '<hr id="rule">'
+        '</div>'
+        '</mj-menu>'
+    )
+    load_fixture(page, base_url, markup, ["mj-menu"])
+
+    styles = page.evaluate(
+        "function() {"
+        "  function pick(id) {"
+        "    var cs = getComputedStyle(document.getElementById(id));"
+        "    return { display: cs.display, minHeight: cs.minHeight, paddingInlineStart: cs.paddingInlineStart, fontSize: cs.fontSize };"
+        "  }"
+        "  return {"
+        "    direct: pick('direct'), nested: pick('nested'),"
+        "    mark: getComputedStyle(document.getElementById('nested'), '::before').content,"
+        "    caption: getComputedStyle(document.getElementById('caption')).textTransform,"
+        "    rule: getComputedStyle(document.getElementById('rule')).height"
+        "  };"
+        "}"
+    )
+    assert styles["nested"] == styles["direct"], "a nested item should look like a direct one: {}".format(styles)
+    assert styles["nested"]["display"] == "flex", styles
+    assert styles["mark"] == '"\u2022"', "a checked nested radio shows its mark: {}".format(styles["mark"])
+    assert styles["caption"] == "uppercase", "a nested caption is styled as a caption"
+    assert styles["rule"] == "1px", "a nested divider is a 1px rule"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_menu_canceled_select_keeps_checked_state(page, base_url):
+    """
+        mj-menu-select fires before a checkbox / radio item changes and
+        reports the state it is about to get; canceling it leaves every
+        aria-checked as it was (it used to flip before the event).
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<button id="trig">View</button>'
+        '<mj-menu anchor="trig" close-on-select="false" open>'
+        '<div role="menuitemcheckbox" aria-checked="false" id="wrap">Wrap lines</div>'
+        '<div role="menuitemradio" aria-checked="true" id="small">Small</div>'
+        '<div role="menuitemradio" aria-checked="false" id="large">Large</div>'
+        '</mj-menu>'
+    )
+    load_fixture(page, base_url, markup, ["mj-menu"])
+
+    result = page.evaluate(
+        "function() {"
+        "  var menu = document.querySelector('mj-menu');"
+        "  var seen = [];"
+        "  var cancel = true;"
+        "  menu.addEventListener('mj-menu-select', function(e) {"
+        "    seen.push([e.detail.item.id, e.detail.checked, e.detail.item.getAttribute('aria-checked')]);"
+        "    if (cancel) { e.preventDefault(); }"
+        "  });"
+        "  function states() { return ['wrap', 'small', 'large'].map(function(id) { return document.getElementById(id).getAttribute('aria-checked'); }); }"
+        "  document.getElementById('wrap').click();"
+        "  document.getElementById('large').click();"
+        "  var canceled = states();"
+        "  cancel = false;"
+        "  document.getElementById('wrap').click();"
+        "  document.getElementById('large').click();"
+        "  return { seen: seen, canceled: canceled, applied: states(), open: menu.open };"
+        "}"
+    )
+    assert result["canceled"] == ["false", "true", "false"], "canceling should keep the checked state: {}".format(result)
+    assert result["applied"] == ["true", "false", "true"], "an accepted selection applies: {}".format(result)
+    assert result["seen"][0] == ["wrap", True, "false"], "the event reports the coming state before the change"
+    assert result["seen"][1] == ["large", True, "false"]
+    assert result["open"] is True
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_menu_without_items_shows_notice_text(page, base_url):
+    """
+        An open menu without items shows the empty notice with text (it used
+        to be an empty box).
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = '<button id="trig">Recent</button><mj-menu anchor="trig" open></mj-menu>'
+    load_fixture(page, base_url, markup, ["mj-menu"])
+
+    notice = page.locator("mj-menu").locator("[part=empty-notice]")
+    expect(notice).to_be_visible()
+    expect(notice).to_have_text("No options")
+    return
+
+
 # ===========================================================================
 # mj-tree-nav
 # ===========================================================================
@@ -1830,8 +3030,9 @@ def test_tree_nav_current_item_aria_current(page, base_url):
 @testbase.attach.parameter(create_page, identifier="page")
 def test_tree_nav_click_sets_active_focus(page, base_url):
     """
-        Clicking a tree item sets aria-activedescendant on the tree root,
-        implementing the WAI-ARIA managed focus pattern.
+        Clicking a tree item moves real focus to that item and gives it the
+        roving tab stop. (An aria-activedescendant on the shadow tree could not
+        reference the light-DOM items, so the component uses roving tabindex.)
 
         :param page: Playwright page fixture.
         :param base_url: Site base URL fixture.
@@ -1851,17 +3052,104 @@ def test_tree_nav_click_sets_active_focus(page, base_url):
     )
     assert first_item_id is not None, "tree should have at least one treeitem"
 
+    # The item's link fills its row, so the click activates it; cancel the
+    # navigation so the preview frame stays on the page under test.
+    frame.evaluate(
+        "() => document.querySelector('mj-tree-nav').addEventListener("
+        "'mj-tree-nav-navigate', (e) => e.preventDefault())"
+    )
     frame.locator("[role='treeitem']").first.click()
 
-    active_descendant = frame.evaluate(
+    result = frame.evaluate(
         "function() {"
-        "  var tree = document.querySelector('mj-tree-nav').shadowRoot.querySelector('.tree');"
-        "  return tree.getAttribute('aria-activedescendant');"
+        "  var items = Array.from(document.querySelectorAll('[role=\"treeitem\"]'));"
+        "  var active = document.activeElement;"
+        "  return {"
+        "    focused: active !== null ? active.id : null,"
+        "    stops: items.filter(function(item) { return item.tabIndex === 0; }).map(function(item) { return item.id; })"
+        "  };"
         "}"
     )
-    assert active_descendant == first_item_id, (
-        "clicking a tree item should set aria-activedescendant to that item's id"
+    assert result["focused"] == first_item_id, "clicking a tree item should focus that item"
+    assert result["stops"] == [first_item_id], "the clicked item should hold the only tab stop"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_tree_nav_collapsed_branch_is_hidden_and_keys_move_focus(page, base_url):
+    """
+        A collapsed branch's children are not displayed (the item styles reach
+        the light-DOM items), ArrowDown / ArrowRight move real focus, and
+        expanding shows the children.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<mj-tree-nav nav-label="Site">'
+        '<li><a href="/home">Home</a></li>'
+        '<li><a href="/products">Products</a><ul>'
+        '<li><a href="/widgets">Widgets</a></li>'
+        '</ul></li>'
+        '</mj-tree-nav>'
     )
+    load_fixture(page, base_url, markup, ["mj-tree-nav"])
+
+    result = page.evaluate(
+        "function() {"
+        "  var tree = document.querySelector('mj-tree-nav');"
+        "  var item = function(href) { return tree.querySelector('a[href=\"' + href + '\"]').closest('li'); };"
+        "  var shown = function(href) { return item(href).getBoundingClientRect().height > 0; };"
+        "  var key = function(name) { document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, composed: true, cancelable: true })); };"
+        "  var before = shown('/widgets');"
+        "  item('/home').focus();"
+        "  key('ArrowDown');"
+        "  var afterDown = document.activeElement === item('/products');"
+        "  key('ArrowRight');"
+        "  var expanded = shown('/widgets');"
+        "  key('ArrowRight');"
+        "  return { before: before, afterDown: afterDown, expanded: expanded, child: document.activeElement === item('/widgets') };"
+        "}"
+    )
+    assert result["before"] is False, "children of a collapsed branch should not be displayed"
+    assert result["afterDown"] is True, "ArrowDown should focus the next item"
+    assert result["expanded"] is True, "ArrowRight should expand the branch"
+    assert result["child"] is True, "ArrowRight on an open branch should focus its first child"
+    return
+
+
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_tree_nav_current_resolves_within_tree_only(page, base_url):
+    """
+        `current` naming an id that belongs to an unrelated page element does
+        not mark that element; removing `current` clears the mark.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    markup = (
+        '<section id="settings">Unrelated</section>'
+        '<mj-tree-nav current="settings"><li><a href="settings">Settings</a></li></mj-tree-nav>'
+    )
+    load_fixture(page, base_url, markup, ["mj-tree-nav"])
+
+    result = page.evaluate(
+        "function() {"
+        "  var tree = document.querySelector('mj-tree-nav');"
+        "  var item = tree.querySelector('li');"
+        "  var marked = item.getAttribute('aria-current');"
+        "  var unrelated = document.getElementById('settings').getAttribute('aria-current');"
+        "  tree.removeAttribute('current');"
+        "  return { marked: marked, unrelated: unrelated, cleared: item.getAttribute('aria-current') };"
+        "}"
+    )
+    assert result["marked"] == "page", "the tree item whose link matches current should be marked"
+    assert result["unrelated"] is None, "an element outside the tree must not be marked"
+    assert result["cleared"] is None, "removing current should clear aria-current"
     return
 
 

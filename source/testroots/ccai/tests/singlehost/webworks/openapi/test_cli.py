@@ -12,7 +12,9 @@
 import argparse
 import io
 import json
+import os
 import sys
+import tempfile
 
 from ccai.testbase.mocking import Mock
 
@@ -280,25 +282,97 @@ def test_generate_no_generator_returns_error():
     return
 
 
-def test_generate_file_output_calls_export():
+def test_generate_file_output_writes_the_specification():
     """
-        Verify that the generate command calls export when output is a file path.
+        Verify that the generate command writes the specification to the
+        file named by --output.
+    """
+    spec = {
+        "openapi": "3.0.3",
+        "info": {"title": "Test API", "version": "1.0.0"},
+        "paths": {"/users": {"get": {"operationId": "list_users", "responses": {}}}},
+    }
+    mock_gen = _create_mock_generator(spec=spec)
+    config = {"openapi_generator": mock_gen}
+
+    cmd = GenerateCommand()
+
+    with tempfile.TemporaryDirectory() as output_dir:
+        output_path = os.path.join(output_dir, "spec.json")
+        args = _parse_args(cmd, ["--output", output_path, "--format", "json"])
+
+        exit_code, _ = _capture_stdout(cmd.execute, args, config)
+
+        if exit_code != 0:
+            raise AssertionError(f"Expected exit code 0, got {exit_code}")
+
+        with open(output_path, "r", encoding="utf-8") as output_file:
+            written = json.load(output_file)
+
+    if written != spec:
+        raise AssertionError(f"Expected the specification to be written, got {written}")
+
+    return
+
+
+def test_generate_file_output_applies_tag_and_path_filters():
+    """
+        Verify that --tags and --paths filter the specification written to a
+        file, exactly as they filter the one printed to stdout.
+    """
+    spec = {
+        "openapi": "3.0.3",
+        "info": {"title": "Test API", "version": "1.0.0"},
+        "paths": {
+            "/users": {"get": {"operationId": "list_users", "tags": ["users"], "responses": {}}},
+            "/users/admins": {"get": {"operationId": "list_admins", "tags": ["admin"], "responses": {}}},
+            "/orders": {"get": {"operationId": "list_orders", "tags": ["users"], "responses": {}}},
+        },
+    }
+    mock_gen = _create_mock_generator(spec=spec)
+    config = {"openapi_generator": mock_gen}
+
+    cmd = GenerateCommand()
+
+    with tempfile.TemporaryDirectory() as output_dir:
+        output_path = os.path.join(output_dir, "filtered.json")
+        args = _parse_args(cmd, ["--output", output_path, "--tags", "users", "--paths", "/users"])
+
+        exit_code, _ = _capture_stdout(cmd.execute, args, config)
+
+        if exit_code != 0:
+            raise AssertionError(f"Expected exit code 0, got {exit_code}")
+
+        with open(output_path, "r", encoding="utf-8") as output_file:
+            written = json.load(output_file)
+
+    if list(written["paths"].keys()) != ["/users"]:
+        raise AssertionError(f"Expected only '/users' in the written file, got {list(written['paths'].keys())}")
+
+    return
+
+
+def test_generate_file_output_reports_an_unwritable_path():
+    """
+        Verify that a file that cannot be written is reported as an error
+        with exit code 1.
     """
     mock_gen = _create_mock_generator()
     config = {"openapi_generator": mock_gen}
 
     cmd = GenerateCommand()
-    args = _parse_args(cmd, ["--output", "/tmp/spec.json", "--format", "json"])
 
-    exit_code, _ = _capture_stdout(cmd.execute, args, config)
+    with tempfile.TemporaryDirectory() as output_dir:
+        output_path = os.path.join(output_dir, "missing-directory", "spec.json")
+        args = _parse_args(cmd, ["--output", output_path])
 
-    if exit_code != 0:
-        raise AssertionError(f"Expected exit code 0, got {exit_code}")
+        exit_code, error_output = _capture_stderr(cmd.execute, args, config)
 
-    ctx = mock_gen.mock_context()
-    ctx.mock_method("export")
-    # The export method was called - if it wasn't, the mock would not have been invoked
-    # We verify by checking the exit code is 0 (success)
+    if exit_code != 1:
+        raise AssertionError(f"Expected exit code 1, got {exit_code}")
+
+    if "Error" not in error_output:
+        raise AssertionError(f"Expected an error message, got: {error_output}")
 
     return
 
@@ -674,5 +748,76 @@ def test_generate_stdout_json_is_parseable():
 
     if parsed["info"]["version"] != "2.0.0":
         raise AssertionError(f"Expected version '2.0.0', got '{parsed['info']['version']}'")
+
+    return
+
+
+# =============================================================================
+# ValidateCommand with a generator that raises on errors
+# =============================================================================
+
+def test_validate_prints_the_issues_of_a_specification_validation_error():
+    """
+        Verify that when the generator's validate() raises
+        SpecificationValidationError -- which the real generator does for
+        any error -- the command prints the issues and returns 1 instead of
+        letting the exception escape.
+    """
+    from ccai.webworks.openapi.validation import SpecificationValidationError
+
+    issues = [
+        ValidationIssue(path="paths./a.get.operationId", message="operationId 'x' is already used", severity="error"),
+        ValidationIssue(path="info.title", message="Missing required field", severity="error"),
+    ]
+
+    def raise_validation_error(strict=False):
+        raise SpecificationValidationError(issues)
+
+    mock_gen = _create_mock_generator()
+    mock_gen.mock_context().mock_method("validate", side_effect=raise_validation_error)
+    config = {"openapi_generator": mock_gen}
+
+    cmd = ValidateCommand()
+    args = _parse_args(cmd, [])
+
+    exit_code, output = _capture_stdout(cmd.execute, args, config)
+
+    if exit_code != 1:
+        raise AssertionError(f"Expected exit code 1, got {exit_code}")
+
+    if "2 issue" not in output or "operationId 'x' is already used" not in output:
+        raise AssertionError(f"Expected both issues to be printed, got: {output}")
+
+    return
+
+
+def test_validate_strict_passes_for_a_documented_specification():
+    """
+        Verify that --strict can pass with the real generator: the built-in
+        error schemas carry examples, so a specification whose operations
+        are described and whose own schemas have examples is valid.
+    """
+    from ccai.webworks.endpoints.doc import Doc
+    from ccai.webworks.endpoints.registry import EndpointRegistry
+    from ccai.webworks.endpoints.restendpoint import RestEndpoint
+    from ccai.webworks.openapi.configuration import OpenAPIInfo
+    from ccai.webworks.openapi.generator import OpenAPIGenerator
+
+    @RestEndpoint.attach_at(leaf="ping", methods=["GET"], doc=Doc(summary="Ping", description="Answers pong."))
+    def ping(request):
+        return {"pong": True}
+
+    registry = EndpointRegistry()
+    registry.collect_from(ping)
+    generator = OpenAPIGenerator(registry=registry, info=OpenAPIInfo(title="Strict API", version="1.0.0"))
+    config = {"openapi_generator": generator}
+
+    cmd = ValidateCommand()
+    args = _parse_args(cmd, ["--strict"])
+
+    exit_code, output = _capture_stdout(cmd.execute, args, config)
+
+    if exit_code != 0:
+        raise AssertionError(f"Expected exit code 0 in strict mode, got {exit_code}: {output}")
 
     return

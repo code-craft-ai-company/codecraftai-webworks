@@ -90,8 +90,8 @@ class AuthorizationEngine:
 
         1. Run pre-hooks
         2. Check custom rules (if any return a result, use it)
-        3. Check require_auth
-        4. Check roles (OR logic)
+        3. Check require_auth (an expired context is not authenticated)
+        4. Check roles (OR logic within each role group of the policy)
         5. Check scopes (AND logic)
         6. Run post-hooks
         7. Return AuthorizationResult
@@ -156,10 +156,15 @@ class AuthorizationEngine:
                     hook(policy, context, result)
                 return result
 
-        # Step 4: Check roles (OR logic)
-        policy_roles = policy.roles
-        if len(policy_roles) > 0:
-            has_role = self.check_roles(policy_roles, context)
+        # Step 4: Check roles (OR logic within a group; a merged policy
+        # has one group per merged policy and every group must be met).
+        # The roles and scopes of a context that is not authenticated --
+        # a guest or an expired context -- grant nothing.
+        is_usable_context = context.is_authenticated is True
+
+        policy_role_groups = policy.role_groups
+        if len(policy_role_groups) > 0:
+            has_role = is_usable_context and policy.has_required_roles(context.roles)
             if has_role is not True:
                 result = AuthorizationResult(
                     allowed=False,
@@ -175,7 +180,7 @@ class AuthorizationEngine:
         # Step 5: Check scopes (AND logic)
         policy_scopes = policy.scopes
         if len(policy_scopes) > 0:
-            has_scopes = self.check_scopes(policy_scopes, context)
+            has_scopes = is_usable_context and self.check_scopes(policy_scopes, context)
             if has_scopes is not True:
                 result = AuthorizationResult(
                     allowed=False,

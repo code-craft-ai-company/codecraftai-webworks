@@ -407,3 +407,279 @@ def test_restblueprint_schema_inspection():
     assert len(descriptors) == 1
     assert "rest" in descriptors[0].extras
     assert "response_schema" in descriptors[0].extras["rest"]
+
+
+# =============================================================================
+# Policy composition, absolute routes and class-body handlers
+# =============================================================================
+
+def test_child_access_policy_merges_with_blueprint_policy():
+    """A per-handler access policy adds to the blueprint's policy; it does not replace it."""
+
+    class AdminBlueprint(RestBlueprint):
+        base_path = "/admin"
+        access_policy = AccessPolicy(roles=["admin"])
+
+    @AdminBlueprint.attach_at(leaf="reports", methods=["GET"], access_policy=AccessPolicy(scopes=["reports:read"]))
+    def reports(request):
+        return {}
+
+    policy = AdminBlueprint.register()[0].constraints.access_policy
+
+    assert "admin" in policy.roles, f"blueprint role lost: {policy.roles}"
+    assert "reports:read" in policy.scopes, f"handler scope lost: {policy.scopes}"
+
+
+def test_child_without_policy_inherits_blueprint_policy():
+    """A handler that gives no access policy takes the blueprint's unchanged."""
+
+    class AdminBlueprint(RestBlueprint):
+        base_path = "/admin"
+        access_policy = AccessPolicy(roles=["admin"])
+
+    @AdminBlueprint.attach_at(leaf="status", methods=["GET"])
+    def status(request):
+        return {}
+
+    policy = AdminBlueprint.register()[0].constraints.access_policy
+
+    assert tuple(policy.roles) == ("admin",)
+
+
+def test_child_rate_limit_cannot_loosen_blueprint_rate_limit():
+    """The most restrictive of the blueprint's and the handler's rate limits applies."""
+
+    class LimitedBlueprint(RestBlueprint):
+        base_path = "/limited"
+        rate_limit = RateLimit(requests=5, window=60)
+
+    @LimitedBlueprint.attach_at(leaf="burst", methods=["GET"], rate_limit=RateLimit(requests=500, window=60))
+    def burst(request):
+        return {}
+
+    rate_limit = LimitedBlueprint.register()[0].constraints.rate_limit
+
+    assert rate_limit.requests == 5, f"expected the blueprint's stricter limit, got {rate_limit.requests}"
+
+
+def test_handler_in_class_body_takes_the_subclass_policy():
+    """A handler written in the blueprint's own body carries that blueprint's access policy."""
+
+    class SecuredBlueprint(RestBlueprint):
+        base_path = "/secured"
+        access_policy = AccessPolicy(roles=["admin"])
+
+        @staticmethod
+        @RestBlueprint.attach_at(leaf="thing", methods=["GET"])
+        def thing(request):
+            return {}
+
+    descriptor = SecuredBlueprint.register()[0]
+    policy = descriptor.constraints.access_policy
+
+    assert policy is not None, "the subclass's access policy was not applied"
+    assert "admin" in policy.roles
+    assert list(descriptor.constraints.roles) == ["admin"]
+
+
+def test_register_returns_absolute_routes():
+    """A handler declared absolute=True is returned by register() although it sits outside the base path."""
+
+    class ApiBlueprint(RestBlueprint):
+        base_path = "/api"
+
+    @ApiBlueprint.attach_at(path="/health", methods=["GET"], absolute=True)
+    def health(request):
+        return {}
+
+    paths = [descriptor.path for descriptor in ApiBlueprint.register()]
+
+    assert paths == ["/health"], f"expected ['/health'], got {paths}"
+
+
+def test_register_returns_handlers_from_other_modules_when_blueprint_has_no_base():
+    """A blueprint with no base path returns every handler declared through it, whatever module defines it."""
+
+    class LooseBlueprint(RestBlueprint):
+        pass
+
+    def elsewhere(request):
+        return {}
+
+    elsewhere.__module__ = "some.other.module"
+    LooseBlueprint.attach_at(leaf="elsewhere", methods=["GET"])(elsewhere)
+
+    paths = [descriptor.path for descriptor in LooseBlueprint.register()]
+
+    assert paths == ["/elsewhere"], f"expected ['/elsewhere'], got {paths}"
+
+
+def test_absolute_without_path_is_rejected():
+    """absolute=True needs the path it should use; a leaf alone is refused."""
+    from ccai.webworks.endpoints.exceptions import EndpointRegistrationError
+
+    class ApiBlueprint(RestBlueprint):
+        base_path = "/api"
+
+    try:
+        ApiBlueprint.attach_at(leaf="health", absolute=True)
+    except EndpointRegistrationError:
+        pass
+    else:
+        raise AssertionError("expected EndpointRegistrationError for absolute=True without a path")
+
+
+def test_instance_method_handler_is_bound_when_registered():
+    """A handler declared ``def thing(self, request)`` in a blueprint body answers a request."""
+    import json
+
+    from ccai.webworks.routing.dispatcher import Dispatcher
+    from ccai.webworks.routing.request import Request
+    from ccai.webworks.routing.router import Router
+
+    class InnerBlueprint(RestBlueprint):
+        base_path = "/inner"
+        greeting = "hello"
+
+        @RestBlueprint.attach_at(leaf="thing", methods=["GET"])
+        def thing(self, request):
+            return {"greeting": self.greeting, "path": request.path}
+
+    router = Router()
+    InnerBlueprint.register(router)
+
+    response = Dispatcher(router).dispatch(Request("GET", "/inner/thing"))
+
+    assert response.status_code == 200, f"expected 200, got {response.status_code}: {response.body!r}"
+    assert json.loads(response.body) == {"greeting": "hello", "path": "/inner/thing"}
+
+
+def test_classmethod_handler_is_bound_to_the_class_when_registered():
+    """A handler declared as a classmethod in a blueprint body is called with the class."""
+
+    class CountingBlueprint(RestBlueprint):
+        base_path = "/counting"
+        label = "counted"
+
+        @classmethod
+        @RestBlueprint.attach_at(leaf="label", methods=["GET"])
+        def read_label(cls, request):
+            return {"label": cls.label}
+
+    descriptor = CountingBlueprint.register()[0]
+
+    assert descriptor.handler(None) == {"label": "counted"}
+
+
+def test_register_returns_the_same_bound_descriptor_each_call():
+    """Binding a class-body handler does not make register() hand out a new descriptor per call."""
+
+    class StableBlueprint(RestBlueprint):
+        base_path = "/stable"
+
+        @RestBlueprint.attach_at(leaf="thing", methods=["GET"])
+        def thing(self, request):
+            return {}
+
+    first = StableBlueprint.register()
+    second = StableBlueprint.register()
+
+    assert len(first) == 1
+    assert first[0] is second[0]
+
+
+def test_static_handler_in_class_body_is_left_unbound():
+    """A @staticmethod handler is registered as the function it is."""
+
+    class StaticBlueprint(RestBlueprint):
+        base_path = "/static"
+
+        @staticmethod
+        @RestBlueprint.attach_at(leaf="thing", methods=["GET"])
+        def thing(request):
+            return {"ok": True}
+
+    descriptor = StaticBlueprint.register()[0]
+
+    assert descriptor.handler is StaticBlueprint.__dict__["thing"].__func__
+
+
+def test_instance_method_handler_on_unconstructible_blueprint_is_reported():
+    """A blueprint that cannot be built without arguments reports that when its instance methods are bound."""
+    from ccai.webworks.endpoints.exceptions import EndpointRegistrationError
+
+    class NeedsArgumentBlueprint(RestBlueprint):
+        base_path = "/needs"
+
+        def __init__(self, required):
+            self.required = required
+
+        @RestBlueprint.attach_at(leaf="thing", methods=["GET"])
+        def thing(self, request):
+            return {}
+
+    try:
+        NeedsArgumentBlueprint.register()
+    except EndpointRegistrationError as err:
+        assert "NeedsArgumentBlueprint" in str(err)
+    else:
+        raise AssertionError("expected EndpointRegistrationError")
+
+
+def test_restblueprint_records_its_name_on_routes():
+    """A RestBlueprint route names the blueprint in its extras, also when declared in the class body."""
+
+    class NamedRestBlueprint(RestBlueprint):
+        base_path = "/named-rest"
+
+        @RestBlueprint.attach_at(leaf="items", methods=["GET"])
+        def list_items(self, request):
+            return {}
+
+    @NamedRestBlueprint.attach_at(leaf="other", methods=["GET"])
+    def other(request):
+        return {}
+
+    names = sorted(descriptor.extras.get("blueprint") for descriptor in NamedRestBlueprint.register())
+
+    assert names == ["NamedRestBlueprint", "NamedRestBlueprint"], names
+
+
+# =============================================================================
+# rest_processing on RestBlueprint.attach_at
+# =============================================================================
+
+from ccai.webworks.endpoints.descriptor import REST_MANAGED_EXTRA, REST_PROCESSING_EXTRA
+
+
+@dataclass
+class _BlueprintProcessingIn:
+    """Request schema of the rest_processing tests."""
+    name: str
+
+
+def test_restblueprint_attach_at_records_rest_processing():
+    """
+        Test that RestBlueprint routes record REST processing, and the opt-out.
+    """
+    class _ProcessingBlueprint(RestBlueprint):
+        base_path = "/rp/restbp"
+
+    @_ProcessingBlueprint.attach_at(leaf="managed", methods=["POST"], request_schema=_BlueprintProcessingIn)
+    def managed(request):
+        return None
+
+    @_ProcessingBlueprint.attach_at(leaf="raw", methods=["POST"], request_schema=_BlueprintProcessingIn, rest_processing=False)
+    def raw(request):
+        return None
+
+    managed_descriptor = _ProcessingBlueprint._find_descriptors_for_handler(managed)[0]
+    raw_descriptor = _ProcessingBlueprint._find_descriptors_for_handler(raw)[0]
+
+    if managed_descriptor.extras["rest"].get(REST_MANAGED_EXTRA) is not True:
+        raise AssertionError(f"Expected a REST managed route, got {managed_descriptor.extras['rest']}")
+
+    if raw_descriptor.extras["rest"].get(REST_PROCESSING_EXTRA) is not False:
+        raise AssertionError(f"Expected the opt-out, got {raw_descriptor.extras['rest']}")
+
+    return

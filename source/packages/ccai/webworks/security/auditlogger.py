@@ -21,15 +21,30 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
+import collections
 import json
+import logging
+import queue
+import threading
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 from ccai.webworks.security.accesspolicy import AccessPolicy
 from ccai.webworks.security.securitycontext import SecurityContext
+
+
+# Module-level logger. A destination that fails must not fail the request
+# being audited, so its error is reported here instead of being raised.
+logger = logging.getLogger(__name__)
+
+
+#: Number of entries the logger keeps in memory for :meth:`AuditLogger.query`
+#: when no other limit is given. Older entries are dropped from memory; they
+#: remain in the destinations they were written to.
+DEFAULT_MAX_ENTRIES: int = 10000
 
 
 class AuditLevel(Enum):
@@ -147,6 +162,55 @@ class AuditDestination:
 
 
 
+class FileAuditDestination:
+    """
+        Audit destination that appends each entry to a file as one line of
+        JSON.
+
+        :param file_path: Path of the audit log file. It is created when
+            the first entry is written; its directory must exist.
+    """
+
+    def __init__(self, file_path: str):
+        self._file_path = file_path
+        self._lock = threading.Lock()
+        return
+
+    @property
+    def file_path(self) -> str:
+        """
+            Get the path of the audit log file.
+
+            :returns: The file path.
+        """
+        rtnval = self._file_path
+        return rtnval
+
+    def write(self, entry: AuditEntry) -> None:
+        """
+            Append an audit entry to the file.
+
+            :param entry: The audit entry to write.
+        """
+        line = entry.to_json()
+
+        with self._lock:
+            with open(self._file_path, "a", encoding="utf-8") as log_file:
+                log_file.write(line)
+                log_file.write("\n")
+
+        return
+
+    async def write_async(self, entry: AuditEntry) -> None:
+        """
+            Asynchronously append an audit entry to the file.
+
+            :param entry: The audit entry to write.
+        """
+        self.write(entry)
+        return
+
+
 class AuditLogger:
     """
         Logs security events for compliance and forensics.
@@ -158,20 +222,57 @@ class AuditLogger:
         entries.
 
         Entries are stored internally for query support and dispatched to all
-        registered destinations.
+        registered destinations. The internal store is bounded: it keeps
+        the most recent ``max_entries`` entries and, when ``retention`` is
+        set, drops entries older than that. A long-running process
+        therefore does not grow with every request; the destinations are
+        the durable record.
+
+        A destination that raises does not fail the request being audited:
+        the error is logged and the remaining destinations are still
+        written. With ``background=True`` destinations are written by a
+        worker thread, so a slow sink does not delay the request either;
+        call :meth:`flush` to wait for pending entries and :meth:`close`
+        when the logger is no longer needed.
 
         :param level: The audit level controlling which events are recorded.
         :param destinations: Optional list of AuditDestination instances.
+        :param max_entries: Largest number of entries kept in memory for
+            :meth:`query`. ``None`` removes the limit.
+        :param retention: How long an entry is kept in memory. ``None``
+            keeps entries until ``max_entries`` displaces them.
+        :param background: If True, destinations are written by a
+            background worker thread instead of the calling thread.
     """
 
     def __init__(
         self,
         level: AuditLevel = AuditLevel.ALL,
-        destinations: Optional[List[AuditDestination]] = None
+        destinations: Optional[List[AuditDestination]] = None,
+        max_entries: Optional[int] = DEFAULT_MAX_ENTRIES,
+        retention: Optional[timedelta] = None,
+        background: bool = False
     ):
         self._level = level
         self._destinations: List[AuditDestination] = destinations if destinations is not None else []
-        self._entries: List[AuditEntry] = []
+        self._max_entries = max_entries
+        self._retention = retention
+        self._entries: Deque[AuditEntry] = collections.deque(maxlen=max_entries)
+        self._entries_lock = threading.Lock()
+
+        self._background = background
+        self._pending: Optional["queue.Queue[Optional[AuditEntry]]"] = None
+        self._worker: Optional[threading.Thread] = None
+
+        if background is True:
+            self._pending = queue.Queue()
+            self._worker = threading.Thread(
+                target=self._write_pending_entries,
+                name="webworks-audit-logger",
+                daemon=True
+            )
+            self._worker.start()
+
         return
 
     def _should_log(self, outcome: str) -> bool:
@@ -200,10 +301,99 @@ class AuditLogger:
 
             :param entry: The audit entry to dispatch.
         """
-        self._entries.append(entry)
+        with self._entries_lock:
+            self._prune_expired_entries(entry.timestamp)
+            self._entries.append(entry)
 
-        for destination in self._destinations:
-            destination.write(entry)
+        if self._pending is not None:
+            self._pending.put(entry)
+        else:
+            self._write_to_destinations(entry)
+
+        return
+
+    def _prune_expired_entries(self, now: datetime) -> None:
+        """
+            Drop the entries that are older than the retention period.
+
+            Entries are stored in the order they were logged, so the
+            expired ones are at the front.
+
+            :param now: The current time.
+        """
+        if self._retention is not None:
+            oldest_kept = now - self._retention
+
+            while len(self._entries) > 0 and self._entries[0].timestamp < oldest_kept:
+                self._entries.popleft()
+
+        return
+
+    def _write_to_destinations(self, entry: AuditEntry) -> None:
+        """
+            Write an entry to every registered destination.
+
+            A destination that raises is reported and skipped; the others
+            are still written and the caller is not interrupted.
+
+            :param entry: The audit entry to write.
+        """
+        for destination in list(self._destinations):
+            try:
+                destination.write(entry)
+            except Exception:
+                logger.exception(
+                    "Audit destination %r failed to write a %s entry",
+                    destination, entry.event_type
+                )
+
+        return
+
+    def _write_pending_entries(self) -> None:
+        """
+            Body of the background worker: write queued entries to the
+            destinations until the logger is closed.
+        """
+        pending = self._pending
+
+        while True:
+            entry = pending.get()
+
+            try:
+                if entry is None:
+                    break
+                self._write_to_destinations(entry)
+            finally:
+                pending.task_done()
+
+        return
+
+    def flush(self) -> None:
+        """
+            Wait until every entry logged so far has been written to the
+            destinations. Returns at once when the logger writes on the
+            calling thread.
+        """
+        if self._pending is not None:
+            self._pending.join()
+
+        return
+
+    def close(self) -> None:
+        """
+            Write the pending entries and stop the background worker.
+            Entries logged afterwards are written on the calling thread.
+        """
+        if self._pending is not None:
+            pending = self._pending
+            worker = self._worker
+
+            self._pending = None
+            self._worker = None
+
+            pending.put(None)
+            if worker is not None:
+                worker.join()
 
         return
 
@@ -395,7 +585,11 @@ class AuditLogger:
         """
         results: List[AuditEntry] = []
 
-        for entry in self._entries:
+        with self._entries_lock:
+            self._prune_expired_entries(datetime.now(timezone.utc))
+            stored_entries = list(self._entries)
+
+        for entry in stored_entries:
             if start_time is not None:
                 if entry.timestamp < start_time:
                     continue

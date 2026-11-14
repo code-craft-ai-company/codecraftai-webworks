@@ -289,6 +289,18 @@ class RestBlueprint(RestEndpoint):
         pass
 ```
 
+### REST processing keyword
+
+Every `attach_at` (and the `RestEndpoint` CRUD helpers) takes
+`rest_processing: Optional[bool] = None`; None means the class attribute
+`rest_processing` (`Endpoint.rest_processing = True`;
+`SecurityBlueprint.rest_processing = False`). When the handler declares REST
+metadata, `record_rest_processing` writes `extras["rest"]["managed"] = True`
+(the route is served through the REST request/response processing, see the
+rest-api-support spec, requirement 13) or `extras["rest"]["processing"] =
+False` (opted out: the schemas only document the route). The keyword is
+never stored among the free-form `**extras`.
+
 ### EndpointDescriptor Dataclass
 
 ```python

@@ -1228,3 +1228,226 @@ def test_property_middleware_positioning_end():
             raise AssertionError(errmsg)
     
     return
+
+
+# ============================================================================
+# Asynchronous execution
+# ============================================================================
+
+import asyncio
+import threading
+
+from ccai.webworks.routing.response import Response as RoutingResponse
+
+
+def _run_async_pipeline(pipeline, request, body=b"handler"):
+    """
+        Run a pipeline with execute_async around a handler that returns a
+        fixed response.
+    """
+    async def handler(req):
+        return RoutingResponse(status_code=200, body=body)
+
+    return asyncio.run(pipeline.execute_async(request, handler))
+
+
+def test_execute_async_runs_sync_middleware_that_calls_call_next():
+    """
+        A synchronous middleware that calls call_next works in the async
+        pipeline and receives the downstream response.
+    """
+    seen = []
+
+    def sync_middleware(request, call_next):
+        response = call_next(request)
+        seen.append(response.status_code)
+        response.set_header("X-Sync", "yes")
+        return response
+
+    pipeline = MiddlewarePipeline()
+    pipeline.add(sync_middleware)
+
+    response = _run_async_pipeline(pipeline, Request(method="GET", path="/"))
+
+    assert seen == [200], f"Expected the middleware to see the response, got {seen}"
+    assert response.headers.get("X-Sync") == "yes", f"Unexpected headers {response.headers}"
+    return
+
+
+def test_execute_async_runs_sync_middleware_off_the_event_loop():
+    """
+        A synchronous middleware runs on its own thread, not on the event loop.
+    """
+    threads = {}
+
+    def sync_middleware(request, call_next):
+        threads["middleware"] = threading.get_ident()
+        return call_next(request)
+
+    pipeline = MiddlewarePipeline()
+    pipeline.add(sync_middleware)
+
+    async def run():
+        threads["loop"] = threading.get_ident()
+
+        async def handler(req):
+            return RoutingResponse(status_code=200)
+
+        return await pipeline.execute_async(Request(method="GET", path="/"), handler)
+
+    asyncio.run(run())
+
+    assert threads["middleware"] != threads["loop"], "The sync middleware ran on the event loop thread"
+    return
+
+
+def test_execute_async_propagates_exception_from_sync_middleware():
+    """
+        An exception raised by a synchronous middleware reaches the caller.
+    """
+    def failing_middleware(request, call_next):
+        raise ValueError("boom")
+
+    pipeline = MiddlewarePipeline()
+    pipeline.add(failing_middleware)
+
+    raised = False
+    try:
+        _run_async_pipeline(pipeline, Request(method="GET", path="/"))
+    except ValueError:
+        raised = True
+
+    assert raised, "Expected the middleware's exception to propagate"
+    return
+
+
+def test_execute_async_awaits_class_based_async_middleware():
+    """
+        An object whose __call__ is a coroutine function is awaited and its
+        body runs.
+    """
+    class AsyncStamp:
+        name = "async_stamp"
+
+        async def __call__(self, request, call_next):
+            response = await call_next(request)
+            response.set_header("X-Async", "yes")
+            return response
+
+    pipeline = MiddlewarePipeline()
+    pipeline.add(AsyncStamp())
+
+    response = _run_async_pipeline(pipeline, Request(method="GET", path="/"))
+
+    assert isinstance(response, RoutingResponse), f"Expected a Response, got {type(response).__name__}"
+    assert response.headers.get("X-Async") == "yes", f"Unexpected headers {response.headers}"
+    return
+
+
+def test_execute_async_prefers_call_async_of_dual_middleware():
+    """
+        A middleware offering call_async next to a synchronous __call__ is
+        run through call_async in the async pipeline.
+    """
+    used = []
+
+    class Dual:
+        name = "dual"
+
+        def __call__(self, request, call_next):
+            used.append("sync")
+            return call_next(request)
+
+        async def call_async(self, request, call_next):
+            used.append("async")
+            return await call_next(request)
+
+    pipeline = MiddlewarePipeline()
+    pipeline.add(Dual())
+
+    _run_async_pipeline(pipeline, Request(method="GET", path="/"))
+
+    assert used == ["async"], f"Expected call_async to be used, got {used}"
+    return
+
+
+def test_execute_async_keeps_order_of_mixed_middleware():
+    """
+        Sync and async middleware in one pipeline run in pipeline order.
+    """
+    order = []
+
+    def sync_first(request, call_next):
+        order.append("sync-before")
+        response = call_next(request)
+        order.append("sync-after")
+        return response
+
+    async def async_second(request, call_next):
+        order.append("async-before")
+        response = await call_next(request)
+        order.append("async-after")
+        return response
+
+    pipeline = MiddlewarePipeline()
+    pipeline.add(sync_first)
+    pipeline.add(async_second)
+
+    _run_async_pipeline(pipeline, Request(method="GET", path="/"))
+
+    assert order == ["sync-before", "async-before", "async-after", "sync-after"], f"Unexpected order {order}"
+    return
+
+
+# ============================================================================
+# from_config and extend
+# ============================================================================
+
+def test_from_config_raises_for_name_without_factory():
+    """
+        A configured middleware name that has no factory is an error, not a
+        silent pass-through.
+    """
+    raised = False
+    try:
+        MiddlewarePipeline.from_config([{"name": "authentication"}], factory_registry={})
+    except ValueError:
+        raised = True
+
+    assert raised, "Expected ValueError for an unknown middleware name"
+    return
+
+
+def test_from_config_allows_placeholders_only_on_request():
+    """
+        With allow_placeholders=True an unknown name becomes a pass-through
+        placeholder carrying that name.
+    """
+    pipeline = MiddlewarePipeline.from_config(
+        [{"name": "authentication"}], factory_registry={}, allow_placeholders=True
+    )
+
+    assert pipeline.get_names() == ["authentication"], f"Unexpected names {pipeline.get_names()}"
+    return
+
+
+def test_extend_appends_entries_without_reordering_by_priority():
+    """
+        extend keeps the order of the entries it is given, whatever their priority.
+    """
+    def first(request, call_next):
+        return call_next(request)
+
+    def second(request, call_next):
+        return call_next(request)
+
+    entries = [
+        MiddlewareEntry(first, name="first", priority=90),
+        MiddlewareEntry(second, name="second", priority=1),
+    ]
+
+    pipeline = MiddlewarePipeline()
+    pipeline.extend(entries)
+
+    assert pipeline.get_names() == ["first", "second"], f"Unexpected names {pipeline.get_names()}"
+    return

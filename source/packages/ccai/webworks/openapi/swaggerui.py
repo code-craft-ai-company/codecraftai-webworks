@@ -27,6 +27,7 @@ from ccai.webworks.endpoints.descriptor import EndpointDescriptor
 from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.restblueprint import RestBlueprint, Router
 from ccai.webworks.openapi.assets import AssetResolver
+from ccai.webworks.routing.response import Response
 
 if TYPE_CHECKING:
     from ccai.webworks.openapi.generator import OpenAPIGenerator
@@ -123,7 +124,63 @@ class SwaggerUIBlueprint(RestBlueprint):
         self.swagger_config = swagger_config
         self._asset_resolver = AssetResolver()
 
+        # A configured blueprint is registered through the instance:
+        # ``blueprint.register(router)``. The class-level ``register`` cannot
+        # know which instance to serve, so on an instance the name refers to
+        # :meth:`register_instance`. That is also what lets an application
+        # hand the instance to ``attach_blueprint_to_route``.
+        self.register = self.register_instance
+
         return
+
+    def register_instance(self, router: Optional[Router] = None) -> List[EndpointDescriptor]:
+        """
+            Register this blueprint's routes -- the UI page, the OpenAPI
+            specification and the static assets -- and return their
+            descriptors.
+
+            :param router: Optional router to add the routes to.
+
+            :returns: A list of EndpointDescriptor objects for the routes.
+        """
+        descriptors = type(self).register(router=router, instance=self)
+        return descriptors
+
+    def handle_ui(self, request: Any = None) -> Response:
+        """
+            Route handler for the Swagger UI page.
+
+            :param request: The incoming request (not used).
+
+            :returns: The HTML page as a response.
+        """
+        response = make_asset_response(self.serve_ui())
+        return response
+
+    def handle_spec(self, request: Any = None) -> Response:
+        """
+            Route handler for the OpenAPI specification.
+
+            :param request: The incoming request (not used).
+
+            :returns: The specification JSON as a response.
+        """
+        response = make_asset_response(self.serve_spec())
+        return response
+
+    def handle_static(self, request: Any) -> Response:
+        """
+            Route handler for the bundled static assets. The file name is
+            the ``filename`` path parameter of the request.
+
+            :param request: The incoming request.
+
+            :returns: The asset as a response, or a 404 response when the
+                name is not one of the bundled files.
+        """
+        filename = get_requested_filename(request)
+        response = make_asset_response(self.serve_static(filename))
+        return response
 
     def serve_ui(self) -> Tuple[str, int, Dict[str, str]]:
         """
@@ -233,13 +290,15 @@ class SwaggerUIBlueprint(RestBlueprint):
             Builds EndpointDescriptor objects for the Swagger UI page,
             the OpenAPI specification JSON endpoint, and the static asset
             serving endpoint.  These descriptors can be used for router
-            registration.
+            registration: their handlers take the request and return a
+            response, and the asset route takes the file name as the
+            ``{filename}`` path parameter.
 
             :returns: A list of EndpointDescriptor objects for the UI,
                 spec, and static asset routes.
         """
         ui_descriptor = EndpointDescriptor(
-            handler=self.serve_ui,
+            handler=self.handle_ui,
             module=self.__class__.__module__,
             path=self.ui_path,
             methods=["GET"],
@@ -251,7 +310,7 @@ class SwaggerUIBlueprint(RestBlueprint):
         )
 
         spec_descriptor = EndpointDescriptor(
-            handler=self.serve_spec,
+            handler=self.handle_spec,
             module=self.__class__.__module__,
             path=self.spec_path,
             methods=["GET"],
@@ -263,9 +322,9 @@ class SwaggerUIBlueprint(RestBlueprint):
         )
 
         static_descriptor = EndpointDescriptor(
-            handler=self.serve_static,
+            handler=self.handle_static,
             module=self.__class__.__module__,
-            path=self.static_path + "/<filename>",
+            path=self.static_path + "/{filename}",
             methods=["GET"],
             tags=["documentation"],
             doc=Doc(
@@ -308,6 +367,54 @@ class SwaggerUIBlueprint(RestBlueprint):
                 router.add_endpoint(descriptor)
 
         return descriptors
+
+
+def make_asset_response(served: Tuple[Any, int, Dict[str, str]]) -> Response:
+    """
+        Turn the ``(content, status code, headers)`` tuple a documentation
+        blueprint's ``serve_*`` method returns into the response a route
+        handler returns.
+
+        :param served: The tuple returned by a ``serve_*`` method. The
+                       content may be text or bytes.
+
+        :returns: The response to send.
+    """
+    content, status_code, headers = served
+
+    if isinstance(content, str):
+        body = content.encode("utf-8")
+        response_headers = dict(headers)
+        content_type = response_headers.get("Content-Type", "text/plain")
+        if "charset=" not in content_type.lower():
+            response_headers["Content-Type"] = f"{content_type}; charset=utf-8"
+    else:
+        body = content
+        response_headers = dict(headers)
+
+    rtnval = Response(status_code=status_code, headers=response_headers, body=body)
+    return rtnval
+
+
+def get_requested_filename(request: Any) -> str:
+    """
+        The ``filename`` path parameter of a request for a static asset.
+
+        :param request: The incoming request.
+
+        :returns: The requested file name, or an empty string when the
+                  request carries none (which no asset matches).
+    """
+    path_params = getattr(request, "path_params", None)
+
+    filename = None
+    if path_params is not None:
+        filename = path_params.get("filename")
+
+    if not isinstance(filename, str):
+        filename = ""
+
+    return filename
 
 
 @dataclass(frozen=True)

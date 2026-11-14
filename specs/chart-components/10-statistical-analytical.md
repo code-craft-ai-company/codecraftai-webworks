@@ -16,8 +16,8 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 
 ### Box plot  *(box-and-whisker plot)*
 
-- **Renderer / `type`:** `box` — **Primary renderer**
-- **Controller:** `<mj-chart type="box" ...>`
+- **Renderer / `type`:** `boxplot` — **Primary renderer**
+- **Controller:** `<mj-chart type="boxplot" ...>`
 - **Purpose:** Display five-number summary statistics (min, Q1, median, Q3,
   max) with optional outliers for one or more groups; best for comparing
   distributions across categories at a glance.
@@ -57,6 +57,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   notch at the median for visual confidence-interval indication, rendered as a
   narrowed `<rect>` or `<path>` polygon. Grouped boxes — multiple series share
   a category axis position with a band-scale sub-group offset.
+- **Events:** `mj-chart-boxplot-click` `{ series, category, stats }` (each box; `stats` is `{ count, q1, median, q3, whiskerLow, whiskerHigh, outliers }`, plus `min`, `max`, `mean` when computed from samples).
 - **Phase:** P2
 - **Notes:** Also cross-listed in the Distribution category (03-distribution.md).
   Scales: `band` for category axis, `linear` for value axis. Whisker extent is
@@ -108,8 +109,9 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   (optional IQR box overlay), `<g>`, `<text>`
 - **Orientation:** `horizontal` | `vertical`
 - **Variants / modes:** Box-inside violin — `box-overlay="true"` superimposes
-  the IQR box (reuses `box` renderer primitives). Half-violin — `half="true"`
+  the IQR box (reuses `boxplot` renderer primitives). Half-violin — `half="true"`
   draws only one side of the mirrored path, useful for paired comparisons.
+- **Events:** `mj-chart-violin-click` `{ series, category, median, bandwidth }` (each violin).
 - **Phase:** P2
 - **Notes:** Also cross-listed in the Distribution category (03-distribution.md).
   The mirrored path is built by reflecting the density array across the group
@@ -160,19 +162,22 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Variants / modes:** Grouped error bars — multiple series share a category
   axis using band-scale offsets. The `bar` mode is a variant that pairs error
   bars with a bar chart background.
+- **Events:** `mj-chart-errorbar-click` `{ series, category, value, low, high }` (each estimate with its interval).
 - **Phase:** P3
-- **Notes:** Cap width is configurable via `cap-width` attribute (default 8 px).
-  Scales: `band` + `linear`. When used as an overlay on another chart (e.g. a
-  bar chart) the controller can accept a second dataset in `error_series` that
-  is drawn after the primary marks. Accessibility: tooltip and data-table expose
-  value, lower bound (`value − error_low`), and upper bound (`value + error_high`).
+- **Notes:** Cap width is configurable via `cap-width` attribute (px, default 8;
+  `0` draws no caps; never wider than the series' sub-band). `null-value`
+  (a number) draws a dashed reference line at that value and keeps it in the
+  value domain; on `errorbar` this reference line is drawn only when
+  `null-value` is given (without it, a plain solid zero line is drawn when 0
+  lies inside the domain). Scales: `band` + `linear`. Accessibility: tooltip and data-table expose value, lower bound
+  (`value − error_low`), and upper bound (`value + error_high`).
 
 ---
 
 ### Confidence interval plot  *(CI plot, estimate range plot)*
 
-- **Renderer / `type`:** `ci` — **Variant of `errorbar`**
-- **Controller:** `<mj-chart type="ci" ...>`
+- **Renderer / `type`:** `confidence-interval` — **Variant of `errorbar`**
+- **Controller:** `<mj-chart type="confidence-interval" ...>`
 - **Purpose:** Visualise point estimates with explicit lower and upper
   confidence-interval bounds across multiple parameters or time points; best
   for presenting regression coefficients, survey estimates, or model outputs.
@@ -199,26 +204,31 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   }
   ```
   Same statistical family shape as `errorbar`; `error_low` / `error_high` are
-  half-widths from the point estimate to each CI bound.
+  half-widths from the point estimate to each CI bound. A `bar` field is
+  ignored (intervals only).
 - **SVG primitives:** `<line>` (interval span), `<circle>` (point estimate),
-  `<line>` (optional end caps), `<line>` (optional reference line at 0 or 1),
-  `<g>`, `<text>`
-- **Orientation:** `horizontal` | `vertical` — horizontal layout (value on
-  x-axis, parameters on y-axis) is conventional for CI plots.
-- **Variants / modes:** None beyond the `errorbar` parent. A reference-line
-  annotation (zero-effect line) is added via `<mj-chart-annotation>`.
+  `<line>` (end caps, `cap-width`), `<line>` (dashed reference line at
+  `null-value`), `<g>`, `<text>`
+- **Orientation:** `horizontal` (registered default — value on x-axis,
+  parameters on y-axis, conventional for CI plots) | `vertical`.
+- **Variants / modes:** None beyond the `errorbar` parent. `null-value`
+  (number, default 0) places the reference line — e.g. `null-value="1"` for
+  ratios; `cap-width` as on `errorbar`.
+- **Events:** `mj-chart-errorbar-click` `{ series, category, value, low, high }` (each estimate with its interval).
 - **Phase:** P3
-- **Notes:** The `ci` type key selects the `errorbar` renderer with default
-  `orientation="horizontal"`, no centre bar, and a zero-reference annotation
-  automatically injected into the model. No separate renderer file; `ci.js`
-  re-exports `errorbar` renderer with a preset options object.
+- **Notes:** There is no `ci.js`: `errorbar.js` registers
+  `confidence-interval` beside `errorbar`, with `orientation="horizontal"` as
+  its default. It draws intervals only — a dot at each point estimate with its
+  whisker, never a bar — and a dashed reference line at `null-value`
+  (default 0) that is always drawn and always kept in the value domain. The
+  renderer draws the line itself; no `<mj-chart-annotation>` is needed.
 
 ---
 
 ### Control chart  *(Shewhart control chart, SPC chart)*
 
-- **Renderer / `type`:** `control` — **Primary renderer**
-- **Controller:** `<mj-chart type="control" ...>`
+- **Renderer / `type`:** `control-chart` — **Primary renderer** (`control.js`, shared with `run-chart`)
+- **Controller:** `<mj-chart type="control-chart" ...>`
 - **Purpose:** Monitor a process variable over time against statistical control
   limits (UCL / LCL / centre line); best for detecting out-of-control signals
   in manufacturing, operations, or quality contexts.
@@ -245,31 +255,43 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   }
   ```
   `control_limits` carries the pre-computed upper control limit (`ucl`), lower
-  control limit (`lcl`), and centre line (`cl`). Multiple limit sets (e.g. for
-  sigma levels) may be supplied as an array. Time points use ISO-8601 strings
-  or sequence integers.
-- **SVG primitives:** `<path>` (data series line), `<circle>` (sample points,
-  coloured red when out-of-control), `<line>` (UCL, LCL, CL reference lines),
-  `<rect>` (optional control-region band fill between UCL/LCL), `<g>`, `<text>`
+  control limit (`lcl`), and centre line (`cl`), plus an optional `label`. It
+  may also be an array of such sets (sigma zones); a set's `label` is appended
+  to its UCL / LCL / CL line labels. Each of `ucl`, `lcl`, `cl` is drawn only
+  when it is a number. Without `control_limits` the limits are computed (see
+  `limits="auto"`). `x` is a number (sequence, timestamp), a date
+  (`YYYY-MM-DD` is a local day; ISO date-times) or a category label — the
+  axis follows; a null or non-numeric `y` is a gap. Optional
+  `reference_lines: [{ label, value }]` adds dashed horizontal lines.
+- **SVG primitives:** `<path>` (data series line), `<circle>` (sample points),
+  `<polygon>` (red diamond for an out-of-control point), `<line>` (UCL / LCL
+  dashed, CL solid; reference lines), `<rect>` (band fill between a set's UCL
+  and LCL when both are given), `<g>`, `<text>` (limit labels right of the plot)
 - **Orientation:** `vertical` only (time on x-axis, value on y-axis); the
   horizontal mode is not meaningful for time-ordered process data.
-- **Variants / modes:** X-bar, R-chart, S-chart, p-chart, c-chart — all use
-  the same renderer; the chart sub-type is metadata that changes the y-axis
-  label and the out-of-control detection rules applied by the data layer before
-  the JSON is passed to the renderer.
+- **Variants / modes:** `limits="auto"` computes the limits from the first
+  series instead of using `control_limits`: CL = mean, UCL / LCL = CL ± 2.66 ×
+  average moving range (an individuals chart). A control chart whose data has
+  no `control_limits` gets these computed limits too. X-bar, R-chart, S-chart,
+  p-chart, c-chart — all use the same renderer with pre-computed
+  `control_limits`; there is no sub-type option.
+- **Events:** `mj-chart-point-click` `{ series, x, y, ooc, shift }` (each point; `ooc` is true for a point beyond the outermost limits or flagged `ooc` in the data; `shift` is always false on this type).
 - **Phase:** P3
-- **Notes:** Out-of-control points are flagged in the JSON by an optional
-  `"ooc": true` field on individual point objects; the renderer colours those
-  `<circle>` elements using the `--mj-color-danger` token. Western Electric
-  rules are the data layer's responsibility, not the renderer's. Scales:
-  `time` or `point` (x), `linear` (y).
+- **Notes:** A point is flagged out of control automatically when its `y`
+  lies beyond the outermost limits (the highest UCL or the lowest LCL of all
+  sets, computed or given), or when the data sets `"ooc": true` on it. Flagged
+  points are drawn as red diamonds (`--mj-color-danger`), say "out of
+  control" in their accessible name and table row, and add an "Out of control"
+  legend entry. Other run rules (Western Electric, Nelson) are not evaluated:
+  mark those points with `ooc: true`. Scales: `linear`, `time` or `point`
+  (x, from the x values), `linear` (y).
 
 ---
 
 ### Run chart  *(run sequence plot)*
 
-- **Renderer / `type`:** `run` — **Variant of `line`**
-- **Controller:** `<mj-chart type="run" ...>`
+- **Renderer / `type`:** `run-chart` — **Variant of `control-chart`** (registered by `control.js`)
+- **Controller:** `<mj-chart type="run-chart" ...>`
 - **Purpose:** Plot individual process observations in time order to reveal
   trends, cycles, and shifts before formal control limits are established;
   simpler and more honest than a control chart when limits cannot yet be
@@ -291,22 +313,30 @@ default axis labelling and tooltip behaviour, not a different drawing path.
       }
     ],
     "reference_lines": [
-      { "label": "Median", "value": 3.1 }
+      { "label": "Target", "value": 3.0 }
     ]
   }
   ```
-  Uses the XY `points` shape from plan §3.4. `reference_lines` is an optional
-  array of horizontal annotations passed through to `<mj-chart-annotation>`.
+  Uses the XY `points` shape from plan §3.4 (`x` and `y` read as on the
+  Control chart). `reference_lines` is an optional array of `{ label, value }`
+  horizontal lines drawn dashed by the renderer; the median needs no entry.
+  `control_limits` is ignored.
 - **SVG primitives:** `<path>` (connecting line), `<circle>` (individual
-  observations), `<line>` (median / reference lines), `<g>`, `<text>`
+  observations; rings for shift points), `<line>` (median / reference lines),
+  `<g>`, `<text>`
 - **Orientation:** `vertical` only (sequence on x-axis).
-- **Variants / modes:** None. The `run` type key selects the `line` renderer
-  with `markers="true"` and injects any `reference_lines` as annotation model
-  entries. No separate renderer file.
+- **Variants / modes:** None. The median is computed from the data (the
+  first series' values) and drawn as a dashed line labelled "Median"; control
+  limits (`control_limits`, `limits`) are ignored and no point is flagged out
+  of control. A shift — 6 or more consecutive points on one side of the
+  median (points on the median neither break nor extend a run) — is marked
+  with rings (larger hollow circles), named in the point's accessible name and
+  table row, and adds a legend entry.
+- **Events:** `mj-chart-point-click` `{ series, x, y, ooc, shift }` (each point; `shift` is true for points in a run of six or more on one side of the median; `ooc` is always false on this type).
 - **Phase:** P3
-- **Notes:** The median reference line is a common addition; the JSON
-  `reference_lines` array avoids requiring a separate `<mj-chart-annotation>`
-  declaration for the simple case. Scales: `point` (x), `linear` (y).
+- **Notes:** Not a `line` variant: `control.js` registers `run-chart` beside
+  `control-chart` and draws it with the same code minus the limits. Scales:
+  `linear`, `time` or `point` (x, from the x values), `linear` (y).
 
 ---
 
@@ -350,6 +380,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Variants / modes:** Percentage Bland-Altman — `mode="percent"` changes
   the y-axis to `(A−B)/mean × 100`; the data layer recomputes `y` accordingly,
   the renderer is unchanged.
+- **Events:** none (not implemented).
 - **Phase:** P3
 - **Notes:** The three annotation lines (mean, upper LoA, lower LoA) are
   injected into the model as horizontal `<mj-chart-annotation>` entries so
@@ -375,7 +406,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
     "meta": { "title": "ROC Curve — Sepsis Model" },
     "series": [
       {
-        "name": "Model v2 (AUC = 0.87)",
+        "name": "Model v2",
         "points": [
           { "x": 0.00, "y": 0.00 },
           { "x": 0.05, "y": 0.48 },
@@ -385,20 +416,25 @@ default axis labelling and tooltip behaviour, not a different drawing path.
     ]
   }
   ```
-  Uses the XY `points` shape from plan §3.4. `x` = FPR, `y` = TPR. Multiple
-  series overlay multiple models. The diagonal chance-line annotation is
-  injected automatically by the model builder when `type="roc"`.
+  Uses the XY `points` shape from plan §3.4. `x` = FPR, `y` = TPR, as
+  fractions (0–1) or percentages (0–100). Multiple series overlay multiple
+  models. The renderer draws the dashed chance diagonal, and the legend
+  appends each series' AUC (trapezoid area), e.g. "Model v2 (AUC 0.87)".
 - **SVG primitives:** `<path>` (curve line per series), `<circle>` (optional
   threshold marker), `<path>` (optional AUC fill area), `<line>` (diagonal
   reference), `<g>`, `<text>`
 - **Orientation:** `n/a` — axes are always FPR (x) vs TPR (y), both 0–1.
 - **Variants / modes:** AUC shading — `shade-auc="true"` fills the area under
-  the curve. Multiple series for multi-model comparison.
+  the curve. Markers — `markers="true|false"`; by default markers are shown
+  when a series has at most 50 points. Hidden markers stay as transparent
+  marks that show on hover / focus, so every point remains focusable and
+  clickable. Multiple series for multi-model comparison.
+- **Events:** `mj-chart-point-click` `{ series, x, y, n }` (each point, including the transparent marks left when markers are hidden; `n` is the point's `n`, or null).
 - **Phase:** P3
 - **Notes:** The `roc` type key selects the shared `curve` renderer
   (`charts/core/renderers/curve.js`) with preset axis domain [0,1]×[0,1],
   axis labels "False Positive Rate" / "True Positive Rate", and a diagonal
-  `<line>` annotation injected into the model. No separate renderer file.
+  `<line>` drawn by the renderer. No separate renderer file.
   Scales: `linear` (x and y). The `curve` renderer is also used by
   `precision-recall`, `lift`, and `calibration`.
 
@@ -419,7 +455,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
     "meta": { "title": "Precision-Recall — Fraud Detector" },
     "series": [
       {
-        "name": "Model v3 (AP = 0.72)",
+        "name": "Model v3",
         "points": [
           { "x": 0.00, "y": 1.00 },
           { "x": 0.55, "y": 0.81 },
@@ -429,12 +465,15 @@ default axis labelling and tooltip behaviour, not a different drawing path.
     ]
   }
   ```
-  `x` = recall, `y` = precision. A baseline annotation at `y = class_prevalence`
-  is injected by the model builder when `type="precision-recall"`.
+  `x` = recall, `y` = precision. An optional top-level `baseline_prevalence`
+  number draws the dashed no-skill line at that precision. The legend appends
+  each series' AP (area under the curve), e.g. "Model v3 (AP 0.72)".
 - **SVG primitives:** `<path>` (curve), `<circle>` (threshold markers),
   `<path>` (optional AP fill), `<line>` (baseline), `<g>`, `<text>`
 - **Orientation:** `n/a`
 - **Variants / modes:** Average precision (AP) shading — `shade-auc="true"`.
+  `markers` as on the ROC curve.
+- **Events:** `mj-chart-point-click` `{ series, x, y, n }` (each point, including the transparent marks left when markers are hidden; `n` is the point's `n`, or null).
 - **Phase:** P3
 - **Notes:** Shares the `curve` renderer with `roc`, `lift`, and `calibration`.
   Preset axis domain [0,1]×[0,1], axis labels "Recall" / "Precision". No
@@ -468,18 +507,22 @@ default axis labelling and tooltip behaviour, not a different drawing path.
     ]
   }
   ```
-  `x` = proportion of population contacted (0–1), `y` = cumulative lift
-  (ratio). A baseline at `y = 1` is injected automatically.
+  `x` = proportion of population contacted (0–1, or 0–100 as percent),
+  `y` = cumulative lift (ratio). The renderer draws a dashed baseline at
+  `y = 1`.
 - **SVG primitives:** `<path>` (lift curve per model), `<line>` (baseline
   y = 1), `<circle>` (optional key threshold markers), `<g>`, `<text>`
 - **Orientation:** `n/a`
-- **Variants / modes:** Gains chart — `mode="gains"` changes the y-axis to
-  cumulative percentage of positives captured; data layer recalculates `y`,
-  renderer is unchanged.
+- **Variants / modes:** Gains chart — `mode="gains"` draws a cumulative-gains
+  chart instead: the y-axis becomes "Positives captured" (fraction or percent,
+  so the data supplies gains `y` values, not lift), and a dashed chance
+  diagonal replaces the `y = 1` baseline. `markers` as on the ROC curve.
+  `shade-auc` does not apply.
+- **Events:** `mj-chart-point-click` `{ series, x, y, n }` (each point, including the transparent marks left when markers are hidden; `n` is the point's `n`, or null).
 - **Phase:** P3
 - **Notes:** Shares the `curve` renderer. Preset axis label "% Population
-  Contacted" / "Lift". Baseline annotation (`y = 1`) injected by the model
-  builder. No separate renderer file.
+  Contacted" / "Lift". The baseline (`y = 1`) is drawn by the renderer. No
+  separate renderer file.
 
 ---
 
@@ -516,9 +559,12 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   `<rect>` (optional histogram bars for bin counts below the plot),
   `<g>`, `<text>`
 - **Orientation:** `n/a` — axes are always predicted (x) vs observed (y).
-- **Variants / modes:** Size-by-count — `size-by="n"` scales point radii via
-  `sqrt` scale. Histogram overlay — `show-histogram="true"` adds a small
-  prediction-distribution bar chart beneath the main plot.
+- **Variants / modes:** Size-by-count — `size-by="n"` scales point radii by
+  `n` via a `sqrt` scale (3–12 px). Histogram overlay — `show-histogram="true"`
+  draws translucent bars of `n` along the bottom of the plot (at most 20 % of
+  its height); points need `n`. `markers` as on the ROC curve. `shade-auc`
+  does not apply.
+- **Events:** `mj-chart-point-click` `{ series, x, y, n }` (each bin point, including the transparent marks left when markers are hidden; `n` is the bin's count, or null).
 - **Phase:** P3
 - **Notes:** Shares the `curve` renderer. Preset axis domain [0,1]×[0,1],
   axis labels "Mean Predicted Probability" / "Fraction of Positives". No
@@ -554,17 +600,27 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   }
   ```
   Uses the XY `points` shape from plan §3.4. `y` is the survival probability
-  (0–1). `censored: true` marks a censored observation; the renderer draws a
-  tick mark at that point rather than a step drop.
+  (0–1); a series whose values go above 1 is read as percent (0–100), its
+  `ci_lower` / `ci_upper` too. `x` is a number or a date (`YYYY-MM-DD` is a
+  local day; ISO date-times) — when any `x` is not a number the x-axis is a
+  time axis. `censored: true` marks a censored observation; the renderer draws
+  a tick mark at that point rather than a step drop. Optional `ci_lower` /
+  `ci_upper` (band, with `ci`) and `at_risk` (at-risk table, with `at-risk`).
 - **SVG primitives:** `<path>` (step-function line built with horizontal-then-
-  vertical segments), `<circle>` or `<line>` tick (censored observation marks),
-  `<path>` (optional confidence-band fill), `<g>`, `<text>`
+  vertical segments), `<line>` tick (censored observation marks), `<circle>`
+  (transparent focusable mark per event), `<path>` (optional confidence-band
+  fill), `<g>`, `<text>`
 - **Orientation:** `vertical` only (time on x-axis, survival probability on
   y-axis).
 - **Variants / modes:** Confidence bands — `ci="true"` expects additional
-  `ci_lower` / `ci_upper` fields on each point and draws a shaded band.
-  Cumulative incidence — `mode="cumulative"` plots `1 − S(t)` (the y-axis is
-  inverted in the model before rendering; the renderer is unchanged).
+  `ci_lower` / `ci_upper` fields on each point and draws a shaded band,
+  stepped like the curve. Cumulative incidence — `mode="cumulative"` plots
+  `1 − S(t)`: the data stays S(t) and the renderer converts it (the curve
+  starts at 0, CI bounds are converted too, the y-axis reads "Cumulative
+  incidence"). Numbers at risk — `at-risk="true"` draws a "Number at risk"
+  table under the x-axis, one row per series, showing the latest `at_risk` at
+  or before each x tick.
+- **Events:** `mj-chart-point-click` `{ series, x, y, censored, at_risk }` — each event step (`censored: false`) and each censor tick (`censored: true`, `y` the curve level there).
 - **Phase:** P3
 - **Notes:** The step-function path is built using the `svgdraw.js` step-line
   builder (same helper as the `step` line renderer). Scales: `linear` or `time`
@@ -605,14 +661,16 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   optional CI band). Numbers-at-risk table rendered as a `<g>` of `<text>`
   elements below the x-axis when `at-risk="true"`.
 - **Orientation:** `vertical` only.
-- **Variants / modes:** None beyond `survival` parent. Log-rank p-value
-  annotation added via `<mj-chart-annotation>` when `p-value` is supplied
-  in the JSON `meta`.
+- **Variants / modes:** None beyond `survival` parent: `ci`, `at-risk` and
+  `mode="cumulative"` (1 − S(t)) work the same, and percent `y` values and
+  date `x` values are read the same way. No log-rank p-value is drawn.
+- **Events:** `mj-chart-point-click` `{ series, x, y, censored, at_risk }` — each event step (`censored: false`) and each censor tick (`censored: true`, `y` the curve level there).
 - **Phase:** P3
-- **Notes:** The `kaplan-meier` type key selects the `survival` renderer with
-  `markers="censored-ticks"` and optionally renders the at-risk table as an
-  additional `<g>` inside the plot SVG. No separate renderer file. Accessibility:
-  data-table includes time, survival estimate, and at-risk count columns.
+- **Notes:** `survival.js` registers `kaplan-meier` beside `survival`; both
+  keys draw the same chart. Censored ticks are always drawn; the at-risk table
+  is drawn under the plot only with `at-risk`. No separate renderer file.
+  Accessibility: data-table includes time, survival estimate, CI bounds,
+  at-risk count and censored columns.
 
 ---
 
@@ -667,6 +725,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Variants / modes:** Log scale — `scale="log"` applies a `log` x-scale for
   odds-ratio or hazard-ratio data. The null-effect reference line moves to
   `x = 1` automatically in the model builder.
+- **Events:** `mj-chart-study-click` `{ series, category, value, ci_lower, ci_upper, weight }` (each study row); `mj-chart-pooled-click` `{ value, ci_lower, ci_upper, label }` (the pooled diamond).
 - **Phase:** P3
 - **Notes:** Study labels are rendered as `<text>` to the left of the plot
   area; the plot SVG must leave left padding sufficient for the longest label,
@@ -710,17 +769,25 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   Uses the XY `points` shape. `x` = study effect estimate, `y` = standard
   error (note: y-axis is inverted by convention — zero SE at top). `funnel`
   carries the summary effect and pre-computed pseudo-confidence funnel bounds
-  at each SE level.
+  at each SE level; without `pseudo_ci` the 95 % funnel `summary_effect ±
+  1.96 × SE` is drawn.
 - **SVG primitives:** `<circle>` (individual study points), `<path>` (funnel
   boundary lines — two lines converging upward), `<line>` (vertical summary-
-  effect reference line), `<g>`, `<text>` (optional point labels)
+  effect reference line), `<rect>` / `<polygon>` (contour shading), `<g>`,
+  `<text>` (optional point labels)
 - **Orientation:** `n/a` — axes are always effect (x) vs precision/SE (y,
   inverted).
-- **Variants / modes:** Contour-enhanced funnel — `contours="true"` adds
-  shaded significance-level regions (p < 0.05, p < 0.01) rendered as
-  `<path>` bands between the funnel lines. Also cross-listed in the Flow &
-  Process category where `type="funnel"` refers to the marketing/sales funnel
-  chart — these are completely different renderers sharing only a name.
+- **Variants / modes:** Contour-enhanced funnel — `contours="true"` shades
+  where a study would be significant against the null effect: p < 0.01
+  (outside the 99 % wedge) and 0.01 ≤ p < 0.05 (between the 95 % and 99 %
+  wedges), with wedges opening from SE 0 at `null-value`; both bands get a
+  legend entry. `null-value` (number, default 0 — right for differences and
+  log ratios) is the null effect of the contours. `labels="true"` draws each
+  point's `label` right of it (flipped left near the right edge, nudged or
+  dropped on overlap). Also cross-listed in the Flow & Process category where
+  `type="funnel"` refers to the marketing/sales funnel chart — these are
+  completely different renderers sharing only a name.
+- **Events:** `mj-chart-study-click` `{ series, x, y, label }` (each study point).
 - **Phase:** P4
 - **Notes:** The y-axis is inverted (larger SE at the bottom, zero at top);
   the model builder sets `y_invert: true` in the scale config. The funnel

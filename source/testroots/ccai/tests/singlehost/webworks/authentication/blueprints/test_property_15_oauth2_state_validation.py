@@ -12,6 +12,7 @@
 import random
 import string
 
+from ccai.webworks.authentication.core import AuthenticationContext, Principal
 from ccai.webworks.authentication.blueprints.oauth2 import (
     OAuth2Blueprint,
 )
@@ -20,6 +21,9 @@ from ccai.webworks.authentication.blueprints.oauth2 import (
 # =============================================================================
 # Test Helpers
 # =============================================================================
+
+
+RESOURCE_OWNER = Principal(identifier="resource-owner-1")
 
 
 class MockJsonRequest:
@@ -31,6 +35,10 @@ class MockJsonRequest:
     def __init__(self, data=None, query_params=None):
         self._data = data or {}
         self.query_params = query_params or {}
+
+        # The resource owner the authentication middleware established.
+        # The authorization endpoint issues codes on this user's behalf.
+        self.auth = AuthenticationContext(principal=RESOURCE_OWNER, scheme="Test")
 
     def json(self):
         return self._data

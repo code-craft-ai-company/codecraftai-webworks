@@ -25,6 +25,11 @@ from ccai.webworks.authentication.core import (
     AuthenticationStatus,
     Principal
 )
+from ccai.webworks.authentication.errors import (
+    AuthenticationError,
+    LoginThrottle,
+    get_client_key
+)
 
 
 # Module-level logger used by the Basic authenticator. Malformed
@@ -93,12 +98,14 @@ class BasicAuthenticator:
         
         :param identity_provider: The provider for validating credentials.
         :param realm: The authentication realm for WWW-Authenticate header.
+        :param login_throttle: Optional rate limiting and account lockout.
     """
     
     def __init__(
         self,
         identity_provider: IdentityProvider,
-        realm: str = "Restricted"
+        realm: str = "Restricted",
+        login_throttle: Optional[LoginThrottle] = None
     ):
         """
             Initialize the BasicAuthenticator.
@@ -106,9 +113,17 @@ class BasicAuthenticator:
             :param identity_provider: The provider for validating credentials.
             :param realm: The authentication realm for WWW-Authenticate header.
                          Defaults to "Restricted".
+            :param login_throttle: Optional :class:`LoginThrottle` applied to
+                                   every credential check. When the client or
+                                   the account is throttled the result is a
+                                   FAILURE with error code
+                                   ``rate_limit_exceeded`` or
+                                   ``account_locked``, which the middleware
+                                   answers with 429.
         """
         self._identity_provider = identity_provider
         self._realm = realm
+        self._login_throttle = login_throttle
     
     @property
     def scheme(self) -> str:
@@ -127,6 +142,15 @@ class BasicAuthenticator:
             :returns: The configured realm string.
         """
         return self._realm
+    
+    def get_challenge(self) -> str:
+        """
+            Return the challenge sent to clients that presented no
+            usable credentials.
+            
+            :returns: The ``WWW-Authenticate`` header value.
+        """
+        return f'Basic realm="{self._realm}"'
     
     def can_handle(self, request: Any) -> bool:
         """
@@ -187,10 +211,22 @@ class BasicAuthenticator:
             logger.warning("Basic auth: failed to decode credentials: %s", e)
             return self._bad_request(str(e))
         
+        # Refuse the attempt while the client or the account is throttled
+        client_key = get_client_key(request)
+        if self._login_throttle is not None:
+            throttle_error = self._login_throttle.check(client_key, username)
+            if throttle_error is not None:
+                return self._throttled(throttle_error, client_key, username)
+        
         # Validate credentials against the identity provider
         principal = await self._identity_provider.validate_credentials(
             username, password
         )
+        
+        if self._login_throttle is not None:
+            self._login_throttle.record(
+                client_key, username, success=principal is not None
+            )
         
         if principal is None:
             return AuthenticationResult(
@@ -298,7 +334,37 @@ class BasicAuthenticator:
         """
         return AuthenticationResult(
             status=AuthenticationStatus.CHALLENGE,
-            challenge=f'Basic realm="{self._realm}"'
+            challenge=self.get_challenge()
+        )
+    
+    def _throttled(
+        self,
+        error: AuthenticationError,
+        client_key: Optional[str],
+        username: str
+    ) -> AuthenticationResult:
+        """
+            Create the response for an attempt refused by the login throttle.
+            
+            :param error: The throttling error from :class:`LoginThrottle`.
+            :param client_key: The client key used for rate limiting.
+            :param username: The account named by the attempt.
+            
+            :returns: An AuthenticationResult with FAILURE status carrying
+                      the throttling error code and a ``Retry-After`` header.
+        """
+        logger.warning("Basic auth: attempt refused: %s", error.error_code)
+        
+        response_headers = {}
+        retry_after = self._login_throttle.get_retry_after(client_key, username)
+        if retry_after is not None:
+            response_headers["Retry-After"] = str(retry_after)
+        
+        return AuthenticationResult(
+            status=AuthenticationStatus.FAILURE,
+            error_code=error.error_code,
+            error_description=error.safe_message,
+            response_headers=response_headers
         )
     
     def _bad_request(self, message: str) -> AuthenticationResult:

@@ -2,12 +2,31 @@
  * mjkanban.js
  *
  * <mj-kanban> -- multi-column card board for workflow visualization.
- * Supports pointer drag-and-drop and full keyboard move interface.
- * WIP limits, live region announcements for screen readers.
+ * Supports pointer drag-and-drop (HTML5 drag for mouse, pointer events for
+ * touch and pen) and a keyboard move mode. WIP limits, live region
+ * announcements for screen readers.
+ *
+ * Keyboard: Tab reaches each card and its drag handle. Enter / Space on a
+ * card emits `mj-card-click`. Enter / Space on a handle starts move mode:
+ * ArrowLeft / ArrowRight pick the column, ArrowUp / ArrowDown the position,
+ * Enter (or Space) drops the card there, Escape cancels. Focus stays on the
+ * moved card's handle.
+ *
+ * Positions (`toIndex`) count the cards of the target column WITHOUT the
+ * moved card, so moving a card onto its own position is a no-op.
+ *
+ * Slots: `column-header-[id]`, `add-card-[id]`, `empty-[id]` per column, and
+ * `loading`. `renderCard(card)` may return a Node or a string; a string is
+ * inserted as markup, so escape interpolated data with core/html.js.
+ *
+ * Events: mj-card-click, mj-card-move-start (cancelable), mj-card-move
+ * (cancelable), mj-card-move-complete, mj-card-move-error,
+ * mj-col-wip-exceeded, mj-board-error.
  */
 
 import { MjElement, nextId } from "../core/mjelement.js";
 import { announce } from "../core/announcer.js";
+import { t } from "../core/intl.js";
 
 const STYLES = `
 :host {
@@ -44,7 +63,7 @@ const STYLES = `
   justify-content: space-between;
   padding: var(--mj-space-3);
   font-weight: var(--mj-font-weight-medium);
-  border-bottom: 1px solid var(--mj-border);
+  border-block-end: 1px solid var(--mj-border);
   background: var(--mj-surface);
 }
 
@@ -57,9 +76,10 @@ const STYLES = `
   background: var(--mj-bg-muted);
   color: var(--mj-text-muted);
 }
+.wip-badge.at-limit { color: var(--mj-kanban-wip-ok-color, var(--mj-text)); }
 .wip-badge.exceeded {
   background: var(--mj-color-warning-surface);
-  color: var(--mj-color-warning);
+  color: var(--mj-kanban-wip-exceeded-color, var(--mj-color-warning));
 }
 
 .column-body {
@@ -102,6 +122,11 @@ const STYLES = `
   border: none;
   padding: 0;
   line-height: 1;
+  touch-action: none;
+}
+.card-handle:focus-visible {
+  outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring);
+  outline-offset: var(--mj-focus-ring-offset);
 }
 :host([mode="readonly"]) .card-handle { display: none; }
 
@@ -127,28 +152,50 @@ const STYLES = `
   font-size: var(--mj-font-size-xs);
   background: var(--mj-color-info-surface);
   color: var(--mj-color-info);
-  border-top: 1px solid var(--mj-border);
+  border-block-start: 1px solid var(--mj-border);
 }
 .move-instructions.visible { display: block; }
+
+.column-footer:empty { display: none; }
+.column-footer { padding: 0 var(--mj-space-2) var(--mj-space-2); }
+
+.loading-region {
+  padding: var(--mj-space-3);
+  color: var(--mj-text-muted);
+  font-size: var(--mj-font-size-sm);
+}
+.loading-region[hidden] { display: none; }
 `;
+
+/* Pointer travel (px) before a touch / pen press on a handle becomes a drag. */
+const TOUCH_DRAG_THRESHOLD = 6;
 
 export class MjKanban extends MjElement {
   static tagName = "mj-kanban";
   static styles = STYLES;
-  static watched = ["mode", "layout", "col-width", "wip-limits", "loading"];
+  static watched = ["mode", "layout", "col-width", "wip-limits", "loading", "label", "aria-label"];
 
   constructor() {
     super()
     this._columns = []
     this._dataSource = null
     this._renderCard = null
+
+    /* A move in progress (mouse drag, touch drag or keyboard). */
     this._dragState = null
     this._moveMode = null
+    this._pointerDrag = null
+
+    /* After a re-render, focus goes to this card's handle (or the card). */
+    this._restoreFocus = null
+    this._dropZoneEl = null
+    this._boardId = nextId("mj-kanban")
   }
 
   render() {
     const markup = `
-      <div class="board" part="board" role="application" aria-label="Kanban board"></div>
+      <div class="loading-region" part="loading" hidden><slot name="loading"></slot></div>
+      <div class="board" part="board" role="region"></div>
       <div class="status-region" role="status" aria-live="assertive" aria-atomic="true"></div>
     `
     return markup
@@ -157,10 +204,31 @@ export class MjKanban extends MjElement {
   afterRender() {
     this._board = this.$(".board")
     this._statusRegion = this.$(".status-region")
+    this._loadingRegion = this.$(".loading-region")
+    this.$("slot[name='loading']").textContent = t("mj.kanban.loading")
+    this._moveMode = null
+    this._dragState = null
+    this._pointerDrag = null
+    this._dropZoneEl = null
 
-    if (this._columns.length > 0) {
-      this._renderBoard()
-    }
+    /* Every interaction is delegated from the board: re-renders add nothing. */
+    this.listen(this._board, "click", this._onBoardClick.bind(this))
+    this.listen(this._board, "keydown", this._onBoardKeydown.bind(this))
+    this.listen(this._board, "dragstart", this._onDragStart.bind(this))
+    this.listen(this._board, "dragend", this._onDragEnd.bind(this))
+    this.listen(this._board, "dragover", this._onDragOver.bind(this))
+    this.listen(this._board, "dragleave", this._onDragLeave.bind(this))
+    this.listen(this._board, "drop", this._onDrop.bind(this))
+    this.listen(this._board, "pointerdown", this._onPointerDown.bind(this))
+    this.listen(this._board, "pointermove", this._onPointerMove.bind(this))
+    this.listen(this._board, "pointerup", this._onPointerUp.bind(this))
+    this.listen(this._board, "pointercancel", this._onPointerCancel.bind(this))
+    this.listen(this._board, "focusout", this._onBoardFocusOut.bind(this))
+
+    this._syncLabel()
+    this._syncColWidth()
+    this._syncLoading()
+    this._renderBoard()
 
     if (this._dataSource !== null) {
       this._loadBoard()
@@ -173,8 +241,51 @@ export class MjKanban extends MjElement {
       return
     }
     if (name === "loading") {
-      this._board.setAttribute("aria-busy", newValue !== null ? "true" : "false")
+      this._syncLoading()
     }
+    if (name === "label" || name === "aria-label") {
+      this._syncLabel()
+    }
+    if (name === "col-width") {
+      this._syncColWidth()
+    }
+    if ((name === "mode" || name === "wip-limits") && oldValue !== newValue) {
+      if (this._moveMode !== null) {
+        this._cancelMoveMode()
+      }
+      this._renderBoard()
+    }
+    return
+  }
+
+  _isReadonly() {
+    const readonly = (this.getAttribute("mode") || "interactive") === "readonly"
+    return readonly
+  }
+
+  _syncLabel() {
+    const label = this.getAttribute("label") || this.getAttribute("aria-label") || t("mj.kanban.label")
+    this._board.setAttribute("aria-label", label)
+    return
+  }
+
+  /* `col-width` (px number or CSS length) sets --mj-kanban-col-width. */
+  _syncColWidth() {
+    const raw = this.getAttribute("col-width")
+    if (raw !== null && raw.trim().length > 0) {
+      const text = raw.trim()
+      const isNumber = /^\d+(\.\d+)?$/.test(text)
+      this._board.style.setProperty("--mj-kanban-col-width", isNumber === true ? `${text}px` : text)
+    } else {
+      this._board.style.removeProperty("--mj-kanban-col-width")
+    }
+    return
+  }
+
+  _syncLoading() {
+    const loading = this.hasAttribute("loading")
+    this._board.setAttribute("aria-busy", loading === true ? "true" : "false")
+    this._loadingRegion.hidden = loading === false
     return
   }
 
@@ -183,36 +294,140 @@ export class MjKanban extends MjElement {
       return
     }
     this.reflectBoolean("loading", true)
-    this._dataSource.fetchBoard().then((cols) => {
+    let pending = null
+    try {
+      pending = Promise.resolve(this._dataSource.fetchBoard())
+    } catch (error) {
+      pending = Promise.reject(error)
+    }
+    pending.then((cols) => {
       this.reflectBoolean("loading", false)
       this._columns = Array.isArray(cols) === true ? cols : []
       this._renderBoard()
       return
-    }).catch(() => {
+    }).catch((error) => {
       this.reflectBoolean("loading", false)
+      this.emit("mj-board-error", { error: error })
+      announce(t("mj.kanban.loadFailed"), "assertive")
     })
     return
   }
 
+  /* ----- lookup helpers ----- */
+
+  _cardsOf(col) {
+    const cards = col !== undefined && Array.isArray(col.cards) === true ? col.cards : []
+    return cards
+  }
+
+  _columnById(colId) {
+    const col = this._columns.find((c) => String(c.id) === String(colId))
+    return col
+  }
+
+  _columnIndex(colId) {
+    const index = this._columns.findIndex((c) => String(c.id) === String(colId))
+    return index
+  }
+
+  _cardIndex(col, cardId) {
+    const index = this._cardsOf(col).findIndex((c) => String(c.id) === String(cardId))
+    return index
+  }
+
+  _findCardElement(cardId) {
+    let found = null
+    const cards = this._board.querySelectorAll(".card")
+    for (let i = 0; i < cards.length; i = i + 1) {
+      if (cards[i].getAttribute("data-card-id") === String(cardId)) {
+        found = cards[i]
+        break
+      }
+    }
+    return found
+  }
+
+  _findColumnBody(colId) {
+    let found = null
+    const bodies = this._board.querySelectorAll(".column-body")
+    for (let i = 0; i < bodies.length; i = i + 1) {
+      if (bodies[i].getAttribute("data-col-id") === String(colId)) {
+        found = bodies[i]
+        break
+      }
+    }
+    return found
+  }
+
+  /* ----- rendering ----- */
+
   _renderBoard() {
-    this._board.innerHTML = ""
+    const focusedCard = this._focusedCardInfo()
+    this._dropZoneEl = null
+    this._board.replaceChildren()
 
     for (let ci = 0; ci < this._columns.length; ci = ci + 1) {
       const col = this._columns[ci]
       const colEl = this._buildColumn(col, ci)
       this._board.appendChild(colEl)
     }
+
+    /* Put focus back on the card it was on (or the card that just moved). */
+    const target = this._restoreFocus !== null ? this._restoreFocus : focusedCard
+    this._restoreFocus = null
+    if (target !== null) {
+      const cardEl = this._findCardElement(target.cardId)
+      if (cardEl !== null) {
+        const handle = cardEl.querySelector(".card-handle")
+        if (target.onHandle === true && handle !== null) {
+          handle.focus()
+        } else {
+          cardEl.focus()
+        }
+      }
+    }
     return
   }
 
+  /* The card focus is in, if any, and whether it is on the handle. */
+  _focusedCardInfo() {
+    let info = null
+    const active = this.shadowRoot.activeElement
+    if (active !== null && active !== undefined && this._board.contains(active) === true) {
+      const cardEl = active.closest(".card")
+      if (cardEl !== null) {
+        info = { cardId: cardEl.getAttribute("data-card-id"), onHandle: active.classList.contains("card-handle") }
+      }
+    }
+    return info
+  }
+
+  /* WIP state of a column: "none", "ok", "at-limit" or "exceeded". */
+  _wipState(col) {
+    let state = "none"
+    if (this.hasAttribute("wip-limits") === true && typeof col.wipLimit === "number") {
+      const count = this._cardsOf(col).length
+      if (count > col.wipLimit) {
+        state = "exceeded"
+      } else if (count === col.wipLimit) {
+        state = "at-limit"
+      } else {
+        state = "ok"
+      }
+    }
+    return state
+  }
+
   _buildColumn(col, colIdx) {
+    const cards = this._cardsOf(col)
+    const label = col.label !== undefined && col.label !== null ? String(col.label) : String(col.id)
+
     const colEl = document.createElement("section")
     colEl.className = "column"
     colEl.setAttribute("part", "column")
     colEl.setAttribute("role", "group")
-    const cardCount = col.cards !== undefined ? col.cards.length : 0
-    colEl.setAttribute("aria-label", `${col.label} (${cardCount} cards)`)
-    colEl.setAttribute("data-col-id", col.id)
+    colEl.setAttribute("aria-label", t("mj.kanban.columnLabel", { label: label, count: cards.length }))
+    colEl.setAttribute("data-col-id", String(col.id))
 
     const header = document.createElement("div")
     header.className = "column-header"
@@ -220,15 +435,27 @@ export class MjKanban extends MjElement {
 
     const title = document.createElement("span")
     title.className = "col-title"
-    title.textContent = col.label
-
+    title.textContent = label
     header.appendChild(title)
 
-    if (this.hasAttribute("wip-limits") === true && col.wipLimit !== undefined) {
+    const headerSlot = document.createElement("slot")
+    headerSlot.setAttribute("name", `column-header-${col.id}`)
+    header.appendChild(headerSlot)
+
+    const wip = this._wipState(col)
+    if (wip !== "none") {
       const badge = document.createElement("span")
-      badge.className = cardCount >= col.wipLimit ? "wip-badge exceeded" : "wip-badge"
-      badge.setAttribute("aria-label", `${cardCount} of ${col.wipLimit} WIP limit${cardCount >= col.wipLimit ? " — exceeded" : ""}`)
-      badge.textContent = `${cardCount}/${col.wipLimit}`
+      badge.className = wip === "ok" ? "wip-badge" : `wip-badge ${wip}`
+      badge.setAttribute("part", "wip-indicator")
+      const wipParams = { count: cards.length, limit: col.wipLimit }
+      let wipLabel = t("mj.kanban.wipLimit", wipParams)
+      if (wip === "exceeded") {
+        wipLabel = t("mj.kanban.wipLimitExceeded", wipParams)
+      } else if (wip === "at-limit") {
+        wipLabel = t("mj.kanban.wipLimitAtLimit", wipParams)
+      }
+      badge.setAttribute("aria-label", wipLabel)
+      badge.textContent = `${cards.length}/${col.wipLimit}`
       header.appendChild(badge)
     }
 
@@ -236,91 +463,66 @@ export class MjKanban extends MjElement {
 
     const instructions = document.createElement("div")
     instructions.className = "move-instructions"
-    instructions.textContent = "Arrow keys to move, Enter to confirm, Escape to cancel."
+    instructions.textContent = t("mj.kanban.moveInstructions")
     colEl.appendChild(instructions)
 
+    /*
+     * The body is the drop target. While it holds cards it is the column's
+     * list. An empty column shows its empty-[id] slot there instead, and a
+     * list may own only list items, so the empty body is a plain container
+     * (the column group's name already says it holds 0 cards).
+     */
     const body = document.createElement("div")
     body.className = "column-body"
     body.setAttribute("part", "column-body")
-    body.setAttribute("role", "list")
-    body.setAttribute("aria-label", col.label)
-    body.setAttribute("data-col-id", col.id)
+    body.setAttribute("data-col-id", String(col.id))
     colEl.appendChild(body)
-
-    this.listen(body, "dragover", (e) => {
-      e.preventDefault()
-      body.classList.add("drag-over")
-    })
-    this.listen(body, "dragleave", () => {
-      body.classList.remove("drag-over")
-    })
-    this.listen(body, "drop", (e) => {
-      e.preventDefault()
-      body.classList.remove("drag-over")
-      if (this._dragState !== null) {
-        this._completeDrop(col.id, col.cards !== undefined ? col.cards.length : 0)
-      }
-    })
-
-    const cards = col.cards !== undefined ? col.cards : []
 
     if (cards.length === 0) {
       const emptySlot = document.createElement("slot")
       emptySlot.setAttribute("name", `empty-${col.id}`)
       body.appendChild(emptySlot)
+    } else {
+      body.setAttribute("role", "list")
+      body.setAttribute("aria-label", label)
     }
 
     for (let ki = 0; ki < cards.length; ki = ki + 1) {
-      const card = cards[ki]
-      const cardEl = this._buildCard(card, col.id, ki)
+      const cardEl = this._buildCard(cards[ki], col.id, ki)
       body.appendChild(cardEl)
     }
+
+    const footer = document.createElement("div")
+    footer.className = "column-footer"
+    footer.setAttribute("part", "column-footer")
+    const addSlot = document.createElement("slot")
+    addSlot.setAttribute("name", `add-card-${col.id}`)
+    footer.appendChild(addSlot)
+    colEl.appendChild(footer)
 
     return colEl
   }
 
   _buildCard(card, colId, cardIdx) {
+    const cardTitle = card.title !== undefined && card.title !== null ? String(card.title) : String(card.id)
     const cardEl = document.createElement("div")
     cardEl.className = "card"
     cardEl.setAttribute("part", "card")
     cardEl.setAttribute("role", "listitem")
-    cardEl.setAttribute("data-card-id", card.id)
-    cardEl.setAttribute("data-col-id", colId)
+    cardEl.setAttribute("data-card-id", String(card.id))
+    cardEl.setAttribute("data-col-id", String(colId))
     cardEl.setAttribute("tabindex", "0")
-    cardEl.setAttribute("aria-label", card.title || card.id)
+    cardEl.setAttribute("aria-label", cardTitle)
 
-    const mode = this.getAttribute("mode") || "interactive"
-
-    if (mode !== "readonly") {
+    if (this._isReadonly() === false) {
       const handle = document.createElement("button")
+      handle.type = "button"
       handle.className = "card-handle"
       handle.setAttribute("part", "card-handle")
-      handle.setAttribute("aria-label", `Move card: ${card.title || card.id}`)
+      handle.setAttribute("aria-label", t("mj.kanban.moveCard", { title: cardTitle }))
       handle.setAttribute("aria-pressed", "false")
       handle.textContent = "⠿"
       handle.setAttribute("draggable", "true")
-
-      this.listen(handle, "dragstart", () => {
-        this._startDrag(card.id, colId, cardIdx)
-        cardEl.classList.add("dragging")
-      })
-      this.listen(handle, "dragend", () => {
-        cardEl.classList.remove("dragging")
-        if (this._dragState !== null && this._dragState.completed === false) {
-          this._cancelDrag()
-        }
-      })
-
-      this.listen(handle, "click", (e) => {
-        e.stopPropagation()
-      })
-      this.listen(handle, "keydown", (e) => {
-        if (e.key === " " || e.key === "Enter") {
-          e.preventDefault()
-          this._enterMoveMode(card.id, colId, cardIdx, cardEl, handle)
-        }
-      })
-
       cardEl.appendChild(handle)
     }
 
@@ -329,53 +531,132 @@ export class MjKanban extends MjElement {
 
     if (this._renderCard !== null) {
       const rendered = this._renderCard(card)
-      if (typeof rendered === "string") {
-        content.innerHTML = rendered
-      } else if (rendered instanceof HTMLElement) {
+      if (rendered instanceof Node) {
         content.appendChild(rendered)
+      } else if (typeof rendered === "string") {
+        /* Documented contract: a string is markup the caller has escaped. */
+        content.innerHTML = rendered
+      } else if (rendered !== null && rendered !== undefined && typeof rendered.markup === "string") {
+        /* Result of the `html` tag from core/html.js. */
+        content.innerHTML = rendered.markup
       }
     } else {
       const titleEl = document.createElement("div")
       titleEl.className = "card-title"
-      titleEl.textContent = card.title || card.id
-      titleEl.setAttribute("title", card.title || card.id)
+      titleEl.textContent = cardTitle
+      titleEl.setAttribute("title", cardTitle)
       content.appendChild(titleEl)
     }
 
     cardEl.appendChild(content)
-
-    this.listen(cardEl, "click", () => {
-      this.emit("mj-card-click", { cardId: card.id, colId: colId })
-    })
-
     return cardEl
   }
 
-  _startDrag(cardId, fromColId, fromIndex) {
-    this._dragState = {
-      cardId: cardId,
-      fromColId: fromColId,
-      fromIndex: fromIndex,
-      completed: false
+  /* ----- click and keyboard ----- */
+
+  _cardFromEvent(event) {
+    let cardEl = null
+    if (event.target instanceof Element) {
+      cardEl = event.target.closest(".card")
     }
-    this.emit("mj-card-move-start", { cardId: cardId, fromColId: fromColId, fromIndex: fromIndex })
+    return cardEl
+  }
+
+  _isHandleEvent(event) {
+    const onHandle = event.target instanceof Element && event.target.closest(".card-handle") !== null
+    return onHandle
+  }
+
+  _emitCardClick(cardEl) {
+    this.emit("mj-card-click", {
+      cardId: cardEl.getAttribute("data-card-id"),
+      colId: cardEl.getAttribute("data-col-id")
+    })
     return
+  }
+
+  _onBoardClick(event) {
+    const cardEl = this._cardFromEvent(event)
+    if (cardEl === null || this._isHandleEvent(event) === true) {
+      return
+    }
+    this._emitCardClick(cardEl)
+    return
+  }
+
+  _onBoardKeydown(event) {
+    const key = event.key
+
+    if (this._moveMode !== null) {
+      this._onMoveModeKeydown(event)
+      return
+    }
+
+    const cardEl = this._cardFromEvent(event)
+    if (cardEl === null) {
+      return
+    }
+
+    if (this._isHandleEvent(event) === true) {
+      if (key === " " || key === "Enter") {
+        /* Prevented here so the native button does not also click. */
+        event.preventDefault()
+        event.stopPropagation()
+        this._enterMoveMode(cardEl)
+      }
+      return
+    }
+
+    if (event.target === cardEl && (key === "Enter" || key === " ")) {
+      event.preventDefault()
+      this._emitCardClick(cardEl)
+    }
+    return
+  }
+
+  /* ----- moves (shared by drag, touch and keyboard) ----- */
+
+  /* Start a move. Returns false when a listener canceled `mj-card-move-start`. */
+  _startDrag(cardId, fromColId, fromIndex) {
+    const proceed = this.emit("mj-card-move-start", { cardId: cardId, fromColId: fromColId, fromIndex: fromIndex }, { cancelable: true })
+    if (proceed === false) {
+      this._dragState = null
+    } else {
+      this._dragState = { cardId: cardId, fromColId: fromColId, fromIndex: fromIndex, completed: false }
+    }
+    return proceed
   }
 
   _cancelDrag() {
     this._dragState = null
+    this._clearDropZone()
     return
   }
 
-  _completeDrop(toColId, toIndex) {
+  /* Card data and position of the card element, for starting a move. */
+  _cardOrigin(cardEl) {
+    const colId = cardEl.getAttribute("data-col-id")
+    const cardId = cardEl.getAttribute("data-card-id")
+    const col = this._columnById(colId)
+    const origin = { cardId: cardId, colId: col !== undefined ? col.id : colId, index: this._cardIndex(col, cardId) }
+    return origin
+  }
+
+  /*
+   * Complete the move in progress. `toIndex` counts the target column's
+   * cards without the moved card; the unchanged position is a no-op.
+   */
+  _completeDrop(toColId, toIndex, refocusHandle) {
     if (this._dragState === null) {
       return
     }
     const ds = this._dragState
     ds.completed = true
+    this._dragState = null
+    this._clearDropZone()
 
-    if (ds.fromColId === toColId && ds.fromIndex === toIndex) {
-      this._dragState = null
+    const sameColumn = String(ds.fromColId) === String(toColId)
+    if (sameColumn === true && ds.fromIndex === toIndex) {
       return
     }
 
@@ -387,15 +668,27 @@ export class MjKanban extends MjElement {
     }, { cancelable: true })
 
     if (proceed === false) {
-      this._dragState = null
       return
     }
 
     this._moveCardInData(ds.cardId, ds.fromColId, toColId, toIndex)
+    if (refocusHandle === true) {
+      this._restoreFocus = { cardId: ds.cardId, onHandle: true }
+    }
     this._renderBoard()
 
+    const toCol = this._columnById(toColId)
+    const toLabel = toCol !== undefined ? toCol.label : toColId
+    this._statusRegion.textContent = t("mj.kanban.cardMoved", { column: toLabel, position: toIndex + 1 })
+
     if (this._dataSource !== null && typeof this._dataSource.moveCard === "function") {
-      this._dataSource.moveCard(ds.cardId, toColId, toIndex).then(() => {
+      let pending = null
+      try {
+        pending = Promise.resolve(this._dataSource.moveCard(ds.cardId, toColId, toIndex))
+      } catch (error) {
+        pending = Promise.reject(error)
+      }
+      pending.then(() => {
         this.emit("mj-card-move-complete", {
           cardId: ds.cardId, fromColId: ds.fromColId, toColId: toColId, toIndex: toIndex
         })
@@ -411,55 +704,291 @@ export class MjKanban extends MjElement {
       })
     }
 
-    const toCol = this._columns.find((c) => c.id === toColId)
-    if (toCol !== undefined && toCol.wipLimit !== undefined) {
-      const count = toCol.cards !== undefined ? toCol.cards.length : 0
-      if (count >= toCol.wipLimit) {
-        this.emit("mj-col-wip-exceeded", { colId: toColId, count: count, limit: toCol.wipLimit })
-      }
+    if (toCol !== undefined && this._wipState(toCol) === "exceeded") {
+      const count = this._cardsOf(toCol).length
+      this.emit("mj-col-wip-exceeded", { colId: toColId, count: count, limit: toCol.wipLimit })
     }
-
-    this._dragState = null
     return
   }
 
   _moveCardInData(cardId, fromColId, toColId, toIndex) {
-    const fromCol = this._columns.find((c) => c.id === fromColId)
-    const toCol = this._columns.find((c) => c.id === toColId)
+    const fromCol = this._columnById(fromColId)
+    const toCol = this._columnById(toColId)
     if (fromCol === undefined || toCol === undefined) {
       return
     }
 
-    const fromCards = fromCol.cards !== undefined ? fromCol.cards : []
-    const cardIdx = fromCards.findIndex((c) => c.id === cardId)
+    const fromCards = this._cardsOf(fromCol)
+    const cardIdx = this._cardIndex(fromCol, cardId)
     if (cardIdx < 0) {
       return
     }
 
     const card = fromCards[cardIdx]
-    fromCol.cards = fromCards.filter((c) => c.id !== cardId)
+    fromCol.cards = fromCards.filter((c) => c !== card)
 
-    const toCards = toCol.cards !== undefined ? toCol.cards : []
-    const insertAt = Math.min(toIndex, toCards.length)
+    const toCards = this._cardsOf(toCol)
+    const insertAt = Math.max(0, Math.min(toIndex, toCards.length))
     toCards.splice(insertAt, 0, card)
     toCol.cards = toCards
     return
   }
 
-  _enterMoveMode(cardId, colId, cardIdx, cardEl, handleBtn) {
-    const colIdx = this._columns.findIndex((c) => c.id === colId)
+  /*
+   * Show the insertion marker in `colId` before the `index`-th card that is
+   * not the moved card.
+   */
+  _showDropZone(colId, index, movingCardId) {
+    const body = this._findColumnBody(colId)
+    if (body === null) {
+      return
+    }
+    if (this._dropZoneEl === null) {
+      this._dropZoneEl = document.createElement("div")
+      this._dropZoneEl.className = "drop-zone active"
+      this._dropZoneEl.setAttribute("part", "drop-zone")
+      this._dropZoneEl.setAttribute("aria-hidden", "true")
+    }
+    const others = Array.from(body.querySelectorAll(".card")).filter((el) => el.getAttribute("data-card-id") !== String(movingCardId))
+    const before = index < others.length ? others[index] : null
+    body.insertBefore(this._dropZoneEl, before)
+    return
+  }
+
+  _clearDropZone() {
+    if (this._dropZoneEl !== null) {
+      this._dropZoneEl.remove()
+    }
+    const highlighted = this._board.querySelectorAll(".column-body.drag-over")
+    for (let i = 0; i < highlighted.length; i = i + 1) {
+      highlighted[i].classList.remove("drag-over")
+    }
+    return
+  }
+
+  /* The insertion index for a pointer at `clientY` over a column body. */
+  _indexFromPointer(body, clientY, movingCardId) {
+    const others = Array.from(body.querySelectorAll(".card")).filter((el) => el.getAttribute("data-card-id") !== String(movingCardId))
+    let index = others.length
+    for (let i = 0; i < others.length; i = i + 1) {
+      const rect = others[i].getBoundingClientRect()
+      if (clientY < rect.top + rect.height / 2) {
+        index = i
+        break
+      }
+    }
+    return index
+  }
+
+  _announceTarget(colId, index) {
+    const col = this._columnById(colId)
+    const label = col !== undefined ? col.label : colId
+    this._statusRegion.textContent = t("mj.kanban.movingTo", { column: label, position: index + 1 })
+    return
+  }
+
+  /* ----- mouse: HTML5 drag and drop ----- */
+
+  _onDragStart(event) {
+    const cardEl = this._cardFromEvent(event)
+    if (cardEl === null || this._isHandleEvent(event) === false || this._isReadonly() === true) {
+      return
+    }
+    const origin = this._cardOrigin(cardEl)
+    if (this._startDrag(origin.cardId, origin.colId, origin.index) === false) {
+      event.preventDefault()
+      return
+    }
+    if (event.dataTransfer !== null && event.dataTransfer !== undefined) {
+      /* Firefox starts a drag only when data is set. */
+      event.dataTransfer.setData("text/plain", String(origin.cardId))
+      event.dataTransfer.effectAllowed = "move"
+    }
+    cardEl.classList.add("dragging")
+    return
+  }
+
+  _onDragEnd(event) {
+    const cardEl = this._cardFromEvent(event)
+    if (cardEl !== null) {
+      cardEl.classList.remove("dragging")
+    }
+    if (this._dragState !== null && this._dragState.completed === false) {
+      this._cancelDrag()
+    }
+    return
+  }
+
+  _bodyFromEvent(event) {
+    let body = null
+    if (event.target instanceof Element) {
+      const colEl = event.target.closest(".column")
+      if (colEl !== null) {
+        body = colEl.querySelector(".column-body")
+      }
+    }
+    return body
+  }
+
+  _onDragOver(event) {
+    const body = this._bodyFromEvent(event)
+    if (body === null || this._dragState === null) {
+      return
+    }
+    event.preventDefault()
+    if (event.dataTransfer !== null && event.dataTransfer !== undefined) {
+      event.dataTransfer.dropEffect = "move"
+    }
+    const colId = body.getAttribute("data-col-id")
+    const index = this._indexFromPointer(body, event.clientY, this._dragState.cardId)
+    this._clearDropZone()
+    body.classList.add("drag-over")
+    this._showDropZone(colId, index, this._dragState.cardId)
+    return
+  }
+
+  _onDragLeave(event) {
+    const body = this._bodyFromEvent(event)
+    if (body === null) {
+      return
+    }
+    const related = event.relatedTarget
+    if (related === null || (related instanceof Node && body.closest(".column").contains(related) === false)) {
+      body.classList.remove("drag-over")
+    }
+    return
+  }
+
+  _onDrop(event) {
+    const body = this._bodyFromEvent(event)
+    if (body === null || this._dragState === null) {
+      return
+    }
+    event.preventDefault()
+    const index = this._indexFromPointer(body, event.clientY, this._dragState.cardId)
+    const col = this._columnById(body.getAttribute("data-col-id"))
+    this._completeDrop(col !== undefined ? col.id : body.getAttribute("data-col-id"), index, false)
+    return
+  }
+
+  /* ----- touch and pen: pointer events ----- */
+
+  _onPointerDown(event) {
+    if (event.pointerType === "mouse" || this._isHandleEvent(event) === false || this._isReadonly() === true) {
+      return
+    }
+    const cardEl = this._cardFromEvent(event)
+    const handle = event.target.closest(".card-handle")
+    this._pointerDrag = { cardEl: cardEl, handle: handle, startX: event.clientX, startY: event.clientY, started: false, pointerId: event.pointerId }
+    if (typeof handle.setPointerCapture === "function" && event.pointerId !== undefined) {
+      try {
+        handle.setPointerCapture(event.pointerId)
+      } catch (error) {
+        /* Synthetic events carry no active pointer. */
+      }
+    }
+    return
+  }
+
+  /* The column body under a viewport point, if any. */
+  _bodyAtPoint(clientX, clientY) {
+    let body = null
+    const hit = this.shadowRoot.elementFromPoint(clientX, clientY)
+    if (hit !== null) {
+      const colEl = hit.closest(".column")
+      if (colEl !== null) {
+        body = colEl.querySelector(".column-body")
+      }
+    }
+    return body
+  }
+
+  _onPointerMove(event) {
+    const drag = this._pointerDrag
+    if (drag === null) {
+      return
+    }
+    if (drag.started === false) {
+      const distance = Math.abs(event.clientX - drag.startX) + Math.abs(event.clientY - drag.startY)
+      if (distance < TOUCH_DRAG_THRESHOLD) {
+        return
+      }
+      const origin = this._cardOrigin(drag.cardEl)
+      if (this._startDrag(origin.cardId, origin.colId, origin.index) === false) {
+        this._pointerDrag = null
+        return
+      }
+      drag.started = true
+      drag.cardEl.classList.add("dragging")
+    }
+    event.preventDefault()
+
+    const body = this._bodyAtPoint(event.clientX, event.clientY)
+    this._clearDropZone()
+    if (body !== null && this._dragState !== null) {
+      const colId = body.getAttribute("data-col-id")
+      const index = this._indexFromPointer(body, event.clientY, this._dragState.cardId)
+      body.classList.add("drag-over")
+      this._showDropZone(colId, index, this._dragState.cardId)
+      drag.target = { colId: colId, index: index }
+    } else {
+      drag.target = null
+    }
+    return
+  }
+
+  _onPointerUp(event) {
+    const drag = this._pointerDrag
+    if (drag === null) {
+      return
+    }
+    this._pointerDrag = null
+    if (drag.started === false) {
+      return
+    }
+    drag.cardEl.classList.remove("dragging")
+    if (drag.target !== null && drag.target !== undefined && this._dragState !== null) {
+      const col = this._columnById(drag.target.colId)
+      this._completeDrop(col !== undefined ? col.id : drag.target.colId, drag.target.index, false)
+    } else {
+      this._cancelDrag()
+    }
+    return
+  }
+
+  _onPointerCancel() {
+    const drag = this._pointerDrag
+    this._pointerDrag = null
+    if (drag !== null && drag.started === true) {
+      drag.cardEl.classList.remove("dragging")
+      this._cancelDrag()
+    }
+    return
+  }
+
+  /* ----- keyboard move mode ----- */
+
+  _enterMoveMode(cardEl) {
+    const origin = this._cardOrigin(cardEl)
+    if (this._startDrag(origin.cardId, origin.colId, origin.index) === false) {
+      return
+    }
+    const colIdx = this._columnIndex(origin.colId)
     this._moveMode = {
-      cardId: cardId,
-      fromColId: colId,
-      fromCardIdx: cardIdx,
+      cardId: origin.cardId,
+      fromColId: origin.colId,
+      fromCardIdx: origin.index,
       currentColIdx: colIdx,
-      currentCardIdx: cardIdx
+      currentCardIdx: origin.index
     }
 
     cardEl.classList.add("in-move-mode")
-    handleBtn.setAttribute("aria-pressed", "true")
+    const handle = cardEl.querySelector(".card-handle")
+    if (handle !== null) {
+      handle.setAttribute("aria-pressed", "true")
+    }
 
-    const colEl = this._board.querySelector(`[data-col-id="${colId}"]`)
+    const colEl = cardEl.closest(".column")
     if (colEl !== null) {
       const instr = colEl.querySelector(".move-instructions")
       if (instr !== null) {
@@ -467,97 +996,116 @@ export class MjKanban extends MjElement {
       }
     }
 
-    this._statusRegion.textContent = `Moving card: ${cardEl.getAttribute("aria-label")}. Use arrow keys to reposition.`
+    this._statusRegion.textContent = t("mj.kanban.moveStarted", { title: cardEl.getAttribute("aria-label") })
+    this._showDropZone(origin.colId, origin.index, origin.cardId)
+    return
+  }
 
-    const onKey = (e) => {
-      if (this._moveMode === null) {
-        document.removeEventListener("keydown", onKey)
-        return
+  /* Highest position in a column for the moving card. */
+  _maxIndexIn(colIdx) {
+    const col = this._columns[colIdx]
+    let count = this._cardsOf(col).length
+    if (col !== undefined && String(col.id) === String(this._moveMode.fromColId)) {
+      count = count - 1
+    }
+    return count
+  }
+
+  _onMoveModeKeydown(event) {
+    const key = event.key
+    const mm = this._moveMode
+
+    if (key === "ArrowLeft" || key === "ArrowRight") {
+      event.preventDefault()
+      const rtl = window.getComputedStyle(this).direction === "rtl"
+      let delta = key === "ArrowRight" ? 1 : -1
+      if (rtl === true) {
+        delta = -delta
       }
-      if (e.key === "ArrowLeft") {
-        e.preventDefault()
-        this._moveModeColumn(-1)
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault()
-        this._moveModeColumn(1)
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault()
-        this._moveModeRow(-1)
-      } else if (e.key === "ArrowDown") {
-        e.preventDefault()
-        this._moveModeRow(1)
-      } else if (e.key === "Enter") {
-        e.preventDefault()
-        document.removeEventListener("keydown", onKey)
-        this._confirmMoveMode(cardEl, handleBtn)
-      } else if (e.key === "Escape") {
-        e.preventDefault()
-        document.removeEventListener("keydown", onKey)
-        this._cancelMoveMode(cardEl, handleBtn)
+      const newIdx = mm.currentColIdx + delta
+      if (newIdx >= 0 && newIdx < this._columns.length) {
+        mm.currentColIdx = newIdx
+        mm.currentCardIdx = Math.min(mm.currentCardIdx, this._maxIndexIn(newIdx))
+      }
+    } else if (key === "ArrowUp" || key === "ArrowDown") {
+      event.preventDefault()
+      const delta = key === "ArrowDown" ? 1 : -1
+      mm.currentCardIdx = Math.max(0, Math.min(mm.currentCardIdx + delta, this._maxIndexIn(mm.currentColIdx)))
+    } else if (key === "Enter" || key === " ") {
+      event.preventDefault()
+      event.stopPropagation()
+      this._confirmMoveMode()
+      return
+    } else if (key === "Escape") {
+      event.preventDefault()
+      event.stopPropagation()
+      this._cancelMoveMode()
+      return
+    } else if (key === "Tab") {
+      this._cancelMoveMode()
+      return
+    } else {
+      return
+    }
+
+    const col = this._columns[mm.currentColIdx]
+    this._clearDropZone()
+    this._showDropZone(col.id, mm.currentCardIdx, mm.cardId)
+    this._announceTarget(col.id, mm.currentCardIdx)
+    return
+  }
+
+  _clearMoveModeUI() {
+    const cards = this._board.querySelectorAll(".card.in-move-mode")
+    for (let i = 0; i < cards.length; i = i + 1) {
+      cards[i].classList.remove("in-move-mode")
+      const handle = cards[i].querySelector(".card-handle")
+      if (handle !== null) {
+        handle.setAttribute("aria-pressed", "false")
       }
     }
-
-    document.addEventListener("keydown", onKey)
-    this.onTeardown(() => { document.removeEventListener("keydown", onKey) })
+    this._clearMoveInstructions()
+    this._clearDropZone()
     return
   }
 
-  _moveModeColumn(delta) {
-    if (this._moveMode === null) {
-      return
-    }
-    const newIdx = this._moveMode.currentColIdx + delta
-    if (newIdx < 0 || newIdx >= this._columns.length) {
-      return
-    }
-    this._moveMode.currentColIdx = newIdx
-    const col = this._columns[newIdx]
-    const cardCount = col.cards !== undefined ? col.cards.length : 0
-    this._moveMode.currentCardIdx = cardCount
-    this._statusRegion.textContent = `Moving to column: ${col.label}, position ${cardCount + 1}.`
-    return
-  }
-
-  _moveModeRow(delta) {
-    if (this._moveMode === null) {
-      return
-    }
-    const col = this._columns[this._moveMode.currentColIdx]
-    const cardCount = col.cards !== undefined ? col.cards.length : 0
-    const newIdx = Math.max(0, Math.min(this._moveMode.currentCardIdx + delta, cardCount))
-    this._moveMode.currentCardIdx = newIdx
-    this._statusRegion.textContent = `Position ${newIdx + 1} in column ${col.label}.`
-    return
-  }
-
-  _confirmMoveMode(cardEl, handleBtn) {
+  _confirmMoveMode() {
     if (this._moveMode === null) {
       return
     }
     const mm = this._moveMode
-    cardEl.classList.remove("in-move-mode")
-    handleBtn.setAttribute("aria-pressed", "false")
-    this._clearMoveInstructions()
     this._moveMode = null
+    this._clearMoveModeUI()
 
     const toCol = this._columns[mm.currentColIdx]
     if (toCol === undefined) {
+      this._cancelDrag()
       return
     }
-
-    this._startDrag(mm.cardId, mm.fromColId, mm.fromCardIdx)
-    this._completeDrop(toCol.id, mm.currentCardIdx)
-
-    this._statusRegion.textContent = `Card moved to ${toCol.label}.`
+    this._completeDrop(toCol.id, mm.currentCardIdx, true)
     return
   }
 
-  _cancelMoveMode(cardEl, handleBtn) {
-    cardEl.classList.remove("in-move-mode")
-    handleBtn.setAttribute("aria-pressed", "false")
-    this._clearMoveInstructions()
+  _cancelMoveMode() {
+    if (this._moveMode === null) {
+      return
+    }
     this._moveMode = null
-    this._statusRegion.textContent = "Move canceled."
+    this._clearMoveModeUI()
+    this._cancelDrag()
+    this._statusRegion.textContent = t("mj.kanban.moveCanceled")
+    return
+  }
+
+  /* Leaving the board with focus ends a keyboard move. */
+  _onBoardFocusOut(event) {
+    if (this._moveMode === null) {
+      return
+    }
+    const next = event.relatedTarget
+    if (next === null || (next instanceof Node && this._board.contains(next) === false)) {
+      this._cancelMoveMode()
+    }
     return
   }
 
@@ -578,6 +1126,8 @@ export class MjKanban extends MjElement {
   set columns(value) {
     this._columns = Array.isArray(value) === true ? value : []
     if (this._board !== undefined && this._board !== null) {
+      this._moveMode = null
+      this._dragState = null
       this._renderBoard()
     }
     return
@@ -601,6 +1151,9 @@ export class MjKanban extends MjElement {
 
   set renderCard(fn) {
     this._renderCard = typeof fn === "function" ? fn : null
+    if (this._board !== undefined && this._board !== null) {
+      this._renderBoard()
+    }
     return
   }
 

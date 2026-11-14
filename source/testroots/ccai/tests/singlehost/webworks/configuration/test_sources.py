@@ -765,7 +765,6 @@ def generate_random_config_dict(num_keys: int = None, max_depth: int = 2) -> Dic
         num_keys = random.randint(1, 5)
     
     result: Dict[str, Any] = {}
-    used_prefixes: set = set()
     
     for _ in range(num_keys):
         # Generate a key with random depth
@@ -1993,13 +1992,6 @@ def test_property_21_optional_missing_file_no_error():
 # SecretsProvider Tests
 # =============================================================================
 
-# Check if cryptography is available for encryption tests
-try:
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    CRYPTOGRAPHY_AVAILABLE = True
-except ImportError:
-    CRYPTOGRAPHY_AVAILABLE = False
-
 from ccai.webworks.configuration import SecretsProvider, SecretValue
 
 
@@ -2200,10 +2192,6 @@ def test_property_13_secret_encryption_round_trip():
         **Feature: configuration-system, Property 13: Secret Encryption Round-Trip**
         **Validates: Requirements 4.1**
     """
-    if not CRYPTOGRAPHY_AVAILABLE:
-        # Skip test if cryptography is not available
-        return
-    
     temp_dir = tempfile.mkdtemp()
     
     try:
@@ -2281,10 +2269,6 @@ def test_property_13_encryption_with_different_keys():
         **Feature: configuration-system, Property 13: Secret Encryption Round-Trip**
         **Validates: Requirements 4.1**
     """
-    if not CRYPTOGRAPHY_AVAILABLE:
-        # Skip test if cryptography is not available
-        return
-    
     temp_dir = tempfile.mkdtemp()
     
     try:
@@ -3651,5 +3635,824 @@ def test_property_31_profile_configuration_precedence():
         
         finally:
             shutil.rmtree(temp_dir)
+    
+    return
+
+
+# =============================================================================
+# Environment names are matched to keys that contain the separator
+# =============================================================================
+
+def _load_with_environment(source: ConfigSource, variables: Dict[str, str]) -> Dict[str, Any]:
+    """
+        Load a source with some environment variables set, and remove them
+        again afterwards.
+        
+        :param source: The source to load.
+        :param variables: The environment variables to set for the load.
+        
+        :returns: What the source loaded.
+    """
+    for name, value in variables.items():
+        os.environ[name] = value
+    
+    try:
+        loaded = source.load()
+    finally:
+        for name in variables:
+            del os.environ[name]
+    
+    return loaded
+
+
+def test_environment_source_resolves_name_against_known_keys():
+    """
+        Test that a variable name is mapped to the schema key it spells when
+        that key contains the separator.
+    """
+    source = EnvironmentSource(prefix="WWTEST_KNOWN_")
+    source.use_known_keys(["database.max_connections", "database.host"])
+    
+    loaded = _load_with_environment(source, {
+        "WWTEST_KNOWN_DATABASE_MAX_CONNECTIONS": "50",
+        "WWTEST_KNOWN_DATABASE_HOST": "db.example.com",
+    })
+    
+    expected = {"database.max_connections": "50", "database.host": "db.example.com"}
+    if loaded != expected:
+        errmsg = f"Expected {expected}, got {loaded}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_environment_source_without_known_keys_maps_every_separator_to_a_dot():
+    """
+        Test that without schema keys every separator still becomes a dot.
+    """
+    source = EnvironmentSource(prefix="WWTEST_PLAIN_")
+    
+    loaded = _load_with_environment(source, {"WWTEST_PLAIN_DATABASE_MAX_CONNECTIONS": "50"})
+    
+    if loaded != {"database.max.connections": "50"}:
+        errmsg = f"Expected the fully dotted key, got {loaded}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_environment_source_doubled_separator_marks_nesting():
+    """
+        Test that a doubled separator separates the nesting levels and keeps
+        single separators in the key.
+    """
+    source = EnvironmentSource(prefix="WWTEST_DOUBLE_")
+    
+    loaded = _load_with_environment(source, {"WWTEST_DOUBLE_DATABASE__MAX_CONNECTIONS": "50"})
+    
+    if loaded != {"database.max_connections": "50"}:
+        errmsg = f"Expected 'database.max_connections', got {loaded}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_environment_source_ambiguous_known_keys_keep_the_dotted_key():
+    """
+        Test that a name that spells two schema keys is not resolved to
+        either of them.
+    """
+    source = EnvironmentSource(prefix="WWTEST_AMBIG_")
+    source.use_known_keys(["cache.max_size", "cache_max.size"])
+    
+    loaded = _load_with_environment(source, {"WWTEST_AMBIG_CACHE_MAX_SIZE": "9"})
+    
+    if loaded != {"cache.max.size": "9"}:
+        errmsg = f"Expected the fully dotted key, got {loaded}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_environment_variable_overrides_schema_key_with_underscore():
+    """
+        Test that, through the registry, an environment variable overrides a
+        schema key whose name contains an underscore.
+    """
+    from ccai.webworks.configuration import ConfigRegistry, ConfigSchema
+    
+    schema = ConfigSchema()
+    schema.define("database.max_connections", int, default=10)
+    
+    registry = ConfigRegistry(schema=schema)
+    registry.register_source(EnvironmentSource(prefix="WWTEST_REG_"))
+    
+    os.environ["WWTEST_REG_DATABASE_MAX_CONNECTIONS"] = "50"
+    try:
+        registry.load()
+    finally:
+        del os.environ["WWTEST_REG_DATABASE_MAX_CONNECTIONS"]
+    
+    if registry.get("database.max_connections") != 50:
+        errmsg = f"Expected 50, got {registry.get('database.max_connections')!r}"
+        raise AssertionError(errmsg)
+    
+    if "database.max.connections" in registry.keys():
+        errmsg = "The variable should not also create 'database.max.connections'"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_secrets_provider_resolves_name_against_known_keys():
+    """
+        Test that SECRET_API_KEY sets 'api_key' when the schema defines it.
+    """
+    provider = SecretsProvider(env_prefix="WWTEST_SECRET_")
+    provider.use_known_keys(["api_key"])
+    
+    loaded = _load_with_environment(provider, {"WWTEST_SECRET_API_KEY": "s3cret"})
+    
+    if list(loaded.keys()) != ["api_key"]:
+        errmsg = f"Expected the key 'api_key', got {list(loaded.keys())}"
+        raise AssertionError(errmsg)
+    
+    if loaded["api_key"].get_secret_value() != "s3cret":
+        errmsg = "Expected the secret value to be loaded"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# INI values are literal and sections keep their own keys
+# =============================================================================
+
+def test_ini_loader_keeps_percent_sign_in_value():
+    """
+        Test that a '%' in a value is read as it is.
+    """
+    loader = IniLoader()
+    
+    result = loader.load("[db]\npassword = abc%def\nformat = %(name)s\n")
+    
+    expected = {"db.password": "abc%def", "db.format": "%(name)s"}
+    if result != expected:
+        errmsg = f"Expected {expected}, got {result}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_ini_loader_keeps_section_override_of_default_key():
+    """
+        Test that a section's own value for a key that [DEFAULT] also defines
+        is kept.
+    """
+    loader = IniLoader()
+    
+    result = loader.load("[DEFAULT]\nhost = localhost\n\n[db]\nhost = db.example.com\n")
+    
+    expected = {"host": "localhost", "db.host": "db.example.com"}
+    if result != expected:
+        errmsg = f"Expected {expected}, got {result}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_ini_loader_does_not_copy_default_keys_into_sections():
+    """
+        Test that a [DEFAULT] key is a top-level key only.
+    """
+    loader = IniLoader()
+    
+    result = loader.load("[DEFAULT]\nhost = localhost\n\n[db]\nport = 5432\n")
+    
+    expected = {"host": "localhost", "db.port": "5432"}
+    if result != expected:
+        errmsg = f"Expected {expected}, got {result}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_ini_loader_round_trips_percent_sign():
+    """
+        Test that dump() writes a value with '%' that load() reads back.
+    """
+    loader = IniLoader()
+    data = {"db.password": "abc%def", "name": "100%"}
+    
+    result = loader.load(loader.dump(data))
+    
+    if result != data:
+        errmsg = f"Expected {data}, got {result}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Include directives
+# =============================================================================
+
+def test_file_source_unquoted_include_stops_at_end_of_line():
+    """
+        Test that an unquoted include path does not take in the lines after it.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        (Path(temp_dir) / "base.ini").write_text("[logging]\nlevel = DEBUG\n")
+        main_path = Path(temp_dir) / "main.ini"
+        main_path.write_text("%include base.ini\n[database]\nhost = localhost\n")
+        
+        result = FileSource(paths=[main_path]).load()
+        
+        expected = {"logging.level": "DEBUG", "database.host": "localhost"}
+        if result != expected:
+            errmsg = f"Expected {expected}, got {result}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_file_source_include_directive_in_cfg_and_conf_files():
+    """
+        Test that .cfg and .conf files use the INI include directive.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        (Path(temp_dir) / "base.ini").write_text("[logging]\nlevel = DEBUG\n")
+        
+        for extension in ("cfg", "conf"):
+            main_path = Path(temp_dir) / f"main.{extension}"
+            main_path.write_text("%include base.ini\n[database]\nhost = localhost\n")
+            
+            result = FileSource(paths=[main_path]).load()
+            
+            if result.get("logging.level") != "DEBUG":
+                errmsg = f"Expected the include of a .{extension} file to be processed, got {result}"
+                raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_file_source_include_directive_in_yml_file():
+    """
+        Test that a .yml file uses the YAML include directive.
+    """
+    if not YAML_AVAILABLE:
+        return  # Skip if YAML not available
+    
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        (Path(temp_dir) / "base.yaml").write_text("logging:\n  level: DEBUG\n")
+        main_path = Path(temp_dir) / "main.yml"
+        main_path.write_text("# !include base.yaml\ndatabase:\n  host: localhost\n")
+        
+        result = FileSource(paths=[main_path]).load()
+        
+        expected = {"logging.level": "DEBUG", "database.host": "localhost"}
+        if result != expected:
+            errmsg = f"Expected {expected}, got {result}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_file_source_include_merges_mapping_with_same_top_level_key():
+    """
+        Test that an included mapping is merged with a mapping of the same
+        name in the including file instead of being replaced by it.
+    """
+    if not YAML_AVAILABLE:
+        return  # Skip if YAML not available
+    
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        (Path(temp_dir) / "base.yaml").write_text("database:\n  host: basehost\n  port: 5432\n")
+        main_path = Path(temp_dir) / "main.yaml"
+        main_path.write_text("# !include base.yaml\ndatabase:\n  port: 6543\n")
+        
+        result = FileSource(paths=[main_path]).load()
+        
+        expected = {"database.host": "basehost", "database.port": 6543}
+        if result != expected:
+            errmsg = f"Expected {expected}, got {result}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_file_source_include_after_settings_overrides_them():
+    """
+        Test that an include placed after the file's own settings takes
+        precedence over them.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        (Path(temp_dir) / "override.ini").write_text("[database]\nhost = overridden\n")
+        main_path = Path(temp_dir) / "main.ini"
+        main_path.write_text("[database]\nhost = localhost\nport = 5432\n%include override.ini\n")
+        
+        result = FileSource(paths=[main_path]).load()
+        
+        expected = {"database.host": "overridden", "database.port": "5432"}
+        if result != expected:
+            errmsg = f"Expected {expected}, got {result}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_file_source_diamond_include_is_not_circular():
+    """
+        Test that a file included from two files is loaded, not reported as
+        a circular include.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        (Path(temp_dir) / "shared.ini").write_text("[shared]\nvalue = 1\n")
+        (Path(temp_dir) / "left.ini").write_text("%include shared.ini\n[left]\nvalue = 2\n")
+        (Path(temp_dir) / "right.ini").write_text("%include shared.ini\n[right]\nvalue = 3\n")
+        main_path = Path(temp_dir) / "main.ini"
+        main_path.write_text("%include left.ini\n%include right.ini\n")
+        
+        result = FileSource(paths=[main_path]).load()
+        
+        expected = {"shared.value": "1", "left.value": "2", "right.value": "3"}
+        if result != expected:
+            errmsg = f"Expected {expected}, got {result}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_file_source_include_of_itself_through_another_file_is_circular():
+    """
+        Test that two files that include each other are reported as a
+        circular include.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        (Path(temp_dir) / "a.ini").write_text("%include b.ini\n[a]\nvalue = 1\n")
+        (Path(temp_dir) / "b.ini").write_text("%include a.ini\n[b]\nvalue = 2\n")
+        
+        try:
+            FileSource(paths=[Path(temp_dir) / "a.ini"]).load()
+            errmsg = "Expected ConfigurationError for a circular include"
+            raise AssertionError(errmsg)
+        except ConfigurationFileNotFoundError:
+            raise
+        except ConfigurationError as exc:
+            if "Circular include" not in str(exc):
+                errmsg = f"Expected a circular include error, got {exc}"
+                raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_file_source_includes_file_of_another_format():
+    """
+        Test that an included file is read in the format of its own extension.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        (Path(temp_dir) / "base.json").write_text('{"logging": {"level": "DEBUG"}}')
+        main_path = Path(temp_dir) / "main.ini"
+        main_path.write_text("%include base.json\n[database]\nhost = localhost\n")
+        
+        result = FileSource(paths=[main_path]).load()
+        
+        expected = {"logging.level": "DEBUG", "database.host": "localhost"}
+        if result != expected:
+            errmsg = f"Expected {expected}, got {result}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+# =============================================================================
+# A configured secrets file must exist
+# =============================================================================
+
+def test_secrets_provider_missing_secrets_file_raises():
+    """
+        Test that load() raises when the configured secrets file is missing.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        provider = SecretsProvider(
+            env_prefix="WWTEST_NOSECRETS_",
+            secrets_file=Path(temp_dir) / "missing.enc",
+            encryption_key=b"0123456789abcdef0123456789abcdef"
+        )
+        
+        try:
+            provider.load()
+            errmsg = "Expected ConfigurationFileNotFoundError for a missing secrets file"
+            raise AssertionError(errmsg)
+        except ConfigurationFileNotFoundError:
+            pass  # Expected
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_secrets_provider_optional_secrets_file_may_be_missing():
+    """
+        Test that a secrets file declared optional may be absent.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        provider = SecretsProvider(
+            env_prefix="WWTEST_NOSECRETS_",
+            secrets_file=Path(temp_dir) / "missing.enc",
+            encryption_key=b"0123456789abcdef0123456789abcdef",
+            secrets_file_required=False
+        )
+        
+        result = provider.load()
+        
+        if result != {}:
+            errmsg = f"Expected no secrets, got {list(result.keys())}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+# =============================================================================
+# The secrets file is authenticated
+# =============================================================================
+
+def _encrypt_legacy_secrets(provider: SecretsProvider, secrets_data: Dict[str, str]) -> bytes:
+    """
+        Encrypt secrets the way releases up to 1.6.0 did: salt + iv +
+        AES-256-CBC ciphertext, with no header and no authentication.
+        
+        :param provider: Provider whose key is used.
+        :param secrets_data: The secrets to encrypt.
+        
+        :returns: The encrypted bytes in the legacy format.
+    """
+    import json
+    
+    from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    
+    salt = os.urandom(16)
+    iv = os.urandom(16)
+    derived_key = provider._derive_key(provider._encryption_key, salt, iterations=provider.LEGACY_KDF_ITERATIONS)
+    
+    padder = padding.PKCS7(128).padder()
+    padded = padder.update(json.dumps(secrets_data).encode("utf-8")) + padder.finalize()
+    
+    encryptor = Cipher(algorithms.AES(derived_key), modes.CBC(iv)).encryptor()
+    ciphertext = encryptor.update(padded) + encryptor.finalize()
+    
+    return salt + iv + ciphertext
+
+
+def test_secrets_provider_encrypted_data_starts_with_versioned_header():
+    """
+        Test that encrypted secrets start with the format magic and version.
+    """
+    provider = SecretsProvider(encryption_key=b"0123456789abcdef0123456789abcdef")
+    
+    encrypted = provider.encrypt_secrets({"api.key": "s3cret"})
+    
+    expected_header = SecretsProvider.FORMAT_MAGIC + bytes([SecretsProvider.FORMAT_VERSION])
+    if not encrypted.startswith(expected_header):
+        errmsg = f"Expected the data to start with {expected_header!r}, got {encrypted[:12]!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_secrets_provider_decrypt_rejects_every_modified_byte():
+    """
+        Test that changing any single byte of the encrypted data makes
+        decryption fail instead of returning altered secrets.
+    """
+    provider = SecretsProvider(encryption_key=b"0123456789abcdef0123456789abcdef")
+    
+    encrypted = provider.encrypt_secrets({"a": "secret-value"})
+    header_size = len(SecretsProvider.FORMAT_MAGIC) + 1
+    
+    # One position in each part: header, salt, nonce, ciphertext and tag
+    positions = [0, header_size - 1, header_size + 2, header_size + 16 + 2, header_size + 16 + 12 + 2, len(encrypted) - 1]
+    
+    for position in positions:
+        tampered = bytearray(encrypted)
+        tampered[position] ^= 0x01
+        
+        try:
+            provider.decrypt_secrets(bytes(tampered))
+            errmsg = f"Expected ConfigurationError for a change at byte {position}"
+            raise AssertionError(errmsg)
+        except ConfigurationError:
+            pass  # Expected
+    
+    return
+
+
+def test_secrets_provider_decrypt_rejects_wrong_key():
+    """
+        Test that data encrypted with one key is refused by another.
+    """
+    writer = SecretsProvider(encryption_key=b"0123456789abcdef0123456789abcdef")
+    reader = SecretsProvider(encryption_key=b"fedcba9876543210fedcba9876543210")
+    
+    encrypted = writer.encrypt_secrets({"a": "secret-value"})
+    
+    try:
+        reader.decrypt_secrets(encrypted)
+        errmsg = "Expected ConfigurationError for the wrong key"
+        raise AssertionError(errmsg)
+    except ConfigurationError:
+        pass  # Expected
+    
+    return
+
+
+def test_secrets_provider_rejects_legacy_format_by_default():
+    """
+        Test that data in the unauthenticated legacy format is refused.
+    """
+    provider = SecretsProvider(encryption_key=b"0123456789abcdef0123456789abcdef")
+    
+    legacy = _encrypt_legacy_secrets(provider, {"a": "secret-value"})
+    
+    try:
+        provider.decrypt_secrets(legacy)
+        errmsg = "Expected ConfigurationError for the legacy format"
+        raise AssertionError(errmsg)
+    except ConfigurationError as exc:
+        if "allow_legacy_secrets_format" not in str(exc):
+            errmsg = f"Expected the error to name the opt-in, got {exc}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+def test_secrets_provider_reads_legacy_format_when_allowed():
+    """
+        Test that the legacy format can be read with the explicit opt-in, so
+        an old file can be converted.
+    """
+    import json
+    
+    provider = SecretsProvider(
+        encryption_key=b"0123456789abcdef0123456789abcdef",
+        allow_legacy_secrets_format=True
+    )
+    
+    legacy = _encrypt_legacy_secrets(provider, {"a": "secret-value"})
+    
+    decrypted = provider.decrypt_secrets(legacy)
+    
+    if json.loads(decrypted) != {"a": "secret-value"}:
+        errmsg = f"Expected the legacy secrets to be decrypted, got {decrypted!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_secrets_provider_rejects_unknown_format_version():
+    """
+        Test that data with a format version this release does not know is
+        refused.
+    """
+    provider = SecretsProvider(encryption_key=b"0123456789abcdef0123456789abcdef")
+    
+    encrypted = bytearray(provider.encrypt_secrets({"a": "secret-value"}))
+    encrypted[len(SecretsProvider.FORMAT_MAGIC)] = 99
+    
+    try:
+        provider.decrypt_secrets(bytes(encrypted))
+        errmsg = "Expected ConfigurationError for an unknown format version"
+        raise AssertionError(errmsg)
+    except ConfigurationError as exc:
+        if "version" not in str(exc):
+            errmsg = f"Expected the error to mention the version, got {exc}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Discovery leaves out the files of other environments and profiles
+# =============================================================================
+
+def _create_profile_files(directory: str) -> None:
+    """
+        Create a base settings file and its dev, staging and production
+        overlays.
+        
+        :param directory: Directory to create the files in.
+    """
+    contents = {
+        "settings.json": '{"name": "base", "base_only": 1}',
+        "settings.dev.json": '{"name": "dev", "dev_only": 1}',
+        "settings.staging.json": '{"name": "staging", "staging_only": 1}',
+        "settings.production.json": '{"name": "production"}',
+    }
+    
+    for filename, content in contents.items():
+        (Path(directory) / filename).write_text(content)
+    
+    return
+
+
+def test_config_file_discovery_leaves_out_other_profiles():
+    """
+        Test that with profile 'production' the dev and staging overlays are
+        not discovered.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        _create_profile_files(temp_dir)
+        
+        discovery = ConfigFileDiscovery(
+            appname="testapp",
+            search_directories=[temp_dir],
+            profile="production"
+        )
+        
+        names = [path.name for path in discovery.discover()]
+        
+        if names != ["settings.json", "settings.production.json"]:
+            errmsg = f"Expected the base file then the production overlay, got {names}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_config_file_discovery_other_profile_keys_do_not_leak():
+    """
+        Test that keys found only in another profile's file are not loaded.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        _create_profile_files(temp_dir)
+        
+        discovery = ConfigFileDiscovery(
+            appname="testapp",
+            search_directories=[temp_dir],
+            profile="production"
+        )
+        
+        loaded = discovery.create_file_source().load()
+        
+        expected = {"name": "production", "base_only": 1}
+        if loaded != expected:
+            errmsg = f"Expected {expected}, got {loaded}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_config_file_discovery_without_profile_finds_base_files_only():
+    """
+        Test that with no environment and no profile only base files are
+        discovered.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        _create_profile_files(temp_dir)
+        
+        discovery = ConfigFileDiscovery(
+            appname="testapp",
+            search_directories=[temp_dir],
+            profile_env_var="WWTEST_UNSET_PROFILE_VAR"
+        )
+        
+        names = [path.name for path in discovery.discover()]
+        
+        if names != ["settings.json"]:
+            errmsg = f"Expected only the base file, got {names}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_config_file_discovery_environment_and_profile_overlays_are_ordered():
+    """
+        Test that the order is base, then environment overlay, then profile
+        overlay.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        _create_profile_files(temp_dir)
+        
+        discovery = ConfigFileDiscovery(
+            appname="testapp",
+            search_directories=[temp_dir],
+            environment="staging",
+            profile="dev"
+        )
+        
+        names = [path.name for path in discovery.discover()]
+        
+        if names != ["settings.json", "settings.staging.json", "settings.dev.json"]:
+            errmsg = f"Expected base, environment and profile files in that order, got {names}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_config_file_discovery_orders_base_files_by_name():
+    """
+        Test that the base files of a directory are returned in name order.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        for filename in ("settings.json", "config.json", "testapp.json", "settings.ini"):
+            (Path(temp_dir) / filename).write_text("{}" if filename.endswith(".json") else "")
+        
+        discovery = ConfigFileDiscovery(
+            appname="testapp",
+            search_directories=[temp_dir],
+            profile_env_var="WWTEST_UNSET_PROFILE_VAR"
+        )
+        
+        names = [path.name for path in discovery.discover()]
+        
+        if names != ["config.json", "settings.ini", "settings.json", "testapp.json"]:
+            errmsg = f"Expected the files in name order, got {names}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+    
+    return
+
+
+def test_config_file_discovery_appname_config_pattern_is_a_base_file():
+    """
+        Test that '<appname>.config.<ext>' is a base file of the
+        '{appname}.config.*' pattern and its profile overlay is found.
+    """
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        for filename in ("testapp.config.json", "testapp.config.production.json", "testapp.config.dev.json"):
+            (Path(temp_dir) / filename).write_text("{}")
+        
+        discovery = ConfigFileDiscovery(
+            appname="testapp",
+            search_directories=[temp_dir],
+            profile="production"
+        )
+        
+        names = [path.name for path in discovery.discover()]
+        
+        if names != ["testapp.config.json", "testapp.config.production.json"]:
+            errmsg = f"Expected the base file and the production overlay, got {names}"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
     
     return

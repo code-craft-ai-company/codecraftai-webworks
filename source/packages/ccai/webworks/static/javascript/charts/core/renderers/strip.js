@@ -7,283 +7,187 @@
  *
  * ctx.model.series data shape:
  *   series[].groups[]: { category, samples: [n, …] }
+ *   categories (optional): display order; derived from the groups when
+ *   omitted. Non-finite samples are missing data and ignored.
  *
  * Relevant ctx.attrs:
- *   jitter   "random" (default) | "none" | "swarm"
- *            "swarm" is also the default when the "swarm" type key is used.
+ *   jitter   "random" | "none" | "swarm" -- the default is "swarm" for the
+ *            swarm type and "random" (deterministic pseudo-random) for strip
  *   r        point radius in px (default 4)
+ *
+ * The swarm layout visits the dots in value order and gives each the
+ * free offset nearest the centre line, testing only dots within one
+ * diameter (a sliding window), and keeps every tied value apart. When a
+ * band is too narrow for the densest pile the radius shrinks (down to
+ * 1.5 px); dots that still find no room are spread over the band. Layouts are cached per group
+ * and pixel geometry, so a re-render at the same size does not redo them.
  */
 
 import { registerRenderer } from "../renderregistry.js";
 import { svgEl, formatNumber } from "../svgdraw.js";
-import { linearScale, bandScale, niceTicks } from "../scales.js";
+import { linearScale, bandScale } from "../scales.js";
+import {
+  finiteValues, isFiniteNumber, placeSwarm, swarmRadius, groupCategories, seriesGroups, hasGroupData,
+  axisLayer, drawTicks, drawCategoryLabels, tickCount, activateOnKey, focusableMark, fitDomain
+} from "./diststats.js";
+
+/* group object -> { signature, layout } */
+const SWARM_CACHE = new WeakMap();
+
+const MIN_SWARM_RADIUS = 1.5;
 
 
-/* ── jitter helpers ──────────────────────────────────────────────────────── */
-
-function _deterministicSeed(value, index) {
+function _jitterOffset(value, index) {
   /*
-   * Deterministic pseudo-random jitter offset in [−1, 1] derived from
-   * the sample value and its index — stable across re-renders.
+   * A deterministic pseudo-random offset in [-1, 1] from the sample value
+   * and index, stable across re-renders.
    */
-  const raw = Math.sin(value * 9301 + index * 49297 + 233) * 0.5 + 0.5
-  return raw * 2 - 1
+  const seed = Math.sin(value * 12.9898 + (index + 1) * 78.233) * 43758.5453
+  const unit = seed - Math.floor(seed)
+  return unit * 2 - 1
 }
 
 
-function _swarmPlace(samples, valScale, halfBand, r) {
+function _swarmLayout(group, samples, valScale, halfBand, radius, signature) {
   /*
-   * Greedy beeswarm placement.
-   * Sorts points by value, then places each at the first perpendicular
-   * offset that does not collide with already-placed points.
+   * Swarm offsets for one group, shrinking the radius when the band
+   * overflows; cached per group and geometry.
    *
-   * :param samples: Raw numeric samples.
-   * :param valScale: Continuous scale for the value axis.
-   * :param halfBand: Half the available band width (maximum jitter).
-   * :param r: Circle radius.
-   * :returns: Array of { value, offset } parallel to sorted order.
+   * :returns: { offsets, radius, overflow }
    */
-  const diameter = r * 2 + 1
-
-  /* Work in pixel space along the value axis. */
-  const pts = samples.map((v, i) => ({ value: v, px: valScale(v), offset: 0 }))
-  pts.sort((a, b) => a.px - b.px)
-
-  const placed = []  /* { px, offset } */
-
-  for (let i = 0; i < pts.length; i = i + 1) {
-    const pt = pts[i]
-    /* Collect candidates that could overlap on the value axis. */
-    const nearby = placed.filter((p) => Math.abs(p.px - pt.px) < diameter)
-
-    /* Try offsets starting from 0, ±1 diameter, ±2 diameter … */
-    let bestOffset = 0
-    let found = false
-    for (let step = 0; step <= Math.ceil(halfBand / diameter) && found === false; step = step + 1) {
-      const candidates = step === 0 ? [0] : [step * diameter, -step * diameter]
-      for (let ci = 0; ci < candidates.length && found === false; ci = ci + 1) {
-        const offset = candidates[ci]
-        if (Math.abs(offset) > halfBand) { continue }
-        const collision = nearby.some((p) => {
-          const dx = pt.px - p.px
-          const dy = offset - p.offset
-          return Math.sqrt(dx * dx + dy * dy) < diameter
-        })
-        if (collision === false) {
-          bestOffset = offset
-          found = true
-        }
-      }
-    }
-    pt.offset = bestOffset
-    placed.push({ px: pt.px, offset: bestOffset })
+  const cached = SWARM_CACHE.get(group)
+  if (cached !== undefined && cached.signature === signature) {
+    return cached.layout
   }
-
-  /* Map back to original sample order. */
-  const result = samples.map((v) => {
-    const match = pts.find((p) => p.value === v)
-    return { value: v, offset: match ? match.offset : 0 }
-  })
-  return result
+  const positions = samples.map((value) => valScale(value))
+  const size = swarmRadius(positions, radius, 1, halfBand, MIN_SWARM_RADIUS)
+  const placed = placeSwarm(positions, size * 2 + 1, halfBand)
+  const layout = { offsets: placed.offsets, radius: size, overflow: placed.overflow }
+  SWARM_CACHE.set(group, { signature: signature, layout: layout })
+  return layout
 }
 
-
-/* ── main render ─────────────────────────────────────────────────────────── */
 
 export function render(ctx) {
   /*
    * Render a strip plot or swarm plot.
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
   const model = ctx.model
   const horizontal = ctx.orientation === "horizontal"
-
-  /* "swarm" type key implies jitter="swarm"; attr overrides. */
-  const typeIsSwarm = false  /* determined at registration time via wrapper */
-  const defaultJitter = ctx.attrs("_swarm_default", "random")
-  const jitter = ctx.attrs("jitter", defaultJitter)
-  const r = parseFloat(ctx.attrs("r", "4")) || 4
+  const jitter = ctx.attrs("jitter", ctx.type === "swarm" ? "swarm" : "random")
+  const radiusAttr = parseFloat(ctx.attrs("r", "4"))
+  const radius = isFiniteNumber(radiusAttr) === true && radiusAttr > 0 ? radiusAttr : 4
 
   const root = svgEl("g", { part: "plot" }, [])
-
-  const series = model.series
-  const categories = model.categories
-  if (series === null || series === undefined || series.length === 0) {
-    return root
-  }
-  if (categories === null || categories === undefined || categories.length === 0) {
+  const series = Array.isArray(model.series) === true ? model.series : []
+  const categories = groupCategories(model)
+  if (series.length === 0 || categories.length === 0) {
     return root
   }
 
-  /* Global value extent. */
   let valMin = Infinity
   let valMax = -Infinity
+  const strips = []
   for (let si = 0; si < series.length; si = si + 1) {
-    const groups = series[si].groups || []
+    const groups = seriesGroups(series[si])
     for (let gi = 0; gi < groups.length; gi = gi + 1) {
-      const samples = groups[gi].samples || []
+      const samples = finiteValues(groups[gi].samples)
+      if (samples.length === 0) {
+        continue
+      }
+      strips.push({ seriesIndex: si, group: groups[gi], samples: samples })
       for (let vi = 0; vi < samples.length; vi = vi + 1) {
-        if (samples[vi] < valMin) { valMin = samples[vi] }
-        if (samples[vi] > valMax) { valMax = samples[vi] }
+        valMin = Math.min(valMin, samples[vi])
+        valMax = Math.max(valMax, samples[vi])
       }
     }
   }
-  if (valMin === Infinity) {
+  if (strips.length === 0) {
     return root
   }
-  const pad = (valMax - valMin) * 0.1 || 1
-  valMin = valMin - pad
-  valMax = valMax + pad
 
-  const margin = { top: 16, right: 16, bottom: 40, left: 52 }
+  const margin = { top: 16, right: 16, bottom: 40, left: horizontal === true ? 96 : 56 }
   const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
+  const valueCount = tickCount(horizontal === true ? plotW : plotH, horizontal === true ? 70 : 40)
+  const pad = (valMax - valMin) * 0.05
+  const domain = fitDomain(valMin - pad, valMax + pad, valueCount)
 
-  const cat = bandScale(categories, [0, horizontal ? plotH : plotW], 0.2)
-  const val = horizontal
-    ? linearScale([valMin, valMax], [0, plotW])
-    : linearScale([valMin, valMax], [plotH, 0])
+  const cat = bandScale(categories, [0, horizontal === true ? plotH : plotW], 0.2)
+  const val = horizontal === true
+    ? linearScale(domain, [0, plotW])
+    : linearScale(domain, [plotH, 0])
 
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
+  const plot = svgEl("g", { transform: `translate(${margin.left},${margin.top})` }, [])
   root.appendChild(plot)
+  const axes = axisLayer(plot)
+  if (horizontal === true) {
+    drawTicks(axes, val, { side: "bottom", extent: plotH, count: valueCount })
+  } else {
+    drawTicks(axes, val, { side: "left", extent: plotW, count: valueCount })
+  }
+  drawCategoryLabels(axes, categories.map((category, index) => ({ text: category, center: cat.centerAt(index) })),
+    horizontal === true ? "left" : "bottom", horizontal === true ? 0 : plotH,
+    horizontal === true ? margin.left - 12 : cat.step())
 
-  /* Value gridlines + tick labels. */
-  const ticks = niceTicks(valMin, valMax, 5)
-  for (let ti = 0; ti < ticks.length; ti = ti + 1) {
-    const tick = ticks[ti]
-    if (horizontal === true) {
-      const x = val(tick)
-      plot.appendChild(svgEl("line", {
-        x1: x, y1: 0, x2: x, y2: plotH,
-        stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-      }, []))
-      plot.appendChild(svgEl("text", {
-        x: x, y: plotH + 16, "text-anchor": "middle",
-        "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-      }, formatNumber(tick)))
+  const marks = svgEl("g", { part: "marks" }, [])
+  plot.appendChild(marks)
+  const clusterWidth = cat.bandwidth() / series.length
+  const halfBand = Math.max(clusterWidth / 2 - radius, 0)
+  const rows = []
+
+  for (let gi = 0; gi < strips.length; gi = gi + 1) {
+    const strip = strips[gi]
+    const position = cat.indexOf(strip.group.category)
+    if (position < 0) {
+      continue
+    }
+    const entry = series[strip.seriesIndex]
+    const color = ctx.colorFor(entry.name)
+    const center = cat.at(position) + strip.seriesIndex * clusterWidth + clusterWidth / 2
+    const category = strip.group.category
+
+    let offsets = null
+    let dotRadius = radius
+    if (jitter === "swarm") {
+      const signature = `${plotW}x${plotH}|${domain[0]},${domain[1]}|${radius}|${halfBand}|${horizontal}|${strip.samples.length}`
+      const layout = _swarmLayout(strip.group, strip.samples, val, halfBand, radius, signature)
+      offsets = layout.offsets
+      dotRadius = layout.radius
     } else {
-      const y = val(tick)
-      plot.appendChild(svgEl("line", {
-        x1: 0, y1: y, x2: plotW, y2: y,
-        stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-      }, []))
-      plot.appendChild(svgEl("text", {
-        x: -8, y: y + 4, "text-anchor": "end",
-        "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-      }, formatNumber(tick)))
+      offsets = strip.samples.map((value, index) => {
+        return jitter === "none" ? 0 : _jitterOffset(value, index) * halfBand * 0.8
+      })
     }
+
+    const group = svgEl("g", { part: "strip" }, [])
+    for (let pi = 0; pi < strip.samples.length; pi = pi + 1) {
+      const value = strip.samples[pi]
+      const along = val(value)
+      const across = center + offsets[pi]
+      const dot = svgEl("circle", {
+        cx: horizontal === true ? along : across,
+        cy: horizontal === true ? across : along,
+        r: dotRadius, fill: color, "fill-opacity": 0.75
+      }, [])
+      dot.setAttribute("part", "point")
+      focusableMark(dot, `${entry.name}, ${category}: ${formatNumber(value)}`)
+      activateOnKey(dot, () => {
+        ctx.emit("mj-chart-point-click", { series: entry.name, category: category, value: value })
+      })
+      group.appendChild(dot)
+      rows.push([entry.name, String(category), value])
+    }
+    marks.appendChild(group)
   }
 
-  /* Category labels. */
-  for (let ci = 0; ci < categories.length; ci = ci + 1) {
-    const category = categories[ci]
-    const bandCenter = cat(category) + cat.bandwidth() / 2
-    if (horizontal === true) {
-      plot.appendChild(svgEl("text", {
-        x: -8, y: bandCenter + 4, "text-anchor": "end",
-        "font-size": 11, fill: "var(--mj-text, #14181f)"
-      }, String(category)))
-    } else {
-      plot.appendChild(svgEl("text", {
-        x: bandCenter, y: plotH + 18, "text-anchor": "middle",
-        "font-size": 11, fill: "var(--mj-text, #14181f)"
-      }, String(category)))
-    }
-  }
-
-  const bandwidth = cat.bandwidth()
-  const halfBand = bandwidth / 2
-
-  for (let si = 0; si < series.length; si = si + 1) {
-    const s = series[si]
-    const color = ctx.colorFor(si)
-    const groups = s.groups || []
-    const clusterWidth = series.length > 1 ? bandwidth / series.length : bandwidth
-    const clusterHalfBand = clusterWidth / 2 * 0.8
-
-    for (let gi = 0; gi < groups.length; gi = gi + 1) {
-      const group = groups[gi]
-      const samples = group.samples || []
-      if (samples.length === 0) { continue }
-
-      const bandStart = cat(group.category)
-      const clusterOffset = series.length > 1 ? si * clusterWidth : 0
-      const bandCenter = bandStart + clusterOffset + clusterWidth / 2
-
-      /* Compute per-point positions. */
-      const useSwarm = jitter === "swarm"
-      let placedPoints = null
-
-      if (useSwarm === true) {
-        placedPoints = _swarmPlace(samples, val, clusterHalfBand, r)
-      } else {
-        placedPoints = samples.map((v, pi) => {
-          const offset = jitter === "none" ? 0 : _deterministicSeed(v, pi) * clusterHalfBand
-          return { value: v, offset: offset }
-        })
-      }
-
-      for (let pi = 0; pi < placedPoints.length; pi = pi + 1) {
-        const { value, offset } = placedPoints[pi]
-        const cx = horizontal ? val(value) : bandCenter + offset
-        const cy = horizontal ? bandCenter + offset : val(value)
-
-        const dot = svgEl("circle", {
-          cx: cx, cy: cy, r: r,
-          fill: color, opacity: 0.75
-        }, [])
-        dot.setAttribute("part", "point")
-        dot.setAttribute("tabindex", "0")
-        dot.setAttribute("role", "img")
-        dot.setAttribute("aria-label",
-          `${s.name}, ${group.category}: ${formatNumber(value)}`)
-        dot.appendChild(svgEl("title", null,
-          `${s.name} — ${group.category}: ${formatNumber(value)}`))
-        const handlerValue = value
-        const handlerGroup = group
-        const handlerSeries = s
-        const clickHandler = () => {
-          ctx.emit("mj-chart-point-click", {
-            series: handlerSeries.name,
-            category: handlerGroup.category,
-            value: handlerValue
-          })
-        }
-        dot.addEventListener("click", clickHandler)
-        dot.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault()
-            clickHandler()
-          }
-        })
-        plot.appendChild(dot)
-      }
-    }
-  }
-
+  ctx.setTable({ columns: ["Series", "Category", "Value"], rows: rows, caption: "Observations" })
   return root
 }
 
 
-function _renderSwarm(ctx) {
-  /*
-   * Wrapper that forces jitter="swarm" as default for the "swarm" type key.
-   * Passes a sentinel attr so the shared render() picks up the right default.
-   */
-  const origAttrs = ctx.attrs
-  const wrappedCtx = Object.assign({}, ctx, {
-    attrs: (name, fallback) => {
-      if (name === "_swarm_default") { return "swarm" }
-      return origAttrs(name, fallback)
-    }
-  })
-  return render(wrappedCtx)
-}
-
-
-registerRenderer("strip", render)
-registerRenderer("swarm", _renderSwarm)
+registerRenderer("strip", render, { isEmpty: (model) => hasGroupData(model, true) === false })
+registerRenderer("swarm", render, { isEmpty: (model) => hasGroupData(model, true) === false })

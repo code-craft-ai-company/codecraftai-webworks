@@ -10,10 +10,11 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2026, Code Craft AI LLC"
 __credits__ = []
 
+import os
 import re
 import tempfile
 
-from typing import Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ccai import testbase
 
@@ -161,6 +162,28 @@ def test_links_between_markdown_files_become_site_urls():
     return
 
 
+def test_a_page_with_a_malformed_link_is_served_with_the_link_as_written():
+    """
+        **Feature: books blueprint**
+        **Property: a document holding a link that cannot be parsed as a URL is served as a page, with the link left as it was written.**
+    """
+    with tempfile.TemporaryDirectory() as root:
+        write_sample_library(root)
+        chapter_path = os.path.join(root, "volumes", "one", "chapters", "01-start.md")
+        with open(chapter_path, "a", encoding="utf-8") as chapter_file:
+            chapter_file.write("\n[Local server](http://[your-host]:8080/)\n")
+
+        get = _serve(root)
+        response = get("/books/volumes/one/chapters/01-start.md")
+        page = response.body.decode("utf-8")
+
+    testbase.assert_equal(
+        (response.status_code, 'href="http://[your-host]:8080/"' in page),
+        (200, True),
+    )
+    return
+
+
 def test_folders_and_non_canonical_locations_redirect_to_the_document():
     """
         **Feature: books blueprint**
@@ -301,20 +324,28 @@ class _RecordingWebApplication:
             Creates the stand-in with no routes.
         """
         self.routes: Dict[str, List[str]] = {}
+        self.metadata: Dict[str, Dict[str, Any]] = {}
         return
 
-    def attach_route(self, path: str, methods: List[str]) -> Callable:
+    def attach_route(self, path: str, methods: List[str], version: Optional[str] = None, tags: Optional[List[str]] = None,
+                     access_policy: Any = None, rate_limit: Any = None, doc: Any = None) -> Callable:
         """
             Records a route the way WebApplication.attach_route registers one.
 
             :param path: The route's path.
             :param methods: The route's methods.
+            :param version: The route's API version.
+            :param tags: The route's documentation tags.
+            :param access_policy: The route's access policy.
+            :param rate_limit: The route's rate limit.
+            :param doc: The route's documentation.
 
             :returns: A decorator that records the handler's route.
         """
 
         def decorator(handler: Callable) -> Callable:
             self.routes[path] = methods
+            self.metadata[path] = {"tags": tags, "doc": doc, "access_policy": access_policy}
             return handler
 
         return decorator
@@ -341,4 +372,25 @@ def test_attaching_to_a_web_application_attaches_every_route():
             "/library/{document:path}": ["GET"],
         },
     )
+    return
+
+
+def test_attaching_to_a_web_application_keeps_the_route_metadata():
+    """
+        **Feature: books blueprint**
+        **Property: attach_to_webapp passes the tags and documentation of each descriptor on to the web application, so the
+        routes keep their metadata.**
+    """
+    with tempfile.TemporaryDirectory() as root:
+        write_sample_library(root)
+        books = BooksBlueprint(BookLibrary(root), mount_path="/library")
+        webapp = _RecordingWebApplication()
+        books.attach_to_webapp(webapp)
+        descriptors = books.get_descriptors(include_trailing_slash=True)
+
+    for descriptor in descriptors:
+        recorded = webapp.metadata[descriptor.path]
+        testbase.assert_equal(recorded["tags"], ["books"])
+        testbase.assert_equal(recorded["doc"] is not None, True)
+        testbase.assert_equal(recorded["doc"].summary, descriptor.doc.summary)
     return

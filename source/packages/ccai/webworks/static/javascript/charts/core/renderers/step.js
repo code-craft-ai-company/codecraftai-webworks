@@ -8,60 +8,99 @@
  *
  * ctx.attrs recognised:
  *   step-position   "before" | "after" | "middle" (default "after")
- *                   Controls where the vertical jump is placed relative to x.
- *   fill            "true" | "false" (default "false") — fill area to baseline.
- *   show-points     "true" | "false" (default "true") — change-point markers.
+ *                   Where the vertical jump sits relative to each x:
+ *                   after  -- a value holds from its x until the next x
+ *                   before -- a value holds from the previous x up to its x
+ *                   middle -- the jump is half-way between two x values
+ *   fill            boolean (default false) — fill the area down to zero
+ *   show-points     boolean (default true) — change-point markers
+ *   x-scale         see line.js
  *
  * Series data may use either:
  *   series[].points  [{x, y}, ...]
  *   series[].values  [...] aligned with model.categories
+ *
+ * Dates use a time scale (line.js rules), so a tread's length is the time
+ * the level lasted. In "after" mode the axis runs one typical interval past
+ * the last x so the final level has a tread of its own. A null value is
+ * a gap: the previous level stops at the null's x and the line restarts at
+ * the next value. The value axis always includes zero.
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber, extent } from "../svgdraw.js";
-import { linearScale, pointScale, niceTicks } from "../scales.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
+import { booleanOption } from "../chartoptions.js";
+import { trendSeries, trendFrame, sortedPixels, pointTargets } from "./line.js";
 
 
-function _buildStepPath(pixelPoints, stepPosition, closeTo) {
+function _stepRuns(pixels, stepPosition, endX) {
   /*
-   * Build a step path `d` string from an array of {x, y} pixel points.
+   * The polylines of a step series, one per run of known values.
    *
-   * :param pixelPoints: Array of {x, y} (all non-null).
+   * :param pixels: [{x, y}] in x order; y null marks a gap.
    * :param stepPosition: "before" | "after" | "middle".
-   * :param closeTo: If not null, close the path to this y pixel value.
-   * :returns: Path data string.
+   * :param endX: The px where the last level of the series ends ("after").
+   * :returns: An array of runs, each an array of {x, y} vertices.
    */
-  if (pixelPoints.length === 0) {
-    return ""
-  }
+  const runs = []
+  let current = null
 
-  let data = `M${pixelPoints[0].x.toFixed(2)},${pixelPoints[0].y.toFixed(2)}`
-
-  for (let i = 1; i < pixelPoints.length; i = i + 1) {
-    const prev = pixelPoints[i - 1]
-    const curr = pixelPoints[i]
-
+  for (let index = 0; index < pixels.length; index = index + 1) {
+    const point = pixels[index]
+    if (point.y === null) {
+      if (current !== null && stepPosition === "after") {
+        /* The level holds until the x where the value goes missing. */
+        const last = current[current.length - 1]
+        current.push({ x: point.x, y: last.y })
+      }
+      current = null
+      continue
+    }
+    if (current === null) {
+      current = [{ x: point.x, y: point.y }]
+      runs.push(current)
+      continue
+    }
+    const previous = current[current.length - 1]
     if (stepPosition === "before") {
-      /* Jump first, then go horizontal to next x. */
-      data = data + ` V${curr.y.toFixed(2)} H${curr.x.toFixed(2)}`
+      current.push({ x: previous.x, y: point.y })
+      current.push({ x: point.x, y: point.y })
     } else if (stepPosition === "middle") {
-      /* Horizontal half-way, jump, then horizontal to next x. */
-      const midX = (prev.x + curr.x) / 2
-      data = data + ` H${midX.toFixed(2)} V${curr.y.toFixed(2)} H${curr.x.toFixed(2)}`
+      const middle = (previous.x + point.x) / 2
+      current.push({ x: middle, y: previous.y })
+      current.push({ x: middle, y: point.y })
+      current.push({ x: point.x, y: point.y })
     } else {
-      /* "after" — go horizontal first to next x, then jump. */
-      data = data + ` H${curr.x.toFixed(2)} V${curr.y.toFixed(2)}`
+      current.push({ x: point.x, y: previous.y })
+      current.push({ x: point.x, y: point.y })
     }
   }
 
-  if (closeTo !== null && closeTo !== undefined) {
-    const first = pixelPoints[0]
-    const last = pixelPoints[pixelPoints.length - 1]
-    data = data +
-      ` V${closeTo.toFixed(2)} H${first.x.toFixed(2)} V${pixelPoints[0].y.toFixed(2)} Z`
+  if (current !== null && stepPosition === "after") {
+    const last = current[current.length - 1]
+    if (endX > last.x) {
+      current.push({ x: endX, y: last.y })
+    }
   }
+  return runs
+}
 
-  return data
+
+function _runPath(run, closeTo) {
+  /*
+   * Path data of one run; closed down to `closeTo` (px) when it is a number.
+   */
+  let data = ""
+  for (let index = 0; index < run.length; index = index + 1) {
+    const command = index === 0 ? "M" : "L"
+    data = data + `${command}${run[index].x.toFixed(2)},${run[index].y.toFixed(2)} `
+  }
+  if (typeof closeTo === "number") {
+    const first = run[0]
+    const last = run[run.length - 1]
+    data = data + `L${last.x.toFixed(2)},${closeTo.toFixed(2)} L${first.x.toFixed(2)},${closeTo.toFixed(2)} Z`
+  }
+  return data.trim()
 }
 
 
@@ -75,190 +114,95 @@ export function render(ctx) {
   const model = ctx.model
   const root = svgEl("g", { part: "plot" }, [])
 
-  const stepPosition = ctx.attrs("step-position", "after")
-  const fillArea = ctx.attrs("fill", "false") === "true"
-  const showPoints = ctx.attrs("show-points", "true") === "true"
+  const positionAttr = String(ctx.attrs("step-position", "after")).trim().toLowerCase()
+  const stepPosition = positionAttr === "before" || positionAttr === "middle" ? positionAttr : "after"
+  const fillArea = booleanOption(ctx, "fill", false)
+  const showPoints = booleanOption(ctx, "show-points", true)
 
-  /* Normalise series to {name, xy:[{x,y}]}. */
-  const normSeries = []
-  for (let s = 0; s < model.series.length; s = s + 1) {
-    const ser = model.series[s]
-    const xy = []
-    if (ser.points !== undefined && ser.points !== null && ser.points.length > 0) {
-      for (let p = 0; p < ser.points.length; p = p + 1) {
-        const pt = ser.points[p]
-        xy.push({ x: String(pt.x), y: typeof pt.y === "number" ? pt.y : null })
-      }
-    } else if (ser.values !== undefined && ser.values !== null) {
-      for (let v = 0; v < ser.values.length; v = v + 1) {
-        const cat = model.categories[v] !== undefined
-          ? String(model.categories[v]) : String(v)
-        xy.push({ x: cat, y: typeof ser.values[v] === "number" ? ser.values[v] : null })
-      }
-    }
-    normSeries.push({ name: ser.name, xy: xy })
-  }
-
-  if (normSeries.length === 0) {
-    return root
-  }
-
-  /* Collect all x labels and y values. */
-  const xLabelSet = []
-  const xLabelSeen = {}
-  const allY = []
-  for (let s = 0; s < normSeries.length; s = s + 1) {
-    const xy = normSeries[s].xy
-    for (let p = 0; p < xy.length; p = p + 1) {
-      const label = xy[p].x
-      if (xLabelSeen[label] !== true) {
-        xLabelSet.push(label)
-        xLabelSeen[label] = true
-      }
-      if (xy[p].y !== null) {
-        allY.push(xy[p].y)
+  const list = trendSeries(model)
+  let yMin = 0
+  let yMax = 0
+  let anyValue = false
+  for (let s = 0; s < list.length; s = s + 1) {
+    for (let p = 0; p < list[s].points.length; p = p + 1) {
+      const value = list[s].points[p].y
+      if (value !== null) {
+        anyValue = true
+        yMin = Math.min(yMin, value)
+        yMax = Math.max(yMax, value)
       }
     }
   }
-
-  if (xLabelSet.length === 0 || allY.length === 0) {
+  if (anyValue === false) {
     return root
   }
-
-  const yExt = extent(allY)
-  let yMin = Math.min(0, yExt[0])
-  let yMax = yExt[1]
   if (yMin === yMax) {
     yMax = yMin + 1
   }
 
-  const margin = { top: 16, right: 16, bottom: 40, left: 52 }
-  const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
-  const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
+  const frame = trendFrame(ctx, list, model, {
+    yDomain: [yMin, yMax],
+    extendEnd: stepPosition === "after"
+  })
+  root.appendChild(frame.plot)
+  const baseline = frame.y(0)
 
-  const xScale = pointScale(xLabelSet, [0, plotW])
-  const yScale = linearScale([yMin, yMax], [plotH, 0])
-
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
-  root.appendChild(plot)
-
-  /* Gridlines + y-axis labels. */
-  const ticks = niceTicks(yMin, yMax, 5)
-  for (let t = 0; t < ticks.length; t = t + 1) {
-    const tick = ticks[t]
-    const y = yScale(tick)
-    plot.appendChild(svgEl("line", {
-      x1: 0, y1: y, x2: plotW, y2: y,
-      stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
+  if (yMin < 0) {
+    frame.chrome.appendChild(svgEl("line", {
+      x1: 0, y1: baseline, x2: frame.plotW, y2: baseline,
+      stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
     }, []))
-    plot.appendChild(svgEl("text", {
-      x: -8, y: y + 4, "text-anchor": "end",
-      "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-    }, formatNumber(tick)))
   }
 
-  /* X-axis labels. */
-  const labelStep = Math.max(1, Math.ceil(xLabelSet.length / 10))
-  for (let i = 0; i < xLabelSet.length; i = i + labelStep) {
-    const label = xLabelSet[i]
-    const x = xScale(label)
-    plot.appendChild(svgEl("text", {
-      x: x, y: plotH + 16, "text-anchor": "middle",
-      "font-size": 11, fill: "var(--mj-text, #14181f)"
-    }, escapeHtml(label)))
-  }
+  for (let s = 0; s < list.length; s = s + 1) {
+    const series = list[s]
+    const color = ctx.colorFor(series.name)
+    const group = svgEl("g", { part: "series", "data-series": series.name }, [])
+    const pixels = sortedPixels(series, frame)
+    const runs = _stepRuns(pixels, stepPosition, frame.x.end)
 
-  /* Axis baseline. */
-  plot.appendChild(svgEl("line", {
-    x1: 0, y1: plotH, x2: plotW, y2: plotH,
-    stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
-  }, []))
-
-  const baseline = yScale(0)
-
-  /* Draw each series. */
-  for (let s = 0; s < normSeries.length; s = s + 1) {
-    const ser = normSeries[s]
-    const color = ctx.colorFor(ser.name)
-    const seriesGroup = svgEl("g", { part: "series" }, [])
-
-    /* Build pixel-space point list, skipping nulls. */
-    const pixelPoints = []
-    for (let p = 0; p < ser.xy.length; p = p + 1) {
-      const pt = ser.xy[p]
-      if (pt.y === null) {
-        continue
+    for (let r = 0; r < runs.length; r = r + 1) {
+      if (fillArea === true) {
+        group.appendChild(svgEl("path", {
+          d: _runPath(runs[r], baseline),
+          fill: color, "fill-opacity": 0.25, stroke: "none", part: "step-fill"
+        }, []))
       }
-      pixelPoints.push({ x: xScale(pt.x), y: yScale(pt.y), xLabel: pt.x, yVal: pt.y })
-    }
-
-    if (pixelPoints.length === 0) {
-      continue
-    }
-
-    const closeTo = fillArea === true ? baseline : null
-    const pathData = _buildStepPath(pixelPoints, stepPosition, closeTo)
-
-    if (pathData !== "") {
-      const pathEl = svgEl("path", {
-        d: pathData,
-        fill: fillArea === true ? color : "none",
-        "fill-opacity": fillArea === true ? "0.25" : null,
+      group.appendChild(svgEl("path", {
+        d: _runPath(runs[r], null),
+        fill: "none",
         stroke: color,
         "stroke-width": 2,
-        "stroke-linejoin": "miter"
-      }, [])
-      seriesGroup.appendChild(pathEl)
+        "stroke-linejoin": "miter",
+        part: "step-line"
+      }, []))
     }
 
-    /* Change-point markers and interactive targets. */
-    if (showPoints === true || true) {
-      for (let p = 0; p < pixelPoints.length; p = p + 1) {
-        const pt = pixelPoints[p]
-
-        if (showPoints === true) {
-          const dot = svgEl("circle", {
-            cx: pt.x, cy: pt.y, r: 3,
-            fill: color,
-            stroke: "var(--mj-surface, #fff)",
-            "stroke-width": 1.5
-          }, [])
-          seriesGroup.appendChild(dot)
-        }
-
-        const hit = svgEl("circle", {
-          cx: pt.x, cy: pt.y, r: 6,
-          fill: "transparent",
-          tabindex: "0",
-          role: "img",
-          "aria-label": `${escapeHtml(ser.name)}, ${escapeHtml(pt.xLabel)}: ${formatNumber(pt.yVal)}`
-        }, [])
-        hit.appendChild(svgEl("title", null,
-          `${ser.name} - ${pt.xLabel}: ${pt.yVal}`))
-        const handler = (() => {
-          const capturedSeries = ser.name
-          const capturedX = pt.xLabel
-          const capturedY = pt.yVal
-          return () => {
-            ctx.emit("mj-chart-step-click", {
-              series: capturedSeries, x: capturedX, y: capturedY
-            })
-          }
-        })()
-        hit.addEventListener("click", handler)
-        hit.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault()
-            handler()
-          }
-        })
-        seriesGroup.appendChild(hit)
+    const targets = []
+    for (let index = 0; index < pixels.length; index = index + 1) {
+      const pixel = pixels[index]
+      if (pixel.y === null) {
+        continue
       }
+      if (showPoints === true) {
+        group.appendChild(svgEl("circle", {
+          cx: pixel.x.toFixed(2), cy: pixel.y.toFixed(2), r: 3,
+          fill: color,
+          stroke: "var(--mj-surface, #fff)",
+          "stroke-width": 1.5,
+          part: "dot"
+        }, []))
+      }
+      const xLabel = frame.x.labelOf(pixel.point)
+      targets.push({
+        x: pixel.x, y: pixel.y,
+        label: `${series.name}, ${xLabel}: ${formatNumber(pixel.value)}`,
+        detail: { series: series.name, x: pixel.point.raw !== null ? pixel.point.raw : xLabel, y: pixel.value }
+      })
     }
+    pointTargets(group, targets, { ctx: ctx, eventName: "mj-chart-step-click", width: frame.plotW })
 
-    plot.appendChild(seriesGroup)
+    frame.marks.appendChild(group)
   }
 
   return root

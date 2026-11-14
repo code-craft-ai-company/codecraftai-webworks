@@ -752,3 +752,80 @@ def test_reset_clears_all_state():
         raise AssertionError(errmsg)
 
     return
+
+
+def test_setup_worker_tmp_dir_uses_the_configured_parent():
+    """
+        worker_tmp_dir is the parent of the directory the workers share.
+    """
+    import shutil
+    import tempfile
+
+    parent = tempfile.mkdtemp(prefix="limiter-parent-")
+    limiter = ResourceLimiter(config=ServerConfig(worker_tmp_dir=parent))
+
+    try:
+        path = limiter.setup_worker_tmp_dir()
+        inside = os.path.dirname(path) == parent
+    finally:
+        limiter.cleanup_worker_tmp_dir()
+        shutil.rmtree(parent)
+
+    if not inside:
+        errmsg = f"Expected the directory inside {parent}, got {path}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_setup_worker_tmp_dir_fails_loudly():
+    """
+        A parent that does not exist is an error, not a silent None.
+    """
+    limiter = ResourceLimiter(config=ServerConfig(worker_tmp_dir="/nonexistent/webworks/parent"))
+
+    try:
+        limiter.setup_worker_tmp_dir()
+    except OSError:
+        return
+
+    errmsg = "Expected OSError for a parent directory that does not exist"
+    raise AssertionError(errmsg)
+
+
+def test_cleanup_worker_tmp_dir_removes_its_contents():
+    """
+        The shared directory is removed with the files the workers left in it.
+    """
+    limiter = ResourceLimiter(config=ServerConfig())
+    path = limiter.setup_worker_tmp_dir()
+
+    with open(os.path.join(path, "worker-1.json"), "w", encoding="utf-8") as snapshot:
+        snapshot.write("{}")
+
+    limiter.cleanup_worker_tmp_dir()
+
+    if os.path.exists(path):
+        errmsg = f"Expected {path} to be removed with its contents"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_current_memory_usage_reports_resident_memory():
+    """
+        The resident memory of the process is reported in bytes.
+    """
+    from ccai.errors.exceptions import SkipError
+    from ccai.webworks.prodserver.resourcelimiter import current_memory_usage
+
+    usage = current_memory_usage()
+
+    if usage == 0:
+        raise SkipError("This platform reports no resident memory.")
+
+    if usage < 1024 * 1024:
+        errmsg = f"Expected at least a megabyte of resident memory, got {usage} bytes"
+        raise AssertionError(errmsg)
+
+    return

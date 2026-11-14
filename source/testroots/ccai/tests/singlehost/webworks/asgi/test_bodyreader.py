@@ -998,7 +998,6 @@ def test_read_multipart_parses_file_upload():
     """
         Test that read_multipart() parses file upload.
     """
-    from ccai.webworks.asgi.bodyreader import UploadedFile
     
     reader = BodyReader()
     boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
@@ -2242,4 +2241,113 @@ def test_property_5_multipart_mixed_fields_and_files_round_trip():
                 )
                 raise AssertionError(errmsg)
 
+    return
+
+
+# =============================================================================
+# Tests for multipart parameters, repeated fields and boundaries inside lines
+# =============================================================================
+
+def build_multipart_messages(boundary: str, parts: List[tuple]) -> List[Dict[str, Any]]:
+    """
+        Build the receive messages of a multipart/form-data body.
+        
+        :param boundary: Boundary string.
+        :param parts: List of (Content-Disposition value, content bytes) pairs.
+        
+        :returns: One http.request message holding the whole body.
+    """
+    lines = []
+    
+    for disposition, content in parts:
+        lines.append(b"--" + boundary.encode("ascii") + b"\r\n")
+        lines.append(b"Content-Disposition: " + disposition.encode("utf-8") + b"\r\n\r\n")
+        lines.append(content + b"\r\n")
+    
+    lines.append(b"--" + boundary.encode("ascii") + b"--\r\n")
+    
+    body = b"".join(lines)
+    rtnval = [{"type": "http.request", "body": body, "more_body": False}]
+    return rtnval
+
+
+def test_read_multipart_keeps_semicolon_in_quoted_filename():
+    """
+        Test that a semicolon inside a quoted filename does not end the parameter.
+    """
+    reader = BodyReader()
+    boundary = "boundary123"
+    receive = create_receive_callable(build_multipart_messages(boundary, [
+        ('form-data; name="doc"; filename="a;b.txt"', b"content"),
+    ]))
+    
+    _, uploaded_files = asyncio.get_event_loop().run_until_complete(
+        reader.read_multipart(receive, f"multipart/form-data; boundary={boundary}")
+    )
+    
+    if "doc" not in uploaded_files or uploaded_files["doc"].filename != "a;b.txt":
+        errmsg = f"Expected the file 'doc' named 'a;b.txt', got {uploaded_files}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_read_multipart_multi_keeps_every_value_of_repeated_field():
+    """
+        Test that a field sent several times keeps all of its values, in order.
+    """
+    reader = BodyReader()
+    boundary = "boundary123"
+    receive = create_receive_callable(build_multipart_messages(boundary, [
+        ('form-data; name="colour"', b"red"),
+        ('form-data; name="colour"', b"green"),
+    ]))
+    
+    form_fields, _ = asyncio.get_event_loop().run_until_complete(
+        reader.read_multipart_multi(receive, f"multipart/form-data; boundary={boundary}")
+    )
+    
+    if form_fields.get("colour") != ["red", "green"]:
+        errmsg = f"Expected both values of 'colour', got {form_fields.get('colour')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_read_multipart_does_not_split_on_boundary_inside_a_line():
+    """
+        Test that the boundary text in the middle of a line of content is content.
+    """
+    reader = BodyReader()
+    boundary = "boundary123"
+    content = b"before --boundary123 after"
+    receive = create_receive_callable(build_multipart_messages(boundary, [
+        ('form-data; name="note"', content),
+    ]))
+    
+    form_fields, _ = asyncio.get_event_loop().run_until_complete(
+        reader.read_multipart(receive, f"multipart/form-data; boundary={boundary}")
+    )
+    
+    if form_fields.get("note") != content.decode("ascii"):
+        errmsg = f"Expected the whole content of the field, got {form_fields.get('note')!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_uploaded_file_safe_filename_removes_path():
+    """
+        Test that safe_filename cannot point outside of the directory it is saved in.
+    """
+    from ccai.webworks.asgi.bodyreader import UploadedFile
+    
+    uploaded_file = UploadedFile(filename="../../etc/passwd", content_type="text/plain", content=b"", size=0)
+    
+    safe_name = uploaded_file.safe_filename
+    
+    if "/" in safe_name or ".." in safe_name or len(safe_name) == 0:
+        errmsg = f"Expected a filename without path parts, got {safe_name!r}"
+        raise AssertionError(errmsg)
+    
     return

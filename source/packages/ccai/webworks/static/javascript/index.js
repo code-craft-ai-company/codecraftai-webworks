@@ -203,5 +203,5 @@ export const registeredTags = defineAll(components);
 import "./charts/index.js";
 
 export * from "./core/registry.js";
-export { setLocale, getLocale, t, registerStrings } from "./core/intl.js";
+export { setLocale, getLocale, t, registerStrings, onLocaleChange } from "./core/intl.js";
 export { announce } from "./core/announcer.js";

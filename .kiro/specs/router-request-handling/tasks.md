@@ -223,6 +223,12 @@ This implementation plan creates the router and request handling system for matc
 - [x] 13. Final checkpoint - All components complete
   - Ensure all tests pass, ask the user if questions arise.
 
+- [x] 14. Fire the request lifecycle hooks in the dispatcher (audit WW-0146)
+  - [x] 14.1 `Dispatcher(request_hooks=..., on_first_request=...)`; `_dispatch_with_hooks` / `_dispatch_with_hooks_async` around `_run_pipeline` / `_run_pipeline_async`; plain path when no request hook has a callback
+    - _Requirements: 12.1-12.8_
+  - [x] 14.2 Tests in `routing/test_dispatcher.py` (order in both modes, first request once, short-circuit before routing, error reported before the 500, after_request replacement, failing hook answered 500, HEAD, plain path)
+    - _Requirements: 12.1-12.8_
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP

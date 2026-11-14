@@ -2,101 +2,243 @@
  * hierlayout.js
  *
  * Hierarchical layout renderer -- a single engine that handles four
- * space-filling / radial decomposition layouts, selected by the `layout`
- * attribute on the controller element:
+ * space-filling / radial decomposition layouts:
  *
- *   layout="treemap"      Squarified treemap (Bruls et al.)
- *   layout="sunburst"     Radial partition -- arcs per depth ring
- *   layout="icicle"       Rectangular partition rows (or columns)
- *   layout="circle-pack"  Packed circles, area proportional to value
+ *   treemap      Squarified treemap (Bruls et al.), internal nodes get a
+ *                header strip with their name
+ *   sunburst     Radial partition -- one ring per depth, root disc in the
+ *                centre
+ *   icicle       Rectangular partition bands (orientation="horizontal"
+ *                gives a flame graph)
+ *   circle-pack  Packed circles (front-chain sibling packing with an exact
+ *                enclosing circle), area proportional to value
  *
- * A renderer is `render(ctx) -> SVGElement`:
- *   ctx.model       normalized model { meta, categories, series, raw }
- *   ctx.raw         the raw data object
- *   ctx.width       drawing surface width (px)
- *   ctx.height      drawing surface height (px)
- *   ctx.orientation "vertical" | "horizontal"
- *   ctx.attrs       (name, fallback) -> controller attribute value
- *   ctx.colorFor    (seriesIndex | seriesName) -> CSS color
- *   ctx.emit        (eventName, detail) -> dispatch an interaction event
- * It returns a <g> SVGElement drawn within [0..width] x [0..height].
+ * The layout follows the chart type (`ctx.type`). An explicit `layout`
+ * attribute overrides it: "treemap", "sunburst", "icicle", "circle-pack"
+ * or the alias "pack".
+ *
+ * Data: `raw.root` is a nested tree { name, value, children: [...] }. Leaves
+ * carry `value`; an internal node without its own value is the sum of its
+ * children. Negative or missing values count as 0. A root given as an array
+ * is treated as the children of an unnamed root.
+ *
+ * Colour: every node takes the colour of its top-level branch
+ * (ctx.colorFor(branchIndex)); deeper levels are lighter (fill-opacity).
+ * Labels use the theme text colour. The branches are published as the
+ * legend, and one table row per node (name, parent, level, value, share)
+ * is published as the accessible table.
+ *
+ * The renderer never writes into the data: it lays out a private copy.
  *
  * Registered type keys: "treemap", "sunburst", "icicle", "circle-pack"
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, arcPath } from "../svgdraw.js";
+import { svgEl, arcPath, formatNumber } from "../svgdraw.js";
+
+
+/* Deepest level read from the data (protects against runaway recursion). */
+const MAX_TREE_DEPTH = 64
+
+/* Approximate glyph width per px of font size, for label truncation. */
+const GLYPH_WIDTH_RATIO = 0.6
+
+const LAYOUT_ALIASES = {
+  "treemap": "treemap",
+  "sunburst": "sunburst",
+  "icicle": "icicle",
+  "partition": "icicle",
+  "circle-pack": "circle-pack",
+  "pack": "circle-pack"
+}
+
+const LAYOUT_BY_TYPE = {
+  "treemap": "treemap",
+  "sunburst": "sunburst",
+  "icicle": "icicle",
+  "circle-pack": "circle-pack"
+}
+
+const TEXT_COLOR = "var(--mj-text, #14181f)"
+const MUTED_TEXT_COLOR = "var(--mj-text-muted, #6b7280)"
+const GAP_COLOR = "var(--mj-surface, #ffffff)"
+const ROOT_FILL = "var(--mj-bg-muted, #eef0f3)"
+const ROOT_STROKE = "var(--mj-border-strong, #c7ccd6)"
 
 
 /* -------------------------------------------------------------------------
- * Shared tree utilities
+ * Private hierarchy built from the data
  * ---------------------------------------------------------------------- */
 
-function _sumChildren(node) {
+function _nodeName(source) {
   /*
-   * Recursively compute and attach `.total` to every node.
-   * Leaf nodes use their own `value`; internal nodes sum their children.
-   * Nodes whose value is missing or null fall back to their subtree sum.
+   * The display name of a data node as a string ("" when it has none).
    *
-   * :param node: A hierarchical data node.
-   * :returns: The numeric total for this subtree.
+   * :param source: A data node.
+   * :returns: The name text.
    */
-  const children = node.children
-  if (children === undefined || children === null || children.length === 0) {
-    const leaf = typeof node.value === "number" && node.value >= 0
-      ? node.value
-      : 0
-    node.total = leaf
-    return leaf
+  let name = ""
+  const candidates = [source.name, source.label, source.id]
+  for (let index = 0; index < candidates.length; index = index + 1) {
+    const candidate = candidates[index]
+    if (typeof candidate === "string" && candidate.length > 0) {
+      name = candidate
+      break
+    }
+    if (typeof candidate === "number" && Number.isFinite(candidate) === true) {
+      name = String(candidate)
+      break
+    }
   }
-
-  let childSum = 0
-  for (let index = 0; index < children.length; index = index + 1) {
-    childSum = childSum + _sumChildren(children[index])
-  }
-
-  const own = typeof node.value === "number" && node.value >= 0
-    ? node.value
-    : childSum
-
-  node.total = own
-  return own
+  return name
 }
 
 
-function _assignDepth(node, depth) {
+function _ownValue(source) {
   /*
-   * Attach `.depth` to every node, traversing the tree recursively.
-   *
-   * :param node: A hierarchical data node.
-   * :param depth: Current depth (root = 0).
+   * The node's own non-negative numeric value, or null.
    */
-  node.depth = depth
-  const children = node.children
-  if (children === undefined || children === null) {
+  let value = null
+  if (typeof source.value === "number" && Number.isFinite(source.value) === true) {
+    value = Math.max(source.value, 0)
+  }
+  return value
+}
+
+
+function _rootSource(raw) {
+  /*
+   * The data root of the hierarchy, or null when there is none.
+   *
+   * :param raw: The raw chart data.
+   * :returns: A data node object, or null.
+   */
+  if (raw === null || raw === undefined || typeof raw !== "object") {
+    return null
+  }
+  const root = raw.root
+  if (Array.isArray(root) === true) {
+    return { name: "", children: root }
+  }
+  if (root === null || root === undefined || typeof root !== "object") {
+    return null
+  }
+  return root
+}
+
+
+function _buildNode(source, parent, depth, ancestors) {
+  /*
+   * Copy one data node (and its subtree) into a private layout node.
+   *
+   * :param source: The data node.
+   * :param parent: The layout parent (null for the root).
+   * :param depth: Depth of this node (root = 0).
+   * :param ancestors: Set of data nodes on the path from the root, used to
+   *     skip a node that contains itself.
+   * :returns: The layout node.
+   */
+  const node = {
+    source: source,
+    name: _nodeName(source),
+    value: _ownValue(source),
+    total: 0,
+    depth: depth,
+    parent: parent,
+    branch: -1,
+    children: []
+  }
+
+  const children = source.children
+  if (Array.isArray(children) === true && depth < MAX_TREE_DEPTH) {
+    ancestors.add(source)
+    for (let index = 0; index < children.length; index = index + 1) {
+      const child = children[index]
+      if (child === null || typeof child !== "object" || ancestors.has(child) === true) {
+        continue
+      }
+      node.children.push(_buildNode(child, node, depth + 1, ancestors))
+    }
+    ancestors.delete(source)
+  }
+  return node
+}
+
+
+function _sumTotals(node) {
+  /*
+   * Compute `.total` for every layout node: a leaf's own value (0 when it
+   * has none), an internal node's own value or else its children's sum.
+   *
+   * :returns: The node's total.
+   */
+  if (node.children.length === 0) {
+    node.total = node.value !== null ? node.value : 0
+    return node.total
+  }
+  let childSum = 0
+  for (let index = 0; index < node.children.length; index = index + 1) {
+    childSum = childSum + _sumTotals(node.children[index])
+  }
+  node.total = node.value !== null ? node.value : childSum
+  return node.total
+}
+
+
+function _assignBranches(root) {
+  /*
+   * Give every node the index of its top-level ancestor (root = -1).
+   */
+  const visit = (node, branch) => {
+    node.branch = branch
+    for (let index = 0; index < node.children.length; index = index + 1) {
+      visit(node.children[index], branch)
+    }
     return
   }
-  for (let index = 0; index < children.length; index = index + 1) {
-    _assignDepth(children[index], depth + 1)
+  for (let index = 0; index < root.children.length; index = index + 1) {
+    visit(root.children[index], index)
   }
   return
 }
 
 
+function _buildHierarchy(raw) {
+  /*
+   * Build the private layout tree of the data.
+   *
+   * :returns: The layout root, or null when the data has no tree.
+   */
+  const source = _rootSource(raw)
+  if (source === null) {
+    return null
+  }
+  const root = _buildNode(source, null, 0, new Set())
+  _sumTotals(root)
+  _assignBranches(root)
+  return root
+}
+
+
+function _collectNodes(node, output) {
+  /*
+   * Collect all layout nodes in pre-order.
+   */
+  output.push(node)
+  for (let index = 0; index < node.children.length; index = index + 1) {
+    _collectNodes(node.children[index], output)
+  }
+  return output
+}
+
+
 function _maxDepth(node) {
   /*
-   * Return the maximum depth in the subtree rooted at node.
-   *
-   * :param node: A hierarchical data node.
-   * :returns: Integer maximum depth.
+   * The deepest level below (and including) a node.
    */
-  const children = node.children
-  if (children === undefined || children === null || children.length === 0) {
-    return node.depth
-  }
   let max = node.depth
-  for (let index = 0; index < children.length; index = index + 1) {
-    const childMax = _maxDepth(children[index])
+  for (let index = 0; index < node.children.length; index = index + 1) {
+    const childMax = _maxDepth(node.children[index])
     if (childMax > max) {
       max = childMax
     }
@@ -105,50 +247,132 @@ function _maxDepth(node) {
 }
 
 
-function _collectNodes(node, output) {
+function _displayName(node) {
   /*
-   * Collect all nodes in tree order (pre-order) into `output`.
-   *
-   * :param node: A hierarchical data node.
-   * :param output: Array to push nodes into.
+   * The name used in labels for assistive technology.
    */
-  output.push(node)
-  const children = node.children
-  if (children === undefined || children === null) {
-    return
-  }
-  for (let index = 0; index < children.length; index = index + 1) {
-    _collectNodes(children[index], output)
-  }
-  return
+  const name = node.name !== "" ? node.name : "(unnamed)"
+  return name
+}
+
+
+function _isEmptyModel(model) {
+  /*
+   * Registered isEmpty test: no tree, or nothing with a positive value.
+   */
+  const root = _buildHierarchy(model.raw)
+  const empty = root === null || root.total <= 0
+  return empty
 }
 
 
 /* -------------------------------------------------------------------------
- * Color helpers
+ * Colour, labels, table and legend
  * ---------------------------------------------------------------------- */
 
-const DEPTH_COLORS = [
-  "var(--mj-color-accent-500, #2563eb)",
-  "var(--mj-color-success, #15803d)",
-  "var(--mj-color-warning, #b45309)",
-  "var(--mj-color-danger, #b91c1c)",
-  "var(--mj-color-accent-300, #80a8ff)",
-  "var(--mj-color-accent-800, #122f78)",
-  "var(--mj-color-neutral-500, #6b7280)",
-  "var(--mj-color-info, #2563eb)"
-]
-
-
-function _colorForDepth(depth) {
+function _nodeColor(node, ctx) {
   /*
-   * Return a CSS color token for the given tree depth.
-   *
-   * :param depth: Numeric depth (root = 0).
-   * :returns: CSS color string.
+   * The fill colour of a node: its top-level branch colour.
    */
-  const color = DEPTH_COLORS[depth % DEPTH_COLORS.length]
+  if (node.branch < 0) {
+    /* A root without children is the only mark: give it a series colour. */
+    return node.children.length === 0 ? ctx.colorFor(0) : ROOT_FILL
+  }
+  const color = ctx.colorFor(node.branch)
   return color
+}
+
+
+function _depthOpacity(depth) {
+  /*
+   * Fill opacity per level: level 1 is the strongest, deeper is lighter.
+   */
+  const opacity = Math.max(0.85 - (depth - 1) * 0.17, 0.35)
+  return opacity
+}
+
+
+function _fitText(text, maxWidth, fontSize) {
+  /*
+   * Shorten text with an ellipsis to fit an approximate pixel width.
+   *
+   * :returns: The text to draw ("" when not even two glyphs fit).
+   */
+  const glyph = fontSize * GLYPH_WIDTH_RATIO
+  const capacity = Math.floor(maxWidth / glyph)
+  if (capacity < 2) {
+    return ""
+  }
+  if (text.length <= capacity) {
+    return text
+  }
+  const shortened = text.slice(0, Math.max(capacity - 1, 1)) + "…"
+  return shortened
+}
+
+
+function _valueText(node) {
+  /*
+   * The formatted total of a node.
+   */
+  const text = formatNumber(node.total)
+  return text
+}
+
+
+function _ariaText(node, rootTotal) {
+  /*
+   * "Name: value (share%)" for a node's accessible name and tooltip.
+   */
+  let text = `${_displayName(node)}: ${_valueText(node)}`
+  if (rootTotal > 0 && node.depth > 0) {
+    text = text + ` (${formatNumber(node.total / rootTotal * 100, { maximumFractionDigits: 1 })}%)`
+  }
+  if (node.parent !== null && node.parent.name !== "") {
+    text = text + `, in ${node.parent.name}`
+  }
+  return text
+}
+
+
+function _publishTable(root, ctx, layout) {
+  /*
+   * Publish one table row per node: name, parent, level, value, share.
+   */
+  const nodes = _collectNodes(root, [])
+  const rows = []
+  for (let index = 0; index < nodes.length; index = index + 1) {
+    const node = nodes[index]
+    const share = root.total > 0
+      ? `${formatNumber(node.total / root.total * 100, { maximumFractionDigits: 1 })}%`
+      : ""
+    rows.push([
+      _displayName(node),
+      node.parent !== null ? _displayName(node.parent) : "",
+      node.depth,
+      node.total,
+      share
+    ])
+  }
+  ctx.setTable({
+    columns: ["Node", "Parent", "Level", "Value", "Share of total"],
+    rows: rows,
+    caption: `${ctx.label} (${layout})`
+  })
+  return
+}
+
+
+function _publishLegend(root, ctx) {
+  /*
+   * Publish one colour-only legend entry per top-level branch.
+   */
+  const entries = []
+  for (let index = 0; index < root.children.length; index = index + 1) {
+    entries.push({ label: _displayName(root.children[index]), color: ctx.colorFor(index) })
+  }
+  ctx.setLegend(entries)
+  return
 }
 
 
@@ -156,26 +380,33 @@ function _colorForDepth(depth) {
  * Shared interactive node wiring
  * ---------------------------------------------------------------------- */
 
-function _makeInteractive(element, partName, ariaLabel, titleText, emitFn, eventName, detail) {
+function _makeInteractive(element, partName, node, rootTotal, ctx) {
   /*
-   * Attach accessibility and interaction attributes/listeners to an SVG node.
+   * Make a node mark focusable and clickable; Enter / Space emit too.
    *
-   * :param element: The SVGElement to wire up.
+   * :param element: The SVGElement of the node.
    * :param partName: CSS part name.
-   * :param ariaLabel: ARIA label string.
-   * :param titleText: Text for the <title> child.
-   * :param emitFn: ctx.emit function.
-   * :param eventName: Event name to fire.
-   * :param detail: Event detail object.
+   * :param node: The layout node.
+   * :param rootTotal: The root's total, for the share in the label.
+   * :param ctx: Renderer context.
    */
+  const label = _ariaText(node, rootTotal)
   element.setAttribute("part", partName)
   element.setAttribute("tabindex", "0")
   element.setAttribute("role", "img")
-  element.setAttribute("aria-label", ariaLabel)
-  element.appendChild(svgEl("title", null, titleText))
+  element.setAttribute("aria-label", label)
+  element.appendChild(svgEl("title", null, label))
+
+  const path = []
+  let cursor = node
+  while (cursor !== null) {
+    path.unshift(cursor.name)
+    cursor = cursor.parent
+  }
+  const detail = { name: node.name, value: node.total, depth: node.depth, path: path }
 
   const handler = () => {
-    emitFn(eventName, detail)
+    ctx.emit("mj-chart-node-click", detail)
   }
   element.addEventListener("click", handler)
   element.addEventListener("keydown", (event) => {
@@ -188,52 +419,41 @@ function _makeInteractive(element, partName, ariaLabel, titleText, emitFn, event
 }
 
 
+function _label(x, y, text, fontSize, extra) {
+  /*
+   * A non-interactive text label (pointer events off).
+   */
+  const attrs = {
+    x: x.toFixed(2),
+    y: y.toFixed(2),
+    "font-size": fontSize,
+    fill: TEXT_COLOR,
+    "pointer-events": "none",
+    "aria-hidden": "true"
+  }
+  const keys = Object.keys(extra || {})
+  for (let index = 0; index < keys.length; index = index + 1) {
+    attrs[keys[index]] = extra[keys[index]]
+  }
+  const element = svgEl("text", attrs, text)
+  return element
+}
+
+
 /* -------------------------------------------------------------------------
  * Treemap layout -- squarified algorithm (Bruls et al.)
  * ---------------------------------------------------------------------- */
 
-function _squarify(items, rect, result) {
+const TREEMAP_HEADER = 17
+const TREEMAP_PAD = 2
+
+
+function _worstAspect(row, short) {
   /*
-   * Recursive squarified treemap layout. Items must carry `.area` (pixels²).
-   * Each item receives `.x .y .w .h` in place.
-   *
-   * :param items: Array of items with `.area` set.
-   * :param rect: { x, y, w, h } available pixel rectangle.
-   * :param result: Output array to push laid-out items into.
+   * The worst (largest) aspect ratio of a proposed row of scaled areas
+   * laid along a side of length `short`.
    */
-  if (items.length === 0) {
-    return
-  }
-
-  /* Normalise areas to fill rect exactly. */
-  let totalArea = 0
-  for (let index = 0; index < items.length; index = index + 1) {
-    totalArea = totalArea + items[index].area
-  }
-
-  const rectArea = rect.w * rect.h
-  const scale = rectArea > 0 ? rectArea / totalArea : 1
-  const scaled = []
-  for (let index = 0; index < items.length; index = index + 1) {
-    scaled.push(items[index].area * scale)
-  }
-
-  _squarifyRow(items, scaled, rect, 0, result)
-  return
-}
-
-
-function _worstAspect(row, rowLen, short) {
-  /*
-   * Compute the worst (maximum) aspect ratio in a proposed row.
-   * `row` contains pre-scaled areas; `rowLen` is the available short-side.
-   *
-   * :param row: Array of scaled area values.
-   * :param rowLen: Length of the short side of the remaining rect.
-   * :param short: Same as rowLen (passed for clarity).
-   * :returns: Worst aspect ratio (>= 1).
-   */
-  if (row.length === 0 || short === 0) {
+  if (row.length === 0 || short <= 0) {
     return Infinity
   }
   let sum = 0
@@ -249,128 +469,94 @@ function _worstAspect(row, rowLen, short) {
       minVal = area
     }
   }
-  const s = short
-  const s2 = s * s
+  if (minVal <= 0 || sum <= 0) {
+    return Infinity
+  }
+  const s2 = short * short
   const sum2 = sum * sum
-  const worst = Math.max(
-    (s2 * maxVal) / sum2,
-    sum2 / (s2 * minVal)
-  )
+  const worst = Math.max((s2 * maxVal) / sum2, sum2 / (s2 * minVal))
   return worst
 }
 
 
-function _squarifyRow(items, scaled, rect, start, result) {
+function _squarify(items, rect) {
   /*
-   * Place rows of items into `rect` using the squarified heuristic.
+   * Squarified layout of items ({ node, area }) inside a rectangle.
    *
-   * :param items: Original items array.
-   * :param scaled: Scaled pixel areas matching `items`.
-   * :param rect: Available { x, y, w, h } rectangle.
-   * :param start: Index in `items` to begin from.
-   * :param result: Output array.
+   * :returns: An array of { node, x, y, w, h }.
    */
-  if (start >= items.length) {
-    return
+  const placed = []
+  let totalArea = 0
+  for (let index = 0; index < items.length; index = index + 1) {
+    totalArea = totalArea + items[index].area
   }
-  if (rect.w <= 0 || rect.h <= 0) {
-    return
+  if (totalArea <= 0 || rect.w <= 0 || rect.h <= 0) {
+    return placed
   }
+  const scale = (rect.w * rect.h) / totalArea
+  const scaled = items.map((item) => item.area * scale)
 
-  const horizontal = rect.w >= rect.h
-  const short = horizontal ? rect.h : rect.w
+  let remaining = { x: rect.x, y: rect.y, w: rect.w, h: rect.h }
+  let start = 0
+  while (start < items.length && remaining.w > 0 && remaining.h > 0) {
+    const horizontal = remaining.w >= remaining.h
+    const short = horizontal === true ? remaining.h : remaining.w
 
-  let row = []
-  let rowItems = []
-  let bestWorst = Infinity
-
-  let index = start
-  while (index < items.length) {
-    const candidate = row.concat([scaled[index]])
-    const aspect = _worstAspect(candidate, short, short)
-    if (row.length > 0 && aspect > bestWorst) {
-      break
+    let row = []
+    let bestWorst = Infinity
+    let next = start
+    while (next < items.length) {
+      const candidate = row.concat([scaled[next]])
+      const aspect = _worstAspect(candidate, short)
+      if (row.length > 0 && aspect > bestWorst) {
+        break
+      }
+      row = candidate
+      bestWorst = aspect
+      next = next + 1
     }
-    row = candidate
-    rowItems.push(items[index])
-    bestWorst = aspect
-    index = index + 1
-  }
 
-  /* Lay out this row. */
-  let rowSum = 0
-  for (let k = 0; k < row.length; k = k + 1) {
-    rowSum = rowSum + row[k]
-  }
-  const rowThick = short > 0 ? rowSum / short : 0
-  let offset = 0
+    let rowSum = 0
+    for (let k = 0; k < row.length; k = k + 1) {
+      rowSum = rowSum + row[k]
+    }
+    const thickness = short > 0 ? rowSum / short : 0
+    let offset = 0
+    for (let k = 0; k < row.length; k = k + 1) {
+      const breadth = thickness > 0 ? row[k] / thickness : 0
+      if (horizontal === true) {
+        placed.push({ node: items[start + k].node, x: remaining.x, y: remaining.y + offset, w: thickness, h: breadth })
+      } else {
+        placed.push({ node: items[start + k].node, x: remaining.x + offset, y: remaining.y, w: breadth, h: thickness })
+      }
+      offset = offset + breadth
+    }
 
-  for (let k = 0; k < rowItems.length; k = k + 1) {
-    const item = rowItems[k]
-    const breadth = rowThick > 0 ? row[k] / rowThick : 0
     if (horizontal === true) {
-      item.x = rect.x
-      item.y = rect.y + offset
-      item.w = rowThick
-      item.h = breadth
+      remaining = { x: remaining.x + thickness, y: remaining.y, w: remaining.w - thickness, h: remaining.h }
     } else {
-      item.x = rect.x + offset
-      item.y = rect.y
-      item.w = breadth
-      item.h = rowThick
+      remaining = { x: remaining.x, y: remaining.y + thickness, w: remaining.w, h: remaining.h - thickness }
     }
-    result.push(item)
-    offset = offset + breadth
+    start = next
   }
-
-  /* Recurse into the remaining rectangle. */
-  let nextRect
-  if (horizontal === true) {
-    nextRect = {
-      x: rect.x + rowThick,
-      y: rect.y,
-      w: rect.w - rowThick,
-      h: rect.h
-    }
-  } else {
-    nextRect = {
-      x: rect.x,
-      y: rect.y + rowThick,
-      w: rect.w,
-      h: rect.h - rowThick
-    }
-  }
-
-  _squarifyRow(items, scaled, nextRect, index, result)
-  return
+  return placed
 }
 
 
-function _layoutTreemap(root, plotX, plotY, plotW, plotH) {
+function _layoutTreemap(node, x, y, w, h, boxes) {
   /*
-   * Compute squarified treemap rectangles for the entire tree, recursively.
-   * Each node receives `.x .y .w .h` (plot-relative pixel coordinates).
+   * Lay a node out in a rectangle and its children inside it. An internal
+   * node below the root keeps a header strip for its name when there is
+   * room for one.
    *
-   * :param root: Tree root node (already has `.total`).
-   * :param plotX: Left edge of bounding rect.
-   * :param plotY: Top edge of bounding rect.
-   * :param plotW: Width of bounding rect.
-   * :param plotH: Height of bounding rect.
+   * :param boxes: Map layout node -> { x, y, w, h, header }.
    */
-  root.x = plotX
-  root.y = plotY
-  root.w = plotW
-  root.h = plotH
+  const box = { x: x, y: y, w: w, h: h, header: false }
+  boxes.set(node, box)
 
-  const children = root.children
-  if (children === undefined || children === null || children.length === 0) {
-    return
-  }
-
-  /* Filter children with positive totals. */
   const visible = []
-  for (let index = 0; index < children.length; index = index + 1) {
-    const child = children[index]
+  for (let index = 0; index < node.children.length; index = index + 1) {
+    const child = node.children[index]
     if (child.total > 0) {
       visible.push({ node: child, area: child.total })
     }
@@ -378,113 +564,86 @@ function _layoutTreemap(root, plotX, plotY, plotW, plotH) {
   if (visible.length === 0) {
     return
   }
+  visible.sort((first, second) => second.area - first.area)
 
-  /* Lay out children inside root rect, with a 1px inset. */
-  const inset = 1
-  const innerRect = {
-    x: plotX + inset,
-    y: plotY + inset,
-    w: Math.max(plotW - inset * 2, 0),
-    h: Math.max(plotH - inset * 2, 0)
+  let inner = { x: x, y: y, w: w, h: h }
+  if (node.depth > 0) {
+    box.header = h >= TREEMAP_HEADER * 2.5 && w >= 40
+    const top = box.header === true ? TREEMAP_HEADER : TREEMAP_PAD
+    inner = {
+      x: x + TREEMAP_PAD,
+      y: y + top,
+      w: Math.max(w - TREEMAP_PAD * 2, 0),
+      h: Math.max(h - top - TREEMAP_PAD, 0)
+    }
   }
 
-  const laid = []
-  _squarify(visible, innerRect, laid)
-
-  for (let index = 0; index < laid.length; index = index + 1) {
-    const item = laid[index]
-    const node = item.node
-    node.x = item.x
-    node.y = item.y
-    node.w = item.w
-    node.h = item.h
-    _layoutTreemap(node, item.x, item.y, item.w, item.h)
+  const placed = _squarify(visible, inner)
+  for (let index = 0; index < placed.length; index = index + 1) {
+    const item = placed[index]
+    _layoutTreemap(item.node, item.x, item.y, item.w, item.h, boxes)
   }
   return
 }
 
 
-function _renderTreemap(root, plot, ctx) {
+function _renderTreemap(root, plot, plotW, plotH, ctx) {
   /*
-   * Walk the laid-out treemap tree and emit SVG <rect>/<text> elements.
-   *
-   * :param root: Tree root node (layout already computed).
-   * :param plot: Parent <g> element to append into.
-   * :param ctx: Renderer context.
+   * Draw the treemap: group tiles with header strips, leaf tiles with a
+   * name (and value when tall enough). The root itself is the plot.
    */
-  const nodes = []
-  _collectNodes(root, nodes)
+  const boxes = new Map()
+  _layoutTreemap(root, 0, 0, plotW, plotH, boxes)
 
-  const MIN_LABEL_WIDTH = 30
-  const MIN_LABEL_HEIGHT = 16
+  const marks = svgEl("g", { part: "treemap" }, [])
+  const labels = svgEl("g", { "aria-hidden": "true" }, [])
+  plot.appendChild(marks)
+  plot.appendChild(labels)
 
-  let clipIndex = 0
-
+  const nodes = _collectNodes(root, [])
   for (let index = 0; index < nodes.length; index = index + 1) {
     const node = nodes[index]
-    if (node.w === undefined || node.w <= 0 || node.h === undefined || node.h <= 0) {
+    const box = boxes.get(node)
+    const isLeaf = node.children.length === 0
+    /* The root is the plot itself, unless it is the only node. */
+    if ((node.depth === 0 && isLeaf === false) || box === undefined || box.w < 1 || box.h < 1) {
+      continue
+    }
+    const color = _nodeColor(node, ctx)
+
+    const rect = svgEl("rect", {
+      x: box.x.toFixed(2), y: box.y.toFixed(2),
+      width: Math.max(box.w, 0).toFixed(2), height: Math.max(box.h, 0).toFixed(2),
+      fill: color,
+      "fill-opacity": isLeaf === true ? _depthOpacity(Math.max(node.depth, 1)) : 0.18,
+      stroke: GAP_COLOR,
+      "stroke-width": 1,
+      rx: isLeaf === true ? 2 : 3
+    }, [])
+    _makeInteractive(rect, "treemap-tile", node, root.total, ctx)
+    marks.appendChild(rect)
+
+    if (isLeaf === false) {
+      if (box.header === true) {
+        const text = _fitText(node.name, box.w - 8, 11)
+        if (text !== "") {
+          labels.appendChild(_label(box.x + 4, box.y + 12, text, 11, { "font-weight": "600" }))
+        }
+      }
       continue
     }
 
-    const color = _colorForDepth(node.depth)
-    const isLeaf = node.children === undefined || node.children === null || node.children.length === 0
-
-    /* Rect fill: leaves use depth color, internal nodes are transparent so
-     * children tiles show through; the inner border is from the inset. */
-    const fill = isLeaf ? color : "none"
-    const stroke = "var(--mj-bg, #ffffff)"
-    const strokeW = isLeaf ? 1 : 0
-
-    const rect = svgEl("rect", {
-      x: node.x, y: node.y, width: node.w, height: node.h,
-      fill: fill,
-      stroke: stroke,
-      "stroke-width": strokeW,
-      rx: isLeaf ? 3 : 0,
-      "fill-opacity": isLeaf ? 0.85 : 0
-    }, [])
-
-    const label = escapeHtml(node.name)
-    const valueText = typeof node.total === "number"
-      ? String(Math.round(node.total))
-      : ""
-    const ariaLabel = valueText !== ""
-      ? `${node.name}: ${valueText}`
-      : node.name
-
-    _makeInteractive(
-      rect,
-      "treemap-tile",
-      ariaLabel,
-      ariaLabel,
-      ctx.emit,
-      "mj-chart-node-click",
-      { name: node.name, value: node.total, depth: node.depth }
-    )
-    plot.appendChild(rect)
-
-    /* Label: only if tile is large enough. */
-    if (node.w >= MIN_LABEL_WIDTH && node.h >= MIN_LABEL_HEIGHT) {
-      const clipId = `mj-tm-clip-${clipIndex}`
-      clipIndex = clipIndex + 1
-
-      const clipRect = svgEl("rect", {
-        x: node.x + 2, y: node.y + 2,
-        width: Math.max(node.w - 4, 0),
-        height: Math.max(node.h - 4, 0)
-      }, [])
-      const clipPath = svgEl("clipPath", { id: clipId }, [clipRect])
-      plot.appendChild(clipPath)
-
-      const textY = node.y + Math.min(14, node.h / 2 + 4)
-      const textEl = svgEl("text", {
-        x: node.x + 4, y: textY,
-        "font-size": 11,
-        fill: "var(--mj-bg, #ffffff)",
-        "clip-path": `url(#${clipId})`,
-        "pointer-events": "none"
-      }, label)
-      plot.appendChild(textEl)
+    if (box.w >= 24 && box.h >= 15) {
+      const name = _fitText(node.name, box.w - 8, 11)
+      if (name !== "") {
+        labels.appendChild(_label(box.x + 4, box.y + 13, name, 11))
+      }
+      if (box.h >= 30) {
+        const value = _fitText(_valueText(node), box.w - 8, 10)
+        if (value !== "") {
+          labels.appendChild(_label(box.x + 4, box.y + 26, value, 10, { "fill-opacity": 0.8 }))
+        }
+      }
     }
   }
   return
@@ -492,266 +651,188 @@ function _renderTreemap(root, plot, ctx) {
 
 
 /* -------------------------------------------------------------------------
- * Sunburst layout -- radial partition by depth ring
+ * Partition layout shared by sunburst and icicle
  * ---------------------------------------------------------------------- */
 
-function _layoutSunburst(node, startAngle, endAngle) {
+function _partition(node, start, end, spans) {
   /*
-   * Recursively assign `.startAngle` and `.endAngle` (radians) to every
-   * node in the subtree.  Children partition the parent's angle span
-   * proportionally to their `.total`.
+   * Assign every node a [start, end] fraction of its parent's span,
+   * proportional to the children's totals.
    *
-   * :param node: Tree node (already has `.total`).
-   * :param startAngle: Start of this node's angular slice (radians, 0=up).
-   * :param endAngle: End of this node's angular slice (radians).
+   * :param spans: Map layout node -> { start, end }.
    */
-  node.startAngle = startAngle
-  node.endAngle = endAngle
-
-  const children = node.children
-  if (children === undefined || children === null || children.length === 0) {
-    return
-  }
-
-  /* Sum of children totals. */
+  spans.set(node, { start: start, end: end })
   let childSum = 0
-  for (let index = 0; index < children.length; index = index + 1) {
-    childSum = childSum + children[index].total
+  for (let index = 0; index < node.children.length; index = index + 1) {
+    childSum = childSum + node.children[index].total
   }
   if (childSum <= 0) {
     return
   }
-
-  const span = endAngle - startAngle
-  let cursor = startAngle
-
-  for (let index = 0; index < children.length; index = index + 1) {
-    const child = children[index]
-    const childSpan = span * (child.total / childSum)
-    _layoutSunburst(child, cursor, cursor + childSpan)
-    cursor = cursor + childSpan
+  /* Children never take more than the parent's own span. */
+  const used = node.total > 0 ? Math.min(childSum / node.total, 1) : 1
+  const scale = (end - start) * used / childSum
+  let cursor = start
+  for (let index = 0; index < node.children.length; index = index + 1) {
+    const child = node.children[index]
+    const childEnd = cursor + child.total * scale
+    _partition(child, cursor, childEnd, spans)
+    cursor = childEnd
   }
   return
 }
 
 
-function _renderSunburst(root, plot, cx, cy, maxDepth, radius, ctx) {
+/* -------------------------------------------------------------------------
+ * Sunburst
+ * ---------------------------------------------------------------------- */
+
+function _renderSunburst(root, plot, plotW, plotH, ctx) {
   /*
-   * Walk the angle-assigned tree and emit SVG <path> arc elements.
-   *
-   * :param root: Tree root (angles computed).
-   * :param plot: Parent <g> element.
-   * :param cx: Centre x.
-   * :param cy: Centre y.
-   * :param maxDepth: Maximum depth in tree.
-   * :param radius: Outer radius of the entire sunburst.
-   * :param ctx: Renderer context.
+   * Draw the root disc and one ring per depth. A node that spans the full
+   * circle draws a whole disc / ring.
    */
-  const nodes = []
-  _collectNodes(root, nodes)
+  const spans = new Map()
+  _partition(root, 0, 2 * Math.PI, spans)
 
-  /* Ring thickness per depth level, root gets a small inner disc. */
-  const ringThick = maxDepth > 0 ? radius / (maxDepth + 1) : radius
-  const MIN_ARC_SPAN = 0.01  /* radians — skip tiny slivers */
+  const cx = plotW / 2
+  const cy = plotH / 2
+  const radius = Math.max(Math.min(plotW, plotH) / 2 - 2, 4)
+  const depth = _maxDepth(root)
+  const ringThick = radius / (depth + 1)
+  const MIN_ARC_SPAN = 0.004
 
+  const marks = svgEl("g", { part: "sunburst" }, [])
+  const labels = svgEl("g", { "aria-hidden": "true" }, [])
+  plot.appendChild(marks)
+  plot.appendChild(labels)
+
+  const nodes = _collectNodes(root, [])
   for (let index = 0; index < nodes.length; index = index + 1) {
     const node = nodes[index]
-    if (node.startAngle === undefined) {
+    const span = spans.get(node)
+    if (span === undefined || span.end - span.start < MIN_ARC_SPAN || node.total <= 0) {
       continue
     }
-    const span = node.endAngle - node.startAngle
-    if (span < MIN_ARC_SPAN) {
-      continue
-    }
-
-    const innerR = node.depth * ringThick
+    const innerR = node.depth === 0 ? 0 : node.depth * ringThick
     const outerR = (node.depth + 1) * ringThick
-    const color = _colorForDepth(node.depth)
-
-    const pathD = arcPath(cx, cy, innerR, outerR, node.startAngle, node.endAngle)
-    const valueText = typeof node.total === "number"
-      ? String(Math.round(node.total))
-      : ""
-    const ariaLabel = valueText !== ""
-      ? `${node.name}: ${valueText}`
-      : node.name
+    const isRoot = node.depth === 0
 
     const pathEl = svgEl("path", {
-      d: pathD,
-      fill: color,
-      "fill-opacity": 0.85,
-      stroke: "var(--mj-bg, #ffffff)",
+      d: arcPath(cx, cy, innerR, outerR, span.start, span.end),
+      fill: _nodeColor(node, ctx),
+      "fill-opacity": isRoot === true ? 1 : _depthOpacity(node.depth),
+      stroke: GAP_COLOR,
       "stroke-width": 1
     }, [])
+    _makeInteractive(pathEl, "sunburst-arc", node, root.total, ctx)
+    marks.appendChild(pathEl)
 
-    _makeInteractive(
-      pathEl,
-      "sunburst-arc",
-      ariaLabel,
-      ariaLabel,
-      ctx.emit,
-      "mj-chart-node-click",
-      { name: node.name, value: node.total, depth: node.depth }
-    )
-    plot.appendChild(pathEl)
-
-    /* Label in arc midpoint -- only for arcs wide enough. */
-    if (span > 0.2 && (outerR - innerR) > 14) {
-      const midAngle = (node.startAngle + node.endAngle) / 2
-      const midR = (innerR + outerR) / 2
-      const lx = cx + midR * Math.sin(midAngle)
-      const ly = cy - midR * Math.cos(midAngle)
-      const charLimit = Math.max(3, Math.floor(span * midR / 7))
-      const labelText = node.name.length > charLimit
-        ? node.name.slice(0, charLimit - 1) + "…"
-        : node.name
-
-      plot.appendChild(svgEl("text", {
-        x: lx.toFixed(2), y: ly.toFixed(2),
-        "text-anchor": "middle",
-        "dominant-baseline": "central",
-        "font-size": 10,
-        fill: "var(--mj-bg, #ffffff)",
-        "pointer-events": "none"
-      }, escapeHtml(labelText)))
+    if (isRoot === true) {
+      const text = _fitText(node.name, ringThick * 1.8, 11)
+      if (text !== "") {
+        labels.appendChild(_label(cx, cy, text, 11, {
+          "text-anchor": "middle", "dominant-baseline": "central", "font-weight": "600"
+        }))
+      }
+      continue
     }
+
+    /*
+     * The label runs along the radius (narrow wedges) or along the ring
+     * (wide wedges), whichever shows more of the name; it is turned so it
+     * never reads upside down.
+     */
+    const midAngle = (span.start + span.end) / 2
+    const midR = (innerR + outerR) / 2
+    const ring = outerR - innerR
+    const arcLength = (span.end - span.start) * midR
+    if (arcLength < 12 || ring < 14) {
+      continue
+    }
+    const radialText = _fitText(node.name, ring - 6, 10)
+    const chord = 2 * Math.sqrt(Math.max(outerR * outerR - midR * midR, 0))
+    const tangentialText = _fitText(node.name, Math.min(arcLength, chord) - 6, 10)
+    const tangential = tangentialText.length > radialText.length
+    const text = tangential === true ? tangentialText : radialText
+    if (text === "") {
+      continue
+    }
+    const lx = cx + midR * Math.sin(midAngle)
+    const ly = cy - midR * Math.cos(midAngle)
+    const degrees = midAngle * 180 / Math.PI
+    let rotation = degrees < 180 ? degrees - 90 : degrees + 90
+    if (tangential === true) {
+      rotation = degrees > 90 && degrees < 270 ? degrees - 180 : degrees
+    }
+    labels.appendChild(_label(lx, ly, text, 10, {
+      "text-anchor": "middle",
+      "dominant-baseline": "central",
+      transform: `rotate(${rotation.toFixed(2)} ${lx.toFixed(2)} ${ly.toFixed(2)})`
+    }))
   }
   return
 }
 
 
 /* -------------------------------------------------------------------------
- * Icicle layout -- rectangular partition rows
+ * Icicle
  * ---------------------------------------------------------------------- */
 
-function _layoutIcicle(node, x, y, w, h, totalW, totalH, bandH, horizontal) {
+function _renderIcicle(root, plot, plotW, plotH, horizontal, ctx) {
   /*
-   * Recursively assign pixel rect coordinates for the icicle layout.
-   *
-   * :param node: Current tree node.
-   * :param x: Left pixel of this node's rect.
-   * :param y: Top pixel of this node's rect.
-   * :param w: Width of this node's rect.
-   * :param h: Height of this node's rect.
-   * :param totalW: Total plot width (used for full-width root).
-   * :param totalH: Total plot height (used for full-height root).
-   * :param bandH: Height (or width) per depth level.
-   * :param horizontal: True = flame-graph orientation.
+   * Draw one band per depth; within a band each node's breadth is its
+   * share of its parent. Vertical: root band on top. Horizontal: root band
+   * on the left (flame graph).
    */
-  node.x = x
-  node.y = y
-  node.w = w
-  node.h = h
+  const breadth = horizontal === true ? plotH : plotW
+  const spans = new Map()
+  _partition(root, 0, breadth, spans)
 
-  const children = node.children
-  if (children === undefined || children === null || children.length === 0) {
-    return
-  }
+  const levels = _maxDepth(root) + 1
+  const bandSize = (horizontal === true ? plotW : plotH) / levels
 
-  let childSum = 0
-  for (let index = 0; index < children.length; index = index + 1) {
-    childSum = childSum + children[index].total
-  }
-  if (childSum <= 0) {
-    return
-  }
+  const marks = svgEl("g", { part: "icicle" }, [])
+  const labels = svgEl("g", { "aria-hidden": "true" }, [])
+  plot.appendChild(marks)
+  plot.appendChild(labels)
 
-  let cursor = horizontal ? y : x
-
-  for (let index = 0; index < children.length; index = index + 1) {
-    const child = children[index]
-    const fraction = child.total / childSum
-
-    if (horizontal === true) {
-      /* Flame graph: root at left, children grow rightward. */
-      const childX = x + bandH
-      const childY = cursor
-      const childW = bandH
-      const childH = h * fraction
-      _layoutIcicle(child, childX, childY, childW, childH, totalW, totalH, bandH, horizontal)
-      cursor = cursor + childH
-    } else {
-      /* Default icicle: root at top, children grow downward. */
-      const childX = cursor
-      const childY = y + bandH
-      const childW = w * fraction
-      const childH = bandH
-      _layoutIcicle(child, childX, childY, childW, childH, totalW, totalH, bandH, horizontal)
-      cursor = cursor + childW
-    }
-  }
-  return
-}
-
-
-function _renderIcicle(root, plot, ctx) {
-  /*
-   * Emit <rect>/<text> elements for the pre-computed icicle layout.
-   *
-   * :param root: Tree root (layout computed).
-   * :param plot: Parent <g>.
-   * :param ctx: Renderer context.
-   */
-  const nodes = []
-  _collectNodes(root, nodes)
-
-  const MIN_SIZE = 4
-  let clipIndex = 0
-
+  const nodes = _collectNodes(root, [])
   for (let index = 0; index < nodes.length; index = index + 1) {
     const node = nodes[index]
-    if (node.w === undefined || node.w < MIN_SIZE || node.h === undefined || node.h < MIN_SIZE) {
+    const span = spans.get(node)
+    if (span === undefined || span.end - span.start < 1 || node.total <= 0) {
       continue
     }
+    let x = span.start
+    let y = node.depth * bandSize
+    let w = span.end - span.start
+    let h = bandSize
+    if (horizontal === true) {
+      x = node.depth * bandSize
+      y = span.start
+      w = bandSize
+      h = span.end - span.start
+    }
 
-    const color = _colorForDepth(node.depth)
     const rect = svgEl("rect", {
-      x: node.x, y: node.y, width: node.w - 1, height: node.h - 1,
-      fill: color,
-      "fill-opacity": 0.85,
-      stroke: "var(--mj-bg, #ffffff)",
+      x: x.toFixed(2), y: y.toFixed(2),
+      width: Math.max(w - 1, 0.5).toFixed(2), height: Math.max(h - 1, 0.5).toFixed(2),
+      fill: _nodeColor(node, ctx),
+      "fill-opacity": node.depth === 0 ? 1 : _depthOpacity(node.depth),
+      stroke: GAP_COLOR,
       "stroke-width": 1,
       rx: 2
     }, [])
+    _makeInteractive(rect, "icicle-tile", node, root.total, ctx)
+    marks.appendChild(rect)
 
-    const valueText = typeof node.total === "number"
-      ? String(Math.round(node.total))
-      : ""
-    const ariaLabel = valueText !== ""
-      ? `${node.name}: ${valueText}`
-      : node.name
-
-    _makeInteractive(
-      rect,
-      "icicle-tile",
-      ariaLabel,
-      ariaLabel,
-      ctx.emit,
-      "mj-chart-node-click",
-      { name: node.name, value: node.total, depth: node.depth }
-    )
-    plot.appendChild(rect)
-
-    /* Label when tile is wide and tall enough. */
-    if (node.w >= 24 && node.h >= 14) {
-      const clipId = `mj-ic-clip-${clipIndex}`
-      clipIndex = clipIndex + 1
-
-      const clipRect = svgEl("rect", {
-        x: node.x + 2, y: node.y + 1,
-        width: Math.max(node.w - 4, 0),
-        height: Math.max(node.h - 2, 0)
-      }, [])
-      plot.appendChild(svgEl("clipPath", { id: clipId }, [clipRect]))
-
-      plot.appendChild(svgEl("text", {
-        x: node.x + 4,
-        y: node.y + Math.min(12, node.h / 2 + 4),
-        "font-size": 10,
-        fill: "var(--mj-bg, #ffffff)",
-        "clip-path": `url(#${clipId})`,
-        "pointer-events": "none"
-      }, escapeHtml(node.name)))
+    if (w >= 24 && h >= 15) {
+      const text = _fitText(node.name, w - 8, 10)
+      if (text !== "") {
+        labels.appendChild(_label(x + 4, y + Math.min(13, h / 2 + 4), text, 10,
+          node.depth === 0 ? { "font-weight": "600" } : null))
+      }
     }
   }
   return
@@ -759,236 +840,534 @@ function _renderIcicle(root, plot, ctx) {
 
 
 /* -------------------------------------------------------------------------
- * Circle packing layout
+ * Circle packing -- front-chain sibling packing and enclosing circles
+ * (after Wang et al. 2006, as implemented by d3-hierarchy)
  * ---------------------------------------------------------------------- */
 
-function _packCircles(circles) {
+function _place(b, a, c) {
   /*
-   * Pack an array of { r } circles into an enclosing circle using an
-   * incremental front-chain approach (Wang-Bhatt heuristic).
-   * Each circle receives `.cx` and `.cy` on exit.
-   *
-   * :param circles: Array of objects with `.r` (radius).
-   * :returns: Object { cx, cy, r } of the enclosing bounding circle.
+   * Position circle c tangent to circles a and b.
    */
-  if (circles.length === 0) {
-    return { cx: 0, cy: 0, r: 0 }
-  }
-  if (circles.length === 1) {
-    circles[0].cx = 0
-    circles[0].cy = 0
-    return { cx: 0, cy: 0, r: circles[0].r }
-  }
-
-  /* Place first two. */
-  circles[0].cx = -circles[0].r
-  circles[0].cy = 0
-  circles[1].cx = circles[1].r
-  circles[1].cy = 0
-
-  if (circles.length === 2) {
-    const boundR = circles[0].r + circles[1].r
-    return { cx: 0, cy: 0, r: boundR / 2 }
-  }
-
-  /* Front chain: list of circles placed so far. */
-  const chain = [circles[0], circles[1]]
-
-  for (let index = 2; index < circles.length; index = index + 1) {
-    const newC = circles[index]
-    /* Try to place touching the last two chain entries. */
-    const a = chain[chain.length - 2]
-    const b = chain[chain.length - 1]
-    const placed = _placeCircle(newC, a, b)
-    if (placed === false) {
-      /* Fall back: place on the right side of the current bound. */
-      let maxCx = -Infinity
-      for (let k = 0; k < chain.length; k = k + 1) {
-        if (chain[k].cx + chain[k].r > maxCx) {
-          maxCx = chain[k].cx + chain[k].r
-        }
-      }
-      newC.cx = maxCx + newC.r
-      newC.cy = 0
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const d2 = dx * dx + dy * dy
+  if (d2 > 0) {
+    let a2 = a.r + c.r
+    a2 = a2 * a2
+    let b2 = b.r + c.r
+    b2 = b2 * b2
+    if (a2 > b2) {
+      const x = (d2 + b2 - a2) / (2 * d2)
+      const y = Math.sqrt(Math.max(0, b2 / d2 - x * x))
+      c.x = b.x - x * dx - y * dy
+      c.y = b.y - x * dy + y * dx
+    } else {
+      const x = (d2 + a2 - b2) / (2 * d2)
+      const y = Math.sqrt(Math.max(0, a2 / d2 - x * x))
+      c.x = a.x + x * dx - y * dy
+      c.y = a.y + x * dy + y * dx
     }
-    chain.push(newC)
+  } else {
+    c.x = a.x + c.r
+    c.y = a.y
   }
-
-  /* Compute enclosing circle. */
-  let maxDist = 0
-  for (let index = 0; index < circles.length; index = index + 1) {
-    const c = circles[index]
-    const dist = Math.sqrt(c.cx * c.cx + c.cy * c.cy) + c.r
-    if (dist > maxDist) {
-      maxDist = dist
-    }
-  }
-  return { cx: 0, cy: 0, r: maxDist }
+  return
 }
 
 
-function _placeCircle(newC, a, b) {
+function _intersects(a, b) {
   /*
-   * Try to place `newC` tangent to circles `a` and `b`.
-   * Returns true when placement succeeded, false otherwise.
-   *
-   * :param newC: Circle to place (has .r).
-   * :param a: First existing circle (has .cx, .cy, .r).
-   * :param b: Second existing circle (has .cx, .cy, .r).
-   * :returns: Boolean success.
+   * True when two circles overlap (beyond a rounding tolerance).
    */
-  const rA = a.r + newC.r
-  const rB = b.r + newC.r
-  const dx = b.cx - a.cx
-  const dy = b.cy - a.cy
-  const d2 = dx * dx + dy * dy
-  const d = Math.sqrt(d2)
+  const dr = a.r + b.r - 1e-6
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const overlaps = dr > 0 && dr * dr > dx * dx + dy * dy
+  return overlaps
+}
 
-  if (d <= 0) {
-    return false
+
+function _chainScore(link) {
+  /*
+   * Squared distance from the origin to the weighted midpoint of a front
+   * chain link and its successor.
+   */
+  const a = link.circle
+  const b = link.next.circle
+  const ab = a.r + b.r
+  const dx = (a.x * b.r + b.x * a.r) / ab
+  const dy = (a.y * b.r + b.y * a.r) / ab
+  return dx * dx + dy * dy
+}
+
+
+function _encloses(a, b) {
+  /*
+   * True when circle a contains circle b (with a small tolerance).
+   */
+  const dr = a.r - b.r + Math.max(a.r, b.r, 1) * 1e-9
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const inside = dr > 0 && dr * dr > dx * dx + dy * dy
+  return inside
+}
+
+
+function _enclosesNot(a, b) {
+  /*
+   * True when circle a does not contain circle b.
+   */
+  const dr = a.r - b.r
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const outside = dr < 0 || dr * dr < dx * dx + dy * dy
+  return outside
+}
+
+
+function _enclosesAll(a, basis) {
+  /*
+   * True when circle a contains every circle of the basis.
+   */
+  for (let index = 0; index < basis.length; index = index + 1) {
+    if (_encloses(a, basis[index]) === false) {
+      return false
+    }
   }
-
-  const cosA = (d2 + rA * rA - rB * rB) / (2 * d * rA)
-  if (cosA < -1 || cosA > 1) {
-    return false
-  }
-
-  const angle = Math.atan2(dy, dx) + Math.acos(cosA)
-  newC.cx = a.cx + rA * Math.cos(angle)
-  newC.cy = a.cy + rA * Math.sin(angle)
   return true
 }
 
 
-function _layoutCirclePack(node, maxLeafValue, scale) {
+function _encloseTwo(a, b) {
   /*
-   * Recursively assign `.cx .cy .r` to every node.
-   * Leaf radius comes from sqrt-scale of node.total.
-   * Internal node radius encloses all children.
-   *
-   * :param node: Tree node (already has `.total`).
-   * :param maxLeafValue: Maximum leaf `.total` value in the entire tree.
-   * :param scale: linearScale mapping [0..sqrt(maxLeafValue)] -> [0..maxR].
-   * :returns: Enclosing radius for this node.
+   * The smallest circle enclosing two circles.
    */
-  const children = node.children
-  if (children === undefined || children === null || children.length === 0) {
-    /* Leaf: radius from sqrt-scale. */
-    const r = scale(Math.sqrt(Math.max(node.total, 0)))
-    node.r = Math.max(r, 4)
-    node.cx = 0
-    node.cy = 0
-    return node.r
+  const x21 = b.x - a.x
+  const y21 = b.y - a.y
+  const r21 = b.r - a.r
+  const length = Math.sqrt(x21 * x21 + y21 * y21)
+  if (length === 0) {
+    return { x: a.x, y: a.y, r: Math.max(a.r, b.r) }
   }
-
-  /* Recurse to get children radii. */
-  for (let index = 0; index < children.length; index = index + 1) {
-    _layoutCirclePack(children[index], maxLeafValue, scale)
+  const circle = {
+    x: (a.x + b.x + x21 / length * r21) / 2,
+    y: (a.y + b.y + y21 / length * r21) / 2,
+    r: (length + a.r + b.r) / 2
   }
-
-  /* Sort children by radius descending for better packing. */
-  const sorted = children.slice()
-  sorted.sort((a, b) => b.r - a.r)
-
-  const bound = _packCircles(sorted)
-
-  /* Translate children back to bound.cx/cy = 0 origin. */
-  for (let index = 0; index < sorted.length; index = index + 1) {
-    sorted[index].cx = sorted[index].cx - bound.cx
-    sorted[index].cy = sorted[index].cy - bound.cy
-  }
-
-  /* Internal node encloses children with a 4px padding. */
-  node.r = Math.max(bound.r + 4, 6)
-  node.cx = 0
-  node.cy = 0
-  return node.r
+  return circle
 }
 
 
-function _translateCircles(node, ox, oy) {
+function _encloseThree(a, b, c) {
   /*
-   * Translate a subtree's cx/cy by (ox, oy).
-   *
-   * :param node: Root of subtree.
-   * :param ox: X offset.
-   * :param oy: Y offset.
+   * The smallest circle enclosing (tangent to) three circles.
    */
-  node.cx = node.cx + ox
-  node.cy = node.cy + oy
-  const children = node.children
-  if (children === undefined || children === null) {
+  const x1 = a.x
+  const y1 = a.y
+  const r1 = a.r
+  const a2 = x1 - b.x
+  const a3 = x1 - c.x
+  const b2 = y1 - b.y
+  const b3 = y1 - c.y
+  const c2 = b.r - r1
+  const c3 = c.r - r1
+  const d1 = x1 * x1 + y1 * y1 - r1 * r1
+  const d2 = d1 - b.x * b.x - b.y * b.y + b.r * b.r
+  const d3 = d1 - c.x * c.x - c.y * c.y + c.r * c.r
+  const ab = a3 * b2 - a2 * b3
+  const xa = (b2 * d3 - b3 * d2) / (ab * 2) - x1
+  const xb = (b3 * c2 - b2 * c3) / ab
+  const ya = (a3 * d2 - a2 * d3) / (ab * 2) - y1
+  const yb = (a2 * c3 - a3 * c2) / ab
+  const qa = xb * xb + yb * yb - 1
+  const qb = 2 * (r1 + xa * xb + ya * yb)
+  const qc = xa * xa + ya * ya - r1 * r1
+  const r = -(Math.abs(qa) > 1e-6 ? (qb + Math.sqrt(qb * qb - 4 * qa * qc)) / (2 * qa) : qc / qb)
+  const circle = { x: x1 + xa + xb * r, y: y1 + ya + yb * r, r: r }
+  return circle
+}
+
+
+function _encloseBasis(basis) {
+  /*
+   * The enclosing circle of a 1-3 circle basis.
+   */
+  if (basis.length === 1) {
+    return { x: basis[0].x, y: basis[0].y, r: basis[0].r }
+  }
+  if (basis.length === 2) {
+    return _encloseTwo(basis[0], basis[1])
+  }
+  return _encloseThree(basis[0], basis[1], basis[2])
+}
+
+
+function _extendBasis(basis, circle) {
+  /*
+   * Smallest basis that encloses the old basis and a new circle, or null.
+   */
+  if (_enclosesAll(circle, basis) === true) {
+    return [circle]
+  }
+  for (let i = 0; i < basis.length; i = i + 1) {
+    if (_enclosesNot(circle, basis[i]) === true &&
+        _enclosesAll(_encloseTwo(basis[i], circle), basis) === true) {
+      return [basis[i], circle]
+    }
+  }
+  for (let i = 0; i < basis.length - 1; i = i + 1) {
+    for (let j = i + 1; j < basis.length; j = j + 1) {
+      if (_enclosesNot(_encloseTwo(basis[i], basis[j]), circle) === true &&
+          _enclosesNot(_encloseTwo(basis[i], circle), basis[j]) === true &&
+          _enclosesNot(_encloseTwo(basis[j], circle), basis[i]) === true &&
+          _enclosesAll(_encloseThree(basis[i], basis[j], circle), basis) === true) {
+        return [basis[i], basis[j], circle]
+      }
+    }
+  }
+  return null
+}
+
+
+function _boundingCircle(circles) {
+  /*
+   * A simple (not minimal) enclosing circle: used only when the exact
+   * algorithm fails numerically.
+   */
+  let cx = 0
+  let cy = 0
+  for (let index = 0; index < circles.length; index = index + 1) {
+    cx = cx + circles[index].x
+    cy = cy + circles[index].y
+  }
+  cx = cx / circles.length
+  cy = cy / circles.length
+  let r = 0
+  for (let index = 0; index < circles.length; index = index + 1) {
+    const c = circles[index]
+    r = Math.max(r, Math.hypot(c.x - cx, c.y - cy) + c.r)
+  }
+  return { x: cx, y: cy, r: r }
+}
+
+
+function _encloseCircles(circles) {
+  /*
+   * The smallest circle enclosing every circle (Welzl's move-to-front
+   * algorithm over a deterministically shuffled list).
+   */
+  const list = circles.slice()
+  /* Deterministic shuffle (linear congruential generator). */
+  let seed = 1
+  for (let index = list.length - 1; index > 0; index = index - 1) {
+    seed = (seed * 1664525 + 1013904223) % 4294967296
+    const swap = Math.floor((seed / 4294967296) * (index + 1))
+    const held = list[index]
+    list[index] = list[swap]
+    list[swap] = held
+  }
+
+  let basis = []
+  let enclosing = null
+  let index = 0
+  let guard = 0
+  const guardLimit = list.length * list.length * 8 + 64
+  while (index < list.length) {
+    guard = guard + 1
+    if (guard > guardLimit) {
+      return _boundingCircle(circles)
+    }
+    const circle = list[index]
+    if (enclosing !== null && _encloses(enclosing, circle) === true) {
+      index = index + 1
+      continue
+    }
+    const extended = _extendBasis(basis, circle)
+    if (extended === null) {
+      return _boundingCircle(circles)
+    }
+    basis = extended
+    enclosing = _encloseBasis(basis)
+    index = 0
+  }
+  if (enclosing === null || Number.isFinite(enclosing.r) === false) {
+    return _boundingCircle(circles)
+  }
+  return enclosing
+}
+
+
+function _packSiblings(circles) {
+  /*
+   * Pack circles ({ r }) around the origin without overlap, each placed
+   * tangent to two circles of the front chain; sets `.x` and `.y`.
+   *
+   * :returns: The radius of the enclosing circle (circles are translated
+   *     so it is centred on the origin).
+   */
+  const count = circles.length
+  if (count === 0) {
+    return 0
+  }
+  let first = circles[0]
+  first.x = 0
+  first.y = 0
+  if (count === 1) {
+    return first.r
+  }
+  const second = circles[1]
+  first.x = -second.r
+  second.x = first.r
+  second.y = 0
+  if (count === 2) {
+    /* Enclosing circle of two tangent circles, re-centred. */
+    const shift = (first.x - first.r + second.x + second.r) / 2
+    first.x = first.x - shift
+    second.x = second.x - shift
+    return first.r + second.r
+  }
+  _place(second, first, circles[2])
+
+  /* Front chain as a circular doubly linked list. */
+  let a = { circle: first, next: null, previous: null }
+  let b = { circle: second, next: null, previous: null }
+  let c = { circle: circles[2], next: null, previous: null }
+  a.next = b
+  c.previous = b
+  b.next = c
+  a.previous = c
+  c.next = a
+  b.previous = a
+
+  let index = 3
+  let attempts = 0
+  const attemptLimit = count * count * 4 + 64
+  while (index < count) {
+    attempts = attempts + 1
+    if (attempts > attemptLimit) {
+      break
+    }
+    const circle = circles[index]
+    _place(a.circle, b.circle, circle)
+    c = { circle: circle, next: null, previous: null }
+
+    /* Find the closest intersecting circle on the front chain, if any. */
+    let j = b.next
+    let k = a.previous
+    let sj = b.circle.r
+    let sk = a.circle.r
+    let restarted = false
+    do {
+      if (sj <= sk) {
+        if (_intersects(j.circle, c.circle) === true) {
+          b = j
+          a.next = b
+          b.previous = a
+          restarted = true
+          break
+        }
+        sj = sj + j.circle.r
+        j = j.next
+      } else {
+        if (_intersects(k.circle, c.circle) === true) {
+          a = k
+          a.next = b
+          b.previous = a
+          restarted = true
+          break
+        }
+        sk = sk + k.circle.r
+        k = k.previous
+      }
+    } while (j !== k.next)
+    if (restarted === true) {
+      continue
+    }
+
+    /* Insert c between a and b, then pick the pair closest to the centre. */
+    c.previous = a
+    c.next = b
+    a.next = c
+    b.previous = c
+    b = c
+    let bestScore = _chainScore(a)
+    let cursor = c.next
+    while (cursor !== b) {
+      const score = _chainScore(cursor)
+      if (score < bestScore) {
+        a = cursor
+        bestScore = score
+      }
+      cursor = cursor.next
+    }
+    b = a.next
+    index = index + 1
+  }
+
+  /* Enclose the front chain and centre it on the origin. */
+  const chain = [b.circle]
+  let cursor = b.next
+  while (cursor !== b) {
+    chain.push(cursor.circle)
+    cursor = cursor.next
+  }
+  const enclosing = _encloseCircles(chain)
+  for (let i = 0; i < count; i = i + 1) {
+    circles[i].x = circles[i].x - enclosing.x
+    circles[i].y = circles[i].y - enclosing.y
+  }
+  return enclosing.r
+}
+
+
+function _packNode(node, padding, circles) {
+  /*
+   * Compute every node's radius and its centre relative to its parent's
+   * centre (bottom-up). Leaf radius = sqrt(value).
+   *
+   * :param padding: Space kept around each child, in layout units.
+   * :param circles: Map layout node -> { x, y, r } (relative).
+   * :returns: The node's circle.
+   */
+  const own = { x: 0, y: 0, r: 0 }
+  circles.set(node, own)
+  if (node.children.length === 0) {
+    own.r = Math.sqrt(Math.max(node.total, 0))
+    return own
+  }
+
+  const childCircles = []
+  for (let index = 0; index < node.children.length; index = index + 1) {
+    const child = node.children[index]
+    if (child.total <= 0) {
+      continue
+    }
+    const circle = _packNode(child, padding, circles)
+    circle.r = circle.r + padding
+    childCircles.push(circle)
+  }
+  if (childCircles.length === 0) {
+    own.r = Math.sqrt(Math.max(node.total, 0))
+    return own
+  }
+  /* Larger circles first pack tighter; layout order only. */
+  const ordered = childCircles.slice().sort((first, second) => second.r - first.r)
+  const enclosing = _packSiblings(ordered)
+  for (let index = 0; index < childCircles.length; index = index + 1) {
+    childCircles[index].r = childCircles[index].r - padding
+  }
+  own.r = enclosing + padding
+  return own
+}
+
+
+function _resolveCircles(node, parentX, parentY, scale, circles, output) {
+  /*
+   * Turn relative circles into absolute pixel circles (top-down), so every
+   * descendant moves with its packed parent.
+   *
+   * :param output: Map layout node -> { cx, cy, r } in pixels.
+   */
+  const circle = circles.get(node)
+  if (circle === undefined) {
     return
   }
-  for (let index = 0; index < children.length; index = index + 1) {
-    _translateCircles(children[index], ox, oy)
+  const cx = parentX + circle.x * scale
+  const cy = parentY + circle.y * scale
+  output.set(node, { cx: cx, cy: cy, r: circle.r * scale })
+  for (let index = 0; index < node.children.length; index = index + 1) {
+    _resolveCircles(node.children[index], cx, cy, scale, circles, output)
   }
   return
 }
 
 
-function _renderCirclePack(root, plot, ctx) {
+function _layoutCirclePack(root, plotW, plotH) {
   /*
-   * Emit <circle>/<text> elements for the pre-computed circle-pack layout.
+   * Pack the whole tree and scale it to fit the plot.
    *
-   * :param root: Tree root (cx/cy/r computed).
-   * :param plot: Parent <g>.
-   * :param ctx: Renderer context.
+   * :returns: Map layout node -> { cx, cy, r } in plot pixels.
    */
-  const nodes = []
-  _collectNodes(root, nodes)
+  const budget = Math.max(Math.min(plotW, plotH) / 2 - 1, 2)
+  const PADDING_PX = 3
 
-  const MIN_LABEL_R = 12
+  /* First pass without padding finds the layout-unit size of a pixel. */
+  const unpadded = new Map()
+  const rawRadius = _packNode(root, 0, unpadded).r
+  const unitsPerPixel = rawRadius > 0 ? rawRadius / budget : 1
 
+  const circles = new Map()
+  const rootCircle = _packNode(root, PADDING_PX * unitsPerPixel, circles)
+  const scale = rootCircle.r > 0 ? budget / rootCircle.r : 1
+
+  const output = new Map()
+  _resolveCircles(root, plotW / 2 - rootCircle.x * scale, plotH / 2 - rootCircle.y * scale,
+    scale, circles, output)
+  return output
+}
+
+
+function _renderCirclePack(root, plot, plotW, plotH, ctx) {
+  /*
+   * Draw the packed circles: the root as a faint outline, groups as light
+   * discs in their branch colour, leaves as stronger discs with labels.
+   */
+  const placed = _layoutCirclePack(root, plotW, plotH)
+
+  const marks = svgEl("g", { part: "circle-pack" }, [])
+  const labels = svgEl("g", { "aria-hidden": "true" }, [])
+  plot.appendChild(marks)
+  plot.appendChild(labels)
+
+  const nodes = _collectNodes(root, [])
   for (let index = 0; index < nodes.length; index = index + 1) {
     const node = nodes[index]
-    if (node.cx === undefined || node.r === undefined) {
+    const circle = placed.get(node)
+    if (circle === undefined || circle.r < 0.5) {
       continue
     }
+    const isLeaf = node.children.length === 0
+    const isRoot = node.depth === 0
+    const color = _nodeColor(node, ctx)
 
-    const color = _colorForDepth(node.depth)
-    const isLeaf = node.children === undefined || node.children === null || node.children.length === 0
-
-    const circle = svgEl("circle", {
-      cx: node.cx.toFixed(2), cy: node.cy.toFixed(2), r: node.r.toFixed(2),
+    let fillOpacity = isLeaf === true ? _depthOpacity(node.depth) : 0.14 + 0.06 * node.depth
+    if (isRoot === true) {
+      fillOpacity = 0.35
+    }
+    const element = svgEl("circle", {
+      cx: circle.cx.toFixed(2), cy: circle.cy.toFixed(2), r: circle.r.toFixed(2),
       fill: color,
-      "fill-opacity": isLeaf ? 0.75 : 0.2,
-      stroke: color,
-      "stroke-width": isLeaf ? 1 : 1.5
+      "fill-opacity": fillOpacity.toFixed(2),
+      stroke: isRoot === true ? ROOT_STROKE : color,
+      "stroke-opacity": isLeaf === true ? 0 : 0.8,
+      "stroke-width": 1
     }, [])
+    _makeInteractive(element, "pack-circle", node, root.total, ctx)
+    marks.appendChild(element)
 
-    const valueText = typeof node.total === "number"
-      ? String(Math.round(node.total))
-      : ""
-    const ariaLabel = valueText !== ""
-      ? `${node.name}: ${valueText}`
-      : node.name
+    if (isLeaf === true && circle.r >= 12) {
+      const fontSize = Math.min(11, Math.max(8, circle.r * 0.4))
+      const text = _fitText(node.name, circle.r * 1.8, fontSize)
+      if (text !== "") {
+        labels.appendChild(_label(circle.cx, circle.cy, text, fontSize.toFixed(1), {
+          "text-anchor": "middle", "dominant-baseline": "central"
+        }))
+      }
+    }
+  }
 
-    _makeInteractive(
-      circle,
-      "pack-circle",
-      ariaLabel,
-      ariaLabel,
-      ctx.emit,
-      "mj-chart-node-click",
-      { name: node.name, value: node.total, depth: node.depth }
-    )
-    plot.appendChild(circle)
-
-    if (node.r >= MIN_LABEL_R) {
-      const charLimit = Math.max(2, Math.floor((node.r * 1.4) / 7))
-      const labelText = node.name.length > charLimit
-        ? node.name.slice(0, charLimit - 1) + "…"
-        : node.name
-
-      plot.appendChild(svgEl("text", {
-        x: node.cx.toFixed(2), y: node.cy.toFixed(2),
-        "text-anchor": "middle",
-        "dominant-baseline": "central",
-        "font-size": Math.min(11, node.r * 0.5),
-        fill: "var(--mj-text, #14181f)",
-        "pointer-events": "none"
-      }, escapeHtml(labelText)))
+  /* Group names along the top inside edge of their circle, above children. */
+  for (let index = 0; index < nodes.length; index = index + 1) {
+    const node = nodes[index]
+    const circle = placed.get(node)
+    if (node.depth !== 1 || node.children.length === 0 || circle === undefined || circle.r < 28) {
+      continue
+    }
+    const text = _fitText(node.name, circle.r * 1.2, 10)
+    if (text !== "") {
+      labels.appendChild(_label(circle.cx, circle.cy - circle.r - 3, text, 10, {
+        "text-anchor": "middle", "font-weight": "600", fill: MUTED_TEXT_COLOR
+      }))
     }
   }
   return
@@ -999,32 +1378,42 @@ function _renderCirclePack(root, plot, ctx) {
  * Main render entry point
  * ---------------------------------------------------------------------- */
 
+function _resolveLayout(ctx) {
+  /*
+   * The layout to draw: an explicit, recognised `layout` attribute, else
+   * the one of the chart type, else treemap.
+   */
+  const requested = ctx.attrs("layout", null)
+  if (typeof requested === "string" && LAYOUT_ALIASES[requested.trim()] !== undefined) {
+    return LAYOUT_ALIASES[requested.trim()]
+  }
+  const byType = LAYOUT_BY_TYPE[ctx.type]
+  const layout = byType !== undefined ? byType : "treemap"
+  return layout
+}
+
+
 export function render(ctx) {
   /*
-   * Render one of four hierarchical layout modes, selected by the `layout`
-   * attribute: "treemap" (default), "sunburst", "icicle", "circle-pack".
+   * Render a treemap, sunburst, icicle or circle-pack chart.
    *
    * :param ctx: The renderer context.
    * :returns: A <g> SVGElement.
    */
   const root = svgEl("g", { part: "plot" }, [])
 
-  const raw = ctx.raw
-  if (raw === null || raw === undefined || raw.root === null || raw.root === undefined) {
+  const hierarchy = _buildHierarchy(ctx.raw)
+  if (hierarchy === null || hierarchy.total <= 0) {
     return root
   }
 
-  const dataRoot = raw.root
-  _sumChildren(dataRoot)
-  _assignDepth(dataRoot, 0)
+  const layout = _resolveLayout(ctx)
+  _publishTable(hierarchy, ctx, layout)
+  _publishLegend(hierarchy, ctx)
 
-  if (dataRoot.total <= 0) {
-    return root
-  }
-
-  const layout = ctx.attrs("layout", "treemap")
-
-  const margin = { top: 8, right: 8, bottom: 8, left: 8 }
+  /* Circle pack keeps room above the top-level circles for their names. */
+  const topMargin = layout === "circle-pack" ? 14 : 8
+  const margin = { top: topMargin, right: 8, bottom: 8, left: 8 }
   const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
 
@@ -1034,68 +1423,22 @@ export function render(ctx) {
   root.appendChild(plot)
 
   if (layout === "sunburst") {
-    const cx = plotW / 2
-    const cy = plotH / 2
-    const radius = Math.min(plotW, plotH) / 2 - 2
-    const depth = _maxDepth(dataRoot)
-
-    _layoutSunburst(dataRoot, 0, 2 * Math.PI)
-    _renderSunburst(dataRoot, plot, cx, cy, depth, radius, ctx)
-
+    _renderSunburst(hierarchy, plot, plotW, plotH, ctx)
   } else if (layout === "icicle") {
-    const horizontal = ctx.orientation === "horizontal"
-    const depth = _maxDepth(dataRoot)
-    const levels = depth + 1
-    const bandH = horizontal
-      ? Math.max(plotW / levels, 4)
-      : Math.max(plotH / levels, 4)
-
-    _layoutIcicle(dataRoot, 0, 0, plotW, plotH, plotW, plotH, bandH, horizontal)
-    _renderIcicle(dataRoot, plot, ctx)
-
+    _renderIcicle(hierarchy, plot, plotW, plotH, ctx.orientation === "horizontal", ctx)
   } else if (layout === "circle-pack") {
-    /* Find max leaf value for the sqrt scale. */
-    const allNodes = []
-    _collectNodes(dataRoot, allNodes)
-    let maxLeafVal = 0
-    for (let index = 0; index < allNodes.length; index = index + 1) {
-      const node = allNodes[index]
-      const isLeaf = node.children === undefined || node.children === null || node.children.length === 0
-      if (isLeaf && node.total > maxLeafVal) {
-        maxLeafVal = node.total
-      }
-    }
-    if (maxLeafVal <= 0) {
-      maxLeafVal = 1
-    }
-
-    const maxR = Math.min(plotW, plotH) / 6
-    const sqrtScale = (v) => {
-      const fraction = v / Math.sqrt(maxLeafVal)
-      const pixel = fraction * maxR
-      return Math.max(pixel, 4)
-    }
-
-    _layoutCirclePack(dataRoot, maxLeafVal, sqrtScale)
-
-    /* Centre the root in the plot. */
-    const cx = plotW / 2
-    const cy = plotH / 2
-    _translateCircles(dataRoot, cx, cy)
-
-    _renderCirclePack(dataRoot, plot, ctx)
-
+    _renderCirclePack(hierarchy, plot, plotW, plotH, ctx)
   } else {
-    /* Default: treemap */
-    _layoutTreemap(dataRoot, 0, 0, plotW, plotH)
-    _renderTreemap(dataRoot, plot, ctx)
+    _renderTreemap(hierarchy, plot, plotW, plotH, ctx)
   }
 
   return root
 }
 
 
-registerRenderer("treemap", render);
-registerRenderer("sunburst", render);
-registerRenderer("icicle", render);
-registerRenderer("circle-pack", render);
+const REGISTRATION = { isEmpty: _isEmptyModel }
+
+registerRenderer("treemap", render, REGISTRATION);
+registerRenderer("sunburst", render, REGISTRATION);
+registerRenderer("icicle", render, REGISTRATION);
+registerRenderer("circle-pack", render, REGISTRATION);

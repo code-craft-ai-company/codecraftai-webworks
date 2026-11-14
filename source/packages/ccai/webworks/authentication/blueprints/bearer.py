@@ -23,20 +23,20 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 
-import asyncio
 import logging
 import time
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ccai.webworks.authentication.bearer import (
     TokenStore,
     decode_jwt,
     encode_jwt,
+    generate_token_id,
     JWTError
 )
 from ccai.webworks.authentication.basic import IdentityProvider
-from ccai.webworks.authentication.core import AuthenticationContext
+from ccai.webworks.authentication.core import AuthenticationContext, Principal
 from ccai.webworks.authentication.blueprints.responses import (
     AuthError,
     AuthResponse
@@ -46,7 +46,10 @@ from ccai.webworks.authentication.blueprints.schemas import (
     TokenResponse
 )
 from ccai.webworks.authentication.blueprints.security import (
-    SecurityBlueprint
+    SecurityBlueprint,
+    restrict_scope,
+    run_async as _run_async,
+    split_scope
 )
 from ccai.webworks.endpoints.doc import Doc
 
@@ -81,47 +84,6 @@ def _token_prefix(token_value: Optional[str]) -> str:
         return "{}…".format(token_value[:4])
     rtnval = "{}…".format(token_value[:8])
     return rtnval
-
-
-def _run_async(coro: Any) -> Any:
-    """
-        Run an asynchronous coroutine synchronously, regardless of
-        whether the calling thread already has a running event loop.
-
-        Uvicorn / Hypercorn workers always have a running loop on the
-        request-handling thread, so the naive pattern
-        ``asyncio.get_event_loop().run_until_complete(coro)`` raises
-        ``RuntimeError: This event loop is already running``. When a
-        running loop is detected this helper offloads the coroutine
-        to a fresh worker thread with its own loop and blocks on the
-        thread's result; the sync caller observes a normal return
-        value with no nested-loop interleaving.
-
-        :param coro: The coroutine to execute.
-
-        :returns: The result of the coroutine.
-    """
-    try:
-        running_loop = asyncio.get_running_loop()
-    except RuntimeError:
-        running_loop = None
-
-    if running_loop is None:
-        # No running loop on this thread — drive the coroutine here
-        # with a fresh loop.
-        result = asyncio.run(coro)
-        return result
-
-    # A running loop is present (the typical ASGI case). Offload to
-    # a worker thread that owns its own loop so we never recurse
-    # into the live loop.
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(asyncio.run, coro)
-        result = future.result()
-
-    return result
 
 
 class BearerAuthBlueprint(SecurityBlueprint):
@@ -163,6 +125,25 @@ class BearerAuthBlueprint(SecurityBlueprint):
                          revoking tokens.
             identity_provider: Optional :class:`IdentityProvider` for
                                validating password grant credentials.
+            client_store: Optional store of OAuth clients used by the
+                          ``client_credentials`` grant. It must offer
+                          ``async validate_client_secret(client_id,
+                          client_secret) -> bool`` and may offer
+                          ``async get_client(client_id) -> dict`` whose
+                          ``scopes`` entry lists the scopes the client
+                          may be granted. Without a client store the
+                          grant validates against the identity provider;
+                          with neither it is refused.
+            revocation_list: Optional list of revoked token identifiers
+                             (see :meth:`get_revocation_list`).
+
+        Scopes:
+            A requested ``scope`` is never copied into a token as is.
+            The password grant grants only scopes in the principal's
+            ``permissions`` (override :meth:`get_allowed_scopes` to
+            change that), the client-credentials grant only scopes the
+            client is registered for, and a refresh can only keep or
+            narrow the scope of the refresh token.
     """
 
     base_path: str = "/auth/token"
@@ -174,6 +155,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
     refresh_token_expires: int = 86400 * 7
     token_store: Optional[TokenStore] = None
     identity_provider: Optional[IdentityProvider] = None
+    client_store: Optional[Any] = None
 
     # --- Class constants ---
     # Override these on a subclass to rebrand wire-format strings without
@@ -185,6 +167,8 @@ class BearerAuthBlueprint(SecurityBlueprint):
     SERVER_ERROR_CODE: str = "server_error"
     INVALID_GRANT_ERROR_CODE: str = "invalid_grant"
     INVALID_CLIENT_ERROR_CODE: str = "invalid_client"
+    INVALID_SCOPE_ERROR_CODE: str = "invalid_scope"
+    UNAUTHORIZED_CLIENT_ERROR_CODE: str = "unauthorized_client"
     UNSUPPORTED_GRANT_TYPE_ERROR_CODE: str = "unsupported_grant_type"
 
     # Authentication scheme label written into AuthenticationContext
@@ -196,6 +180,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
     JWT_CLAIM_EXP: str = "exp"
     JWT_CLAIM_TOKEN_TYPE: str = "token_type"
     JWT_CLAIM_SCOPE: str = "scope"
+    JWT_CLAIM_JTI: str = "jti"
 
     # Token type literals
     TOKEN_TYPE_ACCESS: str = "access"
@@ -246,7 +231,11 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=404)
             return response
 
-        body = request.json()
+        body = cls.read_request_data(request)
+        if body is None:
+            response = cls.invalid_body_response()
+            return response
+
         grant_type = body.get("grant_type")
 
         if grant_type == cls.GRANT_TYPE_PASSWORD:
@@ -258,7 +247,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
             return response
 
         if grant_type == cls.GRANT_TYPE_CLIENT_CREDENTIALS:
-            response = cls._handle_client_credentials_grant(body)
+            response = cls._handle_client_credentials_grant(body, request)
             return response
 
         error = AuthError(
@@ -303,7 +292,11 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=404)
             return response
 
-        body = request.json()
+        body = cls.read_request_data(request)
+        if body is None:
+            response = cls.invalid_body_response()
+            return response
+
         refresh_token = body.get("refresh_token")
 
         if not refresh_token:
@@ -329,10 +322,16 @@ class BearerAuthBlueprint(SecurityBlueprint):
         """
             Revoke a token.
 
-            Accepts a token in the request body and revokes it via the
-            configured :attr:`token_store`. If no token store is
-            configured, the endpoint acknowledges the request without
-            performing any action.
+            Accepts a token in the request body. A JWT signed by this
+            blueprint is put on the revocation list (see
+            :meth:`get_revocation_list`), after which the refresh grant
+            and introspection refuse it, and so does a
+            :class:`BearerAuthenticator` that was given the same list.
+            The token is also revoked in the configured
+            :attr:`token_store`, when there is one.
+
+            As RFC 7009 requires, the response is 200 whether or not the
+            token was known.
 
             The endpoint can be disabled via the ``enabled_endpoints``
             configuration. When disabled, a 404 response is returned.
@@ -351,16 +350,24 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=404)
             return response
 
-        body = request.json()
+        body = cls.read_request_data(request)
+        if body is None:
+            response = cls.invalid_body_response()
+            return response
+
         token_value = body.get("token")
 
-        if not token_value:
+        if not token_value or not isinstance(token_value, str):
             error = AuthError(
                 error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Token is required"
             )
             response = cls.format_error(error, status_code=400)
             return response
+
+        # Signed tokens stay valid until they expire unless their
+        # identifier is remembered as revoked.
+        cls.revoke_signed_token(token_value, cls.jwt_secret, cls.jwt_algorithm)
 
         if cls.token_store is not None:
             _run_async(cls.token_store.revoke_token(token_value))
@@ -385,9 +392,9 @@ class BearerAuthBlueprint(SecurityBlueprint):
             Introspect a token to check validity and retrieve claims.
 
             Decodes the provided token using the configured JWT secret
-            and algorithm. If the token is valid, returns the decoded
-            claims along with an ``active`` flag set to True. If the
-            token is invalid or expired, returns ``active`` set to False.
+            and algorithm. If the token is valid and has not been
+            revoked, returns the decoded claims along with an ``active``
+            flag set to True. Otherwise returns ``active`` set to False.
 
             The endpoint can be disabled via the ``enabled_endpoints``
             configuration. When disabled, a 404 response is returned.
@@ -406,10 +413,14 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=404)
             return response
 
-        body = request.json()
+        body = cls.read_request_data(request)
+        if body is None:
+            response = cls.invalid_body_response()
+            return response
+
         token_value = body.get("token")
 
-        if not token_value:
+        if not token_value or not isinstance(token_value, str):
             error = AuthError(
                 error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Token is required"
@@ -425,22 +436,18 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=500)
             return response
 
+        inactive_response = {
+            "status": 200,
+            "body": {"active": False},
+            "content_type": cls.JSON_CONTENT_TYPE
+        }
+
         try:
             claims = decode_jwt(
                 token_value,
                 cls.jwt_secret,
                 algorithms=[cls.jwt_algorithm]
             )
-            response_body = {"active": True}
-            response_body.update(claims)
-
-            response = {
-                "status": 200,
-                "body": response_body,
-                "content_type": cls.JSON_CONTENT_TYPE
-            }
-            return response
-
         except JWTError as exc:
             # Introspection contract returns ``{"active": false}`` for
             # any decode failure (RFC 7662 §2.2). Operator still wants
@@ -452,12 +459,69 @@ class BearerAuthBlueprint(SecurityBlueprint):
                 _token_prefix(token_value),
                 exc,
             )
-            response = {
-                "status": 200,
-                "body": {"active": False},
-                "content_type": cls.JSON_CONTENT_TYPE
-            }
-            return response
+            return inactive_response
+
+        if cls.is_token_revoked(token_value, claims):
+            return inactive_response
+
+        response_body = {"active": True}
+        response_body.update(claims)
+
+        response = {
+            "status": 200,
+            "body": response_body,
+            "content_type": cls.JSON_CONTENT_TYPE
+        }
+        return response
+
+    @classmethod
+    def get_allowed_scopes(cls, principal: Principal) -> List[str]:
+        """
+            Get the scopes a principal may be granted.
+
+            The default is the principal's ``permissions``, which is what
+            :class:`AccessPolicy` scope requirements are checked against.
+            Override this on a subclass to derive grantable scopes
+            differently (for example from roles).
+
+            :param principal: The authenticated principal.
+
+            :returns: The scopes that may appear in the principal's tokens.
+        """
+        rtnval = sorted(str(permission) for permission in principal.permissions)
+        return rtnval
+
+    @classmethod
+    def _resolve_scope(
+        cls,
+        requested_scope: Any,
+        allowed_scopes: Any
+    ) -> Tuple[Optional[str], Optional[dict]]:
+        """
+            Decide the scope a token is issued with.
+
+            :param requested_scope: The ``scope`` value of the request.
+            :param allowed_scopes: The scopes the principal, client or
+                                   original grant permits.
+
+            :returns: A tuple of (granted scope, error response). The
+                      scope is None when no scope was requested; the
+                      error response is set when a scope was requested
+                      and none of it may be granted.
+        """
+        if len(split_scope(requested_scope)) == 0:
+            return (None, None)
+
+        granted_scope = restrict_scope(requested_scope, allowed_scopes)
+        if granted_scope is None:
+            error = AuthError(
+                error=cls.INVALID_SCOPE_ERROR_CODE,
+                error_description="The requested scope is not allowed"
+            )
+            response = cls.format_error(error, status_code=400)
+            return (None, response)
+
+        return (granted_scope, None)
 
     @classmethod
     def _handle_password_grant(cls, request: Any, body: Dict[str, Any]) -> dict:
@@ -466,7 +530,8 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
             Validates the username and password from the request body
             against the configured :attr:`identity_provider`. On success,
-            issues a JWT access token and an opaque refresh token.
+            issues a JWT access token and a refresh token whose scope is
+            limited to what the principal is allowed.
 
             :param request: The incoming HTTP request object.
             :param body: The parsed request body dictionary.
@@ -485,12 +550,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=400)
             return response
 
-        # Resolve the identity provider from the blueprint or auth_system
-        provider = cls.identity_provider
-        if provider is None and cls.auth_system is not None:
-            basic_auth = cls.auth_system.get_authenticator("Basic")
-            if basic_auth is not None and hasattr(basic_auth, "_identity_provider"):
-                provider = basic_auth._identity_provider
+        provider = cls._resolve_identity_provider()
 
         if provider is None:
             error = AuthError(
@@ -506,9 +566,15 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(pre_error)
             return response
 
+        throttled_response = cls.check_login_throttle(request, str(username))
+        if throttled_response is not None:
+            return throttled_response
+
         principal = _run_async(
             provider.validate_credentials(username, password)
         )
+
+        cls.record_login_attempt(request, str(username), principal is not None)
 
         if principal is None:
             error = AuthError(
@@ -518,6 +584,13 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error)
             return response
 
+        scope, scope_error = cls._resolve_scope(
+            body.get(cls.JWT_CLAIM_SCOPE),
+            cls.get_allowed_scopes(principal)
+        )
+        if scope_error is not None:
+            return scope_error
+
         # Post-authentication hook
         context = AuthenticationContext(
             principal=principal,
@@ -526,8 +599,26 @@ class BearerAuthBlueprint(SecurityBlueprint):
         cls.post_authenticate(request, context)
 
         # Build JWT access token
-        response = cls._issue_tokens(principal.identifier, body.get("scope"))
+        response = cls._issue_tokens(principal.identifier, scope)
         return response
+
+    @classmethod
+    def _resolve_identity_provider(cls) -> Optional[IdentityProvider]:
+        """
+            Find the identity provider that validates user credentials.
+
+            Uses :attr:`identity_provider`, falling back to the provider
+            of the Basic authenticator registered in :attr:`auth_system`.
+
+            :returns: The identity provider, or None if there is none.
+        """
+        provider = cls.identity_provider
+        if provider is None and cls.auth_system is not None:
+            basic_auth = cls.auth_system.get_authenticator("Basic")
+            if basic_auth is not None and hasattr(basic_auth, "_identity_provider"):
+                provider = basic_auth._identity_provider
+
+        return provider
 
     @classmethod
     def _handle_refresh_grant(cls, body: Dict[str, Any]) -> dict:
@@ -536,8 +627,10 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
             Validates the provided refresh token. If a :attr:`token_store`
             is configured, the token is validated through the store.
-            Otherwise, the refresh token is decoded as a JWT. On success,
-            issues a new JWT access token.
+            Otherwise, the refresh token is decoded as a JWT. A revoked
+            refresh token is refused. On success, issues a new JWT access
+            token whose scope is the refresh token's scope, or the part
+            of it the request asks for.
 
             :param body: The parsed request body dictionary.
 
@@ -546,7 +639,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
         """
         refresh_token = body.get("refresh_token")
 
-        if not refresh_token:
+        if not refresh_token or not isinstance(refresh_token, str):
             error = AuthError(
                 error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Refresh token is required"
@@ -562,20 +655,19 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=500)
             return response
 
+        invalid_token_error = AuthError(
+            error=cls.INVALID_GRANT_ERROR_CODE,
+            error_description="Invalid or expired refresh token"
+        )
+
         # Validate the refresh token via token_store if available
         if cls.token_store is not None:
             claims = _run_async(
                 cls.token_store.validate_token(refresh_token)
             )
-            if claims is None:
-                error = AuthError(
-                    error=cls.INVALID_GRANT_ERROR_CODE,
-                    error_description="Invalid or expired refresh token"
-                )
-                response = cls.format_error(error)
+            if not isinstance(claims, dict):
+                response = cls.format_error(invalid_token_error)
                 return response
-
-            subject = claims.get(cls.JWT_CLAIM_SUB)
         else:
             # Decode the refresh token as a JWT
             try:
@@ -595,11 +687,7 @@ class BearerAuthBlueprint(SecurityBlueprint):
                     _token_prefix(refresh_token),
                     exc,
                 )
-                error = AuthError(
-                    error=cls.INVALID_GRANT_ERROR_CODE,
-                    error_description="Invalid or expired refresh token"
-                )
-                response = cls.format_error(error)
+                response = cls.format_error(invalid_token_error)
                 return response
 
             if claims.get(cls.JWT_CLAIM_TOKEN_TYPE) != cls.TOKEN_TYPE_REFRESH:
@@ -610,7 +698,12 @@ class BearerAuthBlueprint(SecurityBlueprint):
                 response = cls.format_error(error)
                 return response
 
-            subject = claims.get(cls.JWT_CLAIM_SUB)
+        # A revoked refresh token must not mint new access tokens
+        if cls.is_token_revoked(refresh_token, claims):
+            response = cls.format_error(invalid_token_error)
+            return response
+
+        subject = claims.get(cls.JWT_CLAIM_SUB)
 
         if not subject:
             error = AuthError(
@@ -620,24 +713,30 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error)
             return response
 
-        # Issue a new access token
-        now = time.time()
-        access_payload = {
-            cls.JWT_CLAIM_SUB: subject,
-            cls.JWT_CLAIM_IAT: int(now),
-            cls.JWT_CLAIM_EXP: int(now) + cls.access_token_expires,
-            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_ACCESS
-        }
+        # The new access token carries the scope of the refresh token.
+        # A request may narrow it but never widen it.
+        original_scope = claims.get(cls.JWT_CLAIM_SCOPE)
+        requested_scope = body.get(cls.JWT_CLAIM_SCOPE)
 
-        scope = body.get(cls.JWT_CLAIM_SCOPE)
-        if scope:
-            access_payload[cls.JWT_CLAIM_SCOPE] = scope
+        if len(split_scope(requested_scope)) == 0:
+            scope = restrict_scope(original_scope, original_scope)
+        else:
+            requested_tokens = split_scope(requested_scope)
+            original_tokens = split_scope(original_scope)
+            exceeds_original = [
+                token for token in requested_tokens
+                if token not in original_tokens
+            ]
+            if len(exceeds_original) > 0:
+                error = AuthError(
+                    error=cls.INVALID_SCOPE_ERROR_CODE,
+                    error_description="Requested scope exceeds the scope of the refresh token"
+                )
+                response = cls.format_error(error, status_code=400)
+                return response
+            scope = " ".join(requested_tokens)
 
-        access_token = encode_jwt(
-            access_payload,
-            cls.jwt_secret,
-            algorithm=cls.jwt_algorithm
-        )
+        access_token = cls._encode_access_token(subject, scope)
 
         auth_response = AuthResponse(
             access_token=access_token,
@@ -649,21 +748,33 @@ class BearerAuthBlueprint(SecurityBlueprint):
         return response
 
     @classmethod
-    def _handle_client_credentials_grant(cls, body: Dict[str, Any]) -> dict:
+    def _handle_client_credentials_grant(
+        cls,
+        body: Dict[str, Any],
+        request: Optional[Any] = None
+    ) -> dict:
         """
             Handle the client_credentials grant type.
 
-            Validates the ``client_id`` and ``client_secret`` from the
-            request body. On success, issues a JWT access token. No
-            refresh token is issued for client credentials grants.
+            Validates the client identifier and secret, which may arrive
+            in an HTTP Basic ``Authorization`` header or in the request
+            body. They are checked against :attr:`client_store` when one
+            is configured, otherwise against the identity provider. When
+            neither is configured the grant is refused: a token is never
+            issued for credentials nothing has verified.
+
+            On success, issues a JWT access token whose scope is limited
+            to what the client is allowed. No refresh token is issued for
+            client credentials grants.
 
             :param body: The parsed request body dictionary.
+            :param request: The incoming HTTP request object, when
+                            available.
 
             :returns: A response dictionary with ``status``, ``body``, and
                       ``content_type`` keys.
         """
-        client_id = body.get("client_id")
-        client_secret = body.get("client_secret")
+        client_id, client_secret = cls.extract_client_credentials(request, body)
 
         if not client_id or not client_secret:
             error = AuthError(
@@ -673,29 +784,25 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=400)
             return response
 
-        # Validate client credentials via identity_provider if available
-        provider = cls.identity_provider
-        if provider is None and cls.auth_system is not None:
-            basic_auth = cls.auth_system.get_authenticator("Basic")
-            if basic_auth is not None and hasattr(basic_auth, "_identity_provider"):
-                provider = basic_auth._identity_provider
+        client_id = str(client_id)
+        client_secret = str(client_secret)
 
-        if provider is not None:
-            principal = _run_async(
-                provider.validate_credentials(client_id, client_secret)
+        client_store = cls.client_store
+        provider = cls._resolve_identity_provider()
+
+        if client_store is None and provider is None:
+            # Fail closed: nothing can verify the client secret.
+            logger.error(
+                "%s: client_credentials grant refused because neither a "
+                "client_store nor an identity_provider is configured",
+                cls.__name__,
             )
-            if principal is None:
-                error = AuthError(
-                    error=cls.INVALID_CLIENT_ERROR_CODE,
-                    error_description="Invalid client credentials"
-                )
-                response = cls.format_error(error)
-                return response
-
-            subject = principal.identifier
-        else:
-            # Without a provider, accept the client_id as the subject
-            subject = client_id
+            error = AuthError(
+                error=cls.UNAUTHORIZED_CLIENT_ERROR_CODE,
+                error_description="The client_credentials grant is not available"
+            )
+            response = cls.format_error(error, status_code=400)
+            return response
 
         if cls.jwt_secret is None:
             error = AuthError(
@@ -705,23 +812,59 @@ class BearerAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=500)
             return response
 
-        now = time.time()
-        access_payload = {
-            cls.JWT_CLAIM_SUB: subject,
-            cls.JWT_CLAIM_IAT: int(now),
-            cls.JWT_CLAIM_EXP: int(now) + cls.access_token_expires,
-            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_ACCESS
-        }
+        # Pre-authentication hook
+        if request is not None:
+            pre_error = cls.pre_authenticate(request)
+            if pre_error is not None:
+                response = cls.format_error(pre_error)
+                return response
 
-        scope = body.get(cls.JWT_CLAIM_SCOPE)
-        if scope:
-            access_payload[cls.JWT_CLAIM_SCOPE] = scope
+        throttled_response = cls.check_login_throttle(request, client_id)
+        if throttled_response is not None:
+            return throttled_response
 
-        access_token = encode_jwt(
-            access_payload,
-            cls.jwt_secret,
-            algorithm=cls.jwt_algorithm
+        invalid_client_error = AuthError(
+            error=cls.INVALID_CLIENT_ERROR_CODE,
+            error_description="Invalid client credentials"
         )
+
+        if client_store is not None:
+            is_valid = _run_async(
+                client_store.validate_client_secret(client_id, client_secret)
+            )
+            # Only an explicit True authenticates the client
+            is_valid = is_valid is True
+
+            cls.record_login_attempt(request, client_id, is_valid)
+
+            if not is_valid:
+                response = cls.format_error(invalid_client_error)
+                return response
+
+            subject = client_id
+            allowed_scopes = cls._get_client_scopes(client_store, client_id)
+        else:
+            principal = _run_async(
+                provider.validate_credentials(client_id, client_secret)
+            )
+
+            cls.record_login_attempt(request, client_id, principal is not None)
+
+            if principal is None:
+                response = cls.format_error(invalid_client_error)
+                return response
+
+            subject = principal.identifier
+            allowed_scopes = cls.get_allowed_scopes(principal)
+
+        scope, scope_error = cls._resolve_scope(
+            body.get(cls.JWT_CLAIM_SCOPE),
+            allowed_scopes
+        )
+        if scope_error is not None:
+            return scope_error
+
+        access_token = cls._encode_access_token(subject, scope)
 
         # Client credentials grant does not issue a refresh token
         auth_response = AuthResponse(
@@ -734,14 +877,73 @@ class BearerAuthBlueprint(SecurityBlueprint):
         return response
 
     @classmethod
+    def _get_client_scopes(cls, client_store: Any, client_id: str) -> List[str]:
+        """
+            Read the scopes a client is registered for.
+
+            :param client_store: The configured client store.
+            :param client_id: The authenticated client identifier.
+
+            :returns: The client's registered scopes; empty when the
+                      store offers no ``get_client`` or the client record
+                      lists none.
+        """
+        client_reader = getattr(client_store, "get_client", None)
+        if not callable(client_reader):
+            return []
+
+        client = _run_async(client_reader(client_id))
+        if not isinstance(client, dict):
+            return []
+
+        registered = client.get("scopes")
+        if registered is None:
+            registered = client.get("scope")
+
+        rtnval = split_scope(registered)
+        return rtnval
+
+    @classmethod
+    def _encode_access_token(cls, subject: str, scope: Optional[str]) -> str:
+        """
+            Build and sign a JWT access token.
+
+            :param subject: The subject identifier for the token claims.
+            :param scope: The granted scope, or None.
+
+            :returns: The encoded access token.
+        """
+        now = time.time()
+
+        access_payload = {
+            cls.JWT_CLAIM_SUB: subject,
+            cls.JWT_CLAIM_IAT: int(now),
+            cls.JWT_CLAIM_EXP: int(now) + cls.access_token_expires,
+            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_ACCESS,
+            cls.JWT_CLAIM_JTI: generate_token_id()
+        }
+        if scope:
+            access_payload[cls.JWT_CLAIM_SCOPE] = scope
+
+        access_token = encode_jwt(
+            access_payload,
+            cls.jwt_secret,
+            algorithm=cls.jwt_algorithm
+        )
+        return access_token
+
+    @classmethod
     def _issue_tokens(cls, subject: str, scope: Optional[str] = None) -> dict:
         """
             Issue an access token and refresh token for the given subject.
 
-            Creates a JWT access token with ``sub``, ``iat``, ``exp``, and
-            ``token_type`` claims. Also creates a JWT refresh token with a
-            longer expiration. If a :attr:`token_store` is configured, the
-            refresh token is stored for later validation.
+            Creates a JWT access token with ``sub``, ``iat``, ``exp``,
+            ``token_type`` and ``jti`` claims. Also creates a JWT refresh
+            token with a longer expiration. If a :attr:`token_store` is
+            configured, the refresh token is stored for later validation.
+
+            The caller is responsible for the scope: it must already be
+            limited to what the subject is allowed.
 
             :param subject: The subject identifier (principal ID) for the
                             token claims.
@@ -760,28 +962,15 @@ class BearerAuthBlueprint(SecurityBlueprint):
 
         now = time.time()
 
-        # Build access token payload
-        access_payload = {
-            cls.JWT_CLAIM_SUB: subject,
-            cls.JWT_CLAIM_IAT: int(now),
-            cls.JWT_CLAIM_EXP: int(now) + cls.access_token_expires,
-            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_ACCESS
-        }
-        if scope:
-            access_payload[cls.JWT_CLAIM_SCOPE] = scope
-
-        access_token = encode_jwt(
-            access_payload,
-            cls.jwt_secret,
-            algorithm=cls.jwt_algorithm
-        )
+        access_token = cls._encode_access_token(subject, scope)
 
         # Build refresh token payload
         refresh_payload = {
             cls.JWT_CLAIM_SUB: subject,
             cls.JWT_CLAIM_IAT: int(now),
             cls.JWT_CLAIM_EXP: int(now) + cls.refresh_token_expires,
-            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_REFRESH
+            cls.JWT_CLAIM_TOKEN_TYPE: cls.TOKEN_TYPE_REFRESH,
+            cls.JWT_CLAIM_JTI: generate_token_id()
         }
         if scope:
             refresh_payload[cls.JWT_CLAIM_SCOPE] = scope

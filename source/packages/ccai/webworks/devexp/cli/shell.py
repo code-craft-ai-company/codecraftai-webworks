@@ -15,12 +15,17 @@
     interactive input.
 """
 
+import argparse
 import code
 import os
 import sys
 
 from typing import Any, Callable, Dict, Optional, Tuple, TYPE_CHECKING
 
+from ccai.webworks.devexp.apploader import ApplicationLoadError
+from ccai.webworks.devexp.apploader import find_webapp_persona
+from ccai.webworks.devexp.apploader import load_application
+from ccai.webworks.devexp.apploader import resolve_app_target
 from ccai.webworks.devexp.cli.command import CLICommand
 from ccai.webworks.devexp.cli.exitcodes import EXIT_ERROR
 from ccai.webworks.devexp.cli.exitcodes import EXIT_SUCCESS
@@ -84,27 +89,98 @@ class ShellApplication:
         raise NotImplementedError("Subclasses must implement the get_common_imports method.")
 
 
+class WebApplicationShell(ShellApplication):
+    """
+        Shell application built from an imported application.
+
+        Pre-loads the application object as ``app`` and, when the
+        application established a web application persona, the persona as
+        ``webapp`` together with its ``router`` and endpoint ``registry``.
+
+        :param application: The object loaded from the import target.
+        :param webapp: The ``WebApplication`` persona, or ``None``.
+    """
+
+    def __init__(self, application: Any, webapp: Any = None):
+        """
+            Construct a WebApplicationShell.
+
+            :param application: The object loaded from the import target.
+            :param webapp: The ``WebApplication`` persona, or ``None``.
+        """
+        self._application = application
+        self._webapp = webapp
+        return
+
+    def get_instance(self) -> Any:
+        """
+            Get the application instance to pre-load into the shell.
+
+            :returns: The application instance.
+        """
+        return self._application
+
+    def get_common_imports(self) -> Dict[str, Any]:
+        """
+            Get the persona objects to pre-load into the shell namespace.
+
+            :returns: A dictionary of name-to-object mappings.
+        """
+        from ccai.webworks.persona.lifecycle import LifecycleError
+
+        common_imports: Dict[str, Any] = {}
+
+        if self._webapp is not None:
+            common_imports["webapp"] = self._webapp
+            common_imports["registry"] = self._webapp.registry
+
+            try:
+                common_imports["router"] = self._webapp.router
+            except LifecycleError:
+                # The application was not started, so it has no router yet.
+                pass
+
+        return common_imports
+
+
 # =============================================================================
 # Helper Functions
 # =============================================================================
 
-def resolve_shell_app(config: Dict[str, Any]) -> Optional[ShellApplication]:
+def resolve_shell_app(config: Dict[str, Any], args: Any = None) -> Optional[ShellApplication]:
     """
-        Resolve the shell application from configuration.
+        Resolve the shell application for the shell command.
 
-        Looks for a ``shell_app`` key in the configuration dictionary.
-        The value must be an instance of :class:`ShellApplication`.
+        A :class:`ShellApplication` instance under the ``shell_app``
+        configuration key is used when present. Otherwise the application
+        named by ``--app`` or the ``server.app`` configuration key is
+        imported and wrapped in a :class:`WebApplicationShell`.
 
         :param config: Loaded configuration dictionary.
+        :param args: Parsed command-line arguments, or ``None``.
 
-        :returns: The shell application instance or None if not configured.
+        :returns: The shell application instance or None if no shell
+            application is configured and no application target is given.
+
+        :raises ApplicationLoadError: If the application target cannot be
+            imported.
     """
     shell_app = config.get("shell_app", None)
 
     if shell_app is not None and isinstance(shell_app, ShellApplication):
         return shell_app
 
-    return None
+    target = resolve_app_target(args, config)
+
+    if target is None:
+        return None
+
+    application = load_application(target)
+    webapp = find_webapp_persona(application)
+
+    shell_app = WebApplicationShell(application, webapp)
+
+    return shell_app
 
 
 def build_shell_namespace(
@@ -317,11 +393,18 @@ class ShellCommand(CLICommand):
         """
             Add command-specific arguments to the parser.
 
-            Registers the ``--no-ipython``, ``--startup-file``, and
-            ``--no-banner`` options.
+            Registers the ``--app``, ``--no-ipython``, ``--startup-file``,
+            and ``--no-banner`` options.
 
             :param parser: The argument parser to add arguments to.
         """
+        parser.add_argument(
+            "--app",
+            type=str,
+            default=argparse.SUPPRESS,
+            help="Application import target 'module:attribute', for example 'app:app'."
+        )
+
         parser.add_argument(
             "--no-ipython",
             action="store_true",
@@ -364,7 +447,18 @@ class ShellCommand(CLICommand):
 
             :returns: Exit code where 0 indicates success.
         """
-        shell_app = resolve_shell_app(config)
+        try:
+            shell_app = resolve_shell_app(config, args)
+        except ApplicationLoadError as err:
+            print("Error: {}".format(err), file=sys.stderr)
+            return EXIT_ERROR
+
+        if shell_app is None:
+            print(
+                "Note: no application was loaded. Name one with --app 'module:attribute' "
+                "to have 'app' available in the shell.",
+                file=sys.stderr,
+            )
 
         namespace = build_shell_namespace(shell_app, config)
 

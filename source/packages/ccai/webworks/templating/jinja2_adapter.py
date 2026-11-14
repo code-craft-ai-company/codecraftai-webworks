@@ -18,14 +18,45 @@
     variants) can render any number of times.
 """
 
+import os
+import re
+
+from types import TracebackType
 from typing import Any, Callable, Dict, Iterator, Optional
 
 import jinja2
 
 from ccai.webworks.templating.engine import TemplateEngine
 from ccai.webworks.templating.exceptions import (
+    TemplateConfigurationError,
     TemplateError,
+    TemplateFilterNotFoundError,
     TemplateNotFoundError,
+    TemplateRenderError,
+    TemplateSyntaxError,
+    UndefinedVariableError,
+)
+
+
+# The name errors report for a template rendered from a string, which has
+# no file name of its own.
+STRING_TEMPLATE_NAME = "<string>"
+
+# Jinja2 reports an undefined name as "'name' is undefined" and a missing
+# filter as "No filter named 'name'." (optionally followed by a suggestion).
+UNDEFINED_NAME_PATTERN = re.compile(r"^'(?P<name>[^']+)' is undefined")
+MISSING_FILTER_PATTERN = re.compile(r"^No filter named '(?P<name>[^']+)'")
+
+# The options the adapter sets on the Jinja2 Environment itself, from its own
+# named parameters. They cannot be given a second time as an engine option.
+RESERVED_ENVIRONMENT_OPTIONS = (
+    "loader",
+    "autoescape",
+    "cache_size",
+    "auto_reload",
+    "undefined",
+    "extensions",
+    "enable_async",
 )
 
 
@@ -103,7 +134,8 @@ class Jinja2Adapter(TemplateEngine):
         auto_reload: bool = False,
         encoding: str = "utf-8",
         undefined_behavior: str = "silent",
-        extensions: Optional[list] = None
+        extensions: Optional[list] = None,
+        **environment_options: Any
     ):
         """
             Construct a Jinja2Adapter.
@@ -111,6 +143,11 @@ class Jinja2Adapter(TemplateEngine):
             Creates a Jinja2 Environment configured with the specified options.
             The environment uses a FileSystemLoader to search the provided
             template directories for template files.
+            
+            Any other keyword argument is a native Jinja2 option and is
+            passed to :class:`jinja2.Environment` unchanged, for example
+            ``trim_blocks=True`` or ``lstrip_blocks=True``. This is how
+            ``TemplateConfig.engine_options`` reaches Jinja2.
             
             :param template_dirs: List of directories to search for templates.
             :param auto_escape: Enable auto-escaping (default True).
@@ -120,7 +157,23 @@ class Jinja2Adapter(TemplateEngine):
             :param undefined_behavior: How to handle undefined variables.
                 Supported values: "silent", "strict", "debug".
             :param extensions: List of Jinja2 extensions to enable.
+            :param environment_options: Native :class:`jinja2.Environment`
+                options, passed through as given.
+            
+            :raises TemplateConfigurationError: If an environment option
+                names something the adapter configures from its own
+                parameters, or Jinja2 does not accept the options.
         """
+        for option_name in environment_options:
+            if option_name in RESERVED_ENVIRONMENT_OPTIONS:
+                errmsg_lines = [
+                    f"The Jinja2 environment option '{option_name}' cannot be passed as an engine option.",
+                    "The Jinja2Adapter sets it from its own parameters: 'template_dirs', 'auto_escape',",
+                    "'cache_size', 'auto_reload', 'undefined_behavior' and 'extensions'.",
+                ]
+                errmsg = os.linesep.join(errmsg_lines)
+                raise TemplateConfigurationError(errmsg, field_name="engine_options")
+        
         self._template_dirs = list(template_dirs)
         self._auto_escape = auto_escape
         self._cache_size = cache_size
@@ -128,6 +181,7 @@ class Jinja2Adapter(TemplateEngine):
         self._encoding = encoding
         self._undefined_behavior = undefined_behavior
         self._extensions = extensions or []
+        self._environment_options = dict(environment_options)
         
         self._environment = self._create_environment()
         
@@ -175,20 +229,11 @@ class Jinja2Adapter(TemplateEngine):
         try:
             template = self._environment.get_template(template_name)
             return template.render(**context)
-        except jinja2.TemplateNotFound as exc:
-            raise TemplateNotFoundError(
-                template_name=template_name,
-                searched_paths=self._template_dirs
-            ) from exc
-        except jinja2.TemplateSyntaxError as exc:
-            raise TemplateError(
-                f"Syntax error in '{exc.name or template_name}' "
-                f"at line {exc.lineno}: {exc.message}"
-            ) from exc
-        except jinja2.TemplateError as exc:
-            raise TemplateError(
-                f"Render error in '{template_name}': {exc}"
-            ) from exc
+        except TemplateError:
+            raise
+        except Exception as exc:
+            translated_error = self._translate_error(exc, template_name)
+            raise translated_error from exc
     
     def render_string(
         self,
@@ -212,15 +257,11 @@ class Jinja2Adapter(TemplateEngine):
         try:
             template = self._environment.from_string(template_source)
             return template.render(**context)
-        except jinja2.TemplateSyntaxError as exc:
-            raise TemplateError(
-                f"Syntax error in template string "
-                f"at line {exc.lineno}: {exc.message}"
-            ) from exc
-        except jinja2.TemplateError as exc:
-            raise TemplateError(
-                f"Render error in template string: {exc}"
-            ) from exc
+        except TemplateError:
+            raise
+        except Exception as exc:
+            translated_error = self._translate_error(exc, STRING_TEMPLATE_NAME)
+            raise translated_error from exc
 
     async def render_async(
         self,
@@ -245,20 +286,11 @@ class Jinja2Adapter(TemplateEngine):
         try:
             template = self._async_env.get_template(template_name)
             return await template.render_async(**context)
-        except jinja2.TemplateNotFound as exc:
-            raise TemplateNotFoundError(
-                template_name=template_name,
-                searched_paths=self._template_dirs
-            ) from exc
-        except jinja2.TemplateSyntaxError as exc:
-            raise TemplateError(
-                f"Syntax error in '{exc.name or template_name}' "
-                f"at line {exc.lineno}: {exc.message}"
-            ) from exc
-        except jinja2.TemplateError as exc:
-            raise TemplateError(
-                f"Render error in '{template_name}': {exc}"
-            ) from exc
+        except TemplateError:
+            raise
+        except Exception as exc:
+            translated_error = self._translate_error(exc, template_name)
+            raise translated_error from exc
     
     def render_stream(
         self,
@@ -284,20 +316,11 @@ class Jinja2Adapter(TemplateEngine):
             template = self._environment.get_template(template_name)
             for chunk in template.generate(**context):
                 yield chunk
-        except jinja2.TemplateNotFound as exc:
-            raise TemplateNotFoundError(
-                template_name=template_name,
-                searched_paths=self._template_dirs
-            ) from exc
-        except jinja2.TemplateSyntaxError as exc:
-            raise TemplateError(
-                f"Syntax error in '{exc.name or template_name}' "
-                f"at line {exc.lineno}: {exc.message}"
-            ) from exc
-        except jinja2.TemplateError as exc:
-            raise TemplateError(
-                f"Render error in '{template_name}': {exc}"
-            ) from exc
+        except TemplateError:
+            raise
+        except Exception as exc:
+            translated_error = self._translate_error(exc, template_name)
+            raise translated_error from exc
     
     def compile_template(
         self,
@@ -330,11 +353,9 @@ class Jinja2Adapter(TemplateEngine):
                 template_name=template_name,
                 filename=filename
             )
-        except jinja2.TemplateSyntaxError as exc:
-            raise TemplateError(
-                f"Syntax error in '{exc.name or template_name}' "
-                f"at line {exc.lineno}: {exc.message}"
-            ) from exc
+        except jinja2.TemplateError as exc:
+            translated_error = self._translate_error(exc, template_name)
+            raise translated_error from exc
         
         compiled_template = Jinja2CompiledTemplate(
             template_name=template_name,
@@ -366,20 +387,11 @@ class Jinja2Adapter(TemplateEngine):
         
         try:
             rendered = compiled_template.template.render(**context)
-        except jinja2.TemplateNotFound as exc:
-            raise TemplateNotFoundError(
-                template_name=exc.name or template_name,
-                searched_paths=self._template_dirs
-            ) from exc
-        except jinja2.TemplateSyntaxError as exc:
-            raise TemplateError(
-                f"Syntax error in '{exc.name or template_name}' "
-                f"at line {exc.lineno}: {exc.message}"
-            ) from exc
-        except jinja2.TemplateError as exc:
-            raise TemplateError(
-                f"Render error in '{template_name}': {exc}"
-            ) from exc
+        except TemplateError:
+            raise
+        except Exception as exc:
+            translated_error = self._translate_error(exc, template_name)
+            raise translated_error from exc
         
         return rendered
     
@@ -416,20 +428,11 @@ class Jinja2Adapter(TemplateEngine):
                     filename=compiled_template.filename
                 )
             rendered = await compiled_template.async_template.render_async(**context)
-        except jinja2.TemplateNotFound as exc:
-            raise TemplateNotFoundError(
-                template_name=exc.name or template_name,
-                searched_paths=self._template_dirs
-            ) from exc
-        except jinja2.TemplateSyntaxError as exc:
-            raise TemplateError(
-                f"Syntax error in '{exc.name or template_name}' "
-                f"at line {exc.lineno}: {exc.message}"
-            ) from exc
-        except jinja2.TemplateError as exc:
-            raise TemplateError(
-                f"Render error in '{template_name}': {exc}"
-            ) from exc
+        except TemplateError:
+            raise
+        except Exception as exc:
+            translated_error = self._translate_error(exc, template_name)
+            raise translated_error from exc
         
         return rendered
     
@@ -457,20 +460,11 @@ class Jinja2Adapter(TemplateEngine):
         try:
             for chunk in compiled_template.template.generate(**context):
                 yield chunk
-        except jinja2.TemplateNotFound as exc:
-            raise TemplateNotFoundError(
-                template_name=exc.name or template_name,
-                searched_paths=self._template_dirs
-            ) from exc
-        except jinja2.TemplateSyntaxError as exc:
-            raise TemplateError(
-                f"Syntax error in '{exc.name or template_name}' "
-                f"at line {exc.lineno}: {exc.message}"
-            ) from exc
-        except jinja2.TemplateError as exc:
-            raise TemplateError(
-                f"Render error in '{template_name}': {exc}"
-            ) from exc
+        except TemplateError:
+            raise
+        except Exception as exc:
+            translated_error = self._translate_error(exc, template_name)
+            raise translated_error from exc
     
     def add_filter(
         self,
@@ -491,6 +485,21 @@ class Jinja2Adapter(TemplateEngine):
         if self._async_environment is not None:
             self._async_environment.filters[name] = func
         return
+    
+    def has_filter(self, name: str) -> bool:
+        """
+            Check whether the Jinja2 environment already has a filter.
+            
+            True for the filters Jinja2 ships (``escape``, ``default``,
+            ``sort``, ``join`` and the rest) and for every filter added
+            with :meth:`add_filter`.
+            
+            :param name: Filter name as it is used in templates.
+            
+            :returns: True if the environment has a filter with this name.
+        """
+        is_present = name in self._environment.filters
+        return is_present
     
     def add_global(
         self,
@@ -516,15 +525,19 @@ class Jinja2Adapter(TemplateEngine):
         """
             Clear the Jinja2 template cache.
             
-            Removes all compiled templates from the Jinja2 bytecode cache,
-            forcing them to be reloaded and recompiled on next access.
+            Removes all compiled templates from the Jinja2 environment
+            cache (sync and async) and from the bytecode cache if one is
+            configured, forcing them to be reloaded and recompiled on next
+            access.
         """
-        # Clear the internal Jinja2 cache by resetting the environment cache
-        if hasattr(self._environment, '_cache'):
-            self._environment._cache.clear()
+        # Jinja2 keeps the templates it loaded by name (including the
+        # targets of extends / include) in Environment.cache, which is
+        # None when the environment was created with a cache size of 0.
+        if self._environment.cache is not None:
+            self._environment.cache.clear()
         if self._async_environment is not None:
-            if hasattr(self._async_environment, '_cache'):
-                self._async_environment._cache.clear()
+            if self._async_environment.cache is not None:
+                self._async_environment.cache.clear()
         
         # Also clear the bytecode cache if one is configured
         if self._environment.bytecode_cache is not None:
@@ -564,15 +577,26 @@ class Jinja2Adapter(TemplateEngine):
         # cache_size is Jinja2's own compiled-template cache for templates it
         # loads by name (including extends/include targets); 0 disables it,
         # which is what a disabled TemplateConfig cache asks for.
-        environment = jinja2.Environment(
-            loader=loader,
-            autoescape=autoescape_func,
-            cache_size=self._cache_size,
-            auto_reload=self._auto_reload,
-            undefined=undefined_class,
-            extensions=self._extensions,
-            enable_async=enable_async
-        )
+        try:
+            environment = jinja2.Environment(
+                loader=loader,
+                autoescape=autoescape_func,
+                cache_size=self._cache_size,
+                auto_reload=self._auto_reload,
+                undefined=undefined_class,
+                extensions=self._extensions,
+                enable_async=enable_async,
+                **self._environment_options
+            )
+        except TypeError as exc:
+            option_names = ", ".join(sorted(self._environment_options))
+            errmsg_lines = [
+                "Jinja2 did not accept the engine options given to the Jinja2Adapter.",
+                f"OPTIONS: {option_names}",
+                f"REASON: {exc}",
+            ]
+            errmsg = os.linesep.join(errmsg_lines)
+            raise TemplateConfigurationError(errmsg, field_name="engine_options") from exc
         
         return environment
     
@@ -612,6 +636,159 @@ class Jinja2Adapter(TemplateEngine):
             uptodate=None
         )
         return template
+    
+    def _translate_error(self, exc: Exception, template_name: str) -> TemplateError:
+        """
+            Map an exception raised while compiling or rendering a template
+            to the templating exception that describes it.
+            
+            - A missing template becomes :class:`TemplateNotFoundError`.
+            - A reference to an unknown filter becomes
+              :class:`TemplateFilterNotFoundError`.
+            - A syntax error becomes :class:`TemplateSyntaxError` with the
+              template name and line number.
+            - An undefined variable becomes :class:`UndefinedVariableError`
+              in strict mode and :class:`TemplateRenderError` (naming the
+              variable) otherwise.
+            - Everything else, including an ordinary Python exception raised
+              by code the template runs, becomes :class:`TemplateRenderError`
+              with the template name and, when it can be found, the line.
+            
+            The caller raises the result ``from`` the original exception, so
+            the original stays available as ``__cause__``.
+            
+            :param exc: The exception that was raised.
+            :param template_name: Name of the template being processed.
+            
+            :returns: The templating exception to raise in its place.
+        """
+        translated_error: TemplateError
+        
+        if isinstance(exc, jinja2.TemplateNotFound):
+            translated_error = TemplateNotFoundError(
+                template_name=exc.name or template_name,
+                searched_paths=self._template_dirs
+            )
+        
+        elif isinstance(exc, jinja2.TemplateSyntaxError):
+            error_template_name = exc.name or template_name
+            error_message = exc.message or str(exc)
+            
+            filter_match = MISSING_FILTER_PATTERN.match(error_message)
+            if filter_match is not None:
+                available_filters = list(self._environment.filters.keys())
+                translated_error = TemplateFilterNotFoundError(
+                    filter_name=filter_match.group("name"),
+                    available_filters=available_filters
+                )
+            else:
+                translated_error = TemplateSyntaxError(
+                    template_name=error_template_name,
+                    line_number=exc.lineno,
+                    message=error_message
+                )
+        
+        elif isinstance(exc, jinja2.UndefinedError):
+            error_message = exc.message or str(exc)
+            error_template_name, line_number = self._find_template_frame(exc.__traceback__, template_name)
+            
+            variable_name = None
+            undefined_match = UNDEFINED_NAME_PATTERN.match(error_message)
+            if undefined_match is not None:
+                variable_name = undefined_match.group("name")
+            
+            if self._undefined_behavior == "strict" and variable_name is not None:
+                translated_error = UndefinedVariableError(
+                    variable_name=variable_name,
+                    template_name=error_template_name,
+                    line_number=line_number
+                )
+            else:
+                translated_error = TemplateRenderError(
+                    template_name=error_template_name,
+                    message=error_message,
+                    variable_name=variable_name,
+                    line_number=line_number
+                )
+        
+        else:
+            error_template_name, line_number = self._find_template_frame(exc.__traceback__, template_name)
+            
+            if isinstance(exc, jinja2.TemplateError):
+                error_message = exc.message or str(exc)
+            else:
+                error_message = f"{type(exc).__name__}: {exc}"
+            
+            translated_error = TemplateRenderError(
+                template_name=error_template_name,
+                message=error_message,
+                line_number=line_number
+            )
+        
+        return translated_error
+    
+    def _find_template_frame(
+        self,
+        traceback: Optional[TracebackType],
+        template_name: str
+    ) -> tuple:
+        """
+            Find the template and line a rendering exception came from.
+            
+            Jinja2 rewrites the traceback of an exception raised during a
+            render so the frames of compiled template code are replaced by
+            frames that carry the template's file name and source line. The
+            innermost such frame is the template line that failed, which may
+            be in a parent or included template.
+            
+            :param traceback: The traceback of the exception.
+            :param template_name: Name of the template that was rendered,
+                used when the frame does not name a template.
+            
+            :returns: A ``(template_name, line_number)`` tuple. The line
+                number is None when no template frame is found.
+        """
+        found_name = template_name
+        found_line = None
+        
+        current = traceback
+        while current is not None:
+            frame_globals = current.tb_frame.f_globals
+            
+            # Jinja2 marks the frames it substitutes for template code.
+            if "__jinja_exception__" in frame_globals:
+                found_line = current.tb_lineno
+                
+                frame_file = frame_globals.get("__file__")
+                if isinstance(frame_file, str) and frame_file not in ("<template>", "<unknown>"):
+                    found_name = self._template_name_for_file(frame_file, template_name)
+            
+            current = current.tb_next
+        
+        return found_name, found_line
+    
+    def _template_name_for_file(self, filename: str, template_name: str) -> str:
+        """
+            Turn a template file path from a traceback into a template name.
+            
+            :param filename: File path recorded for a template frame.
+            :param template_name: Name of the template that was rendered.
+            
+            :returns: The path relative to the template directory holding the
+                file, or ``template_name`` when no directory holds it.
+        """
+        found_name = template_name
+        
+        for template_dir in self._template_dirs:
+            directory_prefix = os.path.join(os.path.abspath(template_dir), "")
+            absolute_filename = os.path.abspath(filename)
+            
+            if absolute_filename.startswith(directory_prefix):
+                relative_name = absolute_filename[len(directory_prefix):]
+                found_name = relative_name.replace(os.sep, "/")
+                break
+        
+        return found_name
     
     def _get_undefined_class(self, behavior: str) -> type:
         """

@@ -13,8 +13,14 @@ __credits__ = []
 from typing import Any, Callable, Dict, List, Optional, Protocol, Type, TypeVar
 
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
-from ccai.webworks.endpoints.descriptor import EndpointDescriptor
+from ccai.webworks.endpoints.descriptor import (
+    ENDPOINT_BLUEPRINT_NAME_EXTRA,
+    EndpointDescriptor,
+    stamp_blueprint_name
+)
 from ccai.webworks.endpoints.doc import Doc
+from ccai.webworks.endpoints.exceptions import EndpointRegistrationError
+from ccai.webworks.endpoints.merging import ConstraintMerger
 from ccai.webworks.endpoints.ratelimit import RateLimit
 from ccai.webworks.endpoints.restendpoint import RestEndpoint
 
@@ -155,6 +161,7 @@ class RestBlueprint(RestEndpoint):
         doc: Optional[Doc] = None,
         on_conflict: str = "error",
         absolute: bool = False,
+        rest_processing: Optional[bool] = None,
         **extras
     ) -> Callable[[F], F]:
         """
@@ -177,15 +184,42 @@ class RestBlueprint(RestEndpoint):
             :param doc: Documentation object with summary/description.
             :param on_conflict: "error" to raise on conflict, "replace" to override.
             :param absolute: If True, path overrides the blueprint prefix.
+            :param rest_processing: False to opt a handler declared with REST
+                                    metadata out of the REST request/response
+                                    processing (see :meth:`Endpoint.attach_at`);
+                                    None takes the class attribute.
             :param extras: Additional kwargs stored in descriptor.extras.
             
             :returns: Decorator that returns the original function unchanged.
         """
         # Compute the full path relative to blueprint base (unless absolute)
+        if absolute and path is None:
+            raise EndpointRegistrationError(
+                message="'path' must be provided to attach_at() when absolute=True",
+                endpoint=cls,
+                missing_fields=["path"]
+            )
+
         if absolute:
             computed_path = path
         else:
             computed_path = cls._compute_full_path(leaf, path)
+
+        # Merge the blueprint's access policy and rate limit with the ones
+        # given for this handler. A per-handler policy narrows the
+        # blueprint's, it never replaces it: roles and scopes accumulate
+        # and the most restrictive rate limit applies, so a nested
+        # declaration cannot weaken what the blueprint requires.
+        merged_access_policy = ConstraintMerger.merge_access_policies(
+            parent=cls.access_policy,
+            child=access_policy,
+            replace_roles=bool(getattr(cls, "replace_roles", False)),
+            replace_scopes=bool(getattr(cls, "replace_scopes", False))
+        )
+        merged_rate_limit = ConstraintMerger.merge_rate_limits(
+            parent=cls.rate_limit,
+            child=rate_limit
+        )
         
         # Handle tag merging
         merged_tags = cls._merge_blueprint_tags(tags)
@@ -202,19 +236,25 @@ class RestBlueprint(RestEndpoint):
         extras["endpoint_type"] = "rest"
         extras["absolute"] = absolute
 
+        # Record the blueprint the route belongs to, so middleware
+        # registered at scope="blueprint" under its name runs for it.
+        if extras.get(ENDPOINT_BLUEPRINT_NAME_EXTRA) is None:
+            extras[ENDPOINT_BLUEPRINT_NAME_EXTRA] = cls.__name__
+
         inner_decorator = super().attach_at(
             leaf=None if computed_path else leaf,
             path=computed_path,
             methods=methods,
             version=merged_version,
             tags=merged_tags,
-            access_policy=access_policy,
-            rate_limit=rate_limit,
+            access_policy=merged_access_policy,
+            rate_limit=merged_rate_limit,
             request_schema=request_schema,
             response_schema=response_schema,
             error_map=error_map,
             doc=doc,
             on_conflict=on_conflict,
+            rest_processing=rest_processing if rest_processing is not None else cls.rest_processing,
             **extras
         )
 
@@ -233,6 +273,21 @@ class RestBlueprint(RestEndpoint):
             path=path,
             absolute=absolute,
         )
+
+    @classmethod
+    def _claim_ancestor_descriptors(cls, descriptors: List[EndpointDescriptor], owner: type) -> None:
+        """
+            Record this blueprint's name on descriptors that a handler in
+            its body declared through an ancestor's ``attach_at`` (which
+            recorded the ancestor's name).
+
+            :param descriptors: The descriptors to update in place.
+            :param owner: The ancestor class ``attach_at`` ran against.
+        """
+        for descriptor in descriptors:
+            stamp_blueprint_name(descriptor, cls.__name__, replaces=owner.__name__)
+
+        return
 
     @classmethod
     def _compose_path_for_attach(
@@ -288,10 +343,12 @@ class RestBlueprint(RestEndpoint):
             
             :returns: List of EndpointDescriptor objects for all registered endpoints.
         """
-        # Collect descriptors from the registry that belong to this blueprint
-        all_descriptors = cls.marked_descriptors()
+        # Collect the descriptors declared through this blueprint, with
+        # handlers written in the class body bound to an instance (or the
+        # class) so the dispatcher can call them with just the request.
+        all_descriptors = cls.routable_descriptors()
         
-        # Filter to descriptors that were registered by this blueprint class
+        # Every descriptor declared through this class belongs to it
         blueprint_descriptors = cls._collect_blueprint_descriptors(all_descriptors)
         
         # If router is provided, add each descriptor to it
@@ -308,31 +365,19 @@ class RestBlueprint(RestEndpoint):
     ) -> List[EndpointDescriptor]:
         """
             Collect descriptors that belong to this blueprint.
-            
-            This method filters the global descriptor list to find those
-            that were registered by this blueprint class.
-            
-            :param all_descriptors: All registered descriptors.
-            
+
+            Every descriptor handed in was declared through this class, so
+            every one belongs to it and is returned. Filtering them by the
+            blueprint's base path or module -- which this method used to do
+            -- dropped handlers declared ``absolute=True`` and handlers
+            defined in another module.
+
+            :param all_descriptors: The descriptors declared through this class.
+
             :returns: List of descriptors belonging to this blueprint.
         """
-        blueprint_descriptors = []
-        base = cls._get_base_path()
-        
-        for descriptor in all_descriptors:
-            # Check if descriptor's path starts with our base path
-            desc_path = descriptor.path
-            if desc_path is None and descriptor.leaf is not None:
-                desc_path = f"/{descriptor.leaf}"
-            
-            if desc_path is not None and base is not None:
-                if desc_path.startswith(base):
-                    blueprint_descriptors.append(descriptor)
-            elif base is None:
-                # No base path - include all descriptors from our module
-                if descriptor.module == cls.__module__:
-                    blueprint_descriptors.append(descriptor)
-        
+        blueprint_descriptors = list(all_descriptors)
+
         return blueprint_descriptors
     
     @classmethod

@@ -16,6 +16,7 @@ Each entry uses this format:
 - **SVG primitives:** the SVG elements the renderer emits.
 - **Orientation:** `horizontal` / `vertical` support, or `n/a`.
 - **Variants / modes:** related catalog names satisfied by an attribute mode.
+- **Events:** the interaction events the renderer emits for this type, with their `detail` keys; `none` when it emits none.
 - **Phase:** P0–P5 per the plan's phasing.
 - **Notes:** anything implementation-relevant.
 
@@ -53,6 +54,7 @@ Each entry uses this format:
 - **Variants / modes:**
   - Radial tree — `layout="radial"` arranges nodes in polar coordinates (root at center, leaves on the outer ring).
   - Dendrogram — `mode="dendrogram"`; see Dendrogram entry below.
+- **Events:** `mj-chart-node-click` `{ name, value, depth, role, path }` (each node; `path` lists the names from the root).
 - **Phase:** P4
 - **Notes:** This chart also appears in `08-flow-process.md` (where it is described as a flow/process topology). Both files reference the same `tree` renderer in `charts/core/renderers/tree.js`. Layout uses a Reingold-Tilford (tidy tree) algorithm. Edge style is configurable via `edge-style="curve|elbow"`. Compare with Org Chart (`tree` with `mode="org"`) and Dendrogram entries in this file.
 
@@ -60,8 +62,8 @@ Each entry uses this format:
 
 ### Treemap  *(squarified treemap, tiled treemap)*
 
-- **Renderer / `type`:** `hierlayout` — **Primary renderer**
-- **Controller:** `<mj-chart type="hierlayout" layout="treemap" ...>`
+- **Renderer / `type`:** `treemap` — **Primary renderer** (`charts/core/renderers/hierlayout.js`, shared with `sunburst`, `icicle`, `circle-pack`; `hierlayout` is the renderer module, not a type key)
+- **Controller:** `<mj-chart type="treemap" ...>`
 - **Purpose:** Represent nested part-to-whole data as a space-filling arrangement of proportionally-sized rectangles, one per leaf node.
 - **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Hierarchical family; `root.value` is the aggregate and `children[].value` drive tile sizes:
@@ -89,18 +91,20 @@ Each entry uses this format:
 - **SVG primitives:** `<rect>` (tiles), `<text>` (node name and value labels clipped to tile bounds), `<g>` (per depth level), `<clipPath>` (label clipping inside tile)
 - **Orientation:** `n/a` — squarified layout fills the available rectangle without a fixed axis.
 - **Variants / modes:**
-  - Icicle chart — `layout="icicle"`; same `hierlayout` renderer. See Icicle entry.
-  - Sunburst chart — `layout="sunburst"`; same `hierlayout` renderer. See Sunburst entry.
-  - Circle packing — `layout="pack"`; same `hierlayout` renderer. See Circle Packing entry.
+  - Icicle chart — `type="icicle"`; same `hierlayout.js` renderer. See Icicle entry.
+  - Sunburst chart — `type="sunburst"`; same `hierlayout.js` renderer. See Sunburst entry.
+  - Circle packing — `type="circle-pack"`; same `hierlayout.js` renderer. See Circle Packing entry.
+  - An explicit `layout` attribute (`treemap`, `sunburst`, `icicle` or its alias `partition`, `circle-pack` or its alias `pack`) overrides the layout of the type key; an unrecognised value is ignored.
+- **Events:** `mj-chart-node-click` `{ name, value, depth, path }` (each rectangle; `path` lists the names from the root).
 - **Phase:** P2
-- **Notes:** Shares the `hierlayout` renderer with Icicle, Sunburst, and Circle Packing — all four differ only in how hierarchy levels are mapped to SVG primitives and coordinate systems. The renderer dispatches on `layout`. Squarified treemap algorithm (Bruls et al.) minimises tile aspect ratios. Depth-based coloring uses the categorical color ramp; leaf value label is suppressed if the tile is narrower than a threshold (configurable via design token `--mj-chart-label-min-width`).
+- **Notes:** Shares the `hierlayout.js` renderer with Icicle, Sunburst, and Circle Packing — all four differ only in how hierarchy levels are mapped to SVG primitives and coordinate systems. The renderer dispatches on the type key (`treemap`, `sunburst`, `icicle`, `circle-pack`), overridden by `layout`. Squarified treemap algorithm (Bruls et al.) minimises tile aspect ratios. Depth-based coloring uses the categorical color ramp; leaf value label is suppressed if the tile is narrower than a threshold (configurable via design token `--mj-chart-label-min-width`).
 
 ---
 
 ### Sunburst Chart  *(radial treemap, multilevel pie)*
 
-- **Renderer / `type`:** `hierlayout` — **Variant of `hierlayout`**
-- **Controller:** `<mj-chart type="hierlayout" layout="sunburst" ...>`
+- **Renderer / `type`:** `sunburst` — **Variant of `treemap`** (same `hierlayout.js` renderer)
+- **Controller:** `<mj-chart type="sunburst" ...>`
 - **Purpose:** Display a radial hierarchy where each ring represents a depth level and arc widths are proportional to value, revealing both structure and proportion.
 - **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Same hierarchical `root` / `children` shape as Treemap.
@@ -126,7 +130,8 @@ Each entry uses this format:
   ```
 - **SVG primitives:** `<path>` (annular arc segments per node, computed with arc commands), `<text>` (rotated or horizontal labels), `<g>` (per depth ring)
 - **Orientation:** `n/a` — radial layout; orientation attribute is ignored.
-- **Variants / modes:** See Treemap entry for the full list of `hierlayout` modes.
+- **Variants / modes:** See Treemap entry for the full list of `hierlayout.js` layouts.
+- **Events:** `mj-chart-node-click` `{ name, value, depth, path }` (each arc; `path` lists the names from the root).
 - **Phase:** P4
 - **Notes:** Arc angles computed by partitioning `[0, 2π]` proportionally to node value within each ring. Uses `linear` scale for angle, `band` scale for ring radii. Clicking an arc zooms to that subtree (re-partitions the full angle range to the selected node's descendants). Breadcrumb trail annotation supported via `mj-chart-annotation`. Compare with Icicle for the rectangular equivalent.
 
@@ -134,8 +139,8 @@ Each entry uses this format:
 
 ### Icicle Chart  *(partition chart, flame graph inverted)*
 
-- **Renderer / `type`:** `hierlayout` — **Variant of `hierlayout`**
-- **Controller:** `<mj-chart type="hierlayout" layout="icicle" ...>`
+- **Renderer / `type`:** `icicle` — **Variant of `treemap`** (same `hierlayout.js` renderer)
+- **Controller:** `<mj-chart type="icicle" ...>`
 - **Purpose:** Show a rectangular hierarchical partition where depth is mapped to one axis and breadth (proportional to value) to the other — the rectangular counterpart of Sunburst.
 - **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Same hierarchical `root` / `children` shape as Treemap.
@@ -161,9 +166,10 @@ Each entry uses this format:
   ```
 - **SVG primitives:** `<rect>` (one per node; width proportional to value, height equal per depth level), `<text>` (label clipped within rect), `<g>` (per depth level), `<clipPath>`
 - **Orientation:** `vertical` (root at top, children grow downward, default) / `horizontal` (root at left, children grow rightward — flame graph style).
-- **Variants / modes:** See Treemap entry for the full list of `hierlayout` modes.
+- **Variants / modes:** See Treemap entry for the full list of `hierlayout.js` layouts.
+- **Events:** `mj-chart-node-click` `{ name, value, depth, path }` (each cell; `path` lists the names from the root).
 - **Phase:** P4
-- **Notes:** The `hierlayout` renderer in `icicle` mode partitions the plot width/height proportionally to node value, then steps down one band per depth level. `linear` scale maps cumulative value to pixel offset; `band` scale maps depth to band height/width. Effectively identical to Sunburst but in Cartesian space. `orientation="horizontal"` produces a flame graph.
+- **Notes:** The `hierlayout.js` renderer in its `icicle` layout partitions the plot width/height proportionally to node value, then steps down one band per depth level. `linear` scale maps cumulative value to pixel offset; `band` scale maps depth to band height/width. Effectively identical to Sunburst but in Cartesian space. `orientation="horizontal"` produces a flame graph.
 
 ---
 
@@ -203,6 +209,7 @@ Each entry uses this format:
 - **SVG primitives:** `<line>` or `<path>` (stepped connectors; branch height encodes merge distance), `<circle>` (leaf nodes, optional), `<text>` (leaf labels), `<g>`
 - **Orientation:** `horizontal` (leaves at left, root at right, distance axis horizontal, default) / `vertical` (leaves at top, root at bottom — cladogram style).
 - **Variants / modes:** None beyond the `tree` primary.
+- **Events:** `mj-chart-node-click` `{ name, value, depth, role, path }` (each node; `path` lists the names from the root).
 - **Phase:** P4
 - **Notes:** Reuses the `tree` renderer layout engine; `mode="dendrogram"` replaces tidy-tree x-position assignment with a `linear` scale mapping node `value` (merge distance/height) to the distance axis. Connectors are elbow paths (horizontal + vertical segments). A `mj-chart-axis` with `kind="value"` renders the distance axis. Leaf spacing is equidistant (`band` scale on the leaf axis). Cross-reference: Tree Diagram entry above for the base `tree` renderer.
 
@@ -210,8 +217,8 @@ Each entry uses this format:
 
 ### Circle Packing Chart  *(bubble hierarchy, packed circles)*
 
-- **Renderer / `type`:** `hierlayout` — **Variant of `hierlayout`**
-- **Controller:** `<mj-chart type="hierlayout" layout="pack" ...>`
+- **Renderer / `type`:** `circle-pack` — **Variant of `treemap`** (same `hierlayout.js` renderer)
+- **Controller:** `<mj-chart type="circle-pack" ...>`
 - **Purpose:** Display nested groups using circles whose areas are proportional to their values, revealing hierarchical structure through containment.
 - **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:** Same hierarchical `root` / `children` shape as Treemap.
@@ -244,9 +251,10 @@ Each entry uses this format:
   ```
 - **SVG primitives:** `<circle>` (one per node; radius from `sqrt` scale on aggregated leaf values), `<text>` (label inside circle, suppressed when circle is too small), `<g>` (per depth level)
 - **Orientation:** `n/a` — packing algorithm fills an elliptical/circular bounding region; orientation attribute is ignored.
-- **Variants / modes:** See Treemap entry for the full list of `hierlayout` modes.
+- **Variants / modes:** See Treemap entry for the full list of `hierlayout.js` layouts.
+- **Events:** `mj-chart-node-click` `{ name, value, depth, path }` (each circle; `path` lists the names from the root).
 - **Phase:** P4
-- **Notes:** Uses the `hierlayout` renderer with `layout="pack"`. Internal node `value` is computed as the sum of descendant leaf values when `null`. Radius is derived from leaf `value` via a `sqrt` scale (area proportional to value). Packing algorithm places sibling circles to minimise enclosing circle radius (Wang-Bhatt packed-circles heuristic). Depth-based stroke color distinguishes hierarchy levels; fill color uses categorical color ramp from design tokens.
+- **Notes:** Uses the `hierlayout.js` renderer in its `circle-pack` layout (`layout="pack"` is an alias). Internal node `value` is computed as the sum of descendant leaf values when `null`. Radius is derived from leaf `value` via a `sqrt` scale (area proportional to value). Packing algorithm places sibling circles to minimise enclosing circle radius (Wang-Bhatt packed-circles heuristic). Depth-based stroke color distinguishes hierarchy levels; fill color uses categorical color ramp from design tokens.
 
 ---
 
@@ -283,6 +291,7 @@ Each entry uses this format:
 - **SVG primitives:** `<rect>` (node card backgrounds with rounded corners via `rx`/`ry`), `<line>` or `<path>` (elbow connectors), `<text>` (name, role, department lines within card), `<image>` (optional avatar), `<g>` (per node card)
 - **Orientation:** `vertical` (root at top, reports below, default) / `horizontal` (root at left, reports to the right).
 - **Variants / modes:** None beyond the `tree` primary.
+- **Events:** `mj-chart-node-click` `{ name, value, depth, role, path }` (each card; `path` lists the names from the root).
 - **Phase:** P4
 - **Notes:** Reuses the `tree` renderer with `mode="org"`, which replaces bare circle/circle nodes with multi-line rectangular cards. Card dimensions are fixed or driven by a design token (`--mj-chart-org-card-width`, `--mj-chart-org-card-height`). The tidy-tree layout algorithm is used with additional inter-node spacing to accommodate card sizes. `mj-chart-brush` enables selection of subtrees (highlights the selected node and all its descendants). Cross-reference: Tree Diagram entry above for the base `tree` renderer.
 
@@ -325,5 +334,6 @@ Each entry uses this format:
 - **SVG primitives:** `<rect>` (rounded label bubbles), `<path>` (curved branch connectors, tapering toward leaves), `<text>` (node labels), `<g>` (per branch/subtree)
 - **Orientation:** `n/a` — root is centered; first-level branches are distributed around the root in all directions (radial placement). Attribute is ignored.
 - **Variants / modes:** None beyond the `tree` primary.
+- **Events:** `mj-chart-node-click` `{ name, value, depth, role, path }` (each node; `path` lists the names from the root).
 - **Phase:** P4
 - **Notes:** Reuses the `tree` renderer with `mode="mindmap"`. First-level children are placed radially around the root at equal angular intervals; deeper children follow the same pattern relative to their parent, but constrained to a half-plane away from the root direction to avoid overlap. Branch color is assigned from the categorical color ramp at depth 1 and inherited by all descendants of that branch. Connector paths taper in stroke-width from root to leaf using a `linear` scale. Cross-reference: Tree Diagram entry above for the base `tree` renderer.

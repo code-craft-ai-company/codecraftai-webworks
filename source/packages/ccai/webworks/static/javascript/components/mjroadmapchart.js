@@ -1,308 +1,150 @@
 /*
  * mjroadmapchart.js
  *
- * <mj-roadmap-chart> -- initiative roadmap chart with swimlane rows and
- * calendar-column or named-bucket columns.
+ * <mj-roadmap-chart> -- a convenience wrapper for <mj-chart type="roadmap">
+ * with the initiative data shape of this component family.
  *
- * SVG is aria-hidden; accessible data table always present.
+ * Drawing, layout (swimlanes with stacked bars, calendar-period or bucket
+ * columns), keyboard support, the data table and data loading are the
+ * roadmap chart type's (charts/core/renderers/gantt.js); the shared
+ * wrapper base (pmchartwrapper.js) adds the toolbar, the selection and the
+ * detail panel. This file maps the documented data and attributes onto the
+ * chart type and its events back onto the documented ones.
+ *
+ * Data: `data` property, `src` attribute or inline JSON child --
+ *   { swimlanes: [{ id, name }], buckets: [{ id, name }],
+ *     initiatives: [{ id, name, swimlaneId, status, percentComplete,
+ *                     description, columnId | startDate + endDate }],
+ *     markers: [{ name, date }], phases: [{ name, start, end }] }
+ * The aliases swimlane, start, end, bucket and column are accepted too. A
+ * `YYYY-MM-DD` date is a local calendar day.
+ *
+ * Attributes: mode, scale, start-date, end-date, today-marker, density (as
+ * on the chart type, under these names).
  */
 
-import { MjElement, nextId } from "../core/mjelement.js";
-import { formatDate } from "../core/intl.js";
+import { html } from "../core/html.js";
+import { formatNumber, t } from "../core/intl.js";
+import { PmChartWrapper } from "./pmchartwrapper.js";
+import { formatChartDate, toNumber, toText } from "./pmchartsupport.js";
+import "../charts/core/renderers/gantt.js";
 
-const ROW_H = 64;
-const LABEL_W = 200;
-const HEADER_H = 40;
-const COL_MIN_W = 120;
-
-const STATUS_COLORS = {
-  planned:     "var(--mj-color-accent-400)",
-  "in-progress": "var(--mj-color-info)",
-  done:        "var(--mj-color-success)",
-  "at-risk":   "var(--mj-color-warning)",
-  blocked:     "var(--mj-color-danger)",
-};
-
-const STATUS_ICONS = {
-  planned:     "○",
-  "in-progress": "◎",
-  done:        "✓",
-  "at-risk":   "⚠",
-  blocked:     "⊘",
-};
-
-const STYLES = `
-:host {
-  display: block;
-  font-family: var(--mj-font-sans);
-  font-size: var(--mj-font-size-sm);
-  color: var(--mj-text);
-  background: var(--mj-bg);
-  border: 1px solid var(--mj-border);
-  border-radius: var(--mj-radius-md);
-  overflow: hidden;
+/* The first of `values` that holds something, else undefined. */
+function firstGiven(...values) {
+  const found = values.find((value) => value !== null && value !== undefined && value !== "")
+  return found
 }
-.wrapper { display: flex; flex-direction: column; }
-.toolbar { display: flex; align-items: center; gap: var(--mj-space-2); padding: var(--mj-space-2) var(--mj-space-3); border-bottom: 1px solid var(--mj-border); }
-.toolbar button { font: inherit; font-size: var(--mj-font-size-xs); background: var(--mj-surface); border: 1px solid var(--mj-border-strong); border-radius: var(--mj-radius-sm); padding: 2px var(--mj-space-2); cursor: pointer; color: var(--mj-text); }
-.toolbar button:focus-visible { outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring); outline-offset: var(--mj-focus-ring-offset); }
-.chart-scroll { overflow: auto; }
-svg { display: block; }
-.bar-el { cursor: pointer; }
-.bar-el:focus { outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring); }
-.detail-panel { padding: var(--mj-space-3); background: var(--mj-surface-raised); border-top: 1px solid var(--mj-border); }
-.detail-panel h3 { margin: 0 0 var(--mj-space-2); font-size: var(--mj-font-size-sm); }
-.a11y-table-wrap { padding: var(--mj-space-3); }
-.a11y-table-wrap table { border-collapse: collapse; width: 100%; font-size: var(--mj-font-size-sm); }
-.a11y-table-wrap th, .a11y-table-wrap td { border: 1px solid var(--mj-border); padding: var(--mj-space-1) var(--mj-space-2); text-align: left; }
-[hidden] { display: none !important; }
-`;
 
-export class MjRoadmapChart extends MjElement {
+/* Display text of the known initiative statuses; any other status shows as given. */
+const STATUS_LABEL_KEYS = {
+  planned:       "mj.roadmapChart.status.planned",
+  "in-progress": "mj.roadmapChart.status.inProgress",
+  done:          "mj.roadmapChart.status.done",
+  "at-risk":     "mj.roadmapChart.status.atRisk",
+  blocked:       "mj.roadmapChart.status.blocked"
+};
+
+function statusText(status) {
+  const known = Object.prototype.hasOwnProperty.call(STATUS_LABEL_KEYS, status) === true
+  const text = known === true ? t(STATUS_LABEL_KEYS[status]) : status
+  return text
+}
+
+/* A { id, name } list as the chart type's { id, label } list. */
+function idLabelList(list) {
+  const entries = []
+  const source = Array.isArray(list) === true ? list : []
+  source.forEach((entry) => {
+    if (entry !== null && typeof entry === "object") {
+      const id = firstGiven(entry.id, entry.name)
+      if (id !== undefined) {
+        entries.push({ id: String(id), label: toText(firstGiven(entry.name, entry.id)) })
+      }
+    }
+  })
+  return entries
+}
+
+export class MjRoadmapChart extends PmChartWrapper {
   static tagName = "mj-roadmap-chart";
-  static styles = STYLES;
-  static watched = ["mode", "scale", "start-date", "end-date", "today-marker", "density"];
-
-  constructor() {
-    super();
-    this._data = null;
-    this._selectedInitiative = null;
-    this._showTable = false;
-    this._tableId = nextId("mj-rc-table");
-  }
-
-  render() {
-    return `
-      <div class="wrapper" part="wrapper" role="img" aria-label="Roadmap chart">
-        <div class="toolbar" part="toolbar">
-          <button class="btn-toggle-table" aria-controls="${this._tableId}" aria-expanded="false">Show data table</button>
-          <slot name="legend"></slot>
-        </div>
-        <div class="chart-scroll">
-          <svg part="svg" aria-hidden="true"></svg>
-        </div>
-        <div class="detail-panel" part="initiative-detail" hidden>
-          <h3></h3>
-          <div class="detail-content"></div>
-          <slot name="initiative-detail"></slot>
-        </div>
-        <div id="${this._tableId}" class="a11y-table-wrap" hidden>
-          <table part="data-table">
-            <caption>Roadmap initiatives</caption>
-            <thead><tr><th>Initiative</th><th>Swimlane</th><th>Column/Timeframe</th><th>Status</th><th>% Complete</th></tr></thead>
-            <tbody class="table-body"></tbody>
-          </table>
-        </div>
-        <slot hidden></slot>
-      </div>`;
-  }
-
-  afterRender() {
-    this._svg = this.$("svg");
-    this._detailPanel = this.$(".detail-panel");
-    this._detailContent = this.$(".detail-content");
-    this._tableBody = this.$(".table-body");
-    this._tableWrap = this.$("#" + this._tableId);
-    this._toggleBtn = this.$(".btn-toggle-table");
-    this.listen(this._toggleBtn, "click", this._onToggleTable.bind(this));
-    if (this._data !== null) {
-      this._draw();
-    }
-    return;
-  }
-
-  get data() {
-    return this._data;
-  }
-
-  set data(value) {
-    this._data = value;
-    if (this._svg !== undefined) {
-      this._draw();
-    }
-    return;
-  }
+  static chartTypeKey = "roadmap";
+  static labelKey = "mj.roadmapChart.label";
+  static optionAliases = { "today": "today-marker" };
+  static rendererEvents = ["mj-chart-bar-click"];
+  static toolbarSlot = "legend";
+  static detailPanel = { part: "initiative-detail", slot: "initiative-detail", placement: "inline" };
+  static deselectEvent = "mj-initiative-deselect";
 
   get selectedInitiative() {
-    return this._selectedInitiative;
+    return this.selectedOf("initiative")
   }
 
-  _onToggleTable() {
-    this._showTable = !this._showTable;
-    this._tableWrap.hidden = !this._showTable;
-    this._toggleBtn.setAttribute("aria-expanded", String(this._showTable));
-    return;
+  _name(initiative, index) {
+    const name = firstGiven(initiative.name, initiative.id)
+    const text = name !== undefined ? toText(name) : t("mj.roadmapChart.defaultInitiativeName", { number: index + 1 })
+    return text
   }
 
-  _draw() {
-    const d = this._data;
-    if (d === null || d === undefined) {
-      return;
-    }
-    const swimlanes = d.swimlanes || [{ id: "default", name: "" }];
-    const initiatives = d.initiatives || [];
-    const markers = d.markers || [];
-    const phases = d.phases || [];
-    const buckets = d.buckets || null;
-
-    const mode = this.getAttribute("mode") || "calendar";
-    let columns = [];
-
-    if (mode === "bucket" && buckets !== null && buckets.length > 0) {
-      columns = buckets.map((b) => ({ id: b.id || b.name, label: b.name }));
-    } else {
-      const startAttr = this.getAttribute("start-date");
-      const endAttr = this.getAttribute("end-date");
-      const allTimes = initiatives.flatMap((ini) => [new Date(ini.startDate || ini.start || Date.now()).getTime(), new Date(ini.endDate || ini.end || Date.now()).getTime()]);
-      const tMin = startAttr !== null ? new Date(startAttr).getTime() : (allTimes.length > 0 ? Math.min(...allTimes) : Date.now());
-      const tMax = endAttr !== null ? new Date(endAttr).getTime() : (allTimes.length > 0 ? Math.max(...allTimes) : Date.now() + 86400000 * 90);
-      const scale = this.getAttribute("scale") || "quarter";
-      columns = this._buildCalendarColumns(tMin, tMax, scale);
-    }
-
-    const colW = Math.max(COL_MIN_W, 160);
-    const totalW = LABEL_W + columns.length * colW;
-    const totalH = HEADER_H + swimlanes.length * ROW_H;
-
-    let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${totalW}" height="${totalH}">`;
-
-    svg += `<rect x="0" y="0" width="${LABEL_W}" height="${totalH}" fill="var(--mj-bg-subtle)" aria-hidden="true"/>`;
-    columns.forEach((col, ci) => {
-      const x = LABEL_W + ci * colW;
-      svg += `<rect x="${x}" y="0" width="${colW}" height="${HEADER_H}" fill="var(--mj-bg-muted)" aria-hidden="true"/>`;
-      svg += `<line x1="${x}" y1="0" x2="${x}" y2="${totalH}" stroke="var(--mj-border)" stroke-width="1" aria-hidden="true"/>`;
-      svg += `<text x="${x + colW / 2}" y="${HEADER_H / 2 + 5}" text-anchor="middle" font-size="12" fill="var(--mj-text)" font-weight="500" part="column-header">${this._esc(col.label)}</text>`;
-    });
-
-    swimlanes.forEach((lane, li) => {
-      const laneY = HEADER_H + li * ROW_H;
-      svg += `<line x1="0" y1="${laneY}" x2="${totalW}" y2="${laneY}" stroke="var(--mj-border)" stroke-width="1" aria-hidden="true"/>`;
-      svg += `<text x="8" y="${laneY + ROW_H / 2 + 5}" font-size="12" fill="var(--mj-text)" part="swimlane-label">${this._esc(lane.name || lane.id || "")}</text>`;
-
-      const laneInitiatives = initiatives.filter((ini) => (ini.swimlaneId || ini.swimlane || "default") === (lane.id || lane.name));
-      laneInitiatives.forEach((ini) => {
-        const colIdx = columns.findIndex((c) => c.id === (ini.columnId || ini.bucket || ini.column || ""));
-        const effectiveColIdx = colIdx >= 0 ? colIdx : 0;
-        const barX = LABEL_W + effectiveColIdx * colW + 4;
-        const barY = laneY + 8;
-        const barW = colW - 8;
-        const barH = ROW_H - 16;
-        const color = STATUS_COLORS[ini.status] || STATUS_COLORS.planned;
-        const icon = STATUS_ICONS[ini.status] || "○";
-        const iniColumn = columns[effectiveColIdx]
-        const iniColumnLabel = iniColumn !== undefined ? iniColumn.label : ""
-        const barLabel = `${ini.name}, ${ini.status || "planned"}, ${iniColumnLabel}`;
-        svg += `<g class="bar-el" part="initiative-bar" tabindex="0" role="gridcell" aria-label="${this._esc(barLabel)}" data-ini-id="${this._esc(ini.id || ini.name)}">`;
-        svg += `<rect x="${barX}" y="${barY}" width="${barW}" height="${barH}" rx="4" fill="${color}" opacity="0.2" stroke="${color}" stroke-width="1.5"/>`;
-        svg += `<text x="${barX + 20}" y="${barY + barH / 2 + 4}" font-size="11" fill="var(--mj-text)" part="initiative-label">${this._esc(ini.name.length > 18 ? ini.name.slice(0, 16) + "…" : ini.name)}</text>`;
-        svg += `<text x="${barX + 6}" y="${barY + barH / 2 + 4}" font-size="12" fill="${color}" aria-hidden="true">${icon}</text>`;
-        svg += `</g>`;
-      });
-    });
-
-    if (this.getAttribute("today-marker") !== "false" && mode === "calendar") {
-      svg += `<!-- today marker would be positioned based on time scale -->`;
-    }
-
-    svg += `</svg>`;
-
-    const scrollArea = this.$(".chart-scroll");
-    if (scrollArea !== null) {
-      scrollArea.innerHTML = svg;
-      const newSvg = scrollArea.querySelector("svg");
-      if (newSvg !== null) {
-        this._svg = newSvg;
-        this.listen(newSvg, "click", this._onSvgClick.bind(this));
-        this.listen(newSvg, "keydown", this._onSvgKeydown.bind(this));
-      }
-    }
-
-    this._buildTable(initiatives, columns);
-
-    const wrapper = this.$(".wrapper");
-    if (wrapper !== null) {
-      wrapper.setAttribute("aria-label", `Roadmap: ${initiatives.length} initiatives across ${swimlanes.length} swimlanes`);
-    }
-    return;
-  }
-
-  _buildCalendarColumns(tMin, tMax, scale) {
-    const cols = [];
-    const d = new Date(tMin);
-    d.setDate(1);
-    d.setHours(0, 0, 0, 0);
-    const endDate = new Date(tMax);
-    while (d <= endDate) {
-      if (scale === "quarter") {
-        const q = Math.floor(d.getMonth() / 3) + 1;
-        cols.push({ id: `Q${q}-${d.getFullYear()}`, label: `Q${q} ${d.getFullYear()}` });
-        d.setMonth(d.getMonth() + 3);
-      } else if (scale === "month") {
-        cols.push({ id: `${d.getFullYear()}-${d.getMonth()}`, label: formatDate(d, { month: "short", year: "numeric" }) });
-        d.setMonth(d.getMonth() + 1);
-      } else {
-        cols.push({ id: `H${d.getMonth() < 6 ? 1 : 2}-${d.getFullYear()}`, label: `H${d.getMonth() < 6 ? 1 : 2} ${d.getFullYear()}` });
-        d.setMonth(d.getMonth() + 6);
-      }
-      if (cols.length > 20) {
-        break;
-      }
-    }
-    return cols;
-  }
-
-  _buildTable(initiatives, columns) {
-    if (this._tableBody === null || this._tableBody === undefined) {
-      return;
-    }
-    const rows = initiatives.map((ini) => {
-      const col = columns.find((c) => c.id === (ini.columnId || ini.bucket || ini.column || ""));
-      return `<tr><td>${this._esc(ini.name)}</td><td>${this._esc(ini.swimlaneId || ini.swimlane || "")}</td><td>${this._esc(col ? col.label : "")}</td><td>${this._esc(ini.status || "")}</td><td>${ini.percentComplete || 0}%</td></tr>`;
-    });
-    this._tableBody.innerHTML = rows.join("");
-    return;
-  }
-
-  _onSvgClick(event) {
-    const node = event.target.closest("[data-ini-id]");
-    if (node !== null) {
-      const id = node.getAttribute("data-ini-id");
-      const initiatives = (this._data && this._data.initiatives) || [];
-      const ini = initiatives.find((i) => (i.id || i.name) === id);
-      if (ini !== undefined) {
-        this._selectedInitiative = ini;
-        const h3 = this._detailPanel.querySelector("h3");
-        if (h3 !== null) {
-          h3.textContent = ini.name;
+  adaptData(data) {
+    const initiatives = Array.isArray(data.initiatives) === true ? data.initiatives : []
+    const adapted = {
+      tasks: initiatives.map((initiative, index) => {
+        const source = initiative !== null && typeof initiative === "object" ? initiative : {}
+        const lane = firstGiven(source.swimlaneId, source.swimlane)
+        const bucket = firstGiven(source.columnId, source.bucket, source.column)
+        const percent = source.percentComplete !== undefined && source.percentComplete !== null
+          ? Math.min(100, Math.max(0, toNumber(source.percentComplete, 0))) / 100 : undefined
+        return {
+          id: source.id, label: this._name(source, index),
+          start: firstGiven(source.startDate, source.start), end: firstGiven(source.endDate, source.end),
+          status: firstGiven(source.status, "planned"), progress: percent,
+          group: lane !== undefined ? String(lane) : undefined,
+          bucket: bucket !== undefined ? String(bucket) : undefined,
+          description: source.description
         }
-        this._detailContent.innerHTML = `<p><strong>Status:</strong> ${this._esc(ini.status || "")}</p>`;
-        this._detailPanel.hidden = false;
-        this.emit("mj-initiative-select", { initiative: ini });
+      }),
+      groups: idLabelList(data.swimlanes),
+      buckets: idLabelList(data.buckets),
+      markers: (Array.isArray(data.markers) === true ? data.markers : []).map((marker) => {
+        const source = marker !== null && typeof marker === "object" ? marker : {}
+        return { label: toText(source.name), date: source.date }
+      }),
+      phases: (Array.isArray(data.phases) === true ? data.phases : []).map((phase) => {
+        const source = phase !== null && typeof phase === "object" ? phase : {}
+        return { label: toText(source.name), start: source.start, end: source.end }
+      })
+    }
+    return adapted
+  }
+
+  loadDetail(data) {
+    const detail = {
+      initiatives: Array.isArray(data.initiatives) === true ? data.initiatives.length : 0,
+      swimlanes: Array.isArray(data.swimlanes) === true ? data.swimlanes.length : 0
+    }
+    return detail
+  }
+
+  onRendererEvent(name, detail) {
+    const data = this.data !== null && typeof this.data === "object" ? this.data : {}
+    const initiative = Array.isArray(data.initiatives) === true ? data.initiatives[detail.index] : undefined
+    let selection = null
+
+    if (initiative !== undefined && initiative !== null && typeof initiative === "object") {
+      const percent = Math.min(100, Math.max(0, toNumber(initiative.percentComplete, 0)))
+      const start = firstGiven(initiative.startDate, initiative.start)
+      const end = firstGiven(initiative.endDate, initiative.end)
+      const dates = start !== undefined
+        ? html`<p><strong>${t("mj.roadmapChart.datesField")}</strong> ${t("mj.roadmapChart.dateRange", { start: formatChartDate(start), end: formatChartDate(end !== undefined ? end : start) })}</p>`
+        : html``
+      const description = firstGiven(initiative.description) !== undefined ? html`<p>${toText(initiative.description)}</p>` : html``
+      selection = {
+        key: `task:${detail.index}`, kind: "initiative", item: initiative,
+        title: this._name(initiative, detail.index),
+        content: html`<p><strong>${t("mj.roadmapChart.statusField")}</strong> ${statusText(toText(firstGiven(initiative.status, "planned")))}</p><p><strong>${t("mj.roadmapChart.percentField")}</strong> ${t("mj.roadmapChart.percent", { percent: formatNumber(percent) })}</p>${dates}${description}`,
+        eventName: "mj-initiative-select", eventDetail: { initiative: initiative }
       }
     }
-    return;
-  }
-
-  _onSvgKeydown(event) {
-    if (event.key === "Enter" || event.key === " ") {
-      this._onSvgClick(event);
-    }
-    if (event.key === "Escape") {
-      this._detailPanel.hidden = true;
-      this._selectedInitiative = null;
-      this.emit("mj-initiative-deselect", {});
-    }
-    return;
-  }
-
-  _esc(str) {
-    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  }
-
-  onAttributeChanged(name, oldValue, newValue) {
-    if (this._svg !== undefined && this._data !== null) {
-      this._draw();
-    }
-    return;
+    return selection
   }
 }

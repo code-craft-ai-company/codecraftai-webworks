@@ -885,3 +885,86 @@ def test_property_filter_chaining_with_escape():
             )
 
     return
+
+
+# =============================================================================
+# escape and json filters return markup
+# =============================================================================
+
+def test_filter_escape_returns_safestring():
+    """
+        Test that filter_escape() returns its escaped output as a SafeString.
+    """
+    result = filter_escape("<b>")
+
+    if not isinstance(result, SafeString):
+        raise AssertionError(f"Expected SafeString, got {type(result).__name__}")
+
+    if result != "&lt;b&gt;":
+        raise AssertionError(f"Expected '&lt;b&gt;', got {result!r}")
+
+    return
+
+
+def test_filter_escape_keeps_safe_value():
+    """
+        Test that filter_escape() does not escape a value already marked safe.
+    """
+    result = filter_escape(SafeString("<b>bold</b>"))
+
+    if result != "<b>bold</b>":
+        raise AssertionError(f"Expected the safe value unchanged, got {result!r}")
+
+    return
+
+
+def test_filter_json_returns_safestring():
+    """
+        Test that filter_json() returns a SafeString.
+    """
+    result = filter_json({"key": "value"})
+
+    if not isinstance(result, SafeString):
+        raise AssertionError(f"Expected SafeString, got {type(result).__name__}")
+
+    return
+
+
+def test_filter_json_escapes_script_closing_tag():
+    """
+        Test that filter_json() output cannot close a script block.
+    """
+    result = filter_json({"html": "</script>"})
+
+    if "<" in result or ">" in result:
+        raise AssertionError(f"Angle brackets should be escaped, got {result!r}")
+
+    return
+
+
+def test_filter_json_escapes_ampersand_and_apostrophe():
+    """
+        Test that filter_json() escapes '&' and the apostrophe.
+    """
+    result = filter_json("Tom & Jerry's")
+
+    if "&" in result or "'" in result:
+        raise AssertionError(f"'&' and the apostrophe should be escaped, got {result!r}")
+
+    return
+
+
+def test_filter_json_output_parses_to_original_value():
+    """
+        Test that filter_json() output is still JSON for the original value.
+    """
+    import json
+
+    value = {"html": "<a href='x'>&</a>", "items": [1, 2, 3], "name": "caf\u00e9"}
+
+    result = filter_json(value)
+
+    if json.loads(result) != value:
+        raise AssertionError(f"JSON output should parse to the original value, got {result!r}")
+
+    return

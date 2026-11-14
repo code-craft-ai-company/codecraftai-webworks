@@ -12,6 +12,7 @@
 import random
 import string
 
+from ccai.webworks.authentication.core import AuthenticationContext, Principal
 from ccai.webworks.authentication.blueprints.apikey import (
     APIKeyBlueprint,
     APIKeyStore,
@@ -22,14 +23,33 @@ from ccai.webworks.authentication.blueprints.apikey import (
 # Test Helpers
 # =============================================================================
 
+# Scopes the test caller holds. A key can only be given scopes its owner
+# holds, so the caller holds every scope the tests request.
+TEST_OWNER_SCOPES = {
+    "read", "write", "admin", "delete", "read:users", "write:users",
+    "read:data", "write:data", "manage", "audit", "export", "import",
+}
+
+TEST_OWNER = Principal(
+    identifier="key-owner",
+    permissions=set(TEST_OWNER_SCOPES)
+)
+
 
 class MockJsonRequest:
     """
         A simple mock request that returns a JSON body dictionary.
     """
 
-    def __init__(self, data):
+    def __init__(self, data, principal=None, path_params=None):
         self._data = data
+
+        if principal is None:
+            principal = TEST_OWNER
+
+        # What AuthenticationMiddleware leaves on the request
+        self.auth = AuthenticationContext(principal=principal, scheme="Test")
+        self.path_params = path_params or {}
 
     def json(self):
         return self._data
@@ -44,7 +64,7 @@ class MockAPIKeyStore(APIKeyStore):
         self._keys = {}
         self._revoked = set()
 
-    async def store_key(self, key_id, key_hash, name, scopes, created_at, expires_at):
+    async def store_key(self, key_id, key_hash, name, scopes, created_at, expires_at, owner=None):
         self._keys[key_id] = {
             "key_id": key_id,
             "key_hash": key_hash,
@@ -52,6 +72,7 @@ class MockAPIKeyStore(APIKeyStore):
             "scopes": scopes,
             "created_at": created_at,
             "expires_at": expires_at,
+            "owner": owner,
         }
 
     async def get_key(self, key_id):
@@ -66,6 +87,7 @@ class MockAPIKeyStore(APIKeyStore):
             "scopes": record["scopes"],
             "created_at": record["created_at"],
             "expires_at": record["expires_at"],
+            "owner": record["owner"],
         }
 
     async def list_keys(self):
@@ -78,6 +100,7 @@ class MockAPIKeyStore(APIKeyStore):
                     "scopes": record["scopes"],
                     "created_at": record["created_at"],
                     "expires_at": record["expires_at"],
+                    "owner": record["owner"],
                 })
         return result
 

@@ -41,6 +41,7 @@ from ccai.webworks.authentication.blueprints.session import (
 from ccai.webworks.authentication.core import Principal
 from ccai.webworks.routing.dispatcher import Dispatcher
 from ccai.webworks.routing.middleware import MiddlewarePipeline
+from ccai.webworks.routing.request import Request
 from ccai.webworks.routing.response import Response
 from ccai.webworks.routing.router import Router
 
@@ -120,6 +121,61 @@ def _build_dispatcher_for_blueprint(blueprint_cls) -> Dispatcher:
 # =============================================================================
 
 
+def _magiclink_form_post(path: str, token: str) -> Request:
+    """
+        Build the request the magic-link confirmation page submits: a
+        form-encoded POST carrying the token.
+    """
+    rtnval = Request(
+        method="POST",
+        path=path,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        body="token={}".format(token).encode("utf-8"),
+    )
+    return rtnval
+
+
+def test_magiclink_get_dispatch_shows_confirmation_without_consuming_token():
+    consumed = []
+
+    def consumer(token):
+        consumed.append(token)
+        return MagicLinkConsumeResult(principal=Principal(identifier="user-1"))
+
+    class FreshMagic(MagicLinkBlueprint):
+        pass
+
+    FreshMagic.token_consumer = staticmethod(consumer)
+    FreshMagic.session_blueprint = _make_session_blueprint()
+    FreshMagic.enabled_endpoints = None
+    FreshMagic.auth_system = None
+    FreshMagic.base_path = "/login/magic"
+
+    dispatcher = _build_dispatcher_for_blueprint(FreshMagic)
+
+    request = _MockRequest(
+        method="GET",
+        path="/login/magic/abcdefghijklmnop",
+    )
+
+    response = dispatcher.dispatch(request)
+
+    if response.status_code != 200:
+        errmsg = "Expected 200 confirmation page, got {}".format(response.status_code)
+        raise AssertionError(errmsg)
+
+    if len(consumed) != 0:
+        errmsg = "Expected the GET to leave the token unconsumed, consumer saw {!r}".format(consumed)
+        raise AssertionError(errmsg)
+
+    page = response.body.decode("utf-8")
+    if 'action="/login/magic/redeem"' not in page or "abcdefghijklmnop" not in page:
+        errmsg = "Expected a form posting the token to /login/magic/redeem, got {!r}".format(page)
+        raise AssertionError(errmsg)
+
+    return
+
+
 def test_magiclink_redeem_dispatch_returns_real_302_with_cookie():
     class FreshMagic(MagicLinkBlueprint):
         pass
@@ -136,10 +192,7 @@ def test_magiclink_redeem_dispatch_returns_real_302_with_cookie():
 
     dispatcher = _build_dispatcher_for_blueprint(FreshMagic)
 
-    request = _MockRequest(
-        method="GET",
-        path="/login/magic/abcdefghijklmnop",
-    )
+    request = _magiclink_form_post("/login/magic/redeem", "abcdefghijklmnop")
 
     response = dispatcher.dispatch(request)
 
@@ -183,10 +236,7 @@ def test_magiclink_redeem_dispatch_invalid_token_returns_real_302_to_error():
 
     dispatcher = _build_dispatcher_for_blueprint(FreshMagic)
 
-    request = _MockRequest(
-        method="GET",
-        path="/login/magic/abcdefghijklmnop",
-    )
+    request = _magiclink_form_post("/login/magic/redeem", "abcdefghijklmnop")
 
     response = dispatcher.dispatch(request)
 

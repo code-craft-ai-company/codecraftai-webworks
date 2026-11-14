@@ -2,6 +2,25 @@ name: Merge Gate
 
 # Runs on every push and pull request to main, and on demand. One job per
 # operating system: the suite is expected to work on Linux, macOS and Windows.
+#
+# The Publish workflow calls this workflow (workflow_call) and uploads a
+# release only when every required job here has passed.
+#
+# Jobs:
+#   build          the single-host suite on Linux, macOS and Windows with the
+#                  required Python version, plus Linux legs for the other
+#                  Python versions pyproject.toml declares support for. The
+#                  Linux leg on the required version also builds the wheel,
+#                  inspects it and smoke-tests the installed package.
+#   browser-tests  the Playwright suite of the testcomponents site, in
+#                  Chromium. It fails when a test is skipped: a skip there
+#                  means the browser was missing, not that the test passed.
+#
+# Not gated here yet (each needs a decision or a new dependency):
+#   - JavaScript lint, type-check and unit tests for the shipped component
+#     library: the repository has no package.json or Node tooling.
+#   - A Python type checker: needs a new development dependency.
+#   - Building the user guide: needs Sphinx and a conf.py.
 
 on:
   push:
@@ -9,11 +28,16 @@ on:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   build:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    # The legs for Python versions other than the required one report their
+    # result without blocking a merge. Remove 'experimental' from a leg in
+    # the matrix below to make it required once it is green.
+    continue-on-error: ${{ matrix.experimental == true }}
 
     strategy:
       # Let every OS finish so one platform failure does not hide another.
@@ -21,6 +45,16 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ['3.12']
+        include:
+          # pyproject.toml declares '>=3.10,<4.0'. 3.10 is the oldest
+          # supported version (no tomllib in its standard library) and
+          # 3.13 the newest.
+          - os: ubuntu-latest
+            python-version: '3.10'
+            experimental: true
+          - os: ubuntu-latest
+            python-version: '3.13'
+            experimental: true
 
     defaults:
       run:
@@ -60,10 +94,22 @@ jobs:
         # pipx run avoids installing into the runner's system python (PEP 668).
         run: pipx run ruff check --select E722 .
 
+      - name: Lint - pyflakes rules
+        # Undefined names, unused imports and variables, and similar defects,
+        # in the package, the test roots and the test sites. In a test, an
+        # unused variable is often a check that was never written.
+        run: pipx run ruff check --select F --statistics .
+
       - name: Setup the Virtual Environment
+        # The 'test' extra brings the testbase runner (and Playwright, used
+        # by the browser-tests job); 'templating' brings both template
+        # engines so the adapter tests run. Pydantic comes with the dev
+        # dependency group, so the Pydantic schema tests run. The gevent,
+        # toml and shell extras are not installed here: the suite has not
+        # been run with them yet.
         run: |
           python ./development/setup-environment
-          poetry install --all-extras
+          poetry install --extras "templating test"
 
       - name: Run Tests
         run: |
@@ -71,4 +117,224 @@ jobs:
           # load the development environment file that rehome-repository wrote.
           source ./.venv/bin/activate 2>/dev/null || source ./.venv/Scripts/activate
           set -a; . ./.env; set +a
-          testbase testing run --root ./source/testroots/ccai --includes=ccai.tests.singlehost
+          testbase testing run --root ./source/testroots/ccai --includes=ccai.tests.singlehost --output=./.output/singlehost-tests
+
+      - name: List the failed and errored tests
+        # The run's console output gives only the totals; this names each
+        # test that failed or errored, with its error, in the job log.
+        if: failure()
+        run: |
+          source ./.venv/bin/activate 2>/dev/null || source ./.venv/Scripts/activate
+          testbase agents testresult failures --results-file=./.output/singlehost-tests/testrun_results_stream.jsos
+
+      - name: Keep the single-host results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: singlehost-tests-${{ matrix.os }}-${{ matrix.python-version }}
+          path: .output/singlehost-tests/
+          if-no-files-found: warn
+
+      - name: Build the distributions
+        # Packaging regressions surface here instead of at publish time.
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: |
+          rm -rf dist
+          poetry build
+          ls -l dist/
+
+      - name: Inspect the wheel
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+          import zipfile
+
+          wheels = glob.glob("dist/*.whl")
+          if len(wheels) != 1:
+              sys.exit("Expected exactly one wheel in dist/, found: {}".format(wheels))
+
+          names = zipfile.ZipFile(wheels[0]).namelist()
+
+          # Asset folders that pyproject.toml includes explicitly; a wheel
+          # without them imports fine and serves broken pages.
+          required_prefixes = [
+              "ccai/webworks/static/javascript/",
+              "ccai/webworks/static/styles/",
+              "ccai/webworks/openapi/static/",
+              "ccai/webworks/books/static/",
+          ]
+
+          problems = []
+
+          for prefix in required_prefixes:
+              count = len([name for name in names if name.startswith(prefix)])
+              print("{:45s} {} files".format(prefix, count))
+              if count == 0:
+                  problems.append("no files under {}".format(prefix))
+
+          required_files = [
+              "ccai/webworks/static/gallery.html",
+              "ccai/webworks/devexp/cli/__main__.py",
+          ]
+
+          for required in required_files:
+              if required not in names:
+                  problems.append("missing {}".format(required))
+
+          entry_points = [name for name in names if name.endswith(".dist-info/entry_points.txt")]
+          if len(entry_points) != 1:
+              problems.append("the wheel declares no entry points")
+          else:
+              content = zipfile.ZipFile(wheels[0]).read(entry_points[0]).decode("utf-8")
+              if "webworks=ccai.webworks.devexp.cli.webworkscli:main" not in content.replace(" ", ""):
+                  problems.append("the 'webworks' console script is not declared")
+
+          # The shared 'ccai' namespace must not carry files of its own.
+          for unwanted in ("ccai/README.md", "ccai/__init__.py"):
+              if unwanted in names:
+                  problems.append("{} must not be in the wheel".format(unwanted))
+
+          if len(problems) > 0:
+              for problem in problems:
+                  print("::error::{}".format(problem))
+              sys.exit(1)
+
+          print("Wheel contents look complete: {} files.".format(len(names)))
+          PY
+
+      - name: Smoke-test the installed wheel
+        # Replace the editable install with the wheel that was just built,
+        # in the environment that already holds its dependencies, and use
+        # the package the way a consumer does.
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: |
+          source ./.venv/bin/activate
+          python -m pip install --no-deps --force-reinstall dist/*.whl
+          cd "$(mktemp -d)"
+          webworks --help
+          webworks new smoke-project
+          cd smoke-project
+          webworks routes
+          python - <<'PY'
+          import os
+
+          import ccai.webworks
+
+          static_root = os.path.join(os.path.dirname(ccai.webworks.__file__), "static")
+          for relative in ("gallery.html", "javascript", "styles"):
+              path = os.path.join(static_root, relative)
+              if not os.path.exists(path):
+                  raise SystemExit("installed package is missing {}".format(path))
+
+          print("Installed package serves its static assets from {}".format(static_root))
+          PY
+
+  browser-tests:
+    # The functional suite of the testcomponents site drives the mj-*
+    # component library and the chart library in a real browser. Without
+    # Playwright and Chromium every test is skipped and the run still
+    # reports PASSED, so this job installs both and treats a skip as a
+    # failure.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install poetry
+        run: pipx install poetry
+
+      - name: Configure Git Store
+        run: git config --global credential.helper store
+
+      - name: Set the Github Token
+        run: echo "https://git:${{ secrets.CCAI_ACCESS_TOKEN }}@github.com" > ~/.git-credentials
+
+      - name: Re-Home the Repository
+        run: |
+          python ./repository-setup/rehome-repository
+          cat ./.env
+
+      - name: Setup the Virtual Environment
+        run: |
+          python ./development/setup-environment
+          poetry install --extras "templating test"
+
+      - name: Install the browser
+        # The Chromium build that matches the installed Playwright version,
+        # with the system libraries it needs.
+        run: |
+          source ./.venv/bin/activate
+          python -m playwright install --with-deps chromium
+
+      - name: Run the testcomponents browser suite
+        run: |
+          source ./.venv/bin/activate
+          set -a; . ./.env; set +a
+          testbase testing run --root ./source/testsites/testcomponents --includes=testcomponents.tests --output=./.output/testcomponents-tests --timeout=4800
+
+      - name: Fail when tests were skipped
+        # Runs even when the suite step failed, so the totals are always in the log.
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          import sys
+
+          summary_file = "./.output/testcomponents-tests/testrun_summary.json"
+
+          try:
+              with open(summary_file, encoding="utf-8") as handle:
+                  summary = json.load(handle)
+          except OSError as err:
+              sys.exit("::error::The browser suite wrote no summary ({}).".format(err))
+
+          detail = summary.get("detail") or {}
+          result = summary.get("result")
+
+          print("result: {}".format(result))
+          for key in ("total", "passed", "failed", "errors", "skipped"):
+              print("{}: {}".format(key, detail.get(key)))
+
+          problems = []
+
+          if result != "PASSED":
+              problems.append("the run result is {}".format(result))
+
+          if not detail.get("total"):
+              problems.append("no tests were collected")
+
+          if detail.get("skipped"):
+              problems.append(
+                  "{} test(s) were skipped; in this job a skip means Playwright or "
+                  "Chromium was not available".format(detail.get("skipped"))
+              )
+
+          if detail.get("failed") or detail.get("errors"):
+              problems.append(
+                  "{} failed, {} errors".format(detail.get("failed"), detail.get("errors"))
+              )
+
+          if len(problems) > 0:
+              for problem in problems:
+                  print("::error::{}".format(problem))
+              sys.exit(1)
+          PY
+
+      - name: Keep the browser suite results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testcomponents-tests
+          path: .output/testcomponents-tests/
+          if-no-files-found: warn

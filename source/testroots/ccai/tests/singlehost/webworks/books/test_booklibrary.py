@@ -175,6 +175,42 @@ def test_links_outside_the_library_or_to_nothing_do_not_resolve():
     return
 
 
+def test_a_link_that_is_not_a_well_formed_url_does_not_resolve():
+    """
+        **Feature: book library links**
+        **Property: a destination that cannot be parsed as a URL, such as one with a placeholder in brackets where a host is expected, resolves to
+        nothing instead of raising.**
+    """
+    with tempfile.TemporaryDirectory() as root:
+        write_sample_library(root)
+        library = BookLibrary(root)
+        chapter = "volumes/one/chapters/01-start.md"
+        resolved = []
+        for destination in ("http://[your-host]:8080/", "//[not-an-address]/a.md"):
+            resolved.append(library.resolve_link(document=chapter, destination=destination))
+
+    testbase.assert_equal(resolved, [None, None])
+    return
+
+
+def test_a_malformed_link_in_the_library_index_does_not_break_the_navigation():
+    """
+        **Feature: book library navigation**
+        **Property: a link in the library index that cannot be parsed as a URL is not a book, and the books linked around it are still listed.**
+    """
+    with tempfile.TemporaryDirectory() as root:
+        write_sample_library(root)
+        index_path = os.path.join(root, "README.md")
+        with open(index_path, "a", encoding="utf-8") as index_file:
+            index_file.write("\n[Local server](http://[your-host]:8080/)\n")
+
+        library = BookLibrary(root)
+        books = [book.document for book in library.books()]
+
+    testbase.assert_equal(books, ["volumes/one/README.md", "volumes/two/index.md", "series.md"])
+    return
+
+
 def test_locations_that_leave_the_root_or_name_hidden_files_are_refused():
     """
         **Feature: book library safety**

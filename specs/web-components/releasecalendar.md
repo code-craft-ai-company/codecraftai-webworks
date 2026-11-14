@@ -83,9 +83,11 @@ axis of milestones (use `<mj-milestone-timeline>`). Nearest alternative:
 |------|-------------|
 | `(default)` | Fallback `<ol>` of events rendered before upgrade |
 | `event-detail` | Custom detail popover for a selected event |
-| `empty` | Shown when no events are present |
-| `loading` | Shown during adapter fetch |
-| `error` | Shown on adapter failure |
+| `empty` | Shown when the data has no events at all (the grid stays navigable) |
+
+Loading and error are not separate slots: while `src` is fetched, and when the data is
+malformed or not an object, a message is shown in the shared empty-state block above the
+grid (the `empty` slot area). The error survives paging and clears when data is assigned.
 
 ## 8. Events
 
@@ -123,9 +125,10 @@ axis of milestones (use `<mj-milestone-timeline>`). Nearest alternative:
 
 ## 10. States
 
-- **loading** — `aria-busy="true"`; loading slot shown.
-- **empty** — no events in visible period; empty slot shown; grid still renders.
-- **error** — error slot shown.
+- **loading** — `aria-busy="true"`; loading message shown in the empty-state block.
+- **empty** — the data has no events; empty slot shown; grid still renders and pages.
+  A month without events in otherwise non-empty data is shown as an ordinary empty grid.
+- **error** — error message shown in the empty-state block; `mj-error` fires.
 - **event-selected** — chip or bar highlighted; detail popover open.
 - **today-highlighted** — today's cell has distinct background.
 - **freeze-day** — days within a freeze event have a background tint on the cell.
@@ -156,7 +159,8 @@ each `mj-period-change`; the adapter is called with `{ start, end }` ISO strings
 
 ## 13. Accessibility
 
-- Root: `role="region"` with `aria-label` = "Release calendar, {month year} –
+- Root: `role="group"` (not a region landmark, which every calendar on a page would repeat) with
+  `aria-label` = "Release calendar, {month year} –
   {n} events".
 - Calendar grid inherits the `grid` role from the §5.8 Calendar grid component;
   each day cell is `role="gridcell"`.
@@ -208,7 +212,8 @@ and initializes the calendar grid.
 
 ## 18. Edge cases & error handling
 
-- **No events in visible period** — empty slot content shown; navigation still
+- **No events in visible period** — the grid shows the month without events (the empty
+  slot is reserved for data with no events at all); navigation still
   works.
 - **Events outside visible period** — clipped; not rendered.
 - **Overlapping multi-day bars in same row** — bars stacked vertically within

@@ -957,3 +957,149 @@ def test_devlogger_teardown_removes_handlers():
     _restore_root_logger_handlers(_saved_logging)
 
     return
+
+
+# =============================================================================
+# Record Integrity and Stream Detection Tests
+# =============================================================================
+
+def _make_log_record(message="payment accepted"):
+    """
+        Create a log record like the ones a logger hands to its handlers.
+    """
+    record = logging.LogRecord(
+        name="probe", level=logging.INFO, pathname="probe.py", lineno=12,
+        msg=message, args=(), exc_info=None,
+    )
+
+    return record
+
+
+def test_format_does_not_modify_the_record():
+    """
+        Test that formatting a record with a request ID active leaves
+        the record's message as it was.
+    """
+    formatter = ColoredFormatter(fmt="%(levelname)s %(message)s", use_colors=False)
+    record = _make_log_record()
+
+    set_request_id("req-1")
+    try:
+        formatter.format(record)
+    finally:
+        set_request_id(None)
+
+    if record.msg != "payment accepted":
+        errmsg = "The record message was modified to {!r}".format(record.msg)
+        raise AssertionError(errmsg)
+
+    if record.levelname != "INFO":
+        errmsg = "The record level name was modified to {!r}".format(record.levelname)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_record_formatted_by_two_handlers_has_one_request_id_prefix():
+    """
+        Test that a record formatted twice, as it is when two handlers
+        are attached, carries the request ID once in each output.
+    """
+    console_formatter = ColoredFormatter(fmt="%(message)s", use_colors=False)
+    file_formatter = ColoredFormatter(fmt="%(message)s", use_colors=False)
+    record = _make_log_record()
+
+    set_request_id("req-2")
+    try:
+        first = console_formatter.format(record)
+        second = file_formatter.format(record)
+    finally:
+        set_request_id(None)
+
+    for output in (first, second):
+        if output != "[req-2] payment accepted":
+            errmsg = "Expected '[req-2] payment accepted', got {!r}".format(output)
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_file_handler_output_carries_the_request_id():
+    """
+        Test that the log file contains the request ID regardless of the
+        order in which the handlers format the record.
+    """
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False) as tmp:
+        log_path = tmp.name
+
+    dev_logger = DevLogger(debug=True, use_colors=False, log_file=log_path)
+    dev_logger.setup()
+
+    set_request_id("req-3")
+    try:
+        logging.getLogger("probe.filehandler").info("stored in file")
+    finally:
+        set_request_id(None)
+        dev_logger.teardown()
+
+    try:
+        with open(log_path) as handle:
+            content = handle.read()
+
+        if "[req-3] stored in file" not in content:
+            errmsg = "Expected the request ID in the log file, got: {!r}".format(content)
+            raise AssertionError(errmsg)
+
+        if "[req-3] [req-3]" in content:
+            errmsg = "The request ID was written twice: {!r}".format(content)
+            raise AssertionError(errmsg)
+    finally:
+        os.unlink(log_path)
+
+    return
+
+
+def test_color_detection_defaults_to_stderr_not_stdout():
+    """
+        Test that without an explicit stream the formatter decides on
+        colors by looking at stderr, the stream DevLogger writes to.
+    """
+    import sys
+
+    class _FakeStream:
+        def __init__(self, is_tty):
+            self._is_tty = is_tty
+
+        def isatty(self):
+            return self._is_tty
+
+        def write(self, text):
+            return len(text)
+
+        def flush(self):
+            return
+
+    formatter = ColoredFormatter(fmt="%(levelname)s %(message)s", use_colors=True)
+    record = _make_log_record()
+
+    saved_stdout = sys.stdout
+    saved_stderr = sys.stderr
+    saved_no_color = os.environ.pop("NO_COLOR", None)
+
+    try:
+        # stdout is a terminal, stderr is redirected: no escape codes.
+        sys.stdout = _FakeStream(is_tty=True)
+        sys.stderr = _FakeStream(is_tty=False)
+
+        output = formatter.format(record)
+    finally:
+        sys.stdout = saved_stdout
+        sys.stderr = saved_stderr
+        if saved_no_color is not None:
+            os.environ["NO_COLOR"] = saved_no_color
+
+    if "\x1b[" in output:
+        errmsg = "ANSI escapes were written although stderr is not a terminal: {!r}".format(output)
+        raise AssertionError(errmsg)
+
+    return

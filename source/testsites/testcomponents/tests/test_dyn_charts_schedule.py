@@ -62,6 +62,12 @@ def _open_chart(page, base_url: str, tag: str):
         arg=tag,
         timeout=15000,
     )
+    # The example's script runs as a module after the upgrade and assigns the
+    # data; wait for it so a test's own assignment is not overwritten later.
+    frame.wait_for_function(
+        "() => window.mjSandbox !== undefined && window.mjSandbox.ready === true",
+        timeout=15000,
+    )
     return frame
 
 
@@ -214,9 +220,9 @@ def test_gantt_chart_initial_render(page, base_url):
 
     frame = _open_chart(page, base_url, "mj-gantt-chart")
     _assign_data(frame, "mj-gantt-chart", _GANTT_DATA_A)
-    _wait_for_shadow(frame, "mj-gantt-chart", "[part=task-bar]")
+    _wait_for_shadow(frame, "mj-gantt-chart", "[part~=task-bar]")
 
-    count = _shadow_count(frame, "mj-gantt-chart", "[part=task-bar]")
+    count = _shadow_count(frame, "mj-gantt-chart", "[part~=task-bar]")
     assert count >= 6
 
     return
@@ -238,17 +244,15 @@ def test_gantt_chart_dynamic_update(page, base_url):
     frame = _open_chart(page, base_url, "mj-gantt-chart")
 
     _assign_data(frame, "mj-gantt-chart", _GANTT_DATA_A)
-    _wait_for_shadow(frame, "mj-gantt-chart", "[part=task-bar]")
-    count_a = _shadow_count(frame, "mj-gantt-chart", "[part=task-bar]")
+    _wait_for_shadow(frame, "mj-gantt-chart", "[part~=task-bar]")
+    count_a = _shadow_count(frame, "mj-gantt-chart", "[part~=task-bar]")
     assert count_a >= 6
 
     _assign_data(frame, "mj-gantt-chart", _GANTT_DATA_B)
-    # Each task renders a <g part="task-bar"> wrapper plus a <rect part="task-bar">
-    # inside it, so 2 tasks produce 4 elements matching [part=task-bar].
-    _wait_for_shadow_count(frame, "mj-gantt-chart", "[part=task-bar]", 4)
-    count_b = _shadow_count(frame, "mj-gantt-chart", "[part=task-bar]")
-    # count_b must be strictly less than the 6-task set count_a.
-    assert count_b < count_a
+    # Each task is one mark (<g part="bar task-bar">), so 2 tasks give 2.
+    _wait_for_shadow_count(frame, "mj-gantt-chart", "[part~=task-bar]", 2)
+    count_b = _shadow_count(frame, "mj-gantt-chart", "[part~=task-bar]")
+    assert count_b == 2 and count_b < count_a
 
     return
 
@@ -265,14 +269,14 @@ def test_gantt_chart_task_select_event(page, base_url):
 
     frame = _open_chart(page, base_url, "mj-gantt-chart")
     _assign_data(frame, "mj-gantt-chart", _GANTT_DATA_A)
-    _wait_for_shadow(frame, "mj-gantt-chart", "[part=task-bar]")
+    _wait_for_shadow(frame, "mj-gantt-chart", "[part~=task-bar]")
 
     _collect_events(frame, "mj-gantt-chart", ["mj-task-select"])
 
     frame.evaluate(
         """() => {
             const el = document.querySelector('mj-gantt-chart');
-            const bar = el.shadowRoot.querySelector('[part=task-bar]');
+            const bar = el.shadowRoot.querySelector('[part~=task-bar]');
             if (bar !== null) {
                 bar.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
             }
@@ -326,6 +330,19 @@ _ROADMAP_DATA_B = {
 }
 
 
+def _use_bucket_mode(frame) -> None:
+    """
+        Switch the roadmap to mode="bucket": the roadmap data above places
+        initiatives by `columnId` (named buckets), while the component's
+        default mode, calendar, places them by their dates.
+
+        :param frame: The Playwright Frame containing the element.
+    """
+
+    frame.evaluate("() => document.querySelector('mj-roadmap-chart').setAttribute('mode', 'bucket')")
+    return
+
+
 @testbase.mark_categories(categories=["functional"])
 @testbase.attach.parameter(create_page, identifier="page")
 def test_roadmap_chart_initial_render(page, base_url):
@@ -337,10 +354,11 @@ def test_roadmap_chart_initial_render(page, base_url):
     """
 
     frame = _open_chart(page, base_url, "mj-roadmap-chart")
+    _use_bucket_mode(frame)
     _assign_data(frame, "mj-roadmap-chart", _ROADMAP_DATA_A)
-    _wait_for_shadow(frame, "mj-roadmap-chart", "[part=initiative-bar]")
+    _wait_for_shadow(frame, "mj-roadmap-chart", "[part~=initiative-bar]")
 
-    count = _shadow_count(frame, "mj-roadmap-chart", "[part=initiative-bar]")
+    count = _shadow_count(frame, "mj-roadmap-chart", "[part~=initiative-bar]")
     assert count >= 6
 
     return
@@ -360,15 +378,16 @@ def test_roadmap_chart_dynamic_update(page, base_url):
     """
 
     frame = _open_chart(page, base_url, "mj-roadmap-chart")
+    _use_bucket_mode(frame)
 
     _assign_data(frame, "mj-roadmap-chart", _ROADMAP_DATA_A)
-    _wait_for_shadow(frame, "mj-roadmap-chart", "[part=initiative-bar]")
-    count_a = _shadow_count(frame, "mj-roadmap-chart", "[part=initiative-bar]")
+    _wait_for_shadow(frame, "mj-roadmap-chart", "[part~=initiative-bar]")
+    count_a = _shadow_count(frame, "mj-roadmap-chart", "[part~=initiative-bar]")
     assert count_a >= 6
 
     _assign_data(frame, "mj-roadmap-chart", _ROADMAP_DATA_B)
-    _wait_for_shadow_count(frame, "mj-roadmap-chart", "[part=initiative-bar]", 2)
-    count_b = _shadow_count(frame, "mj-roadmap-chart", "[part=initiative-bar]")
+    _wait_for_shadow_count(frame, "mj-roadmap-chart", "[part~=initiative-bar]", 2)
+    count_b = _shadow_count(frame, "mj-roadmap-chart", "[part~=initiative-bar]")
     assert count_b == 2
 
     return
@@ -385,15 +404,16 @@ def test_roadmap_chart_initiative_select_event(page, base_url):
     """
 
     frame = _open_chart(page, base_url, "mj-roadmap-chart")
+    _use_bucket_mode(frame)
     _assign_data(frame, "mj-roadmap-chart", _ROADMAP_DATA_A)
-    _wait_for_shadow(frame, "mj-roadmap-chart", "[part=initiative-bar]")
+    _wait_for_shadow(frame, "mj-roadmap-chart", "[part~=initiative-bar]")
 
     _collect_events(frame, "mj-roadmap-chart", ["mj-initiative-select"])
 
     frame.evaluate(
         """() => {
             const el = document.querySelector('mj-roadmap-chart');
-            const bar = el.shadowRoot.querySelector('[part=initiative-bar]');
+            const bar = el.shadowRoot.querySelector('[part~=initiative-bar]');
             if (bar !== null) {
                 bar.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
             }
@@ -538,34 +558,31 @@ _CAL_DATA_B = {
 
 def _navigate_to_may_2026(frame) -> None:
     """
-        Click the next-month button until the calendar title contains 'May 2026'.
+        Show May 2026, the month the test data is in.
 
-        The example sets current-date='2026-05-01' but timezone conversion
-        can shift the displayed month.  This helper ensures May 2026 is
-        always visible before chip assertions run.
+        The catalog example opens on the current month (its events are dated
+        relative to today), so the month is selected with the
+        ``current-date`` attribute, which is a local calendar day and needs
+        no time-zone allowance.
 
         :param frame: The Playwright Frame containing mj-release-calendar.
     """
 
-    for _ in range(3):
-        title = frame.evaluate(
-            """() => {
-                const el = document.querySelector('mj-release-calendar');
-                if (el === null || el.shadowRoot === null) { return ''; }
-                const span = el.shadowRoot.querySelector('.cal-title');
-                return span !== null ? span.textContent : '';
-            }"""
-        )
-        if "May" in title and "2026" in title:
-            break
-        frame.evaluate(
-            """() => {
-                const el = document.querySelector('mj-release-calendar');
-                if (el === null || el.shadowRoot === null) { return; }
-                const btn = el.shadowRoot.querySelector('.next-btn');
-                if (btn !== null) { btn.click(); }
-            }"""
-        )
+    frame.evaluate(
+        """() => {
+            const el = document.querySelector('mj-release-calendar');
+            if (el !== null) { el.setAttribute('current-date', '2026-05-01'); }
+        }"""
+    )
+    frame.wait_for_function(
+        """() => {
+            const el = document.querySelector('mj-release-calendar');
+            if (el === null || el.shadowRoot === null) { return false; }
+            const span = el.shadowRoot.querySelector('.cal-title');
+            return span !== null && span.textContent.indexOf('2026') >= 0 && span.textContent.indexOf('May') >= 0;
+        }""",
+        timeout=5000,
+    )
 
     return
 

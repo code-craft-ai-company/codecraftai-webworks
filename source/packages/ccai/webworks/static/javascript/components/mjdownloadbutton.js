@@ -14,6 +14,21 @@
  * in a new tab, the URL appears in the browser's download UI,
  * and the `download` attribute supplies the suggested filename.
  *
+ * Without a usable `href` (absent, or rejected by the URL check)
+ * the anchor is still a link for assistive technology and the
+ * keyboard: it gets `role="link"` and a tab stop, and Enter
+ * activates it, so a listener that produces the file itself on
+ * `mj-download-start` works from the keyboard too.
+ *
+ * Tab stop: the component writes the anchor's `tabindex` only
+ * when its state needs one (`-1` while disabled, `0` without an
+ * href). A `tabindex` set on the anchor by a managing container
+ * -- mj-toolbar's roving tab stop -- is kept across attribute
+ * changes and restored when `disabled` is removed. A re-render
+ * (reconnect after a removal, locale change) starts from a fresh
+ * anchor, so a button moved out of a toolbar does not keep the
+ * toolbar's value.
+ *
  * Theming: every visual value resolves through a token
  * (`--mj-download-button-*`) with mj library fallbacks.
  *
@@ -21,6 +36,7 @@
  */
 
 import { MjElement } from "../core/mjelement.js";
+import { safeUrl } from "../core/html.js";
 
 const STYLES = `
 :host {
@@ -103,7 +119,7 @@ const STYLES = `
 .spinner {
   width: 1em; height: 1em;
   border: 2px solid currentColor;
-  border-right-color: transparent;
+  border-inline-end-color: transparent;
   border-radius: var(--mj-radius-circle);
   animation: mj-download-spin var(--mj-motion-slow) linear infinite;
 }
@@ -136,6 +152,12 @@ export class MjDownloadButton extends MjElement {
     constructor() {
         super();
         this._anchor = null;
+        /* The rejected href last reported, so the warning is logged once. */
+        this._warned_href = null;
+        /* The anchor tabindex this component wrote itself, or null. */
+        this._own_tabindex = null;
+        /* The anchor tabindex a managing container (mj-toolbar) set, or null. */
+        this._container_tabindex = null;
     }
 
     render() {
@@ -150,9 +172,15 @@ export class MjDownloadButton extends MjElement {
 
     afterRender() {
         this._anchor = this.$(".btn");
+        /* A new anchor carries no tabindex: neither this component's nor a container's. */
+        this._own_tabindex = null;
+        this._container_tabindex = null;
         if (this._anchor !== null) {
-            this._anchor.addEventListener("click", (event) => {
+            this.listen(this._anchor, "click", (event) => {
                 this._on_click(event);
+            });
+            this.listen(this._anchor, "keydown", (event) => {
+                this._on_keydown(event);
             });
         }
         this._sync();
@@ -160,10 +188,53 @@ export class MjDownloadButton extends MjElement {
     }
 
     onAttributeChanged(name, oldValue, newValue) {
-        if (this._anchor === null) {
+        if (this._anchor === undefined || this._anchor === null) {
             return;
         }
         this._sync();
+        return;
+    }
+
+    /*
+     * The URL the inner anchor may carry. `href` can come from user
+     * data (a stored attachment link), so a script-bearing scheme
+     * such as `javascript:` must never reach the anchor: activating
+     * it would run script in the page. Relative URLs and http(s),
+     * blob, mailto, tel and sms pass through `safeUrl`; `data:` URLs are
+     * also allowed because the anchor always carries `download`, so
+     * the browser saves them instead of navigating. Anything else
+     * yields the empty string.
+     */
+    _safe_href() {
+        const href = this.href;
+        let safe = "";
+        if (href.length > 0) {
+            safe = safeUrl(href, "");
+            if (safe === "") {
+                const compact = href.replace(/[\u0000- \u007f-\u009f]/g, "").toLowerCase();
+                if (compact.startsWith("data:") === true) {
+                    safe = href;
+                }
+            }
+            if (safe === "" && this._warned_href !== href) {
+                this._warned_href = href;
+                console.warn("<mj-download-button>: href uses a URL scheme that is not allowed and was ignored.", this);
+            }
+        }
+        return safe;
+    }
+
+    /*
+     * An anchor without `href` has no activation behaviour of its
+     * own, so Enter is mapped to a click here, as a native link does
+     * it when it has an href.
+     */
+    _on_keydown(event) {
+        const plain = event.altKey === false && event.ctrlKey === false && event.metaKey === false;
+        if (event.key === "Enter" && plain === true && this._anchor.hasAttribute("href") === false) {
+            event.preventDefault();
+            this._anchor.click();
+        }
         return;
     }
 
@@ -173,7 +244,7 @@ export class MjDownloadButton extends MjElement {
             return;
         }
         const detail = {
-            href: this.href,
+            href: this._safe_href(),
             filename: this.filename,
         };
         const proceeded = this.emit(
@@ -192,11 +263,15 @@ export class MjDownloadButton extends MjElement {
         if (anchor === null) {
             return;
         }
-        const href = this.href;
-        if (href.length > 0) {
+        const href = this._safe_href();
+        const has_href = href.length > 0;
+        if (has_href === true) {
             anchor.setAttribute("href", href);
+            anchor.removeAttribute("role");
         } else {
+            /* An anchor without href has no link role; keep announcing it as one. */
             anchor.removeAttribute("href");
+            anchor.setAttribute("role", "link");
         }
         const filename = this.filename;
         if (filename.length > 0) {
@@ -224,13 +299,61 @@ export class MjDownloadButton extends MjElement {
         } else {
             anchor.removeAttribute("aria-label");
         }
-        if (this.hasAttribute("disabled") === true) {
+        const disabled = this.hasAttribute("disabled");
+        const loading = this.hasAttribute("loading");
+
+        /*
+         * Activation is swallowed while disabled or loading, and
+         * assistive technology is told so. A loading button stays
+         * in the tab order so its busy state can be discovered; a
+         * disabled one leaves it.
+         */
+        if (disabled === true || loading === true) {
             anchor.setAttribute("aria-disabled", "true");
-            anchor.setAttribute("tabindex", "-1");
         } else {
             anchor.removeAttribute("aria-disabled");
+        }
+        if (loading === true && disabled === false) {
+            anchor.setAttribute("aria-busy", "true");
+        } else {
+            anchor.removeAttribute("aria-busy");
+        }
+        this._sync_tab_stop(disabled, has_href);
+        return;
+    }
+
+    /*
+     * Decide the anchor's tabindex. A value on the anchor that this
+     * component did not write was set by a managing container (the
+     * roving tab stop of mj-toolbar) and is remembered. Disabled
+     * always takes the anchor out of the tab order; otherwise the
+     * container's value wins; without one, an anchor that has no
+     * href gets `0` so it stays focusable, and an anchor with href
+     * needs none.
+     */
+    _sync_tab_stop(disabled, has_href) {
+        const anchor = this._anchor;
+        const current = anchor.getAttribute("tabindex");
+        if (current !== null && current !== this._own_tabindex) {
+            this._container_tabindex = current;
+        }
+        let wanted = null;
+        let own = null;
+        if (disabled === true) {
+            wanted = "-1";
+            own = "-1";
+        } else if (this._container_tabindex !== null) {
+            wanted = this._container_tabindex;
+        } else if (has_href === false) {
+            wanted = "0";
+            own = "0";
+        }
+        if (wanted !== null) {
+            anchor.setAttribute("tabindex", wanted);
+        } else {
             anchor.removeAttribute("tabindex");
         }
+        this._own_tabindex = own;
         return;
     }
 
@@ -259,7 +382,7 @@ export class MjDownloadButton extends MjElement {
     }
 
     set disabled(value) {
-        if (value === true) {
+        if (Boolean(value) === true) {
             this.setAttribute("disabled", "");
         } else {
             this.removeAttribute("disabled");
@@ -272,10 +395,36 @@ export class MjDownloadButton extends MjElement {
     }
 
     set loading(value) {
-        if (value === true) {
+        if (Boolean(value) === true) {
             this.setAttribute("loading", "");
         } else {
             this.removeAttribute("loading");
+        }
+        return;
+    }
+
+    /*
+     * Focus the inner anchor: it is the control in every state, also
+     * when a container's roving tabindex of -1 hides it from the
+     * generic focus lookup of MjElement.
+     */
+    focus(options) {
+        if (this._anchor !== undefined && this._anchor !== null && this.hasAttribute("tabindex") === false) {
+            this._anchor.focus(options);
+        } else {
+            super.focus(options);
+        }
+        return;
+    }
+
+    /*
+     * Starts the download as a user click would (mj-download-start first).
+     * HTMLElement.click() would only dispatch a click at the host, which
+     * never reaches the inner link.
+     */
+    click() {
+        if (this._anchor !== undefined && this._anchor !== null) {
+            this._anchor.click();
         }
         return;
     }

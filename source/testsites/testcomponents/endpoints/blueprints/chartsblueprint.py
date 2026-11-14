@@ -68,6 +68,7 @@ class ChartsBlueprint(RestBlueprint):
         """
 
         tag = request.path_params.get("tag", "")
-        response = serve_component_page("charts", tag)
+        example_key = request.query_params.get("example")
+        response = serve_component_page("charts", tag, example_key=example_key)
 
         return response

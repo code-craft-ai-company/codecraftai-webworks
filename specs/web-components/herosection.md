@@ -110,15 +110,15 @@ weight implies primary importance.
 | `--mj-hero-overlay-opacity` | resolved from `overlay-opacity` | Scrim opacity |
 | `--mj-hero-content-max-width` | `--mj-breakpoint-lg` | Max width of the content region |
 | `--mj-hero-padding-block` | `--mj-space-16` | Top/bottom padding of the content |
-| `--mj-hero-heading-color` | `--mj-color-text-on-primary` | Heading text color |
-| `--mj-hero-body-color` | `--mj-color-text-on-primary-muted` | Body text color |
+| `--mj-hero-heading-color` | `--mj-text-on-accent`; `--mj-color-neutral-0` while the scrim shows | Heading text color |
+| `--mj-hero-body-color` | `--mj-text-on-accent`; `--mj-color-neutral-0` while the scrim shows | Body text color |
 | `--mj-hero-actions-gap` | `--mj-space-3` | Gap between action buttons |
 
 ## 10. States
 
 - **default** — background color, content visible.
 - **image-loaded** — background image rendered; scrim applied.
-- **image-error** — background image failed; falls back to `bg-color`; `mj-hero-bg-error` emitted.
+- **image-error** — background image (or video) failed; the scrim is removed and `bg-color` shows; `mj-hero-bg-error` emitted.
 - **video-playing** — background video playing (muted autoplay).
 - **reduced-motion** — when `prefers-reduced-motion: reduce`, background video is paused and replaced with its poster image.
 
@@ -137,9 +137,14 @@ video is paused.
 
 The scrim `<div>` is rendered between the background and the content layer with
 `position: absolute; inset: 0; background: var(--mj-hero-overlay-color);
-opacity: var(--mj-hero-overlay-opacity)`. Authors must ensure that the resulting
-contrast between heading/body text and the combined background+scrim meets the
-WCAG AA 4.5:1 ratio for normal text and 3:1 for large text.
+opacity: var(--mj-hero-overlay-opacity)`. While the scrim shows, the heading and
+body default to light text (`--mj-color-neutral-0`) in both themes, because the
+default scrim is black; `--mj-text-on-accent` (dark in the dark theme) is the
+default only over the plain accent background. Authors must ensure that the
+resulting contrast between heading/body text and the combined background+scrim
+meets the WCAG AA 4.5:1 ratio for normal text and 3:1 for large text; with a custom
+`bg-color` (which does not change the text colour) set `--mj-hero-heading-color`
+and `--mj-hero-body-color`.
 
 ## 12. Keyboard interaction
 

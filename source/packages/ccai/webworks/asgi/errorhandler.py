@@ -230,6 +230,24 @@ class ErrorHandler:
         """
         return self._custom_handlers.get(exc_type)
     
+    def has_handler_for(
+        self,
+        exc_type: Type[Exception],
+    ) -> bool:
+        """
+            Check whether a custom handler applies to an exception type.
+            
+            A handler applies when it was registered for the type itself or
+            for one of its parent classes.
+            
+            :param exc_type: The exception type to look up.
+            
+            :returns: True if a custom handler would be called for the type.
+        """
+        handler = self._find_custom_handler(exc_type)
+        rtnval = handler is not None
+        return rtnval
+    
     async def handle_http_error(
         self,
         exc: Exception,

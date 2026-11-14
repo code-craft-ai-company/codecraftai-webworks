@@ -19,6 +19,7 @@ import tempfile
 from typing import Any, Optional
 
 from ccai.webworks.templating.cache import TemplateCache
+from ccai.webworks.templating.context import ContextProcessorRegistry, GlobalContext
 from ccai.webworks.templating.exceptions import TemplateNotFoundError
 from ccai.webworks.templating.jinja2_adapter import Jinja2Adapter
 from ccai.webworks.templating.loader import TemplateLoader
@@ -1238,7 +1239,7 @@ def test_property_template_rendering_determinism_with_processors():
             context = _generate_random_context()
             
             # Build a template that uses both context and processor vars
-            parts = [f"{{{{ proc_var }}}}"]
+            parts = ["{{ proc_var }}"]
             for key in context.keys():
                 parts.append(f"{{{{ {key} }}}}")
             template_source = " | ".join(parts)
@@ -1259,6 +1260,211 @@ def test_property_template_rendering_determinism_with_processors():
                         f"but render {render_index} produced '{result}'. "
                         f"Template: '{template_source}'"
                     )
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+# =============================================================================
+# Context processors see the globals and the caller's context
+# =============================================================================
+
+def test_build_context_processor_receives_caller_context():
+    """
+        Test that a context processor is given the caller's context.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        engine = Jinja2Adapter(template_dirs=[temp_dir])
+        renderer = TemplateRenderer(engine)
+        
+        def processor(context):
+            session_id = context.get("session_id")
+            if session_id is None:
+                return {}
+            return {"csrf_token": f"token-for-{session_id}"}
+        
+        renderer.add_context_processor(processor)
+        
+        result = renderer._build_context({"session_id": "abc"}, {})
+        
+        if result.get("csrf_token") != "token-for-abc":
+            raise AssertionError(f"Expected the processor to see session_id, got {result}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_build_context_processor_receives_kwargs():
+    """
+        Test that a context processor is given the caller's keyword arguments.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        engine = Jinja2Adapter(template_dirs=[temp_dir])
+        renderer = TemplateRenderer(engine)
+        
+        seen = {}
+        
+        def processor(context):
+            seen.update(context)
+            return {}
+        
+        renderer.add_context_processor(processor)
+        
+        renderer._build_context({"a": 1, "b": 1}, {"b": 2})
+        
+        if seen != {"a": 1, "b": 2}:
+            raise AssertionError(f"Expected the processor to see context and kwargs, got {seen}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_build_context_processor_receives_earlier_processor_output():
+    """
+        Test that a processor sees what an earlier processor added.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        engine = Jinja2Adapter(template_dirs=[temp_dir])
+        renderer = TemplateRenderer(engine)
+        
+        renderer.add_context_processor(lambda context: {"first": 1})
+        renderer.add_context_processor(lambda context: {"second": context.get("first", 0) + 1})
+        
+        result = renderer._build_context(None, {})
+        
+        if result != {"first": 1, "second": 2}:
+            raise AssertionError(f"Expected {{'first': 1, 'second': 2}}, got {result}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_build_context_includes_global_context():
+    """
+        Test that GlobalContext variables reach the built context.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    GlobalContext.clear()
+    try:
+        GlobalContext.set("app_name", "My Application")
+        
+        engine = Jinja2Adapter(template_dirs=[temp_dir])
+        renderer = TemplateRenderer(engine)
+        
+        result = renderer._build_context({"title": "Home"}, {})
+        
+        if result != {"app_name": "My Application", "title": "Home"}:
+            raise AssertionError(f"Expected the global variable in the context, got {result}")
+    finally:
+        GlobalContext.clear()
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_build_context_caller_overrides_global_context():
+    """
+        Test that the caller's context takes priority over GlobalContext.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    GlobalContext.clear()
+    try:
+        GlobalContext.set("title", "Global")
+        
+        engine = Jinja2Adapter(template_dirs=[temp_dir])
+        renderer = TemplateRenderer(engine)
+        
+        result = renderer._build_context({"title": "Page"}, {})
+        
+        if result.get("title") != "Page":
+            raise AssertionError(f"Expected the caller's title, got {result}")
+    finally:
+        GlobalContext.clear()
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_string_uses_global_context():
+    """
+        Test that a template can use a GlobalContext variable.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    GlobalContext.clear()
+    try:
+        GlobalContext.set("app_name", "WebWorks")
+        
+        engine = Jinja2Adapter(template_dirs=[temp_dir])
+        renderer = TemplateRenderer(engine)
+        
+        output = renderer.render_string("{{ app_name }}")
+        
+        if output != "WebWorks":
+            raise AssertionError(f"Expected 'WebWorks', got {output!r}")
+    finally:
+        GlobalContext.clear()
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_processor_registry_registration_reaches_render():
+    """
+        Test that a processor registered with the renderer's
+        ContextProcessorRegistry runs on render.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        engine = Jinja2Adapter(template_dirs=[temp_dir])
+        renderer = TemplateRenderer(engine)
+        
+        renderer.processor_registry.register(lambda context: {"year": 2024})
+        
+        output = renderer.render_string("{{ year }}")
+        
+        if output != "2024":
+            raise AssertionError(f"Expected '2024', got {output!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_init_with_shared_processor_registry():
+    """
+        Test that a ContextProcessorRegistry passed to the constructor is
+        the one the renderer uses.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        registry = ContextProcessorRegistry()
+        registry.register(lambda context: {"shared": "yes"})
+        
+        engine = Jinja2Adapter(template_dirs=[temp_dir])
+        renderer = TemplateRenderer(engine, processor_registry=registry)
+        
+        if renderer.processor_registry is not registry:
+            raise AssertionError("The renderer should use the registry it was given")
+        
+        result = renderer._build_context(None, {})
+        
+        if result != {"shared": "yes"}:
+            raise AssertionError(f"Expected {{'shared': 'yes'}}, got {result}")
     finally:
         _cleanup_temp_dir(temp_dir)
     

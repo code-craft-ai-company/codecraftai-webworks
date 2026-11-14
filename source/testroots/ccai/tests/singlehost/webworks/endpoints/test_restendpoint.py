@@ -519,3 +519,161 @@ def test_attach_at_raises_on_missing_leaf_and_path():
     
     if "leaf" not in error_instance.missing_fields and "path" not in error_instance.missing_fields:
         raise AssertionError("Error should indicate missing leaf/path")
+
+
+# =============================================================================
+# endpoint_type, query parameters and schema classes on the descriptor
+# =============================================================================
+
+def test_attach_at_stamps_rest_endpoint_type():
+    """An endpoint declared with RestEndpoint.attach_at is marked as a REST endpoint."""
+
+    @RestEndpoint.attach_at(leaf="stamped", methods=["GET"])
+    def stamped(request):
+        return {}
+
+    registry = EndpointRegistry()
+    registry.collect_from(stamped)
+
+    assert registry.collect()[0].extras.get("endpoint_type") == "rest"
+
+
+def test_attach_at_keeps_an_explicit_endpoint_type():
+    """An endpoint_type given by the caller is not overwritten."""
+
+    @RestEndpoint.attach_at(leaf="explicit", methods=["GET"], endpoint_type="auth")
+    def explicit(request):
+        return {}
+
+    registry = EndpointRegistry()
+    registry.collect_from(explicit)
+
+    assert registry.collect()[0].extras.get("endpoint_type") == "auth"
+
+
+def test_attach_at_records_query_params():
+    """query_params declared on attach_at are recorded under extras['rest']."""
+
+    @RestEndpoint.attach_at(leaf="search", methods=["GET"], query_params={"q": str, "page": int})
+    def search(request):
+        return {}
+
+    registry = EndpointRegistry()
+    registry.collect_from(search)
+
+    assert registry.collect()[0].extras["rest"]["query_params"] == {"q": str, "page": int}
+
+
+def test_attach_at_keeps_the_schema_class_beside_the_inspected_schema():
+    """The request and response schema classes are kept next to their inspected JSON schema."""
+
+    @dataclass
+    class Payload:
+        name: str
+
+    @RestEndpoint.attach_at(leaf="typed", methods=["POST"], request_schema=Payload, response_schema=Payload)
+    def typed(request):
+        return {}
+
+    registry = EndpointRegistry()
+    registry.collect_from(typed)
+    rest_extras = registry.collect()[0].extras["rest"]
+
+    assert rest_extras["request_schema_type"] is Payload
+    assert rest_extras["response_schema_type"] is Payload
+    assert rest_extras["request_schema"]["type"] == "object"
+
+
+def test_inspected_schema_handles_pep_604_optional_field():
+    """A field written ``nick: str | None`` is inspected as nullable and not required."""
+
+    @dataclass
+    class Profile:
+        name: str
+        nick: str | None = None
+
+    schema = RestEndpoint._inspect_rest_schema(Profile)
+
+    assert schema["properties"]["nick"] == {"anyOf": [{"type": "string"}, {"type": "null"}]}
+    assert schema["required"] == ["name"]
+
+
+def test_inspected_schema_describes_nested_dataclass_field():
+    """A nested dataclass field is inspected as an object with its own properties."""
+
+    @dataclass
+    class Inner:
+        city: str
+
+    @dataclass
+    class Outer:
+        inner: Inner
+
+    schema = RestEndpoint._inspect_rest_schema(Outer)
+
+    assert schema["properties"]["inner"]["type"] == "object"
+    assert schema["properties"]["inner"]["properties"] == {"city": {"type": "string"}}
+
+
+# =============================================================================
+# rest_processing on the RestEndpoint decorators
+# =============================================================================
+
+from ccai.webworks.endpoints.descriptor import REST_MANAGED_EXTRA, REST_PROCESSING_EXTRA
+
+
+@dataclass
+class _ProcessingIn:
+    """Request schema of the rest_processing tests."""
+    name: str
+
+
+def test_restendpoint_create_marks_route_rest_managed():
+    """
+        Test that RestEndpoint.create with schemas records the route as REST managed.
+    """
+    @RestEndpoint.create(path="/rp/rest/create", request_schema=_ProcessingIn, response_schema=_ProcessingIn)
+    def create(request):
+        return None
+
+    descriptor = RestEndpoint._find_descriptors_for_handler(create)[0]
+
+    if descriptor.extras["rest"].get(REST_MANAGED_EXTRA) is not True:
+        raise AssertionError(f"Expected a REST managed route, got {descriptor.extras['rest']}")
+
+    return
+
+
+def test_restendpoint_helpers_pass_rest_processing_through():
+    """
+        Test that rest_processing=False given to a CRUD helper reaches the descriptor.
+    """
+    @RestEndpoint.update(path="/rp/rest/update", request_schema=_ProcessingIn, rest_processing=False)
+    def update(request):
+        return None
+
+    descriptor = RestEndpoint._find_descriptors_for_handler(update)[0]
+
+    if descriptor.extras["rest"].get(REST_PROCESSING_EXTRA) is not False:
+        raise AssertionError(f"Expected the opt-out, got {descriptor.extras['rest']}")
+
+    if "rest_processing" in descriptor.extras:
+        raise AssertionError("Expected rest_processing not to leak into the free-form extras")
+
+    return
+
+
+def test_restendpoint_route_with_only_query_params_is_not_managed():
+    """
+        Test that documenting query parameters alone does not make a route REST managed.
+    """
+    @RestEndpoint.read(path="/rp/rest/search", query_params={"q": str})
+    def search(request):
+        return None
+
+    descriptor = RestEndpoint._find_descriptors_for_handler(search)[0]
+
+    if REST_MANAGED_EXTRA in descriptor.extras["rest"]:
+        raise AssertionError(f"Expected a route with only query parameters not to be managed, got {descriptor.extras['rest']}")
+
+    return

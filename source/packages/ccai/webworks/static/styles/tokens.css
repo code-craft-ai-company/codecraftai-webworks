@@ -9,7 +9,13 @@
  * Theming: set `data-theme="light|dark"` on a host element (usually <html> or
  * an <mj-app-shell>) to switch palettes. Tokens cascade through Shadow DOM via
  * inheritance, so component styles pick them up automatically. forced-colors
- * is honored at the bottom of this file.
+ * is honored by the shared base stylesheet (base.css / core/basestyles.js),
+ * which maps the border and focus-ring tokens to system colours.
+ *
+ * Contrast targets (WCAG 2.2): text tokens 4.5:1 and --mj-border-strong (the
+ * boundary of every input control) 3:1 against --mj-bg, --mj-bg-subtle and
+ * --mj-bg-muted in both palettes; status foregrounds 4.5:1 against their
+ * status surfaces, --mj-surface and --mj-surface-raised.
  */
 
 :root,
@@ -59,15 +65,37 @@
   --mj-surface: var(--mj-color-neutral-0);
   --mj-surface-raised: var(--mj-color-neutral-0);
   --mj-border: var(--mj-color-neutral-200);
-  --mj-border-strong: var(--mj-color-neutral-300);
+  /* Control boundaries need 3:1 against the page backgrounds (WCAG 1.4.11). */
+  --mj-border-strong: #828997;
   --mj-text: var(--mj-color-neutral-900);
-  --mj-text-muted: var(--mj-color-neutral-500);
+  /* 4.5:1 or better on --mj-bg, --mj-bg-subtle and --mj-bg-muted. */
+  --mj-text-muted: #5f6673;
   --mj-text-on-accent: #ffffff;
   --mj-accent: var(--mj-color-accent-500);
   --mj-accent-hover: var(--mj-color-accent-600);
   --mj-accent-active: var(--mj-color-accent-700);
   --mj-focus-ring: var(--mj-color-accent-400);
   --mj-overlay-scrim: rgba(20, 24, 31, 0.55);
+
+  /*
+   * ---- Data visualisation ----
+   * Categorical series colours (the same values as SERIES_PALETTE in
+   * javascript/charts/core/scales.js, which falls back to them when a token
+   * is not defined), the de-emphasised "secondary" series (committed bars,
+   * baselines) and the geographic map fills.
+   */
+  --mj-chart-series-1: #2a78d6;
+  --mj-chart-series-2: #eb6834;
+  --mj-chart-series-3: #199e70;
+  --mj-chart-series-4: #c98500;
+  --mj-chart-series-5: #d55181;
+  --mj-chart-series-6: #008300;
+  --mj-chart-series-7: #6250d6;
+  --mj-chart-series-8: #e34948;
+  --mj-chart-series-secondary: var(--mj-bg-muted);
+  --mj-chart-series-secondary-border: var(--mj-border-strong);
+  --mj-chart-geo-land: color-mix(in oklab, var(--mj-text) 7%, var(--mj-surface));
+  --mj-chart-geo-no-data: color-mix(in oklab, var(--mj-text) 16%, var(--mj-surface));
 
   /* ---- Spacing scale (4px base) ---- */
   --mj-space-0: 0;
@@ -132,6 +160,11 @@
   --mj-layer-tooltip: 1400;
 }
 
+/*
+ * The dark palette. The same declarations appear twice: for an explicit
+ * data-theme="dark" and, below, for the OS preference when no data-theme is
+ * set. Keep the two blocks identical.
+ */
 [data-theme="dark"] {
   color-scheme: dark;
 
@@ -141,16 +174,23 @@
   --mj-surface: var(--mj-color-neutral-800);
   --mj-surface-raised: var(--mj-color-neutral-700);
   --mj-border: var(--mj-color-neutral-700);
-  --mj-border-strong: var(--mj-color-neutral-600);
+  --mj-border-strong: #858d9d;
   --mj-text: var(--mj-color-neutral-50);
-  --mj-text-muted: var(--mj-color-neutral-400);
-  --mj-text-on-accent: #ffffff;
-  --mj-accent: var(--mj-color-accent-400);
-  --mj-accent-hover: var(--mj-color-accent-300);
-  --mj-accent-active: var(--mj-color-accent-200);
-  --mj-focus-ring: var(--mj-color-accent-300);
+  --mj-text-muted: #a7aebd;
+  --mj-text-on-accent: var(--mj-color-neutral-900);
+  /* accent-300: as text 6.2:1 on --mj-surface and 4.7:1 on --mj-surface-raised
+     (accent-400 was 4.1:1 and 3.1:1); --mj-text-on-accent on it is 7.6:1. */
+  --mj-accent: var(--mj-color-accent-300);
+  --mj-accent-hover: var(--mj-color-accent-200);
+  --mj-accent-active: var(--mj-color-accent-100);
+  --mj-focus-ring: var(--mj-color-accent-200);
   --mj-overlay-scrim: rgba(0, 0, 0, 0.68);
 
+  /* Status foregrounds: 4.5:1 or better on their surfaces, --mj-surface and --mj-surface-raised. */
+  --mj-color-info: #8ab4ff;
+  --mj-color-success: #4ade80;
+  --mj-color-warning: #fbbf24;
+  --mj-color-danger: #fa8a8a;
   --mj-color-info-surface: #16243f;
   --mj-color-success-surface: #15301f;
   --mj-color-warning-surface: #3a2a12;
@@ -159,24 +199,72 @@
   --mj-elevation-1: 0 1px 2px rgba(0, 0, 0, 0.5);
   --mj-elevation-2: 0 2px 8px rgba(0, 0, 0, 0.55);
   --mj-elevation-3: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+  /* Data visualisation (see the light block). */
+  --mj-chart-series-1: #3987e5;
+  --mj-chart-series-2: #d95926;
+  --mj-chart-series-3: #199e70;
+  --mj-chart-series-4: #c98500;
+  --mj-chart-series-5: #d55181;
+  --mj-chart-series-6: #008a00;
+  --mj-chart-series-7: #9085e9;
+  --mj-chart-series-8: #e66767;
+  --mj-chart-series-secondary: var(--mj-bg-muted);
+  --mj-chart-series-secondary-border: var(--mj-border-strong);
+  --mj-chart-geo-land: color-mix(in oklab, var(--mj-text) 7%, var(--mj-surface));
+  --mj-chart-geo-no-data: color-mix(in oklab, var(--mj-text) 16%, var(--mj-surface));
 }
 
 /* Respect the OS preference when no explicit data-theme is set. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
+
     --mj-bg: var(--mj-color-neutral-900);
     --mj-bg-subtle: var(--mj-color-neutral-800);
     --mj-bg-muted: var(--mj-color-neutral-700);
     --mj-surface: var(--mj-color-neutral-800);
     --mj-surface-raised: var(--mj-color-neutral-700);
     --mj-border: var(--mj-color-neutral-700);
-    --mj-border-strong: var(--mj-color-neutral-600);
+    --mj-border-strong: #858d9d;
     --mj-text: var(--mj-color-neutral-50);
-    --mj-text-muted: var(--mj-color-neutral-400);
-    --mj-accent: var(--mj-color-accent-400);
-    --mj-focus-ring: var(--mj-color-accent-300);
+    --mj-text-muted: #a7aebd;
+    --mj-text-on-accent: var(--mj-color-neutral-900);
+    /* accent-300: as text 6.2:1 on --mj-surface and 4.7:1 on --mj-surface-raised
+       (accent-400 was 4.1:1 and 3.1:1); --mj-text-on-accent on it is 7.6:1. */
+    --mj-accent: var(--mj-color-accent-300);
+    --mj-accent-hover: var(--mj-color-accent-200);
+    --mj-accent-active: var(--mj-color-accent-100);
+    --mj-focus-ring: var(--mj-color-accent-200);
     --mj-overlay-scrim: rgba(0, 0, 0, 0.68);
+
+    /* Status foregrounds: 4.5:1 or better on their surfaces, --mj-surface and --mj-surface-raised. */
+    --mj-color-info: #8ab4ff;
+    --mj-color-success: #4ade80;
+    --mj-color-warning: #fbbf24;
+    --mj-color-danger: #fa8a8a;
+    --mj-color-info-surface: #16243f;
+    --mj-color-success-surface: #15301f;
+    --mj-color-warning-surface: #3a2a12;
+    --mj-color-danger-surface: #3a1b1b;
+
+    --mj-elevation-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --mj-elevation-2: 0 2px 8px rgba(0, 0, 0, 0.55);
+    --mj-elevation-3: 0 8px 24px rgba(0, 0, 0, 0.6);
+
+    /* Data visualisation (see the light block). */
+    --mj-chart-series-1: #3987e5;
+    --mj-chart-series-2: #d95926;
+    --mj-chart-series-3: #199e70;
+    --mj-chart-series-4: #c98500;
+    --mj-chart-series-5: #d55181;
+    --mj-chart-series-6: #008a00;
+    --mj-chart-series-7: #9085e9;
+    --mj-chart-series-8: #e66767;
+    --mj-chart-series-secondary: var(--mj-bg-muted);
+    --mj-chart-series-secondary-border: var(--mj-border-strong);
+    --mj-chart-geo-land: color-mix(in oklab, var(--mj-text) 7%, var(--mj-surface));
+    --mj-chart-geo-no-data: color-mix(in oklab, var(--mj-text) 16%, var(--mj-surface));
   }
 }
 

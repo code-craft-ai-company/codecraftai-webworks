@@ -17,12 +17,14 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from ccai.webworks.endpoints.descriptor import EndpointDescriptor
 from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.restblueprint import RestBlueprint, Router
 from ccai.webworks.openapi.assets import AssetResolver
+from ccai.webworks.openapi.swaggerui import get_requested_filename, make_asset_response
+from ccai.webworks.routing.response import Response
 
 if TYPE_CHECKING:
     from ccai.webworks.openapi.generator import OpenAPIGenerator
@@ -89,7 +91,51 @@ class ReDocBlueprint(RestBlueprint):
         self.redoc_config = redoc_config
         self._asset_resolver = AssetResolver()
 
+        # A configured blueprint is registered through the instance:
+        # ``blueprint.register(router)``. The class-level ``register`` cannot
+        # know which instance to serve, so on an instance the name refers to
+        # :meth:`register_instance`. That is also what lets an application
+        # hand the instance to ``attach_blueprint_to_route``.
+        self.register = self.register_instance
+
         return
+
+    def register_instance(self, router: Optional[Router] = None) -> List[EndpointDescriptor]:
+        """
+            Register this blueprint's routes -- the ReDoc page and the
+            static assets -- and return their descriptors.
+
+            :param router: Optional router to add the routes to.
+
+            :returns: A list of EndpointDescriptor objects for the routes.
+        """
+        descriptors = type(self).register(router=router, instance=self)
+        return descriptors
+
+    def handle_ui(self, request: Any = None) -> Response:
+        """
+            Route handler for the ReDoc page.
+
+            :param request: The incoming request (not used).
+
+            :returns: The HTML page as a response.
+        """
+        response = make_asset_response(self.serve_ui())
+        return response
+
+    def handle_static(self, request: Any) -> Response:
+        """
+            Route handler for the bundled static assets. The file name is
+            the ``filename`` path parameter of the request.
+
+            :param request: The incoming request.
+
+            :returns: The asset as a response, or a 404 response when the
+                name is not one of the bundled files.
+        """
+        filename = get_requested_filename(request)
+        response = make_asset_response(self.serve_static(filename))
+        return response
 
     def serve_ui(self) -> Tuple[str, int, Dict[str, str]]:
         """
@@ -182,7 +228,7 @@ class ReDocBlueprint(RestBlueprint):
                 UI and static asset routes.
         """
         ui_descriptor = EndpointDescriptor(
-            handler=self.serve_ui,
+            handler=self.handle_ui,
             module=self.__class__.__module__,
             path=self.ui_path,
             methods=["GET"],
@@ -194,9 +240,9 @@ class ReDocBlueprint(RestBlueprint):
         )
 
         static_descriptor = EndpointDescriptor(
-            handler=self.serve_static,
+            handler=self.handle_static,
             module=self.__class__.__module__,
-            path=self.static_path + "/<filename>",
+            path=self.static_path + "/{filename}",
             methods=["GET"],
             tags=["documentation"],
             doc=Doc(

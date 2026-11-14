@@ -9,7 +9,9 @@
     on Content-Type header, supporting form-encoded, multipart, and JSON bodies.
 """
 
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+import re
+from io import BytesIO
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from ccai.webworks.wsgi.constants import (
     ENVIRON_REQUEST,
@@ -21,6 +23,15 @@ from ccai.webworks.wsgi.bodyparser import RequestBodyParser, UploadedFile
 
 if TYPE_CHECKING:
     from ccai.webworks.routing.request import Request
+
+
+# Number of bytes read from wsgi.input at a time when the size of the body
+# is not known in advance
+READ_CHUNK_SIZE: int = 65536
+
+# A Host header value: a host name, an IPv4 address or a bracketed IPv6
+# address, optionally followed by a port
+HOST_HEADER_PATTERN = re.compile(r"(?P<host>[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(:(?P<port>[0-9]{1,5}))?")
 
 
 class EnvironParser:
@@ -91,6 +102,17 @@ class EnvironParser:
         """
         path = environ.get("PATH_INFO", self.DEFAULT_PATH)
         rtnval = str(path) if path is not None else self.DEFAULT_PATH
+        
+        # PEP 3333 carries the bytes of the path in a native string, one
+        # character per byte (latin-1). A path sent as UTF-8 has to be turned
+        # back into bytes and decoded, otherwise every character outside of
+        # ASCII arrives as two or more wrong ones. A path that is not such a
+        # string, or is not valid UTF-8, is left as it is.
+        try:
+            rtnval = rtnval.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+        
         return rtnval
     
     def get_query_string(self, environ: Dict[str, Any]) -> str:
@@ -117,43 +139,88 @@ class EnvironParser:
         rtnval = str(scheme).lower() if scheme is not None else self.DEFAULT_SCHEME
         return rtnval
     
+    def _parse_host_header(self, environ: Dict[str, Any]) -> Tuple[Optional[str], Optional[int]]:
+        """
+            Split the Host header of the request into host and port.
+            
+            :param environ: WSGI environ dictionary.
+            
+            :returns: Tuple of (host, port). The host is None when there is no
+                      usable Host header, the port is None when the header
+                      does not name one.
+        """
+        host: Optional[str] = None
+        port: Optional[int] = None
+        
+        host_header = environ.get("HTTP_HOST")
+        if host_header is not None:
+            match = HOST_HEADER_PATTERN.fullmatch(str(host_header).strip())
+            if match is not None:
+                host = match.group("host")
+                port_str = match.group("port")
+                if port_str is not None:
+                    port = int(port_str)
+        
+        rtnval = (host, port)
+        return rtnval
+    
     def get_host(self, environ: Dict[str, Any]) -> str:
         """
             Extract server host from environ.
+            
+            The host the client asked for, from the Host header, is preferred.
+            SERVER_NAME is the address the server listens on (often 0.0.0.0)
+            and is only used when the request has no usable Host header.
             
             :param environ: WSGI environ dictionary.
             
             :returns: Server host string (e.g., 'localhost', 'example.com').
         """
-        host = environ.get("SERVER_NAME", self.DEFAULT_HOST)
-        rtnval = str(host) if host is not None else self.DEFAULT_HOST
+        header_host, _ = self._parse_host_header(environ)
+        
+        if header_host is not None:
+            rtnval = header_host
+        else:
+            host = environ.get("SERVER_NAME", self.DEFAULT_HOST)
+            rtnval = str(host) if host is not None else self.DEFAULT_HOST
+        
         return rtnval
     
     def get_port(self, environ: Dict[str, Any]) -> int:
         """
             Extract server port from environ.
             
+            The port comes with the host: when the Host header is used, its
+            port is used, or the default port of the scheme if it names none.
+            SERVER_PORT is used when the request has no usable Host header.
+            
             :param environ: WSGI environ dictionary.
             
             :returns: Server port number.
         """
-        port_str = environ.get("SERVER_PORT")
-        
-        if port_str is None:
-            scheme = self.get_scheme(environ)
-            if scheme == "https":
-                rtnval = self.DEFAULT_HTTPS_PORT
-            else:
-                rtnval = self.DEFAULT_PORT
+        scheme = self.get_scheme(environ)
+        if scheme == "https":
+            default_port = self.DEFAULT_HTTPS_PORT
         else:
-            try:
-                rtnval = int(port_str)
-            except (ValueError, TypeError):
-                scheme = self.get_scheme(environ)
-                if scheme == "https":
-                    rtnval = self.DEFAULT_HTTPS_PORT
-                else:
-                    rtnval = self.DEFAULT_PORT
+            default_port = self.DEFAULT_PORT
+        
+        header_host, header_port = self._parse_host_header(environ)
+        
+        if header_host is not None:
+            if header_port is not None:
+                rtnval = header_port
+            else:
+                rtnval = default_port
+        else:
+            port_str = environ.get("SERVER_PORT")
+            
+            if port_str is None:
+                rtnval = default_port
+            else:
+                try:
+                    rtnval = int(port_str)
+                except (ValueError, TypeError):
+                    rtnval = default_port
         
         return rtnval
     
@@ -236,6 +303,10 @@ class EnvironParser:
                     rtnval = int(content_length_str)
                 except (ValueError, TypeError):
                     rtnval = None
+                
+                # A negative length is as invalid as one that is not a number
+                if rtnval is not None and rtnval < 0:
+                    rtnval = None
         
         return rtnval
     
@@ -243,8 +314,14 @@ class EnvironParser:
         """
             Read request body from wsgi.input.
             
-            Respects CONTENT_LENGTH if present. If CONTENT_LENGTH is not present,
-            reads until EOF. Enforces max_body_size if configured.
+            Reads exactly CONTENT_LENGTH bytes when it is present. A request
+            without a valid CONTENT_LENGTH has no body, unless the server
+            states with 'wsgi.input_terminated' that the stream ends with the
+            body. Without that statement a read to the end of the stream waits
+            for the client to close the connection, on every server that
+            hands the socket through as wsgi.input.
+            
+            Enforces max_body_size if configured.
             
             :param environ: WSGI environ dictionary.
             
@@ -262,24 +339,34 @@ class EnvironParser:
         
         content_length = self.get_content_length(environ)
         
-        # Check size limit before reading if content length is known
         if content_length is not None:
+            # Check size limit before reading
             if self._max_body_size > 0 and content_length > self._max_body_size:
                 raise RequestEntityTooLarge(self._max_body_size, content_length)
-        
-        if content_length is not None:
+            
             # Read exactly content_length bytes
             body = wsgi_input.read(content_length)
+        elif environ.get("wsgi.input_terminated") is True:
+            # The stream ends with the body. Read in bounded steps and stop
+            # as soon as the limit is passed.
+            parts: List[bytes] = []
+            total_size = 0
+            
+            while True:
+                chunk = wsgi_input.read(READ_CHUNK_SIZE)
+                if chunk is None or len(chunk) == 0:
+                    break
+                
+                total_size += len(chunk)
+                if self._max_body_size > 0 and total_size > self._max_body_size:
+                    raise RequestEntityTooLarge(self._max_body_size, total_size)
+                
+                parts.append(chunk)
+            
+            body = b"".join(parts)
         else:
-            # No content length, read until EOF but respect max size
-            if self._max_body_size > 0:
-                # Read up to max_body_size + 1 to detect overflow
-                body = wsgi_input.read(self._max_body_size + 1)
-                if len(body) > self._max_body_size:
-                    raise RequestEntityTooLarge(self._max_body_size, len(body))
-            else:
-                # No limit, read all
-                body = wsgi_input.read()
+            # No length and no promise that the stream ends: no body
+            body = b""
         
         # Ensure we return bytes
         if isinstance(body, bytes):
@@ -318,12 +405,15 @@ class EnvironParser:
             return rtnval
         
         content_type = self.get_content_type(environ)
-        content_length = self.get_content_length(environ)
+        
+        # The body is read here, where the environ says how much of the
+        # stream belongs to it, and handed to the parser complete.
+        body = self.get_body(environ)
         
         raw_body, parsed_data = self._body_parser.parse(
-            wsgi_input,
+            BytesIO(body),
             content_type,
-            content_length
+            len(body)
         )
         
         rtnval = (raw_body, parsed_data)
@@ -395,12 +485,15 @@ class EnvironParser:
             return rtnval
         
         content_type = self.get_content_type(environ) or "multipart/form-data"
-        content_length = self.get_content_length(environ)
+        
+        # The body is read here, where the environ says how much of the
+        # stream belongs to it, and handed to the parser complete.
+        body = self.get_body(environ)
         
         rtnval = self._body_parser.parse_multipart(
-            wsgi_input,
+            BytesIO(body),
             content_type,
-            content_length
+            len(body)
         )
         return rtnval
 
@@ -437,6 +530,9 @@ class EnvironParser:
 
         query_string_bytes = query_string.encode("utf-8") if isinstance(query_string, str) else query_string
 
+        # The environ is passed as the scope of the request, so what
+        # middleware stored in it (for example the authentication context
+        # under 'auth') reaches the handler through the request.
         request = Request(
             method=method,
             path=path,
@@ -445,7 +541,8 @@ class EnvironParser:
             body=body,
             scheme=scheme,
             host=host,
-            port=port
+            port=port,
+            scope=environ
         )
         
         return request

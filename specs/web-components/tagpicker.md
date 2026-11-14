@@ -115,10 +115,10 @@
 | Suggestion focused | Option highlighted | `aria-activedescendant` on input |
 | Loading | Spinner in popup | `aria-busy="true"` on listbox |
 | No results | No-results slot | Status live region |
-| Max count reached | Input disabled; max-count hint | Live region: "Maximum N tags reached" |
+| Max count reached | Input stays focusable and is described by the max-count hint; suggestions do not open | Live region: "Maximum N tags reached" when an add is attempted |
 | Token focused | Token has focus ring | Natural tab focus on token remove button |
 | Disabled | Container muted; no interactions | `aria-disabled="true"` |
-| Readonly | Tokens shown without remove buttons | `aria-readonly="true"` |
+| Readonly | Tokens shown without remove buttons | The combobox input is `readonly` |
 | Invalid | Error border on container | `aria-invalid="true"` |
 
 ## 11. Behavior & interactions
@@ -128,7 +128,7 @@
 - In `free-text` mode, pressing Enter or the configured `delimiter` character commits the current input text as a token.
 - Pressing Backspace in an empty input focuses the last token's remove button; pressing Backspace again (or Delete) removes that token.
 - Each token's remove button removes the token and fires `mj-token-remove` then `mj-change`.
-- If `max-count` is reached, the input is disabled and the popup does not open; `mj-max-count` fires when an add is attempted.
+- If `max-count` is reached, the input stays enabled (so Backspace still reaches the tokens) and is described by the max-count hint (`aria-describedby`); the popup does not open, and Enter on typed text or a delimiter fires `mj-max-count`, announces the limit and keeps the typed text.
 - Duplicate values are rejected unless `duplicate-values` is set; `mj-token-add` fires and can be canceled by the author.
 - In `type="person"` mode, each option row shows an avatar (image or initials fallback) and the token chip includes the avatar.
 

@@ -24,6 +24,11 @@ Each entry uses this format:
   has no meaningful orientation.
 - **Variants / modes:** related catalog names satisfied by an attribute mode
   of this renderer, if any.
+- **Events:** the interaction events the renderer emits for this type, each
+  with its `detail` keys (`mj-chart-bar-click` `{ series, category, value }`),
+  fired on click and on Enter / Space on a focused mark unless stated; `none`
+  when it emits none. Each type keeps its own event names (there is no common
+  point event); the controller's own events are in `../web-components/chart.md`.
 - **Phase:** P0–P5 per the plan's phasing.
 - **Notes:** anything implementation-relevant (scales used, layout engine,
   accessibility specifics, reuse of another renderer).

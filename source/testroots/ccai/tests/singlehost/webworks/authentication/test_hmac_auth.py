@@ -560,7 +560,7 @@ def test_hmac_authenticator_invalid_signature():
     # Create authorization header with WRONG signature
     auth_header = create_hmac_auth_header(
         key_id=key_id,
-        signature="invalid-signature",
+        signature="0" * 64,
         timestamp=timestamp,
         algorithm="HMAC-SHA256",
         signed_headers=signed_headers
@@ -595,8 +595,9 @@ def test_hmac_authenticator_unknown_key():
     
     auth_header = create_hmac_auth_header(
         key_id="unknown-key",
-        signature="some-signature",
-        timestamp=timestamp
+        signature="0" * 64,
+        timestamp=timestamp,
+        signed_headers=["host", "date"]
     )
     
     request = MockRequest(headers={"Authorization": auth_header})
@@ -973,5 +974,263 @@ def test_property_24_hmac_timestamp_window_enforcement():
         if result.context is not None:
             errmsg = f"Iteration {iteration}: Expected no context on failure"
             raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Signature Coverage, Signed Headers and Replay Protection
+# =============================================================================
+
+from ccai.webworks.routing.headers import Headers
+
+
+class SignedMockRequest(MockRequest):
+    """
+        A mock request that also exposes a query string and a body.
+    """
+    
+    def __init__(
+        self,
+        headers: Optional[Dict[str, str]] = None,
+        method: str = "GET",
+        path: str = "/",
+        query_string: str = "",
+        body: bytes = b""
+    ):
+        super().__init__(headers=headers, method=method, path=path)
+        self.query_string = query_string
+        self.body = body
+
+
+SIGNING_KEY_ID = "signing-key"
+SIGNING_SECRET = "signing-secret"
+
+
+def create_signing_authenticator(signed_headers=None) -> HMACAuthenticator:
+    """
+        Create an HMAC authenticator that knows one signing key.
+    """
+    key_store = MockHMACKeyStore()
+    key_store.add_key(SIGNING_KEY_ID, SIGNING_SECRET)
+    
+    if signed_headers is None:
+        signed_headers = ["host"]
+    
+    return HMACAuthenticator(key_store, signed_headers=signed_headers)
+
+
+def build_signed_request(
+    method: str = "POST",
+    path: str = "/payments",
+    query_string: str = "account=1",
+    body: bytes = b'{"amount": 10}',
+    headers: Optional[Dict[str, str]] = None,
+    signed_headers: Optional[list] = None,
+    timestamp: Optional[str] = None
+) -> SignedMockRequest:
+    """
+        Build a request with a valid HMAC Authorization header.
+    """
+    if headers is None:
+        headers = {"host": "example.com"}
+    if signed_headers is None:
+        signed_headers = ["host"]
+    if timestamp is None:
+        timestamp = str(time.time())
+    
+    signature = compute_hmac_signature(
+        secret=SIGNING_SECRET,
+        method=method,
+        path=path,
+        timestamp=timestamp,
+        headers=headers,
+        signed_headers=signed_headers,
+        query_string=query_string,
+        body=body
+    )
+    auth_header = create_hmac_auth_header(
+        key_id=SIGNING_KEY_ID,
+        signature=signature,
+        timestamp=timestamp,
+        signed_headers=signed_headers
+    )
+    
+    request_headers = dict(headers)
+    request_headers["Authorization"] = auth_header
+    
+    return SignedMockRequest(
+        headers=request_headers,
+        method=method,
+        path=path,
+        query_string=query_string,
+        body=body
+    )
+
+
+def test_hmac_authenticator_accepts_request_signed_with_query_and_body():
+    """
+        Test that a signature computed over the query string and the body
+        verifies.
+    """
+    authenticator = create_signing_authenticator()
+    
+    result = run_async(authenticator.authenticate(build_signed_request()))
+    
+    if result.status != AuthenticationStatus.SUCCESS:
+        errmsg = f"Expected SUCCESS, got {result.status} ({result.error_code})"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_hmac_authenticator_rejects_changed_query_string():
+    """
+        Test that changing the query string of a signed request
+        invalidates the signature.
+    """
+    authenticator = create_signing_authenticator()
+    
+    request = build_signed_request()
+    request.query_string = "account=2"
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.error_code != "invalid_signature":
+        errmsg = f"Expected invalid_signature, got {result.status} ({result.error_code})"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_hmac_authenticator_rejects_changed_body():
+    """
+        Test that changing the body of a signed request invalidates the
+        signature.
+    """
+    authenticator = create_signing_authenticator()
+    
+    request = build_signed_request()
+    request.body = b'{"amount": 10000}'
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.error_code != "invalid_signature":
+        errmsg = f"Expected invalid_signature, got {result.status} ({result.error_code})"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_hmac_authenticator_rejects_replayed_request():
+    """
+        Test that a signed request is accepted once and refused when it is
+        sent again inside the timestamp window.
+    """
+    authenticator = create_signing_authenticator()
+    request = build_signed_request()
+    
+    first = run_async(authenticator.authenticate(request))
+    if first.status != AuthenticationStatus.SUCCESS:
+        errmsg = f"Expected SUCCESS for the first use, got {first.status}"
+        raise AssertionError(errmsg)
+    
+    second = run_async(authenticator.authenticate(request))
+    if second.error_code != "replay_detected":
+        errmsg = f"Expected replay_detected, got {second.status} ({second.error_code})"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_hmac_authenticator_rejects_request_that_omits_required_signed_header():
+    """
+        Test that a client cannot leave a header the server is configured
+        to protect out of the signed set.
+    """
+    authenticator = create_signing_authenticator(signed_headers=["host", "date"])
+    
+    request = build_signed_request(signed_headers=["host"])
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = f"Expected FAILURE, got {result.status}"
+        raise AssertionError(errmsg)
+    
+    if result.error_code != "invalid_signature":
+        errmsg = f"Expected invalid_signature, got {result.error_code}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_hmac_authenticator_reads_signed_headers_from_headers_object():
+    """
+        Test that signed header values are read from the framework Headers
+        class, which is not a dict.
+    """
+    authenticator = create_signing_authenticator()
+    
+    request = build_signed_request()
+    request.headers = Headers(request.headers)
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.status != AuthenticationStatus.SUCCESS:
+        errmsg = f"Expected SUCCESS with a Headers object, got {result.status} ({result.error_code})"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_hmac_authenticator_rejects_nan_timestamp():
+    """
+        Test that a timestamp of "nan" does not slip past the freshness
+        check.
+    """
+    authenticator = create_signing_authenticator()
+    
+    request = build_signed_request(timestamp="nan")
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.error_code != "invalid_timestamp":
+        errmsg = f"Expected invalid_timestamp, got {result.status} ({result.error_code})"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_hmac_authenticator_non_ascii_signature_fails_without_error():
+    """
+        Test that a signature containing non-ASCII characters is answered
+        with FAILURE instead of raising from the constant-time compare.
+    """
+    authenticator = create_signing_authenticator()
+    
+    auth_header = create_hmac_auth_header(
+        key_id=SIGNING_KEY_ID,
+        signature="\u00e9" * 64,
+        timestamp=str(time.time()),
+        signed_headers=["host"]
+    )
+    request = SignedMockRequest(
+        headers={"host": "example.com", "Authorization": auth_header}
+    )
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = f"Expected FAILURE, got {result.status}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_hmac_authenticator_declares_that_it_needs_the_body():
+    """
+        Test that the authenticator tells the middleware to buffer the
+        request body.
+    """
+    authenticator = create_signing_authenticator()
+    
+    if authenticator.requires_body is not True:
+        errmsg = "Expected requires_body to be True"
+        raise AssertionError(errmsg)
     
     return

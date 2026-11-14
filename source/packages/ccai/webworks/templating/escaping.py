@@ -76,27 +76,69 @@ class SafeString(str):
     
     def __add__(self, other: Union[str, "SafeString"]) -> "SafeString":
         """
-            Concatenate with another string, preserving SafeString type.
+            Concatenate with another string, escaping it unless it is safe.
             
-            When concatenating a SafeString with another string, the result
-            is also a SafeString. This allows chaining safe content together
-            while maintaining the safe status.
+            The result is a SafeString, so only content that is known to be
+            safe may go into it unchanged. An operand that implements the
+            ``__html__`` protocol (another SafeString, a Jinja2 Markup) is
+            appended as it is; any other string is HTML-escaped first. This
+            is what ``markupsafe.Markup`` does, and it is what keeps
+            ``safe("<b>") + user_input + safe("</b>")`` from emitting the
+            user input verbatim.
             
-            :param other: String to concatenate.
+            :param other: String to append.
             
-            :returns: New SafeString with concatenated content.
+            :returns: New SafeString with the concatenated content, or
+                NotImplemented when ``other`` is not a string.
         """
-        return SafeString(super().__add__(other))
+        result = NotImplemented
+        
+        if isinstance(other, str) or hasattr(other, "__html__"):
+            other_markup = _to_safe_markup(other)
+            result = SafeString(super().__add__(other_markup))
+        
+        return result
     
     def __radd__(self, other: Union[str, "SafeString"]) -> "SafeString":
         """
-            Concatenate with another string (reversed), preserving SafeString type.
+            Concatenate with another string (reversed), escaping it unless it is safe.
+            
+            The left operand is treated as :meth:`__add__` treats the right
+            one: appended unchanged when it implements ``__html__`` and
+            HTML-escaped otherwise.
             
             :param other: String to prepend.
             
-            :returns: New SafeString with concatenated content.
+            :returns: New SafeString with the concatenated content, or
+                NotImplemented when ``other`` is not a string.
         """
-        return SafeString(other.__add__(self))
+        result = NotImplemented
+        
+        if isinstance(other, str) or hasattr(other, "__html__"):
+            other_markup = _to_safe_markup(other)
+            result = SafeString(other_markup + str(self))
+        
+        return result
+
+
+def _to_safe_markup(value: Any) -> str:
+    """
+        Get the HTML-safe text for an operand joined to a SafeString.
+        
+        A value that implements the ``__html__`` protocol has declared its
+        content safe, so that content is used unchanged. Every other value
+        is HTML-escaped.
+        
+        :param value: The operand being concatenated with a SafeString.
+        
+        :returns: Plain ``str`` text that is safe to place in HTML.
+    """
+    if hasattr(value, "__html__"):
+        markup = str(value.__html__())
+    else:
+        markup = escape(value)
+    
+    return markup
 
 
 def safe(value: str) -> SafeString:
@@ -166,7 +208,7 @@ def escape(value: str) -> str:
     return result
 
 
-def escape_json(value: Any) -> str:
+def escape_json(value: Any) -> SafeString:
     """
         Escape a value for safe embedding in JavaScript.
         
@@ -178,11 +220,22 @@ def escape_json(value: Any) -> str:
         - < -> \\u003c (prevents </script> injection)
         - > -> \\u003e (prevents script tag issues)
         - & -> \\u0026 (prevents HTML entity issues)
+        - ' -> \\u0027 (keeps the JSON inside a single-quoted HTML attribute)
+        - U+2028 / U+2029 -> \\u2028 / \\u2029 (line terminators in JavaScript)
+        
+        The result contains none of the characters that end a script block
+        or start an HTML entity, so it is returned as a :class:`SafeString`:
+        an auto-escaping template engine emits it unchanged instead of
+        turning its double quotes into entities, which would break the
+        JavaScript. It is still JSON and parses to the same value.
+        
+        The double quote is not escaped, so in an HTML attribute the value
+        must be placed inside single quotes.
         
         :param value: Value to escape. Can be any JSON-serializable type
             (str, int, float, bool, None, list, dict).
         
-        :returns: JSON-escaped string safe for embedding in JavaScript.
+        :returns: JSON-escaped SafeString safe for embedding in JavaScript.
         
         Example usage::
         
@@ -203,8 +256,11 @@ def escape_json(value: Any) -> str:
     json_str = json_str.replace("<", "\\u003c")
     json_str = json_str.replace(">", "\\u003e")
     json_str = json_str.replace("&", "\\u0026")
+    json_str = json_str.replace("'", "\\u0027")
+    json_str = json_str.replace("\u2028", "\\u2028")
+    json_str = json_str.replace("\u2029", "\\u2029")
     
-    return json_str
+    return SafeString(json_str)
 
 
 def escape_url(value: str) -> str:

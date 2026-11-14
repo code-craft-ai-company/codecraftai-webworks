@@ -13,7 +13,7 @@
 
 import logging
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ccai.webworks.extensibility.exceptions import ExtensionPointError
 from ccai.webworks.extensibility.hookmanager import HookManager
@@ -157,19 +157,61 @@ class ComponentRegistrationHooks:
         isolation by catching exceptions from individual callbacks and
         continuing with the remaining callbacks.
 
+        A component is made available through the framework's own registry
+        by a *forwarder*: a callable given for the hook name that hands the
+        component to that registry. A :class:`WebApplication` forwards
+        middleware to its :class:`MiddlewareRegistry`, authentication
+        providers to its :class:`AuthenticationSystem` and serializers to
+        the serializer registry of its REST processing. The forwarder runs
+        after the component has been validated and before the hook's
+        callbacks are told about it; when it raises, the component is not
+        recorded and the exception reaches the caller.
+
         :param hook_manager: The HookManager instance to use for hook execution.
         :param validator: An optional ComponentValidator instance for interface
             validation. If None, a default ComponentValidator is created.
+        :param forwarders: Optional mapping of hook name to the callable that
+            hands a component registered through that hook to the registry
+            that uses it. Hooks without a forwarder only record the
+            component (see :meth:`get_registered_components`).
     """
 
-    def __init__(self, hook_manager: HookManager, validator: Optional[ComponentValidator] = None):
+    def __init__(
+        self,
+        hook_manager: HookManager,
+        validator: Optional[ComponentValidator] = None,
+        forwarders: Optional[Dict[str, Callable[[Any], None]]] = None
+    ):
         self._hook_manager = hook_manager
         if validator is not None:
             self._validator = validator
         else:
             self._validator = ComponentValidator()
         self._registered_components: Dict[str, List[Any]] = {}
+
+        self._forwarders: Dict[str, Callable[[Any], None]] = {}
+        if forwarders is not None:
+            for hook_name, forwarder in forwarders.items():
+                if hook_name not in COMPONENT_REGISTRATION_HOOKS:
+                    errmsg = "No component registration hook is named '{}'; known hooks: {}".format(
+                        hook_name, ", ".join(COMPONENT_REGISTRATION_HOOKS)
+                    )
+                    raise ValueError(errmsg)
+                self._forwarders[hook_name] = forwarder
+
         return
+
+    def has_forwarder(self, hook_name: str) -> bool:
+        """
+            Check whether components registered through a hook are handed to
+            a framework registry.
+
+            :param hook_name: The hook name identifying the component type.
+
+            :returns: True if a forwarder is configured for the hook.
+        """
+        rtnval = hook_name in self._forwarders
+        return rtnval
 
     @property
     def hook_manager(self) -> HookManager:
@@ -206,8 +248,8 @@ class ComponentRegistrationHooks:
 
     def _register_component(self, hook_name: str, component: Any, validate: bool = True) -> None:
         """
-            Internal method to validate and store a component, then fire
-            the corresponding hook.
+            Internal method to validate a component, hand it to its
+            forwarder, store it, then fire the corresponding hook.
 
             :param hook_name: The hook name identifying the component type.
             :param component: The component instance to register.
@@ -219,6 +261,13 @@ class ComponentRegistrationHooks:
         """
         if validate is True:
             self._validator.validate(hook_name, component)
+
+        # Hand the component to the registry that uses it before anything
+        # else is told about it: a component the registry refuses is not
+        # registered at all.
+        forwarder = self._forwarders.get(hook_name)
+        if forwarder is not None:
+            forwarder(component)
 
         if hook_name not in self._registered_components:
             self._registered_components[hook_name] = []

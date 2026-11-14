@@ -483,6 +483,8 @@ The `Dispatcher` is updated to:
 
 The existing `fire_register_middleware` hook in `ComponentRegistrationHooks` is bridged to the `MiddlewareRegistry`. When an extension registers middleware via the hook, the `MiddlewareRegistry` adds it to the global pipeline. The hook continues to validate `process_request` and `process_response` methods per `COMPONENT_REQUIRED_METHODS`. Extensions can specify priority and position via attributes on the registered component.
 
+As built: a `WebApplication` owns a `MiddlewareRegistry` (`webapp.middleware_registry`) and passes it to its `Dispatcher`. Its `ComponentRegistrationHooks` are given a forwarder for `register_middleware` that calls `register_extension_middleware(registry, component)` (`extensibility/extensionmiddleware.py`): the component is wrapped in `ExtensionMiddleware` -- the single adapter from `process_request` / `process_response` to the `(request, call_next)` contract, so the pipeline keeps one middleware contract -- registered at `scope="global"` with the component's `name`, `priority` (default 50) and `position` (default `"end"`), and recorded with `register_extension_component` so `get_registered_components("register_middleware")` lists it. Extensions initialize in `setup_infrastructure`, before the dispatcher serves a request, so their middleware is composed into every request. The adapter's semantics: `process_request(request)` returning a response short-circuits (`call_next` is not called); `process_response(request, response)` runs for every response the middleware returns and may return a replacement (None keeps it); coroutine methods are awaited, plain methods run on a worker thread in `execute_async` and directly in `execute`.
+
 
 ## Data Models
 

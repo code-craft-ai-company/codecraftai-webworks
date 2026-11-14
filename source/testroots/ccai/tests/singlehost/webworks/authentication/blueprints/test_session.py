@@ -9,12 +9,22 @@
     **Validates: Requirements 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7**
 """
 
+import asyncio
+
+from datetime import datetime, timedelta, timezone
+
 from ccai.webworks.authentication.blueprints.session import (
     SessionAuthBlueprint,
     SessionStore,
 )
 from ccai.webworks.authentication.blueprints.responses import AuthError
-from ccai.webworks.authentication.core import Principal
+from ccai.webworks.authentication.core import AuthenticationStatus, Principal
+from ccai.webworks.authentication.errors import (
+    AccountLockoutPolicy,
+    LockoutConfig,
+    LoginThrottle,
+)
+from ccai.webworks.authentication.session import SessionAuthenticator
 
 
 # =============================================================================
@@ -95,6 +105,30 @@ class MockSessionStore(SessionStore):
         return False
 
 
+def _session_id_from_response(response, cookie_name="session_id"):
+    """
+        Read the session id from the Set-Cookie header of a response.
+
+        The session id is deliberately absent from response bodies; the
+        HttpOnly cookie is the only place it is sent.
+    """
+    cookie = response.get("headers", {}).get("Set-Cookie", "")
+    first_part = cookie.split(";", 1)[0]
+    name, _, value = first_part.partition("=")
+    if name.strip() != cookie_name:
+        errmsg = "Expected a {!r} cookie, got {!r}".format(cookie_name, cookie)
+        raise AssertionError(errmsg)
+    return value.strip()
+
+
+def _session_exists(blueprint, session_id):
+    """
+        Check whether the blueprint's session store still holds a session.
+    """
+    session = asyncio.run(blueprint.get_session_store().get_session(session_id))
+    return session is not None
+
+
 TEST_PRINCIPAL = Principal(
     identifier="user-001",
     display_name="Test User",
@@ -140,7 +174,7 @@ def _login_and_get_session_id(blueprint):
         "password": KNOWN_PASSWORD,
     })
     response = blueprint.login(request)
-    session_id = response["body"]["session_id"]
+    session_id = _session_id_from_response(response)
     return session_id, response
 
 
@@ -170,8 +204,8 @@ def test_login_success():
 
     body = response["body"]
 
-    if "session_id" not in body:
-        errmsg = "Expected session_id in response body"
+    if "session_id" in body:
+        errmsg = "Expected the session id to stay out of the response body"
         raise AssertionError(errmsg)
 
     if body.get("principal_id") != "user-001":
@@ -338,7 +372,7 @@ def test_login_with_session_store():
         errmsg = "Expected status 200, got {}".format(response["status"])
         raise AssertionError(errmsg)
 
-    session_id = response["body"]["session_id"]
+    session_id = _session_id_from_response(response)
 
     if session_id not in store._sessions:
         errmsg = "Expected session to be stored in session store"
@@ -418,7 +452,7 @@ def test_logout_clears_session():
         raise AssertionError(errmsg)
 
     # Verify the session is removed from the store
-    if session_id in blueprint._memory_store:
+    if _session_exists(blueprint, session_id):
         errmsg = "Expected session to be removed from memory store"
         raise AssertionError(errmsg)
 
@@ -441,7 +475,7 @@ def test_logout_with_session_store():
         "password": KNOWN_PASSWORD,
     })
     login_response = blueprint.login(login_request)
-    session_id = login_response["body"]["session_id"]
+    session_id = _session_id_from_response(login_response)
 
     # Logout
     logout_request = MockJsonRequest(
@@ -508,10 +542,8 @@ def test_info_returns_session_details():
 
     body = response["body"]
 
-    if body.get("session_id") != session_id:
-        errmsg = "Expected session_id {!r}, got {!r}".format(
-            session_id, body.get("session_id")
-        )
+    if "session_id" in body:
+        errmsg = "Expected the session id to stay out of the info response body"
         raise AssertionError(errmsg)
 
     if body.get("principal_id") != "user-001":
@@ -826,8 +858,8 @@ def test_establish_session_without_credentials_returns_session():
 
     body = response["body"]
 
-    if "session_id" not in body:
-        errmsg = "Expected session_id in response body"
+    if "session_id" in body:
+        errmsg = "Expected the session id to stay out of the response body"
         raise AssertionError(errmsg)
 
     if body.get("principal_id") != "user-001":
@@ -861,7 +893,7 @@ def test_establish_session_persists_to_session_store():
 
     response = blueprint.establish_session(principal=TEST_PRINCIPAL)
 
-    session_id = response["body"]["session_id"]
+    session_id = _session_id_from_response(response)
     persisted = store._sessions.get(session_id)
 
     if persisted is None:
@@ -970,6 +1002,257 @@ def test_login_preserves_login_successful_message():
         errmsg = "Expected message 'Login successful', got {!r}".format(
             response["body"].get("message")
         )
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Session Store Shared With SessionAuthenticator
+# =============================================================================
+
+def test_login_session_is_accepted_by_session_authenticator():
+    """
+        Verify that the cookie a login sets authenticates a later request
+        through SessionAuthenticator when both use the blueprint's session
+        store, and that the full principal comes back.
+    """
+    blueprint = _create_fresh_blueprint()
+    blueprint.identity_provider = MockIdentityProvider(
+        KNOWN_USERNAME,
+        KNOWN_PASSWORD,
+        Principal(identifier="user-001", roles={"editor"}, permissions={"read"})
+    )
+
+    session_id, _ = _login_and_get_session_id(blueprint)
+
+    authenticator = SessionAuthenticator(
+        session_store=blueprint.get_session_store(),
+        cookie_name=blueprint.cookie_name
+    )
+    result = asyncio.run(
+        authenticator.authenticate({"cookies": {"session_id": session_id}})
+    )
+
+    if result.status != AuthenticationStatus.SUCCESS:
+        errmsg = "Expected SUCCESS for a blueprint session, got {} ({})".format(
+            result.status, result.error_code
+        )
+        raise AssertionError(errmsg)
+
+    principal = result.context.principal
+
+    if principal.identifier != "user-001":
+        errmsg = "Expected principal 'user-001', got {!r}".format(principal.identifier)
+        raise AssertionError(errmsg)
+
+    if principal.roles != {"editor"}:
+        errmsg = "Expected the principal's roles to be kept, got {!r}".format(principal.roles)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_logged_out_session_is_refused_by_session_authenticator():
+    """
+        Verify that logout invalidates the session for SessionAuthenticator.
+    """
+    blueprint = _create_fresh_blueprint()
+    session_id, _ = _login_and_get_session_id(blueprint)
+
+    blueprint.logout(MockJsonRequest({}, cookies={"session_id": session_id}))
+
+    authenticator = SessionAuthenticator(
+        session_store=blueprint.get_session_store(),
+        cookie_name=blueprint.cookie_name
+    )
+    result = asyncio.run(
+        authenticator.authenticate({"cookies": {"session_id": session_id}})
+    )
+
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = "Expected FAILURE after logout, got {}".format(result.status)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_blueprint_subclasses_do_not_share_sessions():
+    """
+        Verify that each blueprint subclass has its own in-memory session
+        store.
+    """
+    first = _create_fresh_blueprint()
+    second = _create_fresh_blueprint()
+
+    session_id, _ = _login_and_get_session_id(first)
+
+    if first.get_session_store() is second.get_session_store():
+        errmsg = "Expected each subclass to have its own session store"
+        raise AssertionError(errmsg)
+
+    if _session_exists(second, session_id):
+        errmsg = "Expected a session of one subclass to be unknown to another"
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Expiry Handling Fails Closed
+# =============================================================================
+
+def _blueprint_with_stored_expiry(expires_at):
+    """
+        Create a blueprint over a legacy store that holds one session with
+        the given expires_at value.
+    """
+    store = MockSessionStore()
+    store._sessions["stored-session"] = {
+        "session_id": "stored-session",
+        "principal_id": "user-001",
+        "created_at": "2025-01-01T00:00:00+00:00",
+        "expires_at": expires_at,
+        "last_accessed": "2025-01-01T00:00:00+00:00",
+    }
+
+    blueprint = _create_fresh_blueprint()
+    blueprint.session_store = store
+    return blueprint, store
+
+
+def test_info_treats_naive_past_expiry_as_expired():
+    """
+        Verify that an expires_at without a timezone that lies in the past
+        expires the session instead of being skipped.
+    """
+    naive_past = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(tzinfo=None)
+    blueprint, store = _blueprint_with_stored_expiry(naive_past.isoformat())
+
+    response = blueprint.info(
+        MockJsonRequest({}, cookies={"session_id": "stored-session"})
+    )
+
+    if response["status"] != 401:
+        errmsg = "Expected status 401, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    if response["body"].get("error") != "session_expired":
+        errmsg = "Expected error 'session_expired', got {!r}".format(
+            response["body"].get("error")
+        )
+        raise AssertionError(errmsg)
+
+    if "stored-session" in store._sessions:
+        errmsg = "Expected the expired session to be removed from the store"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_info_accepts_naive_future_expiry():
+    """
+        Verify that an expires_at without a timezone that lies in the future
+        is read as UTC and the session stays valid.
+    """
+    naive_future = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(tzinfo=None)
+    blueprint, _ = _blueprint_with_stored_expiry(naive_future.isoformat())
+
+    response = blueprint.info(
+        MockJsonRequest({}, cookies={"session_id": "stored-session"})
+    )
+
+    if response["status"] != 200:
+        errmsg = "Expected status 200, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_info_treats_unparseable_expiry_as_expired():
+    """
+        Verify that a session whose expires_at cannot be parsed is treated
+        as expired rather than as valid forever.
+    """
+    blueprint, _ = _blueprint_with_stored_expiry("not-a-timestamp")
+
+    response = blueprint.info(
+        MockJsonRequest({}, cookies={"session_id": "stored-session"})
+    )
+
+    if response["status"] != 401:
+        errmsg = "Expected status 401, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_info_unknown_session_clears_cookie():
+    """
+        Verify that the info endpoint clears the cookie when it names a
+        session that does not exist.
+    """
+    blueprint = _create_fresh_blueprint()
+
+    response = blueprint.info(
+        MockJsonRequest({}, cookies={"session_id": "no-such-session"})
+    )
+
+    cookie = response.get("headers", {}).get("Set-Cookie", "")
+    if "Max-Age=0" not in cookie:
+        errmsg = "Expected a clearing Set-Cookie header, got {!r}".format(cookie)
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Request Parsing and Throttling
+# =============================================================================
+
+def test_login_rejects_non_object_body():
+    """
+        Verify that a JSON body that is not an object is answered with 400.
+    """
+    blueprint = _create_fresh_blueprint()
+
+    response = blueprint.login(MockJsonRequest(["testuser", "testpass"]))
+
+    if response["status"] != 400:
+        errmsg = "Expected status 400, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_login_answers_429_once_account_is_locked():
+    """
+        Verify that a configured login throttle locks an account after
+        repeated failures and the login endpoint then answers 429, even for
+        the correct password.
+    """
+    blueprint = _create_fresh_blueprint()
+    blueprint.login_throttle = LoginThrottle(
+        lockout_policy=AccountLockoutPolicy(LockoutConfig(max_failures=2))
+    )
+
+    for _ in range(2):
+        blueprint.login(MockJsonRequest({
+            "username": KNOWN_USERNAME,
+            "password": "wrong-password",
+        }))
+
+    response = blueprint.login(MockJsonRequest({
+        "username": KNOWN_USERNAME,
+        "password": KNOWN_PASSWORD,
+    }))
+
+    if response["status"] != 429:
+        errmsg = "Expected status 429 for a locked account, got {}".format(response["status"])
+        raise AssertionError(errmsg)
+
+    if "Retry-After" not in response.get("headers", {}):
+        errmsg = "Expected a Retry-After header on the 429"
         raise AssertionError(errmsg)
 
     return

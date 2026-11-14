@@ -68,6 +68,7 @@ class ProductivityBlueprint(RestBlueprint):
         """
 
         tag = request.path_params.get("tag", "")
-        response = serve_component_page("productivity", tag)
+        example_key = request.query_params.get("example")
+        response = serve_component_page("productivity", tag, example_key=example_key)
 
         return response

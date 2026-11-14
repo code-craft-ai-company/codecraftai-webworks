@@ -108,8 +108,10 @@ class WebSocketConnection:
         headers_dict: Dict[str, str] = {}
         
         for name_bytes, value_bytes in headers_list:
-            name = name_bytes.decode("utf-8").lower()
-            value = value_bytes.decode("utf-8")
+            # Header bytes are latin-1 by definition, which decodes any
+            # byte. UTF-8 would raise on a header that is not valid UTF-8.
+            name = name_bytes.decode("latin-1").lower()
+            value = value_bytes.decode("latin-1")
             headers_dict[name] = value
         
         return headers_dict
@@ -304,13 +306,17 @@ class WebSocketConnection:
             raise ClientDisconnected("WebSocket client disconnected")
         
         if message_type == MESSAGE_WEBSOCKET_RECEIVE:
-            # Check for text message
-            if "text" in message:
-                return message["text"]
+            # A server may send both keys with the one that does not apply
+            # set to None, so the value decides and not the presence of the
+            # key. Otherwise a binary frame would be returned as None, which
+            # means "disconnected" to the caller.
+            text = message.get("text")
+            if text is not None:
+                return text
             
-            # Check for binary message
-            if "bytes" in message:
-                return message["bytes"]
+            data = message.get("bytes")
+            if data is not None:
+                return data
         
         # Unknown message type or empty message
         return None

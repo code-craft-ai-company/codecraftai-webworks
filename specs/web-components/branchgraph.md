@@ -54,33 +54,33 @@ Nearest alternatives: `<mj-milestone-timeline>` for date-only views,
 |---|---|---|
 | Compact | `density="compact"` | Commit nodes omit author labels; lane height reduced |
 | Full | `density="full"` (default) | All commit labels visible |
-| Horizontal | `orientation="horizontal"` (default) | Time flows left to right |
-| Vertical | `orientation="vertical"` | Time flows top to bottom |
-| Read-only | `readonly` (boolean) | No node selection; no lane collapse controls |
-| Live | `live` (boolean) | Polls the data-source adapter at `poll-interval` ms |
+| Read-only | `readonly` (boolean) | Commits and markers are labelled `role="img"` marks, not buttons: no selection, no detail panel; setting it closes an open panel |
+| Live | `live` (boolean) | **Not implemented.** Polls the data-source adapter at `poll-interval` ms |
+
+Time always flows left to right (inline direction); the former `orientation`
+attribute was removed and is not observed.
 
 ## 5. Attributes
 
 | Attribute | Type | Default | Reflects | Description |
 |-----------|------|---------|----------|-------------|
-| `src` | string | `""` | yes | URL for the data-source adapter endpoint |
-| `adapter` | string | `"static"` | yes | Adapter key: `"static"`, `"github"`, `"gitlab"`, `"gitea"` |
+| `src` | string | `""` | no | URL of a JSON document with the graph data, fetched when no `data` property has been assigned. Changing it clears the data and fetches again. A failure shows the error state and fires `mj-error` |
+| `adapter` | string | `"static"` | yes | **Not implemented** (not observed by the component). Adapter key: `"static"`, `"github"`, `"gitlab"`, `"gitea"` |
 | `start-date` | string (ISO 8601) | `""` | yes | Left bound of the visible time window |
 | `end-date` | string (ISO 8601) | `""` | yes | Right bound of the visible time window |
-| `orientation` | `"horizontal"` \| `"vertical"` | `"horizontal"` | yes | Layout direction of time axis |
-| `density` | `"compact"` \| `"full"` | `"full"` | yes | Label verbosity on commit nodes |
-| `readonly` | boolean | `false` | yes | Disables collapse controls and node selection |
-| `live` | boolean | `false` | yes | Enables polling via data-source adapter |
-| `poll-interval` | number (ms) | `30000` | yes | Polling interval when `live` is set |
-| `today-marker` | boolean | `true` | yes | Shows a "today" marker on the time axis |
-| `max-lanes` | number | `20` | yes | Maximum number of branch lanes before virtual scroll activates |
-| `locale` | string | `""` | yes | BCP 47 locale for axis tick formatting; defaults to `navigator.language` |
+| `density` | `"compact"` \| `"full"` | `"full"` | yes | `compact` reduces the lane height (32 px instead of 48 px) |
+| `readonly` | boolean | `false` | yes | Disables node and marker selection (see Read-only above) |
+| `live` | boolean | `false` | yes | **Not implemented** (not observed by the component). Enables polling via data-source adapter |
+| `poll-interval` | number (ms) | `30000` | yes | **Not implemented** (not observed by the component). Polling interval when `live` is set |
+| `today-marker` | boolean | `true` | yes | Shows a "today" line when today is inside the range; on unless set to `"false"` |
+| `max-lanes` | number | `20` | yes | **Not implemented** (not observed by the component). Maximum number of branch lanes before virtual scroll activates |
+| `locale` | string | `""` | yes | **Not implemented** (not observed by the component). BCP 47 locale for axis tick formatting; tick labels follow the page locale of the localization hook |
 
 ## 6. Properties
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `data` | `BranchGraphData` | Full graph data object: `{ branches, commits, merges, markers, phases }` |
+| `data` | `BranchGraphData` | Full graph data object: `{ branches, commits, merges, markers, phases }`. Assigning it redraws and fires `mj-data-load`. Data can instead be declared in markup with the `src` attribute or an inline `<script type="application/json">` child; an assigned `data` property always wins over both |
 | `selectedNode` | `CommitNode \| null` | Currently selected commit node |
 | `selectedMarker` | `Marker \| null` | Currently selected milestone marker |
 | `visibleRange` | `{ start: Date, end: Date }` | Current visible time window after zoom/pan |
@@ -102,12 +102,13 @@ Nearest alternatives: `<mj-milestone-timeline>` for date-only views,
 | Event | `detail` | Bubbles | Cancelable | Description |
 |-------|----------|---------|------------|-------------|
 | `mj-node-select` | `{ node: CommitNode, branch: string }` | yes | no | Fired when a commit node is selected |
-| `mj-node-deselect` | `{ node: CommitNode }` | yes | no | Fired when a commit node is deselected |
+| `mj-node-deselect` | `{ node: CommitNode }` | yes | no | Fired when the detail panel of a selected commit is closed (Close button or Escape) |
 | `mj-marker-select` | `{ marker: Marker }` | yes | no | Fired when a milestone marker is selected |
-| `mj-lane-collapse` | `{ branch: string, collapsed: boolean }` | yes | no | Fired when a branch lane is collapsed or expanded |
-| `mj-range-change` | `{ start: string, end: string }` | yes | no | Fired when the visible time window changes via zoom/pan |
-| `mj-data-load` | `{ branches: number, commits: number }` | yes | no | Fired after a successful data fetch |
-| `mj-error` | `{ message: string, cause: unknown }` | yes | no | Fired when the data-source adapter returns an error |
+| `mj-marker-deselect` | `{ marker: Marker }` | yes | no | Fired when the detail panel of a selected marker is closed |
+| `mj-lane-collapse` | `{ branch: string, collapsed: boolean }` | yes | no | **Not implemented.** Fired when a branch lane is collapsed or expanded |
+| `mj-range-change` | `{ start: string, end: string }` | yes | no | **Not implemented.** Fired when the visible time window changes via zoom/pan |
+| `mj-data-load` | `{ branches: number, commits: number }` | yes | no | Fired after data is assigned (property, `src` or inline JSON) and drawn; not on redraws |
+| `mj-error` | `{ message: string }` | yes | no | Fired when the `src` fetch fails or the inline JSON cannot be parsed |
 
 ## 9. CSS parts & custom properties
 
@@ -177,8 +178,12 @@ without full re-render.
 
 ## 13. Accessibility
 
-- Root element role: `img` with `aria-label` summarizing the graph
-  (e.g. "Branch graph: 5 branches, 128 commits, 4 milestones").
+- Root wrapper: `role="group"` with `aria-label` summarizing the graph
+  (e.g. "Branch graph: 5 branches, 128 commits, 4 milestones"). The `<svg>` is
+  not hidden: it is a labelled `role="group"` whose commit and marker marks are
+  `role="button"` with one roving tab stop (arrow keys, Home, End move between
+  marks); only decorative shapes (lanes, edges, bands, grid) are
+  `aria-hidden="true"`.
 - Commit nodes: `role="button"` with `aria-label` = "Commit {sha7}: {message}, {date}".
 - Milestone markers: `role="button"` with `aria-label` = "{name} {type} marker, {date}".
 - Lane collapse buttons: `aria-expanded` reflects open/collapsed state;

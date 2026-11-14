@@ -4,6 +4,23 @@
  * <mj-surface> -- a generic content wrapper providing elevation, background,
  * padding, and radius treatment. Consolidates Panel, Section, and Container
  * synonyms into one component configured by attributes.
+ *
+ * The host is a flex container whose only item, the painted surface, grows
+ * to fill it. A surface with an explicit height, or one stretched by a grid,
+ * flex or dock parent, is therefore painted over its whole box.
+ *
+ * `max-width` constrains and centers the painted surface. Together with
+ * `full-bleed` the background runs edge to edge and only the CONTENT is
+ * constrained and centered.
+ *
+ * A custom property is written on the host only for an attribute that is
+ * present, so stylesheet rules such as
+ * `mj-surface { --mj-surface-padding: 2rem }` apply whenever the matching
+ * attribute is absent. The properties written by attributes belong to one
+ * surface: the host resets them, so a nested surface never inherits the
+ * padding, radius, elevation or max-width of the surface around it. The
+ * colour properties (`--mj-surface-bg`, `--mj-surface-border`) are not
+ * written by attributes and still inherit like theme tokens.
  */
 
 import { MjElement } from "../core/mjelement.js";
@@ -26,18 +43,49 @@ const RADIUS_MAP = {
 
 const STYLES = `
 :host {
-  display: block;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * Per-element properties: an inline value written by an attribute or an
+ * author rule on the element wins over this reset, an ancestor's value does
+ * not reach the surface.
+ */
+:host {
+  --mj-surface-padding: initial;
+  --mj-surface-radius: initial;
+  --mj-surface-shadow: initial;
+  --mj-surface-border-width: initial;
+  --mj-surface-max-width: initial;
 }
 
 .root {
+  position: relative;
+  flex: 1 1 auto;
+  inline-size: 100%;
+  max-inline-size: var(--mj-surface-max-width, none);
+  margin-inline: auto;
   background: var(--mj-surface-bg, var(--mj-surface));
   padding: var(--mj-surface-padding, var(--mj-space-4));
   border-radius: var(--mj-surface-radius, var(--mj-radius-md));
   box-shadow: var(--mj-surface-shadow, none);
   border: var(--mj-surface-border-width, 0) solid var(--mj-surface-border, var(--mj-border));
-  max-width: var(--mj-surface-max-width, none);
-  margin-inline: var(--mj-surface-margin-inline, 0);
   box-sizing: border-box;
+}
+
+:host([full-bleed]) .root {
+  padding: 0;
+  border-radius: 0;
+}
+
+/*
+ * Full-bleed container: the surface spans the whole width and the inline
+ * padding takes up whatever is wider than max-width, centering the content.
+ */
+:host([full-bleed][max-width]) .root {
+  max-inline-size: none;
+  padding-inline: max(0px, (100% - var(--mj-surface-max-width, 100%)) / 2);
 }
 `;
 
@@ -46,9 +94,13 @@ export class MjSurface extends MjElement {
   static styles = STYLES;
   static watched = ["elevation", "padding", "radius", "role-hint", "max-width", "full-bleed"];
 
+  constructor() {
+    super()
+    this._root = null
+  }
+
   render() {
-    const roleHint = this.getAttribute("role-hint") || "generic";
-    const tag = roleHint === "section" ? "section" : "div";
+    const tag = this._rootTagName()
     const markup = `<${tag} class="root" part="root"><slot></slot></${tag}>`
     return markup
   }
@@ -60,29 +112,62 @@ export class MjSurface extends MjElement {
   }
 
   onAttributeChanged(name, oldValue, newValue) {
-    if (this._root !== undefined) {
-      if (name === "role-hint") {
-        this._rebuildRoot()
-      } else {
-        this._syncStyles()
-      }
+    if (this._root === undefined || this._root === null) {
+      return
+    }
+
+    if (name === "role-hint") {
+      this._rebuildRoot()
+    } else {
+      this._syncStyles()
     }
     return
   }
 
-  _rebuildRoot() {
+  /* `section` for role-hint="section", otherwise a plain `div`. */
+  _rootTagName() {
     const roleHint = this.getAttribute("role-hint") || "generic"
     const tag = roleHint === "section" ? "section" : "div"
-    const slot = this._root !== null ? this._root.innerHTML : "<slot></slot>"
-    const newRoot = document.createElement(tag)
-    newRoot.className = "root"
-    newRoot.setAttribute("part", "root")
-    newRoot.innerHTML = slot
-    if (this._root !== null && this._root.parentNode !== null) {
-      this._root.parentNode.replaceChild(newRoot, this._root)
+    return tag
+  }
+
+  /*
+   * Swap the root element for one of the tag `role-hint` asks for, moving
+   * the existing children (the slot) across. Does nothing when the tag is
+   * already right, so a replayed attribute change is harmless.
+   */
+  _rebuildRoot() {
+    const tag = this._rootTagName()
+
+    if (this._root.localName !== tag) {
+      const newRoot = document.createElement(tag)
+      newRoot.className = "root"
+      newRoot.setAttribute("part", "root")
+
+      while (this._root.firstChild !== null) {
+        newRoot.appendChild(this._root.firstChild)
+      }
+
+      if (this._root.parentNode !== null) {
+        this._root.parentNode.replaceChild(newRoot, this._root)
+      }
+      this._root = newRoot
     }
-    this._root = newRoot
+
     this._syncStyles()
+    return
+  }
+
+  /*
+   * Set a custom property on the host, or remove it when `value` is null so
+   * the stylesheet (the component default or an author rule) applies.
+   */
+  _setCustomProperty(name, value) {
+    if (value === null) {
+      this.style.removeProperty(name)
+    } else {
+      this.style.setProperty(name, value)
+    }
     return
   }
 
@@ -91,38 +176,31 @@ export class MjSurface extends MjElement {
       return
     }
 
-    const fullBleed = this.hasAttribute("full-bleed")
-    const elevation = this.getAttribute("elevation") || "flat"
-    const padding = this.getAttribute("padding") || "md"
-    const radius = this.getAttribute("radius") || "md"
-    const maxWidth = this.getAttribute("max-width") || ""
+    const elevation = this.getAttribute("elevation")
+    const padding = this.getAttribute("padding")
+    const radius = this.getAttribute("radius")
+    const maxWidth = this.getAttribute("max-width")
 
-    const paddingVal = fullBleed === true ? "0" : (PADDING_MAP[padding] || PADDING_MAP.md)
-    const radiusVal = fullBleed === true ? "0" : (RADIUS_MAP[radius] || RADIUS_MAP.md)
+    let shadow = null
+    let borderWidth = null
 
-    let shadow = "none"
-    let borderWidth = "0"
-
-    if (elevation === "outlined") {
-      borderWidth = "1px"
-    } else if (elevation === "raised") {
-      shadow = "var(--mj-elevation-2)"
-    } else if (elevation === "overlay") {
-      shadow = "var(--mj-elevation-3)"
+    if (elevation !== null) {
+      shadow = "none"
+      borderWidth = "0"
+      if (elevation === "outlined") {
+        borderWidth = "1px"
+      } else if (elevation === "raised") {
+        shadow = "var(--mj-elevation-2)"
+      } else if (elevation === "overlay") {
+        shadow = "var(--mj-elevation-3)"
+      }
     }
 
-    this.style.setProperty("--mj-surface-padding", paddingVal)
-    this.style.setProperty("--mj-surface-radius", radiusVal)
-    this.style.setProperty("--mj-surface-shadow", shadow)
-    this.style.setProperty("--mj-surface-border-width", borderWidth)
-
-    if (maxWidth !== null && maxWidth.length > 0) {
-      this.style.setProperty("--mj-surface-max-width", maxWidth)
-      this.style.setProperty("--mj-surface-margin-inline", "auto")
-    } else {
-      this.style.setProperty("--mj-surface-max-width", "none")
-      this.style.setProperty("--mj-surface-margin-inline", "0")
-    }
+    this._setCustomProperty("--mj-surface-padding", padding !== null ? (PADDING_MAP[padding] || PADDING_MAP.md) : null)
+    this._setCustomProperty("--mj-surface-radius", radius !== null ? (RADIUS_MAP[radius] || RADIUS_MAP.md) : null)
+    this._setCustomProperty("--mj-surface-shadow", shadow)
+    this._setCustomProperty("--mj-surface-border-width", borderWidth)
+    this._setCustomProperty("--mj-surface-max-width", maxWidth !== null && maxWidth.length > 0 ? maxWidth : null)
     return
   }
 

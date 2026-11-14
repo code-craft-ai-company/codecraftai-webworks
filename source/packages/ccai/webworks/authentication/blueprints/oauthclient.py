@@ -306,6 +306,14 @@ class OAuthClientBlueprint(SecurityBlueprint):
     state_cookie_max_age_seconds: int = DEFAULT_STATE_COOKIE_MAX_AGE_SECONDS
     state_cookie_signature_salt: str = DEFAULT_STATE_COOKIE_SIGNATURE_SALT
 
+    # A registration kickoff (``register=1``) must carry the signed
+    # ticket that ``POST /register`` issues after the captcha was
+    # verified. Set to False only for sites whose registration does not
+    # require a captcha at all.
+    require_registration_ticket: bool = True
+    registration_ticket_max_age_seconds: int = 300
+    registration_ticket_signature_salt: str = "oauth-registration-ticket"
+
     post_login_redirect_url: str = "/dashboard/"
     error_redirect_url: str = "/login"
     scheme_label: str = "OAuth"
@@ -334,6 +342,12 @@ class OAuthClientBlueprint(SecurityBlueprint):
     # Captcha-related error codes
     MISSING_CAPTCHA_ERROR_CODE: str = "missing_captcha"
     CAPTCHA_FAILED_ERROR_CODE: str = "captcha_failed"
+    CAPTCHA_NOT_CONFIGURED_ERROR_CODE: str = "captcha_not_configured"
+
+    # Registration ticket literals
+    REGISTRATION_TICKET_ERROR_CODE: str = "registration_ticket_invalid"
+    REGISTRATION_TICKET_PURPOSE_KEY: str = "purpose"
+    REGISTRATION_TICKET_PURPOSE: str = "register"
 
     # Cookie attribute literals
     COOKIE_PATH: str = "/"
@@ -372,6 +386,7 @@ class OAuthClientBlueprint(SecurityBlueprint):
     # OAuth wire parameter names referenced by handlers
     OAUTH_PARAM_PROVIDER: str = "provider"
     OAUTH_PARAM_REGISTER: str = "register"
+    OAUTH_PARAM_TICKET: str = "ticket"
     OAUTH_PARAM_STATE: str = "state"
     OAUTH_PARAM_NONCE: str = "nonce"
     OAUTH_PARAM_CODE: str = "code"
@@ -651,10 +666,15 @@ class OAuthClientBlueprint(SecurityBlueprint):
                 the default callback path and every provider would
                 reject with ``redirect_uri_mismatch``.
 
-            Uses the request's ``scheme`` and ``host`` so the URL
-            carries the right host the provider should redirect back
-            to. The path resolves against the blueprint's
-            :attr:`base_path` plus ``"/callback"``.
+            The origin is resolved by
+            :meth:`resolve_public_base_url`: the configured
+            :attr:`public_base_url` when set, otherwise the request
+            scheme and ``Host`` header (which carries the port), and
+            ``X-Forwarded-Proto`` / ``X-Forwarded-Host`` when
+            :attr:`trust_forwarded_headers` is enabled. Set
+            ``public_base_url`` for any deployment behind a TLS
+            terminating proxy. The path resolves against the
+            blueprint's :attr:`base_path` plus ``"/callback"``.
 
             :param request: Incoming HTTP request.
             :param provider_name: Provider name to embed as a query
@@ -662,20 +682,107 @@ class OAuthClientBlueprint(SecurityBlueprint):
 
             :returns: A fully-qualified URL.
         """
-        scheme = str(getattr(request, "scheme", cls.DEFAULT_SCHEME) or cls.DEFAULT_SCHEME)
-        host = str(getattr(request, "host", "") or "")
-        if host == "":
-            host = cls.DEFAULT_HOST
+        # ``request.host`` is the address the server is bound to (for
+        # example 127.0.0.1) and carries no port, so it is not the
+        # origin the browser used. The public origin comes from the
+        # configured ``public_base_url`` or from the ``Host`` header.
+        origin = cls.resolve_public_base_url(request)
 
         callback_path = "{}{}".format(cls._get_base_path() or "", cls.CALLBACK_LEAF)
 
-        rtnval = "{}://{}{}?{}={}".format(
-            scheme,
-            host,
+        rtnval = "{}{}?{}={}".format(
+            origin,
             callback_path,
             cls.OAUTH_PARAM_PROVIDER,
             provider_name,
         )
+        return rtnval
+
+    # --------------------------------------------------------------
+    # Registration ticket helpers.
+    # --------------------------------------------------------------
+
+    @classmethod
+    def _build_registration_ticket_serializer(cls) -> Any:
+        """
+            Construct the serializer that signs registration tickets.
+
+            Uses the site's signing secret with a salt of its own, so a
+            ticket can never be confused with a state cookie.
+
+            :returns: A configured serializer instance, or ``None``
+                      when no secret resolver is wired.
+        """
+        from ccai.webworks.security.signedserializer import TimedSerializer
+
+        if cls.state_cookie_secret_resolver is None:
+            return None
+
+        secret = cls.state_cookie_secret_resolver()
+
+        serializer = TimedSerializer(
+            secret_key=secret,
+            salt=cls.registration_ticket_signature_salt,
+        )
+        return serializer
+
+    @classmethod
+    def _issue_registration_ticket(cls, provider_name: str) -> Optional[str]:
+        """
+            Issue the short-lived ticket that proves a captcha was
+            solved for a registration with one provider.
+
+            :param provider_name: The provider the registration is for.
+
+            :returns: The signed ticket, or ``None`` when no signing
+                      secret is wired.
+        """
+        serializer = cls._build_registration_ticket_serializer()
+        if serializer is None:
+            return None
+
+        rtnval = serializer.dumps({
+            cls.OAUTH_PARAM_PROVIDER: provider_name,
+            cls.REGISTRATION_TICKET_PURPOSE_KEY: cls.REGISTRATION_TICKET_PURPOSE,
+        })
+        return rtnval
+
+    @classmethod
+    def _verify_registration_ticket(cls, ticket: str, provider_name: str) -> bool:
+        """
+            Verify a registration ticket presented at kickoff.
+
+            :param ticket: The ``ticket`` query parameter.
+            :param provider_name: The provider named by the kickoff.
+
+            :returns: ``True`` only for an unexpired ticket this site
+                      signed for that provider.
+        """
+        if ticket == "":
+            return False
+
+        serializer = cls._build_registration_ticket_serializer()
+        if serializer is None:
+            return False
+
+        try:
+            payload = serializer.loads(
+                ticket,
+                max_age=cls.registration_ticket_max_age_seconds,
+            )
+        except Exception as exc:
+            logger.warning(
+                "OAuth registration ticket failed verification: %s", exc
+            )
+            return False
+
+        if not isinstance(payload, dict):
+            return False
+
+        if payload.get(cls.REGISTRATION_TICKET_PURPOSE_KEY) != cls.REGISTRATION_TICKET_PURPOSE:
+            return False
+
+        rtnval = payload.get(cls.OAUTH_PARAM_PROVIDER) == provider_name
         return rtnval
 
     # --------------------------------------------------------------
@@ -1025,6 +1132,22 @@ class OAuthClientBlueprint(SecurityBlueprint):
         register_raw = cls._read_query_param(request, cls.OAUTH_PARAM_REGISTER).lower()
         is_register_flow = register_raw in cls.REGISTER_FLAG_TRUTHY_VALUES
 
+        # The register flag alone proves nothing: anyone can type the
+        # kickoff URL. A registration must present the ticket issued by
+        # ``POST /register`` once the captcha was verified.
+        if is_register_flow and cls.require_registration_ticket:
+            ticket = cls._read_query_param(request, cls.OAUTH_PARAM_TICKET)
+            if not cls._verify_registration_ticket(ticket, provider_name):
+                logger.warning(
+                    "OAuth registration kickoff refused: missing or "
+                    "invalid registration ticket (provider=%r).",
+                    provider_name,
+                )
+                response = cls._build_error_redirect(
+                    error_code=cls.REGISTRATION_TICKET_ERROR_CODE,
+                )
+                return response
+
         client = cls._resolve_oauth_client(provider_name)
         if client is None:
             configured: List[str] = []
@@ -1177,28 +1300,58 @@ class OAuthClientBlueprint(SecurityBlueprint):
             )
             return response
 
-        if cls.captcha_verifier is not None:
-            try:
-                captcha_ok = bool(cls.captcha_verifier(captcha_token))
-            except Exception:
-                logger.exception("OAuth captcha_verifier raised.")
-                captcha_ok = False
+        if cls.captcha_verifier is None:
+            # Without a verifier any non-empty string would pass, so
+            # the endpoint refuses instead of pretending to verify.
+            logger.error(
+                "OAuth registration intent: captcha_verifier is not "
+                "configured; refusing the request."
+            )
+            response = cls._build_json_response(
+                body={"success": False, "error": cls.CAPTCHA_NOT_CONFIGURED_ERROR_CODE},
+                status_code=500,
+            )
+            return response
 
-            if not captcha_ok:
-                response = cls._build_json_response(
-                    body={"success": False, "error": cls.CAPTCHA_FAILED_ERROR_CODE},
-                    status_code=400,
-                )
-                return response
+        try:
+            captcha_ok = bool(cls.captcha_verifier(captcha_token))
+        except Exception:
+            logger.exception("OAuth captcha_verifier raised.")
+            captcha_ok = False
+
+        if not captcha_ok:
+            response = cls._build_json_response(
+                body={"success": False, "error": cls.CAPTCHA_FAILED_ERROR_CODE},
+                status_code=400,
+            )
+            return response
 
         provider_name = str(body.get(cls.OAUTH_PARAM_PROVIDER) or "").strip()
         if provider_name == "":
             provider_name = cls.default_provider_name
 
+        # The ticket is the proof, checked at kickoff, that this
+        # captcha verification happened.
+        ticket = cls._issue_registration_ticket(provider_name)
+        if ticket is None:
+            logger.error(
+                "OAuth registration intent: state_cookie_secret_resolver "
+                "is not configured; cannot sign a registration ticket."
+            )
+            response = cls._build_json_response(
+                body={"success": False, "error": cls.NOT_CONFIGURED_ERROR_CODE},
+                status_code=500,
+            )
+            return response
+
         kickoff_path = "{}{}".format(cls._get_base_path() or "", cls.LOGIN_LEAF)
         redirect_url = "{}?{}".format(
             kickoff_path,
-            urlencode({cls.OAUTH_PARAM_PROVIDER: provider_name, cls.OAUTH_PARAM_REGISTER: "1"}),
+            urlencode({
+                cls.OAUTH_PARAM_PROVIDER: provider_name,
+                cls.OAUTH_PARAM_REGISTER: "1",
+                cls.OAUTH_PARAM_TICKET: ticket,
+            }),
         )
 
         response = cls._build_json_response(

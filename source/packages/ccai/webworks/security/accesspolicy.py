@@ -81,6 +81,29 @@ def _coerce_to_tuple(value: Any) -> Tuple[str, ...]:
     return tuple()
 
 
+def _coerce_groups(value: Any) -> Tuple[Tuple[str, ...], ...]:
+    """
+        Normalize an iterable of role groups to a tuple of tuples of strings.
+
+        :param value: Source iterable of iterables, or ``None`` for empty.
+
+        :returns: A tuple holding one tuple of role names per group.
+    """
+    if value is None:
+        return tuple()
+
+    if isinstance(value, str):
+        # A bare string is one group holding one role.
+        return ((value,),)
+
+    groups = []
+    for group in value:
+        groups.append(_coerce_to_tuple(group))
+
+    rtnval = tuple(groups)
+    return rtnval
+
+
 @dataclass(frozen=True)
 class AccessPolicy:
     """
@@ -89,7 +112,10 @@ class AccessPolicy:
 
         :param roles: Iterable of role names required for access. When non-empty,
             the subject must have at least one of these roles (OR logic). Stored
-            as a tuple regardless of input collection type.
+            as a tuple regardless of input collection type. On a policy
+            produced by :meth:`merge_with` this is the union of the roles
+            named by the merged policies, kept for display and reporting;
+            what is enforced is ``role_groups``.
         :param scopes: Iterable of scope names required for access. When non-empty,
             the subject must have all of these scopes (AND logic). Stored as a
             tuple regardless of input collection type.
@@ -97,6 +123,13 @@ class AccessPolicy:
         :param constraints: Additional custom constraint types as a dictionary.
             Callers should treat this as read-only to preserve the immutability
             intent of the policy.
+        :param role_groups: The role requirement in the form it is enforced:
+            a tuple of groups, each a tuple of role names. The subject must
+            hold at least one role from **every** group. A policy
+            constructed with ``roles`` has the single group ``(roles,)``;
+            merging two policies keeps the groups of both, so a policy
+            inherited from a blueprint and the policy of a handler must
+            each be satisfied. Normally left unset and derived.
     """
 
     # Class-level convention. When set to a non-empty role name, any
@@ -117,15 +150,23 @@ class AccessPolicy:
     scopes: Tuple[str, ...] = field(default_factory=tuple)
     require_auth: bool = True
     constraints: Dict[str, Any] = field(default_factory=dict)
+    role_groups: Tuple[Tuple[str, ...], ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         """
             Normalize iterable inputs to tuples after the frozen dataclass is
-            constructed.
+            constructed, and bring ``roles`` and ``role_groups`` into
+            agreement.
 
             ``object.__setattr__`` is used because frozen dataclasses block
             ordinary assignment. Coercion is one-shot at construction time;
             once the policy exists it remains immutable.
+
+            ``role_groups`` is derived when it is not given: one group
+            holding ``roles``. When only ``role_groups`` is given, ``roles``
+            becomes the union of the groups. When both are given and name
+            different roles -- ``dataclasses.replace(policy, roles=...)`` --
+            the explicit ``roles`` win and form the single group.
         """
         coerced_roles = _coerce_to_tuple(self.roles)
         if coerced_roles is not self.roles:
@@ -135,7 +176,62 @@ class AccessPolicy:
         if coerced_scopes is not self.scopes:
             object.__setattr__(self, "scopes", coerced_scopes)
 
+        coerced_groups = []
+        for group in _coerce_groups(self.role_groups):
+            if len(group) > 0:
+                coerced_groups.append(group)
+
+        named_by_groups = []
+        for group in coerced_groups:
+            for role in group:
+                if role not in named_by_groups:
+                    named_by_groups.append(role)
+
+        if len(coerced_groups) == 0:
+            if len(coerced_roles) > 0:
+                coerced_groups = [coerced_roles]
+        elif len(coerced_roles) == 0:
+            object.__setattr__(self, "roles", tuple(named_by_groups))
+        elif set(coerced_roles) != set(named_by_groups):
+            coerced_groups = [coerced_roles]
+
+        object.__setattr__(self, "role_groups", tuple(coerced_groups))
+
         return
+
+    def has_required_roles(self, subject_roles: Iterable[str]) -> bool:
+        """
+            Decide whether a set of roles satisfies the role requirement of
+            this policy.
+
+            The subject needs at least one role from every group in
+            ``role_groups``. When the application has opted in to a
+            "do everything" role via :data:`SUPERUSER_ROLE_NAME`, a subject
+            holding that role satisfies any role requirement.
+
+            :param subject_roles: The roles the subject holds.
+
+            :returns: ``True`` when the roles satisfy every group, or when
+                the policy requires no roles.
+        """
+        rtnval = True
+
+        if len(self.role_groups) > 0:
+            held_roles = set(subject_roles or ())
+
+            superuser_role = type(self).SUPERUSER_ROLE_NAME
+            superuser_granted = (
+                superuser_role is not None
+                and superuser_role in held_roles
+            )
+
+            if not superuser_granted:
+                for group in self.role_groups:
+                    if len(held_roles.intersection(group)) == 0:
+                        rtnval = False
+                        break
+
+        return rtnval
 
     def merge_with(
         self,
@@ -146,10 +242,19 @@ class AccessPolicy:
         """
             Merge this policy with another, combining constraints.
 
-            The merged policy enforces all constraints via logical AND. By default,
-            roles and scopes are combined as a union (deduplicated, preserving the
-            original ordering of ``self`` followed by any new entries from
-            ``other``). When replace flags are set, the other policy's values
+            The merged policy enforces all constraints via logical AND: a
+            subject satisfies it only if it satisfies ``self`` and
+            ``other``. Scopes are all-of, so the merged scopes are the
+            union. Roles are any-of *within* a policy, so they can not be
+            pooled -- a subject holding only a role of ``other`` would then
+            pass a requirement of ``self`` it does not meet. The role
+            groups of both policies are kept instead, and the subject needs
+            a role from each. ``roles`` of the result is the deduplicated
+            union (the original ordering of ``self`` followed by any new
+            entries from ``other``) and serves reporting; ``role_groups``
+            is what is enforced.
+
+            When replace flags are set, the other policy's values
             fully replace this policy's values for that field.
 
             ``require_auth`` is the logical OR of the two policies' values
@@ -159,7 +264,7 @@ class AccessPolicy:
 
             :param other: Policy to merge with.
             :param replace_roles: If True, ``other.roles`` replaces ``self.roles``
-                instead of performing a union.
+                instead of both being required.
             :param replace_scopes: If True, ``other.scopes`` replaces
                 ``self.scopes`` instead of performing a union.
 
@@ -167,6 +272,7 @@ class AccessPolicy:
         """
         if replace_roles is True:
             merged_roles = other.roles
+            merged_groups = other.role_groups
         else:
             seen = set()
             combined = []
@@ -179,6 +285,17 @@ class AccessPolicy:
                     seen.add(role)
                     combined.append(role)
             merged_roles = tuple(combined)
+
+            # Keep the groups of both policies; a group both name is
+            # required once.
+            seen_groups = set()
+            combined_groups = []
+            for group in self.role_groups + other.role_groups:
+                group_key = frozenset(group)
+                if group_key not in seen_groups:
+                    seen_groups.add(group_key)
+                    combined_groups.append(group)
+            merged_groups = tuple(combined_groups)
 
         if replace_scopes is True:
             merged_scopes = other.scopes
@@ -204,7 +321,8 @@ class AccessPolicy:
             roles=merged_roles,
             scopes=merged_scopes,
             require_auth=merged_require_auth,
-            constraints=merged_constraints
+            constraints=merged_constraints,
+            role_groups=merged_groups
         )
 
         return rtnval
@@ -228,7 +346,8 @@ class AccessPolicy:
 
                 1. If ``require_auth`` is True, the subject must be authenticated.
                 2. If ``roles`` is non-empty, the subject must have at least
-                   one of the required roles (OR logic).
+                   one of the required roles (OR logic) -- one from every
+                   group of ``role_groups`` when the policy was merged.
                 3. If ``scopes`` is non-empty, the subject must have all of the
                    required scopes (AND logic). For
                    :class:`AuthenticationContext` the scope check is performed
@@ -283,10 +402,14 @@ class AccessPolicy:
 
             :returns: ``True`` when the context satisfies all constraints.
         """
+        # An expired context authenticates nobody: it is treated as an
+        # unauthenticated request whether or not the policy demands
+        # authentication, so its roles and permissions grant nothing.
+        if context is not None and getattr(context, "is_expired", False) is not False:
+            context = None
+
         if self.require_auth is True:
             if context is None:
-                return False
-            if getattr(context, "is_expired", False) is True:
                 return False
 
         if context is None:
@@ -300,26 +423,11 @@ class AccessPolicy:
 
         principal = context.principal
 
-        if len(self.roles) > 0:
-            principal_roles = set(principal.roles)
-
-            # Optional class-level "do everything" role. When the
-            # application has opted in via
-            # :data:`SUPERUSER_ROLE_NAME`, a principal carrying that
-            # role satisfies any role-required policy — the same
-            # short-circuit :meth:`check_roles` applies. Without this
-            # the two check paths disagree and a superuser-only
-            # principal is rejected on the request-enforcement path.
-            superuser_role = type(self).SUPERUSER_ROLE_NAME
-            superuser_granted = (
-                superuser_role is not None
-                and superuser_role in principal_roles
-            )
-
-            if not superuser_granted:
-                required_roles = set(self.roles)
-                if len(principal_roles.intersection(required_roles)) == 0:
-                    return False
+        # Role groups, with the optional class-level "do everything"
+        # role applied by :meth:`has_required_roles` -- the same rule
+        # :meth:`check_roles` applies, so the two check paths agree.
+        if self.has_required_roles(principal.roles) is not True:
+            return False
 
         if len(self.scopes) > 0:
             principal_permissions = set(principal.permissions)
@@ -343,7 +451,7 @@ class AccessPolicy:
             :param context: AuthenticationContext to check, or ``None``.
 
             :returns: ``True`` when the context has at least one required
-                role, or when no roles are required.
+                role from every role group, or when no roles are required.
         """
         if len(self.roles) == 0:
             return True
@@ -351,22 +459,12 @@ class AccessPolicy:
         if context is None:
             return False
 
-        if getattr(context, "is_expired", False) is True:
+        if getattr(context, "is_expired", False) is not False:
             return False
 
-        principal_roles = set(context.principal.roles)
-
-        # Optional class-level "do everything" role. When the site
-        # has opted in via :data:`SUPERUSER_ROLE_NAME`, a principal
-        # carrying that role satisfies any role-required policy.
-        # See the class docstring for the convention.
-        superuser_role = type(self).SUPERUSER_ROLE_NAME
-        if superuser_role is not None and superuser_role in principal_roles:
-            return True
-
-        required_roles = set(self.roles)
-
-        rtnval = len(principal_roles.intersection(required_roles)) > 0
+        # Role groups plus the optional class-level "do everything"
+        # role; see :meth:`has_required_roles`.
+        rtnval = self.has_required_roles(context.principal.roles)
         return rtnval
 
     def check_permissions(self, context: Optional["AuthenticationContext"]) -> bool:
@@ -388,7 +486,7 @@ class AccessPolicy:
         if context is None:
             return False
 
-        if getattr(context, "is_expired", False) is True:
+        if getattr(context, "is_expired", False) is not False:
             return False
 
         principal_permissions = set(context.principal.permissions)
@@ -409,17 +507,24 @@ class AccessPolicy:
 
             :returns: ``True`` when the context satisfies all constraints.
         """
+        # ``is_authenticated`` is False for a guest and for an expired
+        # context. Roles and scopes of a context that is not authenticated
+        # grant nothing, whether or not the policy demands authentication.
+        is_auth = context.is_authenticated
+
         if self.require_auth is True:
-            is_auth = context.is_authenticated
             if is_auth is not True:
                 return False
 
         if len(self.roles) > 0:
-            has_required_role = context.has_any_role(*self.roles)
-            if has_required_role is not True:
+            if is_auth is not True:
+                return False
+            if self.has_required_roles(context.roles) is not True:
                 return False
 
         if len(self.scopes) > 0:
+            if is_auth is not True:
+                return False
             has_all_required_scopes = context.has_all_scopes(*self.scopes)
             if has_all_required_scopes is not True:
                 return False
@@ -445,9 +550,8 @@ class AccessPolicy:
                 return False
 
         if len(self.roles) > 0:
-            user_roles = set(getattr(user, "roles", ()) or ())
-            required_roles = set(self.roles)
-            if len(user_roles.intersection(required_roles)) == 0:
+            user_roles = getattr(user, "roles", ()) or ()
+            if self.has_required_roles(user_roles) is not True:
                 return False
 
         if len(self.scopes) > 0:
@@ -486,11 +590,16 @@ class AccessPolicy:
         self,
         context: Optional["AuthenticationContext"]
     ) -> Optional[str]:
+        expired = context is not None and getattr(context, "is_expired", False) is not False
+
         if self.require_auth is True:
             if context is None:
                 return "Authentication is required"
-            if getattr(context, "is_expired", False) is True:
+            if expired:
                 return "Authentication has expired"
+
+        if expired:
+            context = None
 
         if context is None:
             if len(self.roles) > 0:
@@ -501,11 +610,8 @@ class AccessPolicy:
 
         principal = context.principal
 
-        if len(self.roles) > 0:
-            principal_roles = set(principal.roles)
-            required_roles = set(self.roles)
-            if len(principal_roles.intersection(required_roles)) == 0:
-                return "Missing required role"
+        if self.has_required_roles(principal.roles) is not True:
+            return "Missing required role"
 
         if len(self.scopes) > 0:
             principal_permissions = set(principal.permissions)
@@ -516,16 +622,18 @@ class AccessPolicy:
         return None
 
     def _security_context_denial(self, context: SecurityContext) -> Optional[str]:
+        is_auth = context.is_authenticated
+
         if self.require_auth is True:
-            if context.is_authenticated is not True:
+            if is_auth is not True:
                 return "Authentication is required"
 
         if len(self.roles) > 0:
-            if context.has_any_role(*self.roles) is not True:
+            if is_auth is not True or self.has_required_roles(context.roles) is not True:
                 return "Missing required role"
 
         if len(self.scopes) > 0:
-            if context.has_all_scopes(*self.scopes) is not True:
+            if is_auth is not True or context.has_all_scopes(*self.scopes) is not True:
                 return "Missing required scope"
 
         return None
@@ -537,9 +645,8 @@ class AccessPolicy:
                 return "Authentication is required"
 
         if len(self.roles) > 0:
-            user_roles = set(getattr(user, "roles", ()) or ())
-            required_roles = set(self.roles)
-            if len(user_roles.intersection(required_roles)) == 0:
+            user_roles = getattr(user, "roles", ()) or ()
+            if self.has_required_roles(user_roles) is not True:
                 return "Missing required role"
 
         if len(self.scopes) > 0:

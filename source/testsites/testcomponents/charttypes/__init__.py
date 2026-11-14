@@ -6,10 +6,14 @@
     and the per-type playground pages.
 
     Each per-category module exposes a module-level ``CHART_TYPES`` list of
-    ChartTypeDoc instances.
+    ChartTypeDoc instances. The coordinated chart PART components (title,
+    legend, data table) are documented in :mod:`chartparts` and served on
+    their own pages.
 """
 
+from testcomponents.catalog.componentdoc import ComponentDoc
 from testcomponents.charttypes.charttypedoc import ChartTypeDoc
+from testcomponents.charttypes.chartparts import CHART_PARTS
 
 from testcomponents.charttypes import _01_comparison_trend as _01
 from testcomponents.charttypes import _02_distribution_relationship as _02
@@ -147,3 +151,61 @@ def chart_type_for(type_key: str) -> "ChartTypeDoc | None":
 
     doc = BY_TYPE.get(type_key)
     return doc
+
+
+def chart_type_neighbours(type_key: str) -> "tuple[ChartTypeDoc | None, ChartTypeDoc | None]":
+    """
+        Return the chart types before and after one in the gallery order
+        (category order, then catalog order within a category).
+
+        :param type_key: The chart type key.
+
+        :returns: (previous, next); either is None at the ends or when unknown.
+    """
+
+    ordered = []
+    grouped = chart_types_by_category()
+    for category_key in grouped:
+        for doc in grouped[category_key]:
+            ordered.append(doc)
+
+    previous_doc = None
+    next_doc = None
+    for index, doc in enumerate(ordered):
+        if doc.type_key == type_key:
+            if index > 0:
+                previous_doc = ordered[index - 1]
+            if index + 1 < len(ordered):
+                next_doc = ordered[index + 1]
+            break
+
+    return previous_doc, next_doc
+
+
+def chart_part_for(tag: str) -> "ComponentDoc | None":
+    """
+        Resolve a chart part doc by its tag.
+
+        :param tag: The part tag, e.g. ``mj-chart-legend``.
+
+        :returns: The ComponentDoc, or None when unknown.
+    """
+
+    found = None
+    for doc in CHART_PARTS:
+        if doc.tag == tag:
+            found = doc
+            break
+
+    return found
+
+
+def chart_part_count() -> int:
+    """
+        Return the number of documented chart part components.
+
+        :returns: The integer count.
+    """
+
+    count = len(CHART_PARTS)
+    return count

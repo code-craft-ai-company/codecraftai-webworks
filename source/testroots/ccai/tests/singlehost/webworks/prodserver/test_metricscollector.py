@@ -763,3 +763,138 @@ def test_reset_clears_all_metrics():
         raise AssertionError(errmsg)
 
     return
+
+
+def test_latency_window_is_bounded():
+    """
+        A long-running worker keeps a bounded window of recent latencies.
+    """
+    from ccai.webworks.prodserver.metricscollector import RECENT_LATENCY_WINDOW
+
+    collector = MetricsCollector(ServerConfig())
+
+    for index in range(RECENT_LATENCY_WINDOW + 50):
+        collector.record_request("/a", "GET", 200, float(index))
+
+    latencies = collector.get_request_latencies(endpoint="/a", method="GET")
+
+    if len(latencies) != RECENT_LATENCY_WINDOW or latencies[-1] != float(RECENT_LATENCY_WINDOW + 49):
+        errmsg = f"Expected the {RECENT_LATENCY_WINDOW} most recent latencies, got {len(latencies)}"
+        raise AssertionError(errmsg)
+
+    if collector.get_request_count(endpoint="/a", method="GET") != RECENT_LATENCY_WINDOW + 50:
+        errmsg = "Expected the count to include every request"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_number_of_endpoints_is_capped():
+    """
+        Distinct paths beyond the cap are counted under the 'other' endpoint.
+    """
+    from ccai.webworks.prodserver.metricscollector import MAX_ENDPOINT_KEYS, OTHER_ENDPOINT
+
+    collector = MetricsCollector(ServerConfig())
+
+    for index in range(MAX_ENDPOINT_KEYS + 25):
+        collector.record_request(f"/item/{index}", "GET", 200, 1.0)
+
+    summary = collector.get_metrics_summary()
+
+    if len(summary["request_counts"]) != MAX_ENDPOINT_KEYS + 1:
+        errmsg = f"Expected {MAX_ENDPOINT_KEYS} endpoints plus 'other', got {len(summary['request_counts'])}"
+        raise AssertionError(errmsg)
+
+    if collector.get_request_count(endpoint=OTHER_ENDPOINT, method="GET") != 25:
+        errmsg = "Expected the requests beyond the cap under the 'other' endpoint"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_prometheus_latency_is_a_histogram():
+    """
+        The latency is exposed as cumulative histogram buckets with count and sum.
+    """
+    collector = MetricsCollector(ServerConfig())
+    collector.record_request("/a", "GET", 200, 3.0)
+    collector.record_request("/a", "GET", 200, 30.0)
+    collector.record_request("/a", "GET", 200, 30000.0)
+
+    output = collector.get_prometheus_metrics()
+
+    expected_lines = [
+        "# TYPE webworks_request_latency_ms histogram",
+        'webworks_request_latency_ms_bucket{method="GET",endpoint="/a",le="5"} 1',
+        'webworks_request_latency_ms_bucket{method="GET",endpoint="/a",le="50"} 2',
+        'webworks_request_latency_ms_bucket{method="GET",endpoint="/a",le="10000"} 2',
+        'webworks_request_latency_ms_bucket{method="GET",endpoint="/a",le="+Inf"} 3',
+        'webworks_request_latency_ms_count{method="GET",endpoint="/a"} 3',
+    ]
+
+    for line in expected_lines:
+        if line not in output.splitlines():
+            errmsg = f"Expected the line {line!r} in:\n{output}"
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_prometheus_labels_are_escaped():
+    """
+        A quote or backslash in a path cannot break the exposition format.
+    """
+    collector = MetricsCollector(ServerConfig())
+    collector.record_request('/a"b\\c', "GET", 200, 1.0)
+
+    output = collector.get_prometheus_metrics()
+
+    if 'endpoint="/a\\"b\\\\c"' not in output:
+        errmsg = f"Expected the endpoint label to be escaped, got:\n{output}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_export_and_merge_add_up_collectors():
+    """
+        The states of several collectors add up; gauges only for live ones.
+    """
+    first = MetricsCollector(ServerConfig())
+    first.record_request("/a", "GET", 200, 10.0)
+    first.record_request("/a", "GET", 500, 20.0)
+    first.increment_connections()
+    first.update_worker_status(1, WorkerState.ACTIVE)
+
+    second = MetricsCollector(ServerConfig())
+    second.record_request("/a", "GET", 200, 30.0)
+    second.record_request("/b", "POST", 404, 5.0)
+    second.increment_connections()
+    second.update_worker_status(2, WorkerState.ACTIVE)
+
+    totals = MetricsCollector(ServerConfig())
+    totals.merge_state(first.export_state(), include_gauges=True)
+    totals.merge_state(second.export_state(), include_gauges=False)
+
+    checks = [
+        ("total", totals.get_request_count(), 4),
+        ("GET /a", totals.get_request_count(endpoint="/a", method="GET"), 3),
+        ("POST /b", totals.get_request_count(endpoint="/b", method="POST"), 1),
+        ("errors", totals.get_error_count(), 2),
+        ("500s", totals.get_error_count(status_code=500), 1),
+        ("active", totals.get_active_connections(), 1),
+        ("workers", totals.get_worker_statuses(), {1: "active"}),
+    ]
+
+    for name, actual, expected in checks:
+        if actual != expected:
+            errmsg = f"Merged {name}: expected {expected!r}, got {actual!r}"
+            raise AssertionError(errmsg)
+
+    output = totals.get_prometheus_metrics()
+    if 'webworks_request_latency_ms_sum{method="GET",endpoint="/a"} 60.00' not in output:
+        errmsg = f"Expected the latency sums to add up, got:\n{output}"
+        raise AssertionError(errmsg)
+
+    return

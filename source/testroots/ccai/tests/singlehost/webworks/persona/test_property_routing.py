@@ -355,7 +355,7 @@ def test_property_attach_blueprint_registers_all_endpoints(iteration):
 
         testbase.assert_true(
             register_calls[0] is app._router,
-            f"Expected register to be called with the app's Router instance"
+            "Expected register to be called with the app's Router instance"
         )
 
     finally:

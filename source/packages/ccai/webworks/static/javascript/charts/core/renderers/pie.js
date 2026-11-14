@@ -7,68 +7,195 @@
  *
  * ctx.model.categories  -- slice labels (up to 12; excess collapsed to "Other")
  * ctx.model.series[0]   -- first series only; .values are the slice magnitudes
- * ctx.attrs("inner-radius", "0") -- fraction 0-1; > 0 activates donut mode
- * ctx.model.meta["center-label"] -- optional string drawn at center (donut)
+ * ctx.attrs("inner-radius", ...) -- fraction 0-0.95 of the outer radius; > 0
+ *                          draws a ring. Default 0 for "pie", 0.5 for "donut".
+ * ctx.model.meta["center-label"] -- optional string drawn at the centre (donut)
+ *
+ * Values must be non-negative numbers. A null (or any non-number) is a gap:
+ * the category gets no slice. A negative value is invalid: it is left out
+ * and the chart emits `mj-chart-error` naming the categories, while the
+ * remaining slices are still drawn.
+ *
+ * Every slice has its own colour (ctx.colorFor(categoryIndex)), and the
+ * legend lists the slices. When there is room beside the pie, each slice is
+ * also labelled outside the circle (name and share, with a leader line and
+ * de-collided per side); otherwise wide slices carry their share inside and
+ * the legend names them.
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, arcPath, formatNumber } from "../svgdraw.js";
+import { svgEl, arcPath, formatNumber } from "../svgdraw.js";
 
 
 const MAX_SLICES = 12;
 const TWO_PI = Math.PI * 2;
+const MARGIN = 12;
+const LABEL_FONT = 11;
+const LABEL_LINE = 14;
+const INSIDE_LABEL_MIN_FRACTION = 0.07;
+const MIN_LABELLED_RADIUS = 48;
 
 
-function _buildSlices(categories, values) {
+function _textWidth(text, fontSize) {
   /*
-   * Collapse excess slices into "Other", compute proportions and angles.
-   *
-   * :returns: Array of { label, value, startAngle, endAngle }.
+   * Estimate the rendered width of a label (no layout pass is available
+   * while the drawing is built).
    */
-  let cats = categories.slice();
-  let vals = values.slice();
+  const width = String(text).length * fontSize * 0.58
+  return width
+}
 
-  if (cats.length > MAX_SLICES) {
-    const kept = cats.slice(0, MAX_SLICES - 1);
-    const keptVals = vals.slice(0, MAX_SLICES - 1);
-    let otherSum = 0;
-    for (let index = MAX_SLICES - 1; index < vals.length; index = index + 1) {
-      const numeric = typeof vals[index] === "number" ? vals[index] : 0;
-      otherSum = otherSum + numeric;
+
+function _fitText(text, maxWidth, fontSize) {
+  /*
+   * Shorten a label with an ellipsis so it fits a width.
+   *
+   * :returns: The label, possibly truncated; "" when nothing fits.
+   */
+  const label = String(text)
+  if (_textWidth(label, fontSize) <= maxWidth) {
+    return label
+  }
+  const characters = Math.floor(maxWidth / (fontSize * 0.58)) - 1
+  if (characters < 2) {
+    return ""
+  }
+  const fitted = label.slice(0, characters) + "…"
+  return fitted
+}
+
+
+function _percentText(fraction) {
+  /*
+   * A share as a percentage label ("23%", "0.4%").
+   */
+  const percent = fraction * 100
+  const digits = percent > 0 && percent < 1 ? 1 : 0
+  const text = `${formatNumber(percent, { maximumFractionDigits: digits })}%`
+  return text
+}
+
+
+function _innerFraction(ctx) {
+  /*
+   * The ring's inner radius as a fraction of the outer radius: the
+   * inner-radius attribute when it is a number, else the type's default.
+   */
+  const fallback = ctx.type === "donut" ? "0.5" : "0"
+  const parsed = parseFloat(ctx.attrs("inner-radius", fallback))
+  let fraction = Number.isFinite(parsed) === true ? parsed : parseFloat(fallback)
+  fraction = Math.min(Math.max(fraction, 0), 0.95)
+  return fraction
+}
+
+
+function _collectEntries(categories, values) {
+  /*
+   * Pair categories with their values and split out the invalid ones.
+   *
+   * :returns: { entries: [{ label, value, colorIndex }], negatives: [label] }
+   *     with only the positive, finite values in `entries`.
+   */
+  const entries = []
+  const negatives = []
+  for (let index = 0; index < categories.length; index = index + 1) {
+    const value = values[index]
+    if (typeof value !== "number" || Number.isFinite(value) === false) {
+      continue
     }
-    kept.push("Other");
-    keptVals.push(otherSum);
-    cats = kept;
-    vals = keptVals;
+    if (value < 0) {
+      negatives.push(String(categories[index]))
+      continue
+    }
+    if (value === 0) {
+      continue
+    }
+    entries.push({ label: String(categories[index]), value: value, colorIndex: index })
+  }
+  const collected = { entries: entries, negatives: negatives }
+  return collected
+}
+
+
+function _buildSlices(entries) {
+  /*
+   * Collapse excess slices into "Other" and compute fractions and angles.
+   *
+   * :param entries: [{ label, value, colorIndex }] with positive values.
+   * :returns: Array of { label, value, fraction, startAngle, endAngle,
+   *     colorIndex }, or [] when there is nothing to draw.
+   */
+  let kept = entries.slice()
+  if (kept.length > MAX_SLICES) {
+    const head = kept.slice(0, MAX_SLICES - 1)
+    let otherSum = 0
+    for (let index = MAX_SLICES - 1; index < kept.length; index = index + 1) {
+      otherSum = otherSum + kept[index].value
+    }
+    head.push({ label: "Other", value: otherSum, colorIndex: kept[MAX_SLICES - 1].colorIndex })
+    kept = head
   }
 
-  let total = 0;
-  for (let index = 0; index < vals.length; index = index + 1) {
-    const numeric = typeof vals[index] === "number" ? vals[index] : 0;
-    total = total + numeric;
+  let total = 0
+  for (let index = 0; index < kept.length; index = index + 1) {
+    total = total + kept[index].value
+  }
+  if (total <= 0) {
+    return []
   }
 
-  if (total === 0) {
-    return [];
-  }
-
-  const slices = [];
-  let cursor = 0;
-  for (let index = 0; index < cats.length; index = index + 1) {
-    const value = typeof vals[index] === "number" ? vals[index] : 0;
-    const fraction = value / total;
-    const startAngle = cursor;
-    const endAngle = cursor + fraction * TWO_PI;
+  const slices = []
+  let cursor = 0
+  for (let index = 0; index < kept.length; index = index + 1) {
+    const entry = kept[index]
+    const fraction = entry.value / total
+    const endAngle = index === kept.length - 1 ? TWO_PI : cursor + fraction * TWO_PI
     slices.push({
-      label: cats[index],
-      value: value,
+      label: entry.label,
+      value: entry.value,
       fraction: fraction,
-      startAngle: startAngle,
-      endAngle: endAngle
-    });
-    cursor = endAngle;
+      startAngle: cursor,
+      endAngle: endAngle,
+      colorIndex: entry.colorIndex
+    })
+    cursor = endAngle
   }
-  return slices;
+  return slices
+}
+
+
+function _declutter(labels, top, bottom) {
+  /*
+   * Spread the outside labels of one side vertically so they do not
+   * overlap, keeping each as close to its slice as possible.
+   *
+   * :param labels: [{ y }] on one side; `y` is adjusted in place.
+   * :param top: The smallest allowed y.
+   * :param bottom: The largest allowed y.
+   */
+  labels.sort((a, b) => a.y - b.y)
+  for (let index = 0; index < labels.length; index = index + 1) {
+    const previous = index > 0 ? labels[index - 1].y + LABEL_LINE : top
+    labels[index].y = Math.max(labels[index].y, previous)
+  }
+  /* Pushed past the bottom: shift the run back up from the end. */
+  for (let index = labels.length - 1; index >= 0; index = index - 1) {
+    const next = index < labels.length - 1 ? labels[index + 1].y - LABEL_LINE : bottom
+    labels[index].y = Math.min(labels[index].y, next)
+  }
+  return
+}
+
+
+function _pieTable(slices, valueName) {
+  /*
+   * The accessible table: one row per slice.
+   */
+  const rows = slices.map((slice) => {
+    return [slice.label, slice.value, _percentText(slice.fraction)]
+  })
+  const table = { columns: ["Category", valueName, "Share"], rows: rows }
+  return table
 }
 
 
@@ -77,140 +204,212 @@ export function render(ctx) {
    * Render a pie or donut chart.
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
-  const model = ctx.model;
-  const root = svgEl("g", { part: "plot" }, []);
+  const model = ctx.model
+  const root = svgEl("g", { part: "plot" }, [])
 
-  const series = model.series;
-  const categories = model.categories;
+  const series = model.series
+  const categories = model.categories
   if (categories.length === 0 || series.length === 0) {
-    return root;
+    return root
   }
 
-  const firstSeries = series[0];
-  const slices = _buildSlices(categories, firstSeries.values);
+  const firstSeries = series[0]
+  const collected = _collectEntries(categories, firstSeries.values)
+  if (collected.negatives.length > 0) {
+    ctx.emit("mj-chart-error", {
+      message: `${ctx.type}: negative values are not drawn (${collected.negatives.join(", ")})`
+    })
+  }
+
+  const slices = _buildSlices(collected.entries)
   if (slices.length === 0) {
-    return root;
+    return root
   }
 
-  const innerRadiusAttr = parseFloat(ctx.attrs("inner-radius", "0"));
-  const innerFraction = Number.isNaN(innerRadiusAttr) ? 0 : Math.min(Math.max(innerRadiusAttr, 0), 0.95);
+  for (let index = 0; index < slices.length; index = index + 1) {
+    slices[index].color = ctx.colorFor(slices[index].colorIndex)
+  }
 
-  const margin = { top: 16, right: 16, bottom: 16, left: 16 };
-  const plotW = Math.max(ctx.width - margin.left - margin.right, 10);
-  const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10);
+  ctx.setLegend(slices.map((slice) => {
+    return { label: slice.label, color: slice.color }
+  }))
+  ctx.setTable(_pieTable(slices, String(firstSeries.name || "Value")))
 
-  const cx = margin.left + plotW / 2;
-  const cy = margin.top + plotH / 2;
-  const outerRadius = Math.min(plotW, plotH) / 2;
-  const innerRadius = outerRadius * innerFraction;
+  const innerFraction = _innerFraction(ctx)
+  const plotW = Math.max(ctx.width - MARGIN * 2, 10)
+  const plotH = Math.max(ctx.height - MARGIN * 2, 10)
+  const cx = MARGIN + plotW / 2
+  const cy = MARGIN + plotH / 2
+
+  /*
+   * Room for outside labels: the longest "name 00%" beside the pie on
+   * both sides, capped so the pie keeps most of the width.
+   */
+  let longest = 0
+  for (let index = 0; index < slices.length; index = index + 1) {
+    const text = `${slices[index].label} ${_percentText(slices[index].fraction)}`
+    longest = Math.max(longest, _textWidth(text, LABEL_FONT))
+  }
+  const labelSpace = Math.min(longest + 24, plotW * 0.3)
+  const labelledRadius = Math.min((plotW - labelSpace * 2) / 2, plotH / 2 - 4)
+  const outsideLabels = labelledRadius >= MIN_LABELLED_RADIUS
+  const outerRadius = outsideLabels === true ? labelledRadius : Math.max(Math.min(plotW, plotH) / 2, 4)
+  const innerRadius = outerRadius * innerFraction
 
   /* Draw wedges. */
+  const wedges = svgEl("g", { part: "slices" }, [])
+  root.appendChild(wedges)
+  const decoration = svgEl("g", { "aria-hidden": "true", "pointer-events": "none" }, [])
+  root.appendChild(decoration)
+
   for (let index = 0; index < slices.length; index = index + 1) {
-    const slice = slices[index];
-    const color = ctx.colorFor(index);
-    const pathData = arcPath(cx, cy, innerRadius, outerRadius, slice.startAngle, slice.endAngle);
+    const slice = slices[index]
+    const share = _percentText(slice.fraction)
+    const description = `${slice.label}: ${formatNumber(slice.value)} (${share})`
 
     const wedge = svgEl("path", {
-      d: pathData,
-      fill: color,
-      stroke: "var(--mj-surface, #ffffff)",
+      d: arcPath(cx, cy, innerRadius, outerRadius, slice.startAngle, slice.endAngle),
+      fill: slice.color,
+      stroke: slices.length > 1 ? "var(--mj-surface, #ffffff)" : "none",
       "stroke-width": 1.5,
       part: "slice",
       tabindex: "0",
       role: "img",
-      "aria-label": `${escapeHtml(slice.label)}: ${formatNumber(slice.value)} (${(slice.fraction * 100).toFixed(1)}%)`
-    }, []);
-
-    wedge.appendChild(svgEl("title", null,
-      `${slice.label}: ${formatNumber(slice.value)} (${(slice.fraction * 100).toFixed(1)}%)`));
+      "aria-label": description
+    }, [svgEl("title", null, description)])
 
     const handler = () => {
       ctx.emit("mj-chart-slice-click", {
         label: slice.label,
         value: slice.value,
         fraction: slice.fraction
-      });
-    };
-    wedge.addEventListener("click", handler);
+      })
+    }
+    wedge.addEventListener("click", handler)
     wedge.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        handler();
+        event.preventDefault()
+        handler()
       }
-    });
+    })
+    wedges.appendChild(wedge)
 
-    root.appendChild(wedge);
-
-    /* Radial label for slices wide enough to label. */
-    const midAngle = (slice.startAngle + slice.endAngle) / 2;
-    const labelRadius = innerRadius + (outerRadius - innerRadius) * 0.6;
-    const lx = cx + labelRadius * Math.sin(midAngle);
-    const ly = cy - labelRadius * Math.cos(midAngle);
-
-    if (slice.fraction >= 0.07) {
-      root.appendChild(svgEl("text", {
-        x: lx.toFixed(2),
-        y: ly.toFixed(2),
+    /* Share inside the wedge when there are no outside labels. */
+    if (outsideLabels === false && slice.fraction >= INSIDE_LABEL_MIN_FRACTION && outerRadius >= 30) {
+      const midAngle = (slice.startAngle + slice.endAngle) / 2
+      const labelRadius = slices.length === 1 && innerRadius === 0
+        ? 0
+        : innerRadius + (outerRadius - innerRadius) * 0.6
+      decoration.appendChild(svgEl("text", {
+        x: (cx + labelRadius * Math.sin(midAngle)).toFixed(2),
+        y: (cy - labelRadius * Math.cos(midAngle)).toFixed(2),
         "text-anchor": "middle",
         "dominant-baseline": "middle",
-        "font-size": 11,
-        fill: "var(--mj-surface, #ffffff)",
-        "pointer-events": "none"
-      }, `${(slice.fraction * 100).toFixed(0)}%`));
+        "font-size": LABEL_FONT,
+        "font-weight": "600",
+        fill: "var(--mj-text-on-accent, #ffffff)"
+      }, share))
     }
   }
 
-  /* Outer leader labels for slices too narrow for internal labels. */
-  for (let index = 0; index < slices.length; index = index + 1) {
-    const slice = slices[index];
-    if (slice.fraction < 0.07) {
-      const midAngle = (slice.startAngle + slice.endAngle) / 2;
-      const leaderR = outerRadius + 10;
-      const labelR = outerRadius + 20;
-      const lx1 = cx + outerRadius * Math.sin(midAngle);
-      const ly1 = cy - outerRadius * Math.cos(midAngle);
-      const lx2 = cx + leaderR * Math.sin(midAngle);
-      const ly2 = cy - leaderR * Math.cos(midAngle);
-      const lx3 = cx + labelR * Math.sin(midAngle);
-      const ly3 = cy - labelR * Math.cos(midAngle);
-      const anchor = lx3 >= cx ? "start" : "end";
+  /* Outside labels: name and share, leader line, de-collided per side. */
+  if (outsideLabels === true) {
+    const left = []
+    const right = []
+    for (let index = 0; index < slices.length; index = index + 1) {
+      const slice = slices[index]
+      const midAngle = slices.length === 1 ? Math.PI / 2 : (slice.startAngle + slice.endAngle) / 2
+      const anchor = {
+        slice: slice,
+        angle: midAngle,
+        y: cy - (outerRadius + 10) * Math.cos(midAngle)
+      }
+      if (Math.sin(midAngle) >= 0) {
+        right.push(anchor)
+      } else {
+        left.push(anchor)
+      }
+    }
+    const top = MARGIN + LABEL_LINE / 2
+    const bottom = ctx.height - MARGIN - LABEL_LINE / 2
+    _declutter(left, top, bottom)
+    _declutter(right, top, bottom)
 
-      root.appendChild(svgEl("line", {
-        x1: lx1.toFixed(2), y1: ly1.toFixed(2),
-        x2: lx2.toFixed(2), y2: ly2.toFixed(2),
-        stroke: "var(--mj-text-muted, #6b7280)", "stroke-width": 1
-      }, []));
-      root.appendChild(svgEl("text", {
-        x: lx3.toFixed(2), y: ly3.toFixed(2),
-        "text-anchor": anchor,
-        "dominant-baseline": "middle",
-        "font-size": 10,
-        fill: "var(--mj-text-muted, #6b7280)",
-        "pointer-events": "none"
-      }, escapeHtml(slice.label)));
+    const sides = [{ labels: left, sign: -1 }, { labels: right, sign: 1 }]
+    for (let side = 0; side < sides.length; side = side + 1) {
+      const sign = sides[side].sign
+      const labels = sides[side].labels
+      for (let index = 0; index < labels.length; index = index + 1) {
+        const label = labels[index]
+        const edge = { x: cx + outerRadius * Math.sin(label.angle), y: cy - outerRadius * Math.cos(label.angle) }
+        const elbowX = cx + sign * (outerRadius + 10)
+        const textX = cx + sign * (outerRadius + 16)
+        const room = sign > 0 ? ctx.width - MARGIN - textX : textX - MARGIN
+        const share = _percentText(label.slice.fraction)
+        const name = _fitText(label.slice.label, room - _textWidth(` ${share}`, LABEL_FONT), LABEL_FONT)
+
+        decoration.appendChild(svgEl("polyline", {
+          points: `${edge.x.toFixed(2)},${edge.y.toFixed(2)} ` +
+            `${elbowX.toFixed(2)},${label.y.toFixed(2)} ` +
+            `${(textX - sign * 3).toFixed(2)},${label.y.toFixed(2)}`,
+          fill: "none",
+          stroke: "var(--mj-text-muted, #5f6673)",
+          "stroke-width": 1
+        }, []))
+        decoration.appendChild(svgEl("text", {
+          x: textX.toFixed(2),
+          y: label.y.toFixed(2),
+          "text-anchor": sign > 0 ? "start" : "end",
+          "dominant-baseline": "middle",
+          "font-size": LABEL_FONT,
+          fill: "var(--mj-text, #14181f)"
+        }, [
+          name.length > 0 ? `${name} ` : "",
+          svgEl("tspan", { "font-weight": "600" }, share)
+        ]))
+      }
     }
   }
 
-  /* Center label (donut mode). */
-  const centerLabel = model.meta && model.meta["center-label"];
+  /* Centre label (rings only). */
+  const centerLabel = model.meta !== null && model.meta !== undefined ? model.meta["center-label"] : null
   if (centerLabel !== null && centerLabel !== undefined && innerRadius > 0) {
-    root.appendChild(svgEl("text", {
+    const fontSize = Math.max(Math.min(16, innerRadius / 3), 9)
+    const text = _fitText(String(centerLabel), innerRadius * 1.8, fontSize)
+    decoration.appendChild(svgEl("text", {
       x: cx.toFixed(2),
       y: cy.toFixed(2),
       "text-anchor": "middle",
       "dominant-baseline": "middle",
-      "font-size": 16,
+      "font-size": fontSize.toFixed(1),
       "font-weight": "600",
-      fill: "var(--mj-text, #14181f)",
-      "pointer-events": "none"
-    }, escapeHtml(String(centerLabel))));
+      fill: "var(--mj-text, #14181f)"
+    }, text))
   }
 
-  return root;
+  return root
 }
 
 
-registerRenderer("pie", render);
-registerRenderer("donut", render);
+function _isEmpty(model) {
+  /*
+   * Nothing to draw: the first visible series has no positive value.
+   */
+  if (model.series.length === 0) {
+    return true
+  }
+  const values = model.series[0].values
+  for (let index = 0; index < values.length; index = index + 1) {
+    const value = values[index]
+    if (typeof value === "number" && Number.isFinite(value) === true && value > 0) {
+      return false
+    }
+  }
+  return true
+}
+
+
+registerRenderer("pie", render, { legend: "categories", isEmpty: _isEmpty });
+registerRenderer("donut", render, { legend: "categories", isEmpty: _isEmpty });

@@ -13,6 +13,13 @@
  *   - An optional popup context menu (right-click / Shift+F10) that every
  *     component inherits -- see `contextMenu` / `setContextMenu`.
  *   - Deterministic cleanup of listeners/observers on disconnect.
+ *   - Attribute changes that arrive before the first render are delivered
+ *     again once the shadow DOM exists.
+ *   - A reorder inside the same parent does not tear the component down.
+ *   - A locale change (`setLocale` / `registerStrings` in core/intl.js)
+ *     renders every connected component again, so strings read through
+ *     `t()` and locale-aware formatting follow the new locale (see
+ *     `onLocaleChanged`).
  *
  * Universal requirements (web-component-development-plan.md sec.3) are honored
  * here once, on behalf of all components.
@@ -21,6 +28,7 @@
 import { sharedBaseSheet } from "./basestyles.js";
 import { registerDockChild, unregisterDockChild } from "./anchoring.js";
 import { openContextMenu, closeContextMenu } from "./contextmenu.js";
+import { onLocaleChange } from "./intl.js";
 
 let UID_SEQ = 0;
 
@@ -68,6 +76,19 @@ export class MjElement extends HTMLElement {
     this._teardown = []
     this._componentSheet = null
 
+    /* True once render() + afterRender() have run for the first time. */
+    this._rendered = false
+
+    /* Attribute changes seen before the first render, replayed after it. */
+    this._pendingAttributeChanges = []
+
+    /* Set while a disconnect waits to learn whether it was only a move. */
+    this._disconnectPending = false
+    this._lastParent = null
+
+    /* Native events currently travelling through the shadow root, by type. */
+    this._inflightNativeEvents = {}
+
     /* Context-menu state. Items are null until a menu is configured. */
     this._contextMenuItems = null
     this._contextMenuWired = false
@@ -76,6 +97,26 @@ export class MjElement extends HTMLElement {
 
     const root = this.attachShadow({ mode: "open" })
     this._adoptStyles(root)
+    this._trackBridgedNativeEvents(root)
+  }
+
+  /*
+   * Remember the native `input`, `focus` and `blur` event that is currently
+   * being dispatched inside the shadow root. `emit` uses the record to keep
+   * the native event from reaching host listeners a second time when the
+   * component re-fires it under the same name (see `emit`).
+   */
+  _trackBridgedNativeEvents(root) {
+    const types = ["input", "focus", "blur"]
+
+    for (let index = 0; index < types.length; index = index + 1) {
+      const type = types[index]
+      root.addEventListener(type, (event) => {
+        this._inflightNativeEvents[type] = event
+      }, true)
+    }
+
+    return
   }
 
   /*
@@ -104,7 +145,11 @@ export class MjElement extends HTMLElement {
 
   /*
    * Render the component's shadow DOM. Components override `render` to return
-   * an HTML string for the initial markup. Called once on first connect.
+   * the markup -- a string, or the result of the `html` tag from core/html.js,
+   * which escapes every interpolated value. Called on the first connect and
+   * again when the element is connected after a real removal; a reorder
+   * inside the same parent keeps the existing shadow DOM (see
+   * `disconnectedCallback`).
    */
   render() {
     const markup = ""
@@ -112,16 +157,40 @@ export class MjElement extends HTMLElement {
   }
 
   connectedCallback() {
+    if (this._disconnectPending === true) {
+      this._disconnectPending = false
+
+      if (this.parentNode === this._lastParent) {
+        /*
+         * Removed and re-inserted under the same parent within one task: a
+         * reorder. The shadow DOM, listeners and state are still valid, so
+         * nothing is torn down or rebuilt.
+         */
+        if (this.getAttribute("dock") !== null) {
+          registerDockChild(this)
+        }
+        return
+      }
+
+      /* Moved to a different parent: finish the old connection first. */
+      this._finishDisconnect()
+    }
+
+    const firstRender = this._rendered === false
+
     if (this._connected === false) {
       const markup = this.render()
-      if (markup !== null && markup !== undefined && markup.length > 0) {
-        this.shadowRoot.innerHTML = markup
+      const markupText = markup !== null && markup !== undefined ? String(markup) : ""
+      if (markupText.length > 0) {
+        this.shadowRoot.innerHTML = markupText
       }
       this.afterRender()
       this._upgradeProperties()
+      this._rendered = true
     }
 
     this._connected = true
+    this._lastParent = this.parentNode
 
     const dockValue = this.getAttribute("dock")
     if (dockValue !== null) {
@@ -129,10 +198,77 @@ export class MjElement extends HTMLElement {
     }
 
     this.onConnected()
+
+    /* Removed again by the teardown of this connection. */
+    this.onTeardown(onLocaleChange((locale) => {
+      this._handleLocaleChange(locale)
+    }))
+
+    if (firstRender === true) {
+      this._replayAttributeChanges()
+    }
     return
   }
 
+  /*
+   * The locale (or the string table) changed while this component was
+   * connected. Skipped for an element that is on its way out: a component
+   * that an ancestor's re-render just removed is disconnected but still
+   * subscribed until its deferred teardown runs.
+   */
+  _handleLocaleChange(locale) {
+    const live = this.isConnected === true && this._connected === true && this._disconnectPending === false
+    if (live === true) {
+      this.onLocaleChanged(locale)
+    }
+    return
+  }
+
+  /*
+   * Rebuild the shadow DOM from the component's fields and attributes. This
+   * is exactly what a removal followed by a re-insert does: the teardown of
+   * the current connection, then render(), afterRender() and onConnected().
+   * Focus that was inside the component is put back on it.
+   */
+  renderAgain() {
+    if (this._connected === false || this._rendered === false || this.isConnected === false) {
+      return
+    }
+
+    const hadFocus = this.matches(":focus-within")
+    this._finishDisconnect()
+    this.connectedCallback()
+
+    if (hadFocus === true) {
+      this.focus()
+    }
+    return
+  }
+
+  /*
+   * Teardown is deferred by one microtask. Moving an element (insertBefore,
+   * append, a keyed re-sort) disconnects and reconnects it synchronously; when
+   * it comes back under the same parent the component is left intact instead
+   * of being rebuilt, which would discard everything held in its shadow DOM.
+   */
   disconnectedCallback() {
+    if (this._disconnectPending === true) {
+      return
+    }
+    this._disconnectPending = true
+
+    queueMicrotask(() => {
+      if (this._disconnectPending === true) {
+        this._disconnectPending = false
+        if (this.isConnected === false) {
+          this._finishDisconnect()
+        }
+      }
+    })
+    return
+  }
+
+  _finishDisconnect() {
     unregisterDockChild(this)
 
     for (let index = 0; index < this._teardown.length; index = index + 1) {
@@ -142,7 +278,43 @@ export class MjElement extends HTMLElement {
     this._teardown = []
 
     this._connected = false
+    this._lastParent = null
     this.onDisconnected()
+    return
+  }
+
+  /*
+   * Deliver the attribute changes that arrived before the first render a
+   * second time, now that the shadow DOM exists. Attributes present in the
+   * markup fire `attributeChangedCallback` during upgrade, before
+   * `connectedCallback`; a handler that updates shadow nodes can do nothing
+   * useful at that point. Only the latest value of each attribute is
+   * replayed, and only if the attribute still holds it.
+   */
+  _replayAttributeChanges() {
+    const pending = this._pendingAttributeChanges
+    this._pendingAttributeChanges = []
+
+    const latest = {}
+    const order = []
+    for (let index = 0; index < pending.length; index = index + 1) {
+      const change = pending[index]
+      if (latest[change.name] === undefined) {
+        order.push(change.name)
+        latest[change.name] = { oldValue: change.oldValue, newValue: change.newValue }
+      } else {
+        latest[change.name].newValue = change.newValue
+      }
+    }
+
+    for (let index = 0; index < order.length; index = index + 1) {
+      const name = order[index]
+      const change = latest[name]
+      if (this.getAttribute(name) === change.newValue) {
+        this.onAttributeChanged(name, change.oldValue, change.newValue)
+      }
+    }
+
     return
   }
 
@@ -161,6 +333,22 @@ export class MjElement extends HTMLElement {
 
     if (name === "context-menu") {
       this._applyContextMenuAttribute(newValue)
+    }
+
+    if (this._rendered === false) {
+      /*
+       * Before the first render the shadow DOM does not exist. The handler
+       * still runs so components that only record state keep working, but a
+       * failure here is not an error: the change is delivered again by
+       * `_replayAttributeChanges` once the component has rendered.
+       */
+      this._pendingAttributeChanges.push({ name: name, oldValue: oldValue, newValue: newValue })
+      try {
+        this.onAttributeChanged(name, oldValue, newValue)
+      } catch (error) {
+        /* Replayed after the first render. */
+      }
+      return
     }
 
     this.onAttributeChanged(name, oldValue, newValue)
@@ -227,6 +415,16 @@ export class MjElement extends HTMLElement {
   onDisconnected() { return }
   onAttributeChanged(name, oldValue, newValue) { return }
 
+  /*
+   * Called when `setLocale` or `registerStrings` changed the locale or the
+   * string table. The default renders the component again; a component that
+   * can update its text in place overrides this.
+   */
+  onLocaleChanged(locale) {
+    this.renderAgain()
+    return
+  }
+
   /* ----- helpers ----- */
 
   /*
@@ -240,7 +438,14 @@ export class MjElement extends HTMLElement {
    * `<input>` / `<select>` / `<textarea>` to its mj-* equivalent.
    * The bridged event carries the same bubbles/composed flags but is
    * a plain `Event` (no detail) -- consumers that want the rich
-   * payload listen for the `mj-*` form.
+   * payload listen for the `mj-*` form. It is not fired when a listener
+   * cancelled the `mj-*` event.
+   *
+   * Native `input`, `focus` and `blur` events are composed, so the one fired
+   * by the inner control would reach host listeners as well and they would
+   * run twice. When the component emits while that native event is still
+   * being dispatched, its propagation is stopped at this point and the
+   * bridged event is the only one the outside sees.
    */
   emit(type, detail, options) {
     const opts = options || {}
@@ -264,12 +469,28 @@ export class MjElement extends HTMLElement {
       type === "mj-blur"
     ) {
       const nativeName = type.slice(3)
-      const nativeEvent = new Event(nativeName, {
-        bubbles: bubbles,
-        cancelable: false,
-        composed: composed
-      })
-      this.dispatchEvent(nativeEvent)
+
+      const inflight = this._inflightNativeEvents[nativeName]
+      if (inflight !== undefined && inflight !== null) {
+        if (inflight.eventPhase !== Event.NONE) {
+          inflight.stopPropagation()
+        }
+        this._inflightNativeEvents[nativeName] = null
+      }
+
+      /*
+       * A cancelled `mj-*` event refused the change (a cancelable mj-change
+       * whose listener called preventDefault()), so the native-named event
+       * that mirrors it is not fired either.
+       */
+      if (notCanceled === true) {
+        const nativeEvent = new Event(nativeName, {
+          bubbles: bubbles,
+          cancelable: false,
+          composed: composed
+        })
+        this.dispatchEvent(nativeEvent)
+      }
     }
 
     return notCanceled
@@ -305,6 +526,32 @@ export class MjElement extends HTMLElement {
     const nodes = this.shadowRoot.querySelectorAll(selector)
     const list = Array.from(nodes)
     return list
+  }
+
+  /*
+   * Move focus into the component. A host that is itself focusable (it
+   * carries a `tabindex`) takes focus as usual; otherwise focus goes to the
+   * first focusable control in the shadow DOM, so `element.focus()` and a
+   * label activation behave as they do for a native control. Components with
+   * a more specific target override this.
+   */
+  focus(options) {
+    let target = null
+
+    if (this.hasAttribute("tabindex") === false && this.shadowRoot !== null) {
+      target = this.shadowRoot.querySelector(
+        "[data-mj-focus-target], input:not([type='hidden']):not([disabled]), " +
+        "textarea:not([disabled]), select:not([disabled]), button:not([disabled]), " +
+        "a[href], [tabindex]:not([tabindex='-1'])"
+      )
+    }
+
+    if (target !== null && typeof target.focus === "function") {
+      target.focus(options)
+    } else {
+      super.focus(options)
+    }
+    return
   }
 
   /* Reflect a boolean attribute from a property value. */
@@ -418,6 +665,10 @@ export class MjElement extends HTMLElement {
   }
 
   _handleContextMenu(event) {
+    /* An inner component (or the page) already handled this request. */
+    if (event.defaultPrevented === true) {
+      return
+    }
     if (this._contextMenuItems === null || this._contextMenuItems.length === 0) {
       return
     }
@@ -430,7 +681,7 @@ export class MjElement extends HTMLElement {
     const isContextKey =
       event.key === "ContextMenu" ||
       (event.shiftKey === true && event.key === "F10")
-    if (isContextKey === false) {
+    if (isContextKey === false || event.defaultPrevented === true) {
       return
     }
     if (this._contextMenuItems === null || this._contextMenuItems.length === 0) {

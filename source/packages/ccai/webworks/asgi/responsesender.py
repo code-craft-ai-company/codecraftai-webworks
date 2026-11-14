@@ -6,7 +6,8 @@
     with proper message ordering per ASGI specification.
 """
 
-from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple
+import asyncio
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, Iterator, List, Optional, Tuple
 
 from ccai.webworks.asgi.constants import (
     MESSAGE_HTTP_RESPONSE_START,
@@ -107,15 +108,17 @@ class ResponseSender:
         send: Callable[[Dict[str, Any]], Awaitable[None]],
         status: int,
         headers: List[Tuple[bytes, bytes]],
-        body_stream: AsyncGenerator[bytes, None]
+        body_stream: AsyncIterator[bytes]
     ) -> None:
         """
             Send streaming response.
             
             Sends a response with a streaming body from an async generator.
-            The response start is sent first, then body chunks are sent
-            with more_body=True for intermediate chunks and more_body=False
-            for the final chunk.
+            The response start is sent first. Every chunk is sent as soon as
+            the stream produces it, with more_body=True, and the response is
+            ended with an empty message with more_body=False. Nothing is held
+            back, so a client that follows a live stream sees each chunk when
+            it was produced.
             
             :param send: ASGI send callable.
             :param status: HTTP status code.
@@ -125,24 +128,118 @@ class ResponseSender:
         # Send the response start message first
         await self.send_start(send, status, headers)
         
-        # Buffer to hold the previous chunk so we know when we're at the last one
-        previous_chunk: Optional[bytes] = None
-        
         async for chunk in body_stream:
-            # If we have a previous chunk, send it with more_body=True
-            if previous_chunk is not None:
-                await self.send_body(send, previous_chunk, more_body=True)
-            
-            previous_chunk = chunk
+            chunk_bytes = self._chunk_to_bytes(chunk)
+            if len(chunk_bytes) > 0:
+                await self.send_body(send, chunk_bytes, more_body=True)
         
-        # Send the final chunk with more_body=False
-        if previous_chunk is not None:
-            await self.send_body(send, previous_chunk, more_body=False)
-        else:
-            # Empty stream - send empty body with more_body=False
-            await self.send_body(send, b"", more_body=False)
+        # End the response
+        await self.send_body(send, b"", more_body=False)
         
         return
+    
+    async def send_streaming_iterator(
+        self,
+        send: Callable[[Dict[str, Any]], Awaitable[None]],
+        status: int,
+        headers: List[Tuple[bytes, bytes]],
+        body_iterator: Iterator[bytes]
+    ) -> None:
+        """
+            Send streaming response from an ordinary (blocking) iterator.
+            
+            Each chunk is taken from the iterator on a worker thread, so an
+            iterator that reads a file or waits for data does not stop the
+            event loop, and is sent as soon as it is available.
+            
+            :param send: ASGI send callable.
+            :param status: HTTP status code.
+            :param headers: Response headers as list of byte tuples.
+            :param body_iterator: Iterator yielding body chunks.
+        """
+        loop = asyncio.get_running_loop()
+        exhausted = object()
+        
+        def next_chunk() -> Any:
+            # StopIteration cannot cross a thread boundary through a
+            # future, the end of the iterator is reported with a marker.
+            chunk = next(body_iterator, exhausted)
+            return chunk
+        
+        # Send the response start message first
+        await self.send_start(send, status, headers)
+        
+        try:
+            while True:
+                chunk = await loop.run_in_executor(None, next_chunk)
+                if chunk is exhausted:
+                    break
+                
+                chunk_bytes = self._chunk_to_bytes(chunk)
+                if len(chunk_bytes) > 0:
+                    await self.send_body(send, chunk_bytes, more_body=True)
+        finally:
+            # Let a generator release what it holds, also when the client
+            # went away in the middle of the stream.
+            close_iterator = getattr(body_iterator, "close", None)
+            if callable(close_iterator):
+                close_iterator()
+        
+        # End the response
+        await self.send_body(send, b"", more_body=False)
+        
+        return
+    
+    def _chunk_to_bytes(self, chunk: Any) -> bytes:
+        """
+            Convert a body or a chunk of a body to bytes.
+            
+            :param chunk: The value to convert.
+            
+            :returns: The value as bytes.
+            
+            :raises: TypeError if the value is not text or bytes-like.
+        """
+        if isinstance(chunk, bytes):
+            rtnval = chunk
+        elif isinstance(chunk, str):
+            rtnval = chunk.encode("utf-8")
+        elif isinstance(chunk, (bytearray, memoryview)):
+            rtnval = bytes(chunk)
+        else:
+            errmsg = f"Unsupported response body type: {type(chunk).__name__}"
+            raise TypeError(errmsg)
+        return rtnval
+    
+    def _get_content_stream(self, response: "Response") -> Optional[Any]:
+        """
+            Get the stream of a streaming response.
+            
+            A streaming response offers its chunks through 'iter_content'. Its
+            'body' property is not used: reading it would collect the whole
+            stream in memory first.
+            
+            :param response: Framework Response object.
+            
+            :returns: The iterator or async iterator of chunks, or None if the
+                      response is not a streaming response.
+        """
+        rtnval: Optional[Any] = None
+        
+        iter_content = getattr(response, "iter_content", None)
+        
+        if callable(iter_content):
+            try:
+                rtnval = iter_content()
+            except TypeError:
+                # The response was given an async generator, which cannot
+                # be iterated the ordinary way. Stream it as it is.
+                content = getattr(response, "_content_iterator", None)
+                if content is None or not hasattr(content, "__aiter__"):
+                    raise
+                rtnval = content
+        
+        return rtnval
     
     async def send(
         self,
@@ -154,10 +251,14 @@ class ResponseSender:
             
             Sends a complete Response object, ensuring the start message
             is sent before the body message. This method handles both
-            regular and streaming response bodies.
+            regular and streaming response bodies. A streaming body is sent
+            chunk by chunk and is never collected in memory.
             
             :param send_callable: ASGI send callable.
             :param response: Framework Response object with status, headers, and body.
+            
+            :raises: TypeError if the body is of a type that cannot be sent.
+                     Nothing has been sent in that case.
         """
         # Serialize headers to a list of byte tuples. The framework
         # Response carries cookies OUTSIDE the plain headers dict (a
@@ -175,30 +276,49 @@ class ResponseSender:
         else:
             headers = self.format_headers(response.headers)
         
-        # Check if the response has a streaming body
-        body = response.body
+        # A streaming response is recognised before its body is looked at
+        stream = self._get_content_stream(response)
         
-        if hasattr(body, "__aiter__"):
-            # Streaming response - body is an async generator
+        if stream is None:
+            body = response.body
+            
+            if isinstance(body, (bytes, str, bytearray, memoryview)):
+                # Regular response - the body is complete
+                body_bytes = self._chunk_to_bytes(body)
+                
+                await self.send_start(send_callable, response.status_code, headers)
+                await self.send_body(send_callable, body_bytes, more_body=False)
+                return
+            
+            if body is None:
+                await self.send_start(send_callable, response.status_code, headers)
+                await self.send_body(send_callable, b"", more_body=False)
+                return
+            
+            # A duck-typed response may carry its stream as the body
+            stream = body
+        
+        if hasattr(stream, "__aiter__"):
+            # Streaming response - the body is an async generator
             await self.send_streaming(
                 send_callable,
                 response.status_code,
                 headers,
-                body
+                stream
+            )
+        elif hasattr(stream, "__next__") or isinstance(stream, (list, tuple)):
+            # Streaming response - the body is an ordinary iterator of chunks
+            await self.send_streaming_iterator(
+                send_callable,
+                response.status_code,
+                headers,
+                iter(stream)
             )
         else:
-            # Regular response - body is bytes
-            await self.send_start(send_callable, response.status_code, headers)
-            
-            # Ensure body is bytes
-            if isinstance(body, str):
-                body_bytes = body.encode("utf-8")
-            elif isinstance(body, bytes):
-                body_bytes = body
-            else:
-                body_bytes = b""
-            
-            await self.send_body(send_callable, body_bytes, more_body=False)
+            # Sending an empty body here would turn a programming error
+            # into a response that looks fine.
+            errmsg = f"Unsupported response body type: {type(stream).__name__}"
+            raise TypeError(errmsg)
         
         return
 

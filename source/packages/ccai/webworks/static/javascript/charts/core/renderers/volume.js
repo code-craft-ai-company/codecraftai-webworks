@@ -4,22 +4,35 @@
  * Trading-volume renderer.
  *
  * Registers:
- *   "volume" — vertical bars over a time axis; bar color follows price
- *              direction (bullish/bearish) or a uniform series color
+ *   "volume" — vertical bars, one per trading session; bar colour follows
+ *              price direction (rising / falling) or a uniform series colour
  *              depending on the `color-mode` attribute.
  *
- * ctx.raw shape (reuses candles envelope):
- *   candles: [{ t, v, o?, c?, h?, l? }]
+ * ctx.raw shape (reuses the candles envelope):
+ *   candles: [{ t, v, o?, c?, h?, l? }]   numeric strings are accepted
+ *
+ * Sessions use the same equal slots, margins and date labels as the
+ * ohlc / candlestick renderer, so a price chart and a volume chart of the
+ * same data at the same width line up. Dense data is merged the same way.
  *
  * color-mode:
- *   "direction" (default) — bullish (c >= o) uses --mj-chart-positive;
- *                           bearish uses --mj-chart-negative.
- *   "series"              — uniform series color from colorFor(0).
+ *   "direction" (default) — close >= open uses the rising colour, else the
+ *                           falling colour (sessions without open / close use
+ *                           the series colour); falling bars are also drawn
+ *                           at a lower opacity so direction is not colour-only
+ *   "series"              — uniform series colour
+ *
+ * Events:
+ *   mj-chart-bar-click { date, volume, open, close, count }
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatDate, formatNumber } from "../svgdraw.js";
-import { timeScale, linearScale, niceTicks } from "../scales.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
+import { linearScale, niceDomain, niceTicks } from "../scales.js";
+import {
+  SESSION_MARGIN, UP_COLOR, DOWN_COLOR, readCandles, aggregateSessions,
+  drawSessionAxis, sessionText
+} from "./ohlc.js";
 
 
 export function render(ctx) {
@@ -29,165 +42,111 @@ export function render(ctx) {
    * :param ctx: The renderer context.
    * :returns: A <g> SVGElement.
    */
-  const raw = ctx.raw
-  const candles = (raw !== null && raw !== undefined && Array.isArray(raw.candles))
-    ? raw.candles : []
-
   const colorMode = ctx.attrs("color-mode", "direction")
+  const byDirection = colorMode !== "series"
+  const seriesColor = ctx.colorFor(0)
 
   const root = svgEl("g", { part: "plot" }, [])
 
-  if (candles.length === 0) {
-    return root
-  }
-
-  /* Filter to candles that have a volume value. */
-  const withVolume = candles.filter((candle) => {
-    const hasV = candle.v !== undefined && candle.v !== null && candle.v !== ""
-    return hasV
+  const allSessions = readCandles(ctx.raw)
+  ctx.setTable({
+    columns: ["Date", "Volume", "Open", "Close", "Direction"],
+    rows: allSessions.map((entry) => [
+      sessionText(entry),
+      entry.v !== null ? entry.v : "",
+      entry.o !== null ? entry.o : "",
+      entry.c !== null ? entry.c : "",
+      entry.o !== null ? (entry.c >= entry.o ? "rising" : "falling") : ""
+    ])
   })
+  ctx.setLegend(byDirection === true
+    ? [{ label: "Close ≥ open", color: UP_COLOR }, { label: "Close < open", color: DOWN_COLOR }]
+    : [{ label: "Volume", color: seriesColor }])
 
-  if (withVolume.length === 0) {
-    return root
-  }
-
-  /* Date domain. */
-  let dateMin = null
-  let dateMax = null
-  let volumeMax = 0
-
-  for (let index = 0; index < withVolume.length; index = index + 1) {
-    const candle = withVolume[index]
-    const date = new Date(candle.t)
-    const vol = typeof candle.v === "number" ? candle.v : parseFloat(candle.v) || 0
-    if (dateMin === null || date < dateMin) {
-      dateMin = date
-    }
-    if (dateMax === null || date > dateMax) {
-      dateMax = date
-    }
-    if (vol > volumeMax) {
-      volumeMax = vol
-    }
-  }
-
-  if (dateMin === null) {
-    dateMin = new Date()
-  }
-  if (dateMax === null) {
-    dateMax = new Date(dateMin.getTime() + 86400000)
-  }
-  if (volumeMax === 0) {
-    volumeMax = 1
-  }
-
-  /* Pad the time domain by half a bar on each side. */
-  const margin = { top: 16, right: 16, bottom: 40, left: 64 }
+  const margin = SESSION_MARGIN
   const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
+  const sessions = aggregateSessions(allSessions, plotW)
 
-  const timePad = withVolume.length > 1
-    ? ((dateMax.getTime() - dateMin.getTime()) / (withVolume.length - 1)) / 2
-    : 86400000 / 2
-  const paddedMin = new Date(dateMin.getTime() - timePad)
-  const paddedMax = new Date(dateMax.getTime() + timePad)
-
-  const timeScaleFn = timeScale([paddedMin, paddedMax], [0, plotW])
-  const valScale = linearScale([0, volumeMax], [plotH, 0])
+  let volumeMax = 0
+  let anyVolume = false
+  for (let index = 0; index < sessions.length; index = index + 1) {
+    if (sessions[index].v !== null && sessions[index].v >= 0) {
+      anyVolume = true
+      volumeMax = Math.max(volumeMax, sessions[index].v)
+    }
+  }
+  if (anyVolume === false) {
+    return root
+  }
+  const domain = niceDomain(0, volumeMax > 0 ? volumeMax : 1, 5)
+  const valScale = linearScale(domain, [plotH, 0])
+  const slotW = plotW / sessions.length
+  const barW = Math.min(Math.max(slotW * 0.6, 1), 24)
 
   const plot = svgEl("g", {
     transform: `translate(${margin.left},${margin.top})`
   }, [])
   root.appendChild(plot)
+  const axis = svgEl("g", { "aria-hidden": "true" }, [])
+  const marks = svgEl("g", null, [])
+  plot.appendChild(axis)
+  plot.appendChild(marks)
 
-  /* Value axis ticks (left side). */
-  const ticks = niceTicks(0, volumeMax, 5)
+  const ticks = niceTicks(domain[0], domain[1], 5)
   for (let t = 0; t < ticks.length; t = t + 1) {
-    const tick = ticks[t]
-    const y = valScale(tick)
-    plot.appendChild(svgEl("line", {
+    const y = valScale(ticks[t])
+    axis.appendChild(svgEl("line", {
       x1: 0, y1: y, x2: plotW, y2: y,
       stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
     }, []))
-    plot.appendChild(svgEl("text", {
+    axis.appendChild(svgEl("text", {
       x: -8, y: y + 4, "text-anchor": "end",
       "font-size": 10, fill: "var(--mj-text-muted, #6b7280)"
-    }, formatNumber(tick, { notation: "compact" })))
+    }, formatNumber(ticks[t], { notation: "compact" })))
   }
-
-  /* Time axis ticks (bottom). */
-  const tickCount = Math.max(2, Math.floor(plotW / 70))
-  const timeTicks = timeScaleFn.ticks(tickCount)
-  const spanDays = (dateMax.getTime() - dateMin.getTime()) / 86400000
-
-  for (let t = 0; t < timeTicks.length; t = t + 1) {
-    const tick = timeTicks[t]
-    const x = timeScaleFn(tick)
-    plot.appendChild(svgEl("line", {
-      x1: x, y1: plotH, x2: x, y2: plotH + 4,
-      stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1
-    }, []))
-    plot.appendChild(svgEl("text", {
-      x: x, y: plotH + 16, "text-anchor": "middle",
-      "font-size": 10, fill: "var(--mj-text-muted, #6b7280)"
-    }, formatDate(tick, spanDays <= 180
-      ? { month: "short", day: "numeric" }
-      : { year: "numeric", month: "short" })))
-  }
-
-  /* Axis baseline. */
-  plot.appendChild(svgEl("line", {
+  drawSessionAxis(axis, sessions, slotW, plotW, plotH)
+  axis.appendChild(svgEl("line", {
     x1: 0, y1: plotH, x2: plotW, y2: plotH,
     stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
   }, []))
 
-  /* Volume bars. */
-  const barW = withVolume.length > 1
-    ? Math.max((plotW / withVolume.length) * 0.7, 1)
-    : 10
+  for (let index = 0; index < sessions.length; index = index + 1) {
+    const session = sessions[index]
+    if (session.v === null || session.v < 0) {
+      continue
+    }
+    const cx = (index + 0.5) * slotW
+    const barY = valScale(session.v)
+    const hasDirection = session.o !== null && session.c !== null
+    const rising = hasDirection === true && session.c >= session.o
 
-  for (let index = 0; index < withVolume.length; index = index + 1) {
-    const candle = withVolume[index]
-    const date = new Date(candle.t)
-    const vol = typeof candle.v === "number" ? candle.v : parseFloat(candle.v) || 0
-    const open = typeof candle.o === "number" ? candle.o : null
-    const close = typeof candle.c === "number" ? candle.c : null
-
-    const cx = timeScaleFn(date)
-    const barX = cx - barW / 2
-    const barY = valScale(vol)
-    const barH = plotH - barY
-
-    let barColor = ctx.colorFor(0)
-    if (colorMode === "direction") {
-      if (open !== null && close !== null) {
-        barColor = close >= open
-          ? "var(--mj-chart-positive, var(--mj-color-success, #15803d))"
-          : "var(--mj-chart-negative, var(--mj-color-danger, #b91c1c))"
-      }
+    let barColor = seriesColor
+    let opacity = 0.8
+    if (byDirection === true && hasDirection === true) {
+      barColor = rising === true ? UP_COLOR : DOWN_COLOR
+      opacity = rising === true ? 0.85 : 0.55
     }
 
-    const dirLabel = (open !== null && close !== null)
-      ? (close >= open ? "bullish" : "bearish") : ""
-    const ariaLabel = `Volume ${formatDate(date)}: ${formatNumber(vol)}` +
-      (dirLabel !== "" ? ` (${dirLabel})` : "")
+    const direction = hasDirection === true ? (rising === true ? "rising" : "falling") : ""
+    const ariaLabel = `Volume ${sessionText(session)}: ${formatNumber(session.v)}` +
+      (direction !== "" ? ` (${direction})` : "")
 
     const bar = svgEl("rect", {
-      x: barX, y: barY, width: barW, height: Math.max(barH, 1),
-      fill: barColor, "fill-opacity": 0.75, part: "bar"
+      x: cx - barW / 2, y: barY, width: barW, height: Math.max(plotH - barY, 1),
+      fill: barColor, "fill-opacity": opacity, stroke: barColor, "stroke-width": slotW < 4 ? 0 : 1,
+      part: "bar", tabindex: "0", role: "img", "aria-label": ariaLabel
     }, [])
-    bar.setAttribute("tabindex", "0")
-    bar.setAttribute("role", "img")
-    bar.setAttribute("aria-label", ariaLabel)
     bar.appendChild(svgEl("title", null, ariaLabel))
 
-    const emitCandle = candle
+    const emitSession = session
     const clickHandler = () => {
       ctx.emit("mj-chart-bar-click", {
-        date: emitCandle.t,
-        volume: emitCandle.v,
-        open: emitCandle.o,
-        close: emitCandle.c
+        date: emitSession.source.t,
+        volume: emitSession.v,
+        open: emitSession.o,
+        close: emitSession.c,
+        count: emitSession.count
       })
     }
     bar.addEventListener("click", clickHandler)
@@ -197,11 +156,11 @@ export function render(ctx) {
         clickHandler()
       }
     })
-    plot.appendChild(bar)
+    marks.appendChild(bar)
   }
 
   return root
 }
 
 
-registerRenderer("volume", render);
+registerRenderer("volume", render, { minHeight: 200 });

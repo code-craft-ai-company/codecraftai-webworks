@@ -915,3 +915,65 @@ def test_clear_spans():
         raise AssertionError(errmsg)
 
     return
+
+
+def test_get_or_create_request_id_replaces_ids_that_are_not_plain_tokens():
+    """
+        A received ID is echoed in a response header and written to the logs,
+        so text that is not a plain token is replaced by a generated ID.
+    """
+    tracer = RequestTracer(ServerConfig(trace_header="X-Request-ID"))
+
+    rejected = [
+        "has space",
+        "quote\"inside",
+        "tab\tinside",
+        "x" * 129,
+        "semi;colon",
+        "café",
+    ]
+
+    for value in rejected:
+        request_id = tracer.get_or_create_request_id({"X-Request-ID": value})
+        if request_id == value.strip() or len(request_id) != 36:
+            errmsg = f"Expected a generated ID instead of {value!r}, got {request_id!r}"
+            raise AssertionError(errmsg)
+
+    accepted = ["abc-123", "req_1.2:3/4+5=6@7", "x" * 128]
+    for value in accepted:
+        request_id = tracer.get_or_create_request_id({"X-Request-ID": value})
+        if request_id != value:
+            errmsg = f"Expected {value!r} to be used as it is, got {request_id!r}"
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_export_traces_hands_out_each_span_once_under_concurrency():
+    """
+        Spans created by several threads are exported exactly once.
+    """
+    import threading
+
+    tracer = RequestTracer(ServerConfig(enable_tracing=True))
+    exported = []
+    tracer.register_export_backend(lambda spans: exported.extend(span["span_id"] for span in spans))
+
+    def work():
+        for _ in range(200):
+            span = tracer.create_span("unit", "req")
+            span.end()
+            tracer.export_traces()
+
+    threads = [threading.Thread(target=work) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    tracer.export_traces()
+
+    if len(exported) != 800 or len(set(exported)) != 800:
+        errmsg = f"Expected 800 distinct exported spans, got {len(exported)} ({len(set(exported))} distinct)"
+        raise AssertionError(errmsg)
+
+    return

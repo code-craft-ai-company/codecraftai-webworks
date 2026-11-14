@@ -600,6 +600,138 @@ class ExtensionManifest:
         pass
 ```
 
+### Application Integration
+
+A `WebApplication` owns the extension machinery through an `ExtensionHost`
+(`extensibility/extensionhost.py`), created in the application's
+constructor. The host creates the application's one `ExtensionRegistry`
+(and with it the one `HookManager`) and wraps that manager in
+`AppLifecycleHooks`, `RequestLifecycleHooks` and
+`ComponentRegistrationHooks`. The application exposes `extension_registry`,
+`hook_manager` and `app_context`, and `add_extension(extension)`.
+
+#### Application context
+
+`ApplicationContext` (`extensibility/applicationcontext.py`) is the small,
+explicit object an `ExtensionContext` reads. Its members are exactly:
+
+| Member | Provides |
+|--------|----------|
+| `get_logger(name)` | `logging.getLogger("<app logger>.<name>")`; an extension's logger is `<app logger>.extension.<name>` |
+| `config` | the application's `ManagedConfigRegistry` (None before `setup_configuration`) |
+| `endpoint_registry` | the application's `EndpointRegistry`; routes registered before the routes are finalised are served |
+| `url_node_map` | a `URLNodeMap` of the served routes, filled when the routes are finalised (complete from `on_routes_registered`); left empty by an application without extensions |
+| `middleware` | the application's `MiddlewareRegistry` |
+| `extension_registry` | the `ExtensionRegistry` |
+| `component_hooks` | the `ComponentRegistrationHooks` |
+
+The configuration and the extension machinery are bound after construction
+(`bind_config`, `bind_extensions`): the registry needs the context to exist.
+
+An extension uses its `ExtensionContext` while it initializes:
+`context.register_hook(hook_name, callback, priority, before, after)`
+registers a callback under the extension's name (so it is suspended with
+the extension and its failures count against it);
+`context.component_hooks.fire_register_middleware(component)` and its
+siblings register components; `context.endpoint_registry` takes routes.
+The context is frozen after initialization; `register_hook` then raises
+`ExtensionContextFrozenError`.
+
+#### Configuration
+
+Discovery is explicit. The `extensions` section of the application
+configuration (`ExtensionSettings`, `extensibility/extensionsettings.py`):
+
+```yaml
+extensions:
+  load:                 # import strings, "package.module:ClassName" (or "package.module.ClassName")
+    - mycompany.audit.extension:AuditExtension
+  entry_points:         # names of entry points in the "ccai.extensions" group
+    - metrics
+  paths:                # absolute directories holding extension manifests (the directory and its subdirectories)
+    - /srv/myapp/extensions
+  allowed_packages:     # required whenever anything above is set
+    - mycompany
+  audit:                # extensions.<name>.*: the "audit" extension's own settings
+    level: full
+```
+
+Nothing configured means no extension is loaded and no module imported.
+`ExtensionLoader.load_from_import_string` / `load_from_entry_point` check
+the allow-list before importing, only instantiate `Extension` subclasses
+and raise `ExtensionLoadError`; manifests found in `paths` are loaded with
+`load_extension`. The application turns every load failure, a disallowed
+package, a duplicate name, a missing dependency or an invalid extension
+configuration into `ConfigurationError` at startup. `load`, `entry_points`,
+`paths` and `allowed_packages` can not be extension names.
+`load_extension_config` reads `extensions.<name>.*` from a nested dict or
+from the dot-notation keys of a configuration registry (`items()`).
+
+#### Phase mapping
+
+| Application phase | Extension work |
+|-------------------|----------------|
+| constructor | `ExtensionHost`, `ExtensionRegistry`, `HookManager` created |
+| before `setup_infrastructure` | `add_extension(...)` |
+| `setup_configuration` | the configuration is bound to the context |
+| `setup_infrastructure`, before the routes are finalised | configured extensions loaded; `initialize_all()`; every INITIALIZED extension enabled (`activate()`); `on_config_loaded`; `on_app_init` |
+| `setup_infrastructure`, routes final (`INFRASTRUCTURE_READY`) | URL node map filled; `on_routes_registered` |
+| ASGI lifespan startup, after the startup handlers (`LifespanHandler.on_ready`) -- or, without a lifespan startup, before the first request (`Dispatcher(on_first_request=...)`) | `on_app_ready`, once |
+| requests | request lifecycle hooks (below) |
+| ASGI lifespan shutdown, before the shutdown handlers (`LifespanHandler.on_stopping`) -- or `shutdown()`, whichever comes first | `on_app_shutdown`, then `ExtensionRegistry.shutdown_all()`: every started extension's `shutdown()` in reverse dependency order, continuing past (and logging) one that raises; once |
+
+Application lifecycle hook callbacks receive the `ApplicationContext`.
+
+#### Request lifecycle hooks in the dispatcher
+
+`Dispatcher(request_hooks=..., on_first_request=...)` fires the request hooks
+the same way in `dispatch` (WSGI) and `dispatch_async` (ASGI):
+
+1. canonical path published; first-request work once (`on_first_request`,
+   then `before_first_request(request)`), serialised by a lock;
+2. `before_request(request)` -- a returned response is sent without running
+   the middleware, routing or the handler;
+3. the pipeline; an unhandled exception is passed to
+   `on_request_error(request, exception)` before it becomes the 500;
+4. `after_request(request, response)` -- chained: a returned response replaces
+   the response the next callback receives;
+5. `teardown_request(request, response, exception)` always, last.
+
+When no request hook has a callback (`HookManager.has_any_callbacks`, a
+dictionary-size check when nothing is registered) the dispatcher takes its
+plain path after the first request and executes no hook. Callbacks are
+synchronous (the HookManager refuses coroutine functions) and run on the
+dispatching thread.
+
+A failing callback is reported through the HookManager's error callback
+(logged with the extension name, counted towards quarantine). Failures of
+`before_first_request`, `before_request` and `after_request` are raised as
+`HookExecutionError` (`HookManager.execute(..., stop_on_error=True)` /
+`execute_chain`) and the request is answered 500; failures of
+`on_request_error` and `teardown_request` are only reported.
+`ConfigurationError` / `SemanticError` propagate.
+
+#### Component registration
+
+`ComponentRegistrationHooks(forwarders=...)` hands a validated component to
+the application's registry before the hook's callbacks are told about it
+(a component the registry refuses is not recorded):
+
+| Hook | Forwarded to |
+|------|--------------|
+| `register_middleware` | `MiddlewareRegistry.register(ExtensionMiddleware(component), scope="global", name, priority, position)` |
+| `register_auth_provider` | `AuthenticationSystem.register(component, priority)` (the component needs a `scheme`) |
+| `register_serializer` | the REST processing's `SerializerRegistry` (serializer and deserializer; needs a `content_type`) |
+| `register_template_engine`, `register_error_handler`, `register_cli_command` | recorded only (`get_registered_components`); the application has no registry these instances could be served from |
+
+`ExtensionMiddleware` (`extensibility/extensionmiddleware.py`) is the one
+adapter from the specification's `process_request` / `process_response`
+component to the pipeline's `(request, call_next)` contract:
+`process_request(request)` returning a response short-circuits;
+`process_response(request, response)` sees every response the middleware
+returns and may replace it. Coroutine methods are awaited; plain methods run
+on a worker thread in the async pipeline.
+
 ## Data Models
 
 ### ExtensionState Enum

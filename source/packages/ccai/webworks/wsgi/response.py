@@ -8,6 +8,11 @@
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 from ccai.webworks.wsgi.constants import HTTP_STATUS_PHRASES
+from ccai.webworks.wsgi.headervalidation import validate_headers
+
+
+# Status codes of responses that carry neither a body nor a Content-Length
+STATUS_CODES_WITHOUT_BODY: Tuple[int, ...] = (204, 304)
 
 
 class Response:
@@ -203,14 +208,49 @@ class ResponseBuilder:
             :param content_type: Optional content type if not in headers.
             
             :returns: List of (name, value) tuples.
+            
+            :raises: InvalidResponseHeader if a header name or value is not safe
+                     to send, for example because it contains CR or LF.
+        """
+        header_items: List[Tuple[str, str]] = []
+        for name, value in headers.items():
+            header_items.append((name, value))
+        
+        result = self.format_header_list(
+            header_items,
+            body_length=body_length,
+            content_type=content_type
+        )
+        return result
+    
+    def format_header_list(
+        self,
+        headers: List[Tuple[str, str]],
+        body_length: Optional[int] = None,
+        content_type: Optional[str] = None
+    ) -> List[Tuple[str, str]]:
+        """
+            Format a list of headers, filtering hop-by-hop headers.
+            
+            Unlike a dict, a list can hold a header more than once, which is
+            how several Set-Cookie headers are carried.
+            
+            :param headers: Response headers as (name, value) tuples.
+            :param body_length: Optional body length for Content-Length header.
+            :param content_type: Optional content type if not in headers.
+            
+            :returns: List of (name, value) tuples.
+            
+            :raises: InvalidResponseHeader if a header name or value is not safe
+                     to send, for example because it contains CR or LF.
         """
         result: List[Tuple[str, str]] = []
         
         # Track which headers we've added to avoid duplicates
         added_headers: set = set()
         
-        # Add headers from the dict, filtering hop-by-hop headers
-        for name, value in headers.items():
+        # Add the given headers, filtering hop-by-hop headers
+        for name, value in headers:
             if self.is_hop_by_hop(name):
                 continue
             
@@ -227,50 +267,138 @@ class ResponseBuilder:
             result.append(("Content-Length", str(body_length)))
             added_headers.add("content-length")
         
+        # A header that holds a line break would be split into two headers
+        # by whatever writes the response. It is refused here, where every
+        # WSGI server the application runs under is covered.
+        validate_headers(result)
+        
         return result
+    
+    def _get_response_headers(self, response: Any) -> List[Tuple[str, str]]:
+        """
+            Get every header of a response object, cookies included.
+            
+            The framework response keeps its cookies outside of the headers
+            dict and offers the complete list through '_get_all_headers'.
+            Responses without that method only have the dict.
+            
+            :param response: Response object.
+            
+            :returns: List of (name, value) header tuples.
+        """
+        rtnval: List[Tuple[str, str]] = []
+        
+        all_headers = getattr(response, "_get_all_headers", None)
+        if callable(all_headers):
+            for name, value in all_headers():
+                rtnval.append((name, value))
+        else:
+            for name, value in response.headers.items():
+                rtnval.append((name, value))
+        
+        return rtnval
+    
+    def _get_response_content_type(
+        self,
+        response: Any,
+        headers: List[Tuple[str, str]]
+    ) -> Optional[str]:
+        """
+            Get the content type of a response object.
+            
+            :param response: Response object.
+            :param headers: Headers of the response as (name, value) tuples.
+            
+            :returns: Content type or None if the response does not set one.
+        """
+        rtnval: Optional[str] = getattr(response, "content_type", None)
+        
+        if rtnval is None:
+            for name, value in headers:
+                if name.lower() == "content-type":
+                    rtnval = value
+                    break
+        
+        return rtnval
     
     def build(
         self,
-        response: Response
+        response: Any
     ) -> Tuple[str, List[Tuple[str, str]], Iterable[bytes]]:
         """
             Convert Response to WSGI format.
             
-            :param response: Framework Response object.
+            Accepts the Response of this module and the response classes of
+            the framework, including streaming responses, whose body is passed
+            on as an iterator and not collected in memory.
+            
+            :param response: Response object.
             
             :returns: Tuple of (status, headers, body_iterator).
+            
+            :raises: InvalidResponseHeader if a header name or value is not safe
+                     to send.
         """
         # Format status string
-        status = self.format_status(response.status_code)
+        status_code = response.status_code
+        status = self.format_status(status_code)
         
-        # Get body and determine length
-        body = response.body
-        body_length: Optional[int] = None
+        response_headers = self._get_response_headers(response)
+        response_content_type = self._get_response_content_type(response, response_headers)
         
-        if len(body) > 0:
-            body_length = len(body)
+        status_has_body = True
+        if status_code >= 100 and status_code < 200:
+            status_has_body = False
+        elif status_code in STATUS_CODES_WITHOUT_BODY:
+            status_has_body = False
         
-        # Determine content type for responses with body
-        content_type: Optional[str] = None
-        if body_length is not None and body_length > 0:
-            if response.content_type is None:
-                # Default to text/plain if body exists but no content type set
-                content_type = "text/plain; charset=utf-8"
+        iter_content = getattr(response, "iter_content", None)
+        
+        if callable(iter_content):
+            # Streaming response: the size of the body is not known and the
+            # body is not read here.
+            body_iterator: Iterable[bytes] = iter_content()
+            
+            # WSGI has no way to wait on an async iterator.
+            if hasattr(body_iterator, "__aiter__"):
+                errmsg = (
+                    "A streaming response with async content can not be served "
+                    "through WSGI; serve it through the ASGI application."
+                )
+                raise TypeError(errmsg)
+            body_length: Optional[int] = None
+            content_type: Optional[str] = response_content_type
+        else:
+            body = response.body
+            
+            # The length is stated for an empty body as well, a client that
+            # keeps the connection open has no other way to tell that the
+            # response is complete.
+            body_length = None
+            if status_has_body:
+                body_length = len(body)
+            
+            # Determine content type for responses with body
+            content_type = None
+            if len(body) > 0:
+                if response_content_type is None:
+                    # Default to text/plain if body exists but no content type set
+                    content_type = "text/plain; charset=utf-8"
+                else:
+                    content_type = response_content_type
+            
+            # Create body iterator
+            if len(body) > 0 and status_has_body:
+                body_iterator = [body]
             else:
-                content_type = response.content_type
+                body_iterator = []
         
         # Format headers
-        headers = self.format_headers(
-            response.headers,
+        headers = self.format_header_list(
+            response_headers,
             body_length=body_length,
             content_type=content_type
         )
-        
-        # Create body iterator
-        if len(body) > 0:
-            body_iterator: Iterable[bytes] = [body]
-        else:
-            body_iterator = []
         
         rtnval = (status, headers, body_iterator)
         return rtnval

@@ -180,10 +180,21 @@ class MockRequest:
     def __init__(
         self,
         headers: Optional[Dict[str, str]] = None,
-        method: str = "GET"
+        method: str = "GET",
+        path: str = "/",
+        query_string: str = ""
     ):
         self.headers = headers or {}
         self.method = method
+        self.path = path
+        self.query_string = query_string
+
+
+# Quality-of-protection values the tests send. The authenticator is
+# configured with qop="auth" by default and requires clients to use it.
+TEST_QOP = "auth"
+TEST_NC = "00000001"
+TEST_CNONCE = "0a4f113b"
 
 
 # =============================================================================
@@ -606,7 +617,10 @@ def test_digest_authenticator_valid_credentials():
         nonce=nonce,
         uri=uri,
         method=method,
-        algorithm="MD5"
+        algorithm="MD5",
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     
     # Create authorization header
@@ -617,10 +631,13 @@ def test_digest_authenticator_valid_credentials():
         uri=uri,
         response=response,
         algorithm="MD5",
-        opaque=opaque
+        opaque=opaque,
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     
-    request2 = MockRequest(headers={"Authorization": auth_header}, method=method)
+    request2 = MockRequest(headers={"Authorization": auth_header}, method=method, path=uri)
     result2 = run_async(authenticator.authenticate(request2))
     
     if result2.status != AuthenticationStatus.SUCCESS:
@@ -668,7 +685,10 @@ def test_digest_authenticator_invalid_password():
         nonce=nonce,
         uri=uri,
         method=method,
-        algorithm="MD5"
+        algorithm="MD5",
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     
     auth_header = create_digest_auth_header(
@@ -678,10 +698,13 @@ def test_digest_authenticator_invalid_password():
         uri=uri,
         response=response,
         algorithm="MD5",
-        opaque=opaque
+        opaque=opaque,
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     
-    request2 = MockRequest(headers={"Authorization": auth_header}, method=method)
+    request2 = MockRequest(headers={"Authorization": auth_header}, method=method, path=uri)
     result2 = run_async(authenticator.authenticate(request2))
     
     if result2.status != AuthenticationStatus.FAILURE:
@@ -722,7 +745,10 @@ def test_digest_authenticator_unknown_user():
         nonce=nonce,
         uri=uri,
         method=method,
-        algorithm="MD5"
+        algorithm="MD5",
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     
     auth_header = create_digest_auth_header(
@@ -732,10 +758,13 @@ def test_digest_authenticator_unknown_user():
         uri=uri,
         response=response,
         algorithm="MD5",
-        opaque=opaque
+        opaque=opaque,
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     
-    request2 = MockRequest(headers={"Authorization": auth_header}, method=method)
+    request2 = MockRequest(headers={"Authorization": auth_header}, method=method, path=uri)
     result2 = run_async(authenticator.authenticate(request2))
     
     if result2.status != AuthenticationStatus.FAILURE:
@@ -780,7 +809,10 @@ def test_digest_authenticator_sha256_algorithm():
         nonce=nonce,
         uri=uri,
         method=method,
-        algorithm="SHA-256"
+        algorithm="SHA-256",
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     
     auth_header = create_digest_auth_header(
@@ -790,10 +822,13 @@ def test_digest_authenticator_sha256_algorithm():
         uri=uri,
         response=response,
         algorithm="SHA-256",
-        opaque=opaque
+        opaque=opaque,
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     
-    request2 = MockRequest(headers={"Authorization": auth_header}, method=method)
+    request2 = MockRequest(headers={"Authorization": auth_header}, method=method, path=uri)
     result2 = run_async(authenticator.authenticate(request2))
     
     if result2.status != AuthenticationStatus.SUCCESS:
@@ -850,7 +885,10 @@ def test_digest_authenticator_with_dict_request():
         nonce=nonce,
         uri=uri,
         method=method,
-        algorithm="MD5"
+        algorithm="MD5",
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     
     auth_header = create_digest_auth_header(
@@ -860,10 +898,13 @@ def test_digest_authenticator_with_dict_request():
         uri=uri,
         response=response,
         algorithm="MD5",
-        opaque=opaque
+        opaque=opaque,
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     
-    request2 = {"headers": {"Authorization": auth_header}, "method": method}
+    request2 = {"headers": {"Authorization": auth_header}, "method": method, "path": uri}
     result2 = run_async(authenticator.authenticate(request2))
     
     if result2.status != AuthenticationStatus.SUCCESS:
@@ -1016,7 +1057,10 @@ def test_property_9_digest_auth_nonce_freshness_validation():
             nonce=nonce,
             uri=uri,
             method=method,
-            algorithm="MD5"
+            algorithm="MD5",
+            cnonce=TEST_CNONCE,
+            nc=TEST_NC,
+            qop=TEST_QOP
         )
         
         auth_header = create_digest_auth_header(
@@ -1026,10 +1070,13 @@ def test_property_9_digest_auth_nonce_freshness_validation():
             uri=uri,
             response=response,
             algorithm="MD5",
-            opaque=opaque
+            opaque=opaque,
+            cnonce=TEST_CNONCE,
+            nc=TEST_NC,
+            qop=TEST_QOP
         )
         
-        request2 = MockRequest(headers={"Authorization": auth_header}, method=method)
+        request2 = MockRequest(headers={"Authorization": auth_header}, method=method, path=uri)
         result2 = run_async(authenticator.authenticate(request2))
         
         # Property: Status must be CHALLENGE (not SUCCESS, not FAILURE)
@@ -1125,6 +1172,9 @@ def test_digest_authenticator_rejects_response_hash_off_by_one_char():
         uri=uri,
         method=method,
         algorithm="MD5",
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     # Flip the last hex digit so the hash is one character off.
     if correct_response[-1] == "0":
@@ -1141,9 +1191,12 @@ def test_digest_authenticator_rejects_response_hash_off_by_one_char():
         response=tampered_response,
         algorithm="MD5",
         opaque=opaque,
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     request2 = MockRequest(
-        headers={"Authorization": auth_header}, method=method,
+        headers={"Authorization": auth_header}, method=method, path=uri,
     )
     result2 = run_async(authenticator.authenticate(request2))
 
@@ -1198,6 +1251,9 @@ def test_digest_authenticator_accepts_uppercase_response_hash():
         uri=uri,
         method=method,
         algorithm="MD5",
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     upper_response = response.upper()
     auth_header = create_digest_auth_header(
@@ -1208,9 +1264,12 @@ def test_digest_authenticator_accepts_uppercase_response_hash():
         response=upper_response,
         algorithm="MD5",
         opaque=opaque,
+        cnonce=TEST_CNONCE,
+        nc=TEST_NC,
+        qop=TEST_QOP
     )
     request2 = MockRequest(
-        headers={"Authorization": auth_header}, method=method,
+        headers={"Authorization": auth_header}, method=method, path=uri,
     )
     result2 = run_async(authenticator.authenticate(request2))
 
@@ -1373,4 +1432,278 @@ def test_digest_authenticator_rejects_empty_uri():
             "uri, got '{}'".format(result.error_code)
         )
         raise AssertionError(errmsg)
+    return
+
+
+# =============================================================================
+# Server-Chosen Parameters and Replay Protection
+# =============================================================================
+
+def build_digest_request(
+    authenticator: DigestAuthenticator,
+    username: str,
+    password: str,
+    realm: str,
+    uri: str = "/protected/resource",
+    path: Optional[str] = None,
+    nonce: Optional[str] = None,
+    nc: Optional[str] = TEST_NC,
+    qop: Optional[str] = TEST_QOP,
+    algorithm: str = "MD5",
+    response: Optional[str] = None
+) -> MockRequest:
+    """
+        Build a request that carries a Digest Authorization header for a
+        nonce obtained from the authenticator.
+    """
+    if nonce is None:
+        nonce = extract_nonce_from_challenge(authenticator.get_challenge())
+    
+    cnonce = TEST_CNONCE if qop else None
+    
+    if response is None:
+        response = compute_digest_response(
+            username=username,
+            realm=realm,
+            password=password,
+            nonce=nonce,
+            uri=uri,
+            method="GET",
+            algorithm=algorithm,
+            cnonce=cnonce,
+            nc=nc,
+            qop=qop
+        )
+    
+    auth_header = create_digest_auth_header(
+        username=username,
+        realm=realm,
+        nonce=nonce,
+        uri=uri,
+        response=response,
+        algorithm=algorithm,
+        cnonce=cnonce,
+        nc=nc,
+        qop=qop
+    )
+    
+    request = MockRequest(
+        headers={"Authorization": auth_header},
+        method="GET",
+        path=path if path is not None else uri
+    )
+    request.nonce = nonce
+    return request
+
+
+def create_digest_fixture():
+    """
+        Create a Digest authenticator that knows one user.
+    """
+    realm = "TestRealm"
+    provider = MockDigestIdentityProvider()
+    provider.add_user("testuser", realm, "testpass")
+    authenticator = DigestAuthenticator(provider, realm=realm)
+    return authenticator, realm
+
+
+def test_digest_authenticator_rejects_uri_that_is_not_request_target():
+    """
+        Test that a header signed for one URI is refused on a request for
+        another, so a captured header cannot be replayed elsewhere.
+    """
+    authenticator, realm = create_digest_fixture()
+    
+    request = build_digest_request(
+        authenticator, "testuser", "testpass", realm,
+        uri="/protected/resource", path="/admin/delete-everything"
+    )
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = f"Expected FAILURE for a uri mismatch, got {result.status}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_digest_authenticator_accepts_uri_with_query_string():
+    """
+        Test that the signed uri is compared with the path and query
+        string of the request.
+    """
+    authenticator, realm = create_digest_fixture()
+    
+    request = build_digest_request(
+        authenticator, "testuser", "testpass", realm,
+        uri="/search?q=a", path="/search"
+    )
+    request.query_string = "q=a"
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.status != AuthenticationStatus.SUCCESS:
+        errmsg = f"Expected SUCCESS, got {result.status} ({result.error_code})"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_digest_authenticator_rejects_algorithm_other_than_configured():
+    """
+        Test that the hash algorithm is the configured one, not whatever
+        the client names in the header.
+    """
+    realm = "TestRealm"
+    provider = MockDigestIdentityProvider()
+    provider.add_user("testuser", realm, "testpass")
+    authenticator = DigestAuthenticator(
+        provider, realm=realm, algorithm=DigestAlgorithm.SHA256
+    )
+    
+    request = build_digest_request(
+        authenticator, "testuser", "testpass", realm, algorithm="MD5"
+    )
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = f"Expected FAILURE for a downgraded algorithm, got {result.status}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_digest_authenticator_rejects_header_without_configured_qop():
+    """
+        Test that a client cannot drop qop (and with it the nonce count
+        replay check) when the authenticator is configured to use it.
+    """
+    authenticator, realm = create_digest_fixture()
+    
+    request = build_digest_request(
+        authenticator, "testuser", "testpass", realm, qop=None, nc=None
+    )
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = f"Expected FAILURE for a header without qop, got {result.status}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_digest_authenticator_rejects_replayed_nonce_count():
+    """
+        Test that the same header is refused the second time it is sent.
+    """
+    authenticator, realm = create_digest_fixture()
+    
+    request = build_digest_request(authenticator, "testuser", "testpass", realm)
+    
+    first = run_async(authenticator.authenticate(request))
+    if first.status != AuthenticationStatus.SUCCESS:
+        errmsg = f"Expected SUCCESS for the first use, got {first.status}"
+        raise AssertionError(errmsg)
+    
+    second = run_async(authenticator.authenticate(request))
+    if second.error_code != "replay_detected":
+        errmsg = f"Expected replay_detected for the replay, got {second.error_code}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_digest_authenticator_remembers_highest_nonce_count():
+    """
+        Test that after a request with nc=5 a request with a lower nonce
+        count for the same nonce is refused.
+    """
+    authenticator, realm = create_digest_fixture()
+    
+    high = build_digest_request(
+        authenticator, "testuser", "testpass", realm, nc="00000005"
+    )
+    first = run_async(authenticator.authenticate(high))
+    if first.status != AuthenticationStatus.SUCCESS:
+        errmsg = f"Expected SUCCESS for nc=5, got {first.status}"
+        raise AssertionError(errmsg)
+    
+    low = build_digest_request(
+        authenticator, "testuser", "testpass", realm,
+        nonce=high.nonce, nc="00000003"
+    )
+    second = run_async(authenticator.authenticate(low))
+    if second.error_code != "replay_detected":
+        errmsg = f"Expected replay_detected for nc=3 after nc=5, got {second.error_code}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_digest_authenticator_same_failure_for_unknown_user_and_wrong_password():
+    """
+        Test that the failure does not reveal whether the username exists.
+    """
+    authenticator, realm = create_digest_fixture()
+    
+    unknown_user = run_async(authenticator.authenticate(
+        build_digest_request(authenticator, "nobody", "testpass", realm)
+    ))
+    wrong_password = run_async(authenticator.authenticate(
+        build_digest_request(authenticator, "testuser", "wrong", realm)
+    ))
+    
+    unknown_pair = (unknown_user.error_code, unknown_user.error_description)
+    wrong_pair = (wrong_password.error_code, wrong_password.error_description)
+    
+    if unknown_pair != wrong_pair:
+        errmsg = f"Expected identical failures, got {unknown_pair} and {wrong_pair}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_digest_authenticator_non_ascii_response_fails_without_error():
+    """
+        Test that a response containing non-ASCII characters is answered
+        with FAILURE instead of raising from the constant-time compare.
+    """
+    authenticator, realm = create_digest_fixture()
+    
+    request = build_digest_request(
+        authenticator, "testuser", "testpass", realm,
+        response="\u00e9" * 32
+    )
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = f"Expected FAILURE for a non-ASCII response, got {result.status}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_digest_authenticator_without_qop_accepts_nonce_only_once():
+    """
+        Test that in the legacy mode without qop a nonce is good for one
+        request only.
+    """
+    realm = "TestRealm"
+    provider = MockDigestIdentityProvider()
+    provider.add_user("testuser", realm, "testpass")
+    authenticator = DigestAuthenticator(provider, realm=realm, qop="")
+    
+    request = build_digest_request(
+        authenticator, "testuser", "testpass", realm, qop=None, nc=None
+    )
+    
+    first = run_async(authenticator.authenticate(request))
+    if first.status != AuthenticationStatus.SUCCESS:
+        errmsg = f"Expected SUCCESS for the first use, got {first.status} ({first.error_code})"
+        raise AssertionError(errmsg)
+    
+    second = run_async(authenticator.authenticate(request))
+    if second.status == AuthenticationStatus.SUCCESS:
+        errmsg = "Expected the replayed nonce to be refused"
+        raise AssertionError(errmsg)
+    
     return

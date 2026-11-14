@@ -16,6 +16,7 @@
     - render_async(): Asynchronous rendering (falls back to sync)
     - render_stream(): Streaming rendering (yields single chunk)
     - compile_template(): Compile loaded template source (keeps the source)
+    - has_filter(): Whether a filter name is already provided (reports False)
     - render_compiled(), render_compiled_async(), render_compiled_stream():
       Render a compiled template (fall back to render_string())
     
@@ -287,6 +288,24 @@ class TemplateEngine(ABC):
                 # In template: {{ name|uppercase }}
         """
         pass
+    
+    def has_filter(self, name: str) -> bool:
+        """
+            Check whether the engine already provides a filter with a name.
+            
+            :func:`ccai.webworks.templating.wiring.setup_templating` asks
+            this before it registers a built-in filter, so a filter the
+            underlying engine ships (Jinja2's ``escape``, ``default``,
+            ``sort`` and so on) is never replaced by a different
+            implementation. The default implementation reports that no
+            filter is provided; an adapter whose engine has its own filters
+            overrides it.
+            
+            :param name: Filter name as it is used in templates.
+            
+            :returns: True if a filter with this name is already available.
+        """
+        return False
     
     @abstractmethod
     def add_global(

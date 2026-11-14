@@ -36,6 +36,7 @@ The `WebApplication` singleton currently manages only persona/identity concerns 
 4. WHEN the WebApplication creates the Dispatcher, THE WebApplication SHALL configure the Dispatcher with the Router owned by the WebApplication.
 5. WHEN the WebApplication creates the ASGIApplication, THE WebApplication SHALL wire the ASGIApplication HTTP handler to use the Dispatcher `dispatch_async` method.
 6. THE WebApplication SHALL load all EndpointDescriptor instances from the EndpointRegistry into the Router during infrastructure setup.
+7. FROM the `INFRASTRUCTURE_READY` phase, THE WebApplication SHALL expose a `wsgi_app` property: a PEP 3333 callable (`ccai.webworks.wsgi.asgibridge.ASGIBridge`, the same object on every call) that serves `asgi_app` (read when the bridge starts in a process, so authentication middleware configured later is included) with the same routing, middleware, limits, error handling and lifespan as under ASGI. The lifespan startup runs once per process before the first request (or when a server starts a worker), the shutdown when the server stops the worker or the process exits. See the wsgi-layer specification, Requirement 16.
 
 ### Requirement 2: Endpoint Registration API
 
@@ -118,3 +119,17 @@ The `WebApplication` singleton currently manages only persona/identity concerns 
 1. THE WebApplication SHALL implement each lifecycle phase as a separate overridable method (e.g., `setup_configuration`, `setup_credentials`, `setup_data_profiles`, `setup_authentication`, `setup_infrastructure`).
 2. WHEN a subclass overrides a lifecycle phase method, THE WebApplication `startup` method SHALL invoke the overridden method in place of the default implementation.
 3. THE WebApplication SHALL continue to accept an `application_cls` parameter in `establish_webapp_persona` that allows instantiation of a custom subclass.
+
+### Requirement 10: Extensions and REST Processing in the Lifecycle
+
+**User Story:** As a web application developer, I want the lifecycle to start my extensions, apply the REST processing to my REST routes and stop the extensions again, so that neither needs wiring code of my own.
+
+#### Acceptance Criteria
+
+1. THE WebApplication SHALL own, from construction, an ExtensionRegistry with its HookManager, a MiddlewareRegistry and the RESTMiddleware of its REST processing, exposed as `extension_registry`, `hook_manager`, `middleware_registry` and `rest_middleware`.
+2. THE WebApplication SHALL provide `add_extension(extension)` until `setup_infrastructure` starts the extensions, and SHALL raise `LifecycleError` afterwards.
+3. `setup_infrastructure` SHALL start the extensions (configured ones loaded, all initialized and activated, `on_config_loaded` and `on_app_init` fired) before it finalises the routes, and SHALL fire `on_routes_registered` once the phase is `INFRASTRUCTURE_READY`.
+4. `setup_infrastructure` SHALL serve every route that declares REST metadata through the REST processing, unless the route opted out with `rest_processing=False`.
+5. `setup_infrastructure` SHALL pass the MiddlewareRegistry and the request lifecycle hooks to the Dispatcher.
+6. THE application SHALL fire `on_app_ready` once when it starts serving (ASGI lifespan startup, or the first request when served without one) and SHALL stop the extensions once, at the ASGI lifespan shutdown or in `shutdown()`, whichever comes first.
+7. IF the extension configuration is invalid, or a configured extension is disallowed, unknown, cannot be loaded or misses a required dependency, THEN `setup_infrastructure` SHALL raise `ConfigurationError`.

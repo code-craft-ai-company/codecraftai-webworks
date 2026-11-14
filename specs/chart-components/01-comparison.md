@@ -46,6 +46,7 @@ another, either for a single measure or across multiple measures.
   - `group="cluster"` → Grouped bar / Grouped column
   - `group="stack"` → Stacked bar / Stacked column
   - `group="stack100"` → 100% stacked bar / 100% stacked column
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each bar).
 - **Phase:** P1
 - **Notes:** Uses `band` scale for categories and `linear` scale for values.
   Negative values are supported (bars extend left/down from the zero baseline).
@@ -69,6 +70,7 @@ another, either for a single measure or across multiple measures.
   to render as Bar.
 - **Variants / modes:** All `group` modes apply identically — `cluster`, `stack`,
   `stack100`.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each column).
 - **Phase:** P1
 - **Notes:** No separate renderer file — `bar.js` reads `orientation` from the
   model and rotates its drawing logic. Default orientation when `orientation` is
@@ -100,6 +102,7 @@ another, either for a single measure or across multiple measures.
 - **Orientation:** `horizontal` or `vertical`.
 - **Variants / modes:** This is the `cluster` mode of the `bar` renderer.
   Switching `group` changes mode without a renderer change.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each bar).
 - **Phase:** P1
 - **Notes:** Within each category band, bars are sub-divided using a nested
   `band` scale (`bandwidth / seriesCount`). Color comes from the categorical
@@ -122,6 +125,7 @@ another, either for a single measure or across multiple measures.
 - **Orientation:** `horizontal` or `vertical`.
 - **Variants / modes:** `group="stack"` mode of `bar`. Switch to `stack100`
   for proportional stacking.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each segment).
 - **Phase:** P1
 - **Notes:** Renderer computes cumulative baselines per category using the D3
   stack algorithm pattern (implemented in `svgdraw.js`, no D3 dependency). Only
@@ -143,6 +147,7 @@ another, either for a single measure or across multiple measures.
 - **SVG primitives:** `<rect>`, `<text>`, `<line>`, `<g>`.
 - **Orientation:** `horizontal` or `vertical`.
 - **Variants / modes:** `group="stack100"` mode of `bar`.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each segment; `value` is the data value, not the percentage drawn).
 - **Phase:** P1
 - **Notes:** Value scale is always `linear` 0–100 regardless of raw data range.
   Segments narrower than ~14px suppress their value label to avoid overlap.
@@ -181,6 +186,7 @@ another, either for a single measure or across multiple measures.
 - **Orientation:** `horizontal` or `vertical`.
 - **Variants / modes:** Multiple series render side-by-side lollipops within a
   category band (cluster mode, controlled by `group="cluster"`). No stack mode.
+- **Events:** `mj-chart-lollipop-click` `{ series, category, value }` (each dot head; the stem is not interactive).
 - **Phase:** P2
 - **Notes:** Uses `band` scale for categories and `linear` scale for values.
   Stems use `stroke-width` from `--mj-chart-stem-width` token. Dot size
@@ -224,6 +230,7 @@ another, either for a single measure or across multiple measures.
 - **Variants / modes:**
   - Single series: classic Cleveland dot plot.
   - Two series with `showConnectors: true`: Dumbbell chart (see Dumbbell entry).
+- **Events:** `mj-chart-dotplot-click` `{ series, category, value }` (each dot).
 - **Phase:** P2
 - **Notes:** Uses `point` scale (not `band`) for categories — dots align to
   category midpoints without a bandwidth gap. Multiple series dots for the same
@@ -269,6 +276,7 @@ another, either for a single measure or across multiple measures.
 - **Orientation:** `horizontal` (canonical — wide bar) or `vertical` (tall bar).
 - **Variants / modes:** None. Multiple bullets stack as independent rows/columns
   sharing the same value scale.
+- **Events:** `mj-chart-bullet-click` `{ name, value, target }` (the measure bar of each bullet).
 - **Phase:** P2
 - **Notes:** Range bands use progressively lighter fills from `--mj-chart-range-*`
   tokens. Performance bar is drawn narrower (≈40% of band width) and centered.
@@ -303,6 +311,7 @@ another, either for a single measure or across multiple measures.
 - **Variants / modes:** This is the `showConnectors=true` mode of `dotplot`.
   Semantically best with exactly two series; the renderer draws connectors for
   all adjacent series pairs if more than two are present.
+- **Events:** `mj-chart-dotplot-click` `{ series, category, value }` (each dot; the connectors are not interactive).
 - **Phase:** P2
 - **Notes:** Connector line styled with `--mj-chart-connector-stroke` and
   `--mj-chart-connector-stroke-width`. Arrow heads on connectors are optional
@@ -346,6 +355,7 @@ another, either for a single measure or across multiple measures.
   `<g>`.
 - **Orientation:** `n/a` — the chart is always rendered left-column to right-column.
 - **Variants / modes:** None. For three or more time points, use a Line chart.
+- **Events:** `mj-chart-slope-click` `{ series, leftValue, rightValue }` (each slope line).
 - **Phase:** P2
 - **Notes:** Both columns share a single `linear` value scale, so slopes are
   visually accurate. Endpoint labels are right-aligned on the left column and
@@ -393,6 +403,7 @@ another, either for a single measure or across multiple measures.
   - `fill="false"`: outline only (line-only radar).
   - `grid-shape="circle"` vs `grid-shape="polygon"`: ring gridlines rendered as
     `<circle>` or `<polygon>`.
+- **Events:** `mj-chart-radar-click` `{ series }` (a series' area or outline); `mj-chart-radar-dot-click` `{ series, category, value }` (each vertex dot).
 - **Phase:** P4
 - **Notes:** Each spoke maps a `linear` scale from 0 (or `domainMin`) to
   `domainMax`. Spoke angles are evenly distributed: `2π / N` radians apart
@@ -454,6 +465,7 @@ another, either for a single measure or across multiple measures.
     smoother look (same `<path>` element, `C` commands instead of `L`).
   - `color-by="dimension-name"`: line color encodes the value on a named
     dimension using a sequential scale instead of a series categorical color.
+- **Events:** `mj-chart-parallel-click` `{ series, observation }` (each observation line; `observation` is its row of values). Above 200 observations the lines are not focusable and emit nothing.
 - **Phase:** P4
 - **Notes:** Each dimension has its own independent `linear` scale with the
   same pixel range (plot height). Dimension columns are evenly spaced

@@ -8,8 +8,8 @@
 ---
 
 ### Word Cloud  *(tag cloud, text cloud, wordle)*
-- **Renderer / `type`:** `wordcloud` — **Primary renderer**
-- **Controller:** `<mj-chart type="wordcloud" ...>`
+- **Renderer / `type`:** `word-cloud` — **Primary renderer** (`wordcloud.js`)
+- **Controller:** `<mj-chart type="word-cloud" ...>`
 - **Purpose:** Display a corpus of terms sized by frequency or weight — communicates the relative prominence of words in a body of text at a glance.
 - **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
@@ -30,6 +30,7 @@
 - **SVG primitives:** `<text>` (one per word, font-size driven by `sqrt` scale over word values, positioned by a collision-layout algorithm), `<g>` (layout container with `transform` for centering).
 - **Orientation:** `n/a` — radial/free placement; orientation attribute ignored.
 - **Variants / modes:** Rotated layout (`rotation="mixed"` allows ±90° word orientations); masked layout (`mask` field provides an SVG `<path>` boundary to constrain word placement).
+- **Events:** `mj-chart-word-click` `{ text, value }` (each word).
 - **Phase:** P5
 - **Notes:** Font size is mapped through a `sqrt` scale (same scale type used for bubble radius, from `scales.js`) so large values do not visually overwhelm. Word placement uses a greedy spiral-packing layout built in the renderer — no external library. To avoid color-only encoding, word prominence is conveyed by font size; color is supplementary (categorical ramp from `--mj-chart-categorical-*` tokens). The data-table exposes term and frequency as a two-column sorted table for screen readers.
 
@@ -53,6 +54,7 @@
 - **SVG primitives:** `<rect>` (one bar per category per series), `<text>` (axis tick labels, optional value labels), `<g>` (per-series groups).
 - **Orientation:** `vertical` (bars rise from x-axis; default) and `horizontal` (bars extend from y-axis) — `orientation` attribute on the controller swaps which axis is category vs. value.
 - **Variants / modes:** Grouped/clustered bars (`group="cluster"`), stacked bars (`group="stack"`), 100%-normalized stacked bars (`group="stack100"`). See **Stacked Bar Chart** entry below.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each bar or segment).
 - **Phase:** P1
 - **Notes:** The `bar` renderer is the foundational Cartesian renderer built first in Phase 1. It is reused by numerous variant entries in other catalog files — Churn chart and Segmentation chart in this file (`specs/chart-components/14-ux-product-business.md`), and ranked bar variants in `specs/chart-components/06-ranking.md`. Uses a `band` scale for categories and a `linear` scale for values. Negative values draw bars below (or left of) the zero baseline.
 
@@ -78,6 +80,7 @@
 - **SVG primitives:** `<rect>` (stacked segment per series per category), `<text>` (axis labels, optional segment value labels), `<g>` (per-series groups). Identical to the `bar` renderer primitives.
 - **Orientation:** `vertical` and `horizontal` via the `bar` renderer's orientation swap.
 - **Variants / modes:** 100%-normalized stacked bar (`group="stack100"`) normalizes each column to 100% to show proportional composition without absolute scale.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each segment; `value` is the data value, also with `group="stack100"`).
 - **Phase:** P1
 - **Notes:** Stacking is computed in `chartmodel.js` as a `d3-stack`-style cumulative offset pass over the series values. The `bar` renderer reads pre-stacked `[y0, y1]` segments directly. This renderer is also cross-referenced in `specs/chart-components/14-ux-product-business.md` (Segmentation chart) and `specs/chart-components/01-comparison.md`.
 
@@ -103,6 +106,7 @@
 - **SVG primitives:** `<rect>` (one cell per series per category, with variable x-width and y-height), `<text>` (axis tick labels, optional cell labels), `<g>` (per-column groups).
 - **Orientation:** `n/a` — the x/y assignment is semantic (column width = category marginal, height = conditional share); swapping produces a different chart type.
 - **Variants / modes:** None; the proportional width and stacked height are intrinsic to the mosaic encoding.
+- **Events:** `mj-chart-cell-click` `{ series, category, value, pct, residual }` (each tile).
 - **Phase:** P5
 - **Notes:** Column widths are computed from the column totals `sum(series[i].values[col])` normalized across all columns to fill the plot width — a two-pass normalization in the renderer. Cell heights within a column are proportional to each series value relative to the column total (a `stack100` pass). Uses two `linear` scales: one for column-width fractions and one for the 0–100 % height axis. The `bar` renderer's `<rect>` drawing utility is reused for cells. This chart is cross-referenced from `specs/chart-components/14-ux-product-business.md` — Segmentation chart uses grouped bars rather than mosaic encoding.
 
@@ -134,6 +138,7 @@
 - **SVG primitives:** `<rect>` (intersection-size bars at the top, set-size bars on the left side), `<circle>` (filled dot per set in the membership matrix), `<line>` (vertical connector between filled dots in an intersection column), `<text>` (set names, size labels), `<g>` (regions: top bars, left bars, matrix).
 - **Orientation:** `n/a` — the UpSet layout is a fixed two-region composition (bar area + matrix area); swapping is not meaningful.
 - **Variants / modes:** Sorted by intersection size (default) or by degree (number of sets in the intersection), toggled by `sort="size|degree"`.
+- **Events:** `mj-chart-upset-click` `{ sets, size }` (each intersection bar; `sets` lists the set names); `mj-chart-upset-set-click` `{ name, size }` (each set-size bar).
 - **Phase:** P5
 - **Notes:** The three regions (intersection bars, set bars, membership matrix) share the same `band` scale for columns. The intersection-size bars reuse the `bar` renderer's `<rect>` drawing utility. Dot membership matrix is drawn directly by the `upset` renderer. The data-table exposes each intersection's set membership and count as rows.
 
@@ -160,6 +165,7 @@
 - **SVG primitives:** `<circle>` (one per set, fill semi-transparent via `fill-opacity`), `<text>` (set labels, intersection count labels), `<g>` (per-set groups).
 - **Orientation:** `n/a` — radial/spatial layout; orientation attribute ignored.
 - **Variants / modes:** Three-set Venn (three overlapping circles; same renderer handles up to three sets). For four or more sets, the **UpSet Plot** is the recommended alternative and is noted in the tooltip help text.
+- **Events:** `mj-chart-venn-click` `{ name, size }` (each set circle; overlaps are not separate marks).
 - **Phase:** P5
 - **Notes:** Circle radii are proportional to `sqrt(size)` (using the `sqrt` scale from `scales.js`) so area encodes set size. Circle center positions are computed iteratively to achieve the correct intersection area overlap using a simple force-placement pass in the renderer. Color encoding uses the `--mj-chart-categorical-*` token ramp with `fill-opacity: 0.4` for the overlap region. The data-table lists each set name, exclusive count, and all intersection counts as rows.
 
@@ -191,6 +197,7 @@
 - **SVG primitives:** `<circle>` or `<ellipse>` (sets), `<text>` (labels, counts), `<g>`. Identical to the `venn` renderer primitives.
 - **Orientation:** `n/a`.
 - **Variants / modes:** None separate from the `venn` renderer — `type="euler"` sets `proportional: true` as the default and allows ellipses when circles cannot achieve the target overlap.
+- **Events:** `mj-chart-venn-click` `{ name, size }` (each set shape; overlaps are not separate marks).
 - **Phase:** P5
 - **Notes:** When circles alone cannot satisfy the area constraints (a common occurrence with three or more sets), the renderer falls back to ellipses (`<ellipse>` SVG primitive with a `transform="rotate(...)"` attribute). Placement uses an iterative numerical optimization pass seeded by the `venn` initial positions. For four or more sets the renderer emits an `mj-chart-error` recommendation to use `type="upset"` instead.
 
@@ -218,6 +225,7 @@
 - **SVG primitives:** `<circle>` (for `mark="circle"`, radius ∝ `sqrt` scale of value), `<rect>` (for `mark="square"`, area ∝ value; or for color-fill mode), `<text>` (axis tick labels, optional cell value labels), `<g>` (row and column groups).
 - **Orientation:** `n/a` — the x/y grid assignment is semantically fixed by the two categorical axes.
 - **Variants / modes:** Circle matrix (`mark="circle"`, size-encoded); square/color matrix (`mark="square"`, color-encoded — delegates cell fill to the `heatmap` renderer's color-scale logic). Correlation matrix is a special case of `mark="square"` with a diverging color scale, cross-referenced in `specs/chart-components/04-relationship-correlation.md`.
+- **Events:** `mj-chart-matrix-click` `{ x, y, value }` (each cell with a value; `x`, `y` are its column and row categories).
 - **Phase:** P5
 - **Notes:** For `mark="circle"` mode, mark radius uses a `sqrt` scale over `[0, max(cell.value)]` to ensure area (not radius) is proportional to value. For `mark="square"` color mode, the fill logic reuses the `heatmap` renderer's `--mj-chart-sequential-*` or `--mj-chart-diverging-*` token ramp (see **Heatmap** in `specs/chart-components/14-ux-product-business.md`). Size encoding is never the sole encoding — tooltip and the data-table always expose the exact numeric value.
 
@@ -243,5 +251,6 @@
 - **SVG primitives:** `<rect>` (diverging bars: positive extends right from center, negative extends left, neutral straddles center), `<line>` (zero/center axis line), `<text>` (axis labels, percentage labels), `<g>` (per-series and per-category groups). Same primitives as the `bar` renderer.
 - **Orientation:** `horizontal` (categories on y-axis, sentiment diverges left/right; default and canonical); `vertical` supported via the `bar` renderer's orientation swap.
 - **Variants / modes:** Stacked diverging (`group="stack"`, all three segments stacked from a center baseline); percentage-normalized (`group="stack100"` normalizes to 100 % total).
+- **Events:** none (not implemented).
 - **Phase:** P5
 - **Notes:** No new renderer code; `type="sentiment"` is the `bar` renderer configured with a diverging layout where negative-series values are negated and drawn from the zero baseline in the opposite direction. The center-zero baseline is enforced by the `linear` scale's domain. Positive/neutral/negative encoding uses semantic token colors (`--mj-color-success`, `--mj-color-neutral`, `--mj-color-danger`) and never relies on color alone — segment labels and tooltip text always name the sentiment tier. The `bar` renderer is defined in the **Bar Chart** entry above and in `specs/chart-components/01-comparison.md`.

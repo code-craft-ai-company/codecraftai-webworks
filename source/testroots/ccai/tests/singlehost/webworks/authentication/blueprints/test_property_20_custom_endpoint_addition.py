@@ -219,8 +219,15 @@ def test_property_20_custom_endpoint_addition():
             raise AssertionError(errmsg)
 
         # --- Verify custom endpoint handler is the correct function ---
+        # The descriptor carries the blueprint's endpoint wrapper (error
+        # handling, CORS, sanitising); the registered function is what
+        # it wraps.
 
-        if custom_descriptor.handler is not custom_handler:
+        registered_function = getattr(
+            custom_descriptor.handler, "__wrapped__", custom_descriptor.handler
+        )
+
+        if registered_function is not custom_handler:
             errmsg = (
                 f"Iteration {iteration}: Custom endpoint handler "
                 f"does not match the registered function."

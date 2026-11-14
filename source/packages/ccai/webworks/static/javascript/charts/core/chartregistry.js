@@ -8,6 +8,14 @@
 
 const CONTROLLER_TAG = "mj-chart";
 
+/*
+ * Dispatched by a controller (bubbling, composed) when it connects or its
+ * `id` changes. A part that found no controller listens for it on the
+ * document and resolves again, so the order in which the chart and its
+ * parts enter the page does not matter.
+ */
+export const CONTROLLER_CONNECT_EVENT = "mj-chart-connect";
+
 
 function _isController(node) {
   /*

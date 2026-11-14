@@ -59,6 +59,11 @@ class SessionData:
         :param last_accessed: Timestamp of the last session access.
         :param expires_at: Optional expiration timestamp for the session.
         :param data: Additional session data storage.
+        :param lifetime: The lifetime in seconds the session was created
+                         with. Renewal extends the session by this amount,
+                         so a remember-me session keeps its long lifetime
+                         and a short session stays short. None means the
+                         store default applies.
     """
     
     session_id: str
@@ -68,6 +73,7 @@ class SessionData:
     last_accessed: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: Optional[datetime] = None
     data: Dict[str, Any] = field(default_factory=dict)
+    lifetime: Optional[float] = None
     
     @property
     def is_expired(self) -> bool:
@@ -155,6 +161,11 @@ class CookieAttributes:
         """
         parts = [f"{name}="]
         parts.append("Path=" + self.path)
+        
+        # A cookie set for a domain is only cleared by naming that domain
+        if self.domain:
+            parts.append(f"Domain={self.domain}")
+        
         parts.append("Max-Age=0")
         parts.append("Expires=Thu, 01 Jan 1970 00:00:00 GMT")
         
@@ -249,12 +260,16 @@ class InMemorySessionStore:
         
         :param default_expiration: Default session lifetime in seconds.
         :param session_id_length: Length of generated session IDs in bytes.
+        :param max_sessions: Maximum number of sessions kept.
     """
+    
+    DEFAULT_MAX_SESSIONS: int = 100000
     
     def __init__(
         self,
         default_expiration: Optional[int] = 3600,
-        session_id_length: int = 32
+        session_id_length: int = 32,
+        max_sessions: Optional[int] = None
     ):
         """
             Initialize the in-memory session store.
@@ -262,10 +277,19 @@ class InMemorySessionStore:
             :param default_expiration: Default session lifetime in seconds.
                                       None means sessions don't expire.
             :param session_id_length: Length of generated session IDs in bytes.
+            :param max_sessions: Maximum number of sessions kept. Expired
+                                 sessions are swept when a session is
+                                 created; when the store is still full the
+                                 session closest to expiry is dropped.
+                                 Defaults to :attr:`DEFAULT_MAX_SESSIONS`.
         """
+        if max_sessions is None:
+            max_sessions = self.DEFAULT_MAX_SESSIONS
+        
         self._sessions: Dict[str, SessionData] = {}
         self._default_expiration = default_expiration
         self._session_id_length = session_id_length
+        self._max_sessions = max_sessions
     
     def _generate_session_id(self) -> str:
         """
@@ -303,11 +327,38 @@ class InMemorySessionStore:
             principal_id=principal.identifier,
             principal=principal,
             expires_at=expires_at,
-            data=data or {}
+            data=data or {},
+            lifetime=expiration_seconds
         )
         
+        self._make_room()
         self._sessions[session_id] = session
         return session
+    
+    def _make_room(self) -> None:
+        """
+            Sweep expired sessions and keep the store within its bound.
+            
+            Called before a session is added. When the store is still
+            full after the sweep, the session closest to expiry is
+            dropped so memory use stays bounded.
+        """
+        expired = [
+            sid for sid, session in self._sessions.items()
+            if session.is_expired
+        ]
+        for sid in expired:
+            del self._sessions[sid]
+        
+        while len(self._sessions) >= self._max_sessions:
+            far_future = datetime.max.replace(tzinfo=timezone.utc)
+            victim = min(
+                self._sessions,
+                key=lambda sid: self._sessions[sid].expires_at or far_future
+            )
+            del self._sessions[victim]
+        
+        return
     
     async def get_session(self, session_id: str) -> Optional[SessionData]:
         """
@@ -365,11 +416,16 @@ class InMemorySessionStore:
         # Update last accessed
         session.last_accessed = datetime.now(timezone.utc)
         
-        # Extend expiration if requested
-        if extend_expiration and self._default_expiration is not None:
-            session.expires_at = datetime.now(timezone.utc) + timedelta(
-                seconds=self._default_expiration
-            )
+        # Extend expiration if requested, by the lifetime the session
+        # was created with (the store default when it has none).
+        if extend_expiration:
+            lifetime = session.lifetime
+            if lifetime is None:
+                lifetime = self._default_expiration
+            if lifetime is not None and session.expires_at is not None:
+                session.expires_at = datetime.now(timezone.utc) + timedelta(
+                    seconds=lifetime
+                )
         
         return session
     
@@ -575,12 +631,18 @@ class SessionAuthenticator:
             await self._session_store.delete_session(session_id)
             return self._session_expired_response()
         
-        # Renew session if configured
+        # Renew session if configured, and re-issue the cookie so its
+        # Max-Age follows the extended expiration.
+        response_headers: Dict[str, str] = {}
         if self._renew_on_access:
-            await self._session_store.update_session(
+            renewed = await self._session_store.update_session(
                 session_id,
                 extend_expiration=True
             )
+            if renewed is not None:
+                session = renewed
+                if session.expires_at is not None:
+                    response_headers["Set-Cookie"] = self._build_session_cookie(session)
         
         # Success - return context with principal
         return AuthenticationResult(
@@ -595,7 +657,8 @@ class SessionAuthenticator:
                     "created_at": session.created_at.isoformat(),
                     "last_accessed": session.last_accessed.isoformat()
                 }
-            )
+            ),
+            response_headers=response_headers
         )
     
     async def create_session(
@@ -622,11 +685,29 @@ class SessionAuthenticator:
             data=data
         )
         
+        cookie_header = self._build_session_cookie(session)
+        
+        return session, cookie_header
+    
+    def _build_session_cookie(self, session: SessionData) -> str:
+        """
+            Build the Set-Cookie header value for a session.
+            
+            The cookie Max-Age is the time the session has left, so the
+            browser drops the cookie when the session expires.
+            
+            :param session: The session the cookie identifies.
+            
+            :returns: The Set-Cookie header value.
+        """
         # Calculate max_age for cookie
         max_age = None
         if session.expires_at is not None:
-            delta = session.expires_at - datetime.now(timezone.utc)
-            max_age = int(delta.total_seconds())
+            expires_at = session.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            delta = expires_at - datetime.now(timezone.utc)
+            max_age = max(0, int(delta.total_seconds()))
         
         # Create cookie attributes with max_age
         cookie_attrs = CookieAttributes(
@@ -643,7 +724,7 @@ class SessionAuthenticator:
             session.session_id
         )
         
-        return session, cookie_header
+        return cookie_header
     
     async def invalidate_session(self, session_id: str) -> tuple:
         """
@@ -712,8 +793,24 @@ class SessionAuthenticator:
         return AuthenticationResult(
             status=AuthenticationStatus.FAILURE,
             error_code="invalid_session",
-            error_description="Session not found or invalid"
+            error_description="Session not found or invalid",
+            response_headers=self._clear_cookie_headers()
         )
+    
+    def _clear_cookie_headers(self) -> Dict[str, str]:
+        """
+            Build the response headers that clear the session cookie.
+            
+            Sent when the cookie names a session that is unknown or has
+            expired, so the browser stops presenting it.
+            
+            :returns: A dictionary with the clearing Set-Cookie header.
+        """
+        clear_cookie = self._cookie_attributes.to_clear_cookie_string(
+            self._cookie_name
+        )
+        rtnval = {"Set-Cookie": clear_cookie}
+        return rtnval
     
     def _session_expired_response(self) -> AuthenticationResult:
         """
@@ -724,7 +821,8 @@ class SessionAuthenticator:
         return AuthenticationResult(
             status=AuthenticationStatus.FAILURE,
             error_code="session_expired",
-            error_description="Session has expired"
+            error_description="Session has expired",
+            response_headers=self._clear_cookie_headers()
         )
 
 

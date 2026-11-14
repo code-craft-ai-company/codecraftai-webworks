@@ -15,7 +15,7 @@ states, behavior, keyboard, accessibility, form participation, i18n/RTL, SSR,
 dependencies, edge cases, acceptance criteria, open questions). The universal
 requirements in plan §3 are referenced, not repeated, by each spec.
 
-**138 component specs.**
+**146 component specs.**
 
 ## Selection & dropdown-style controls
 - [select.md](select.md) — `<mj-select>`
@@ -71,6 +71,8 @@ requirements in plan §3 are referenced, not repeated, by each spec.
 - [copybutton.md](copybutton.md) — `<mj-copy-button>`
 - [sharebutton.md](sharebutton.md) — `<mj-share-button>`
 - [favoritebutton.md](favoritebutton.md) — `<mj-favorite-button>`
+- [downloadbutton.md](downloadbutton.md) — `<mj-download-button>`
+- [uploadbutton.md](uploadbutton.md) — `<mj-upload-button>`
 
 ## Navigation components
 - [link.md](link.md) — `<mj-link>`
@@ -97,6 +99,7 @@ requirements in plan §3 are referenced, not repeated, by each spec.
 - [accordion.md](accordion.md) — `<mj-accordion>`
 - [disclosure.md](disclosure.md) — `<mj-disclosure>`
 - [splitpane.md](splitpane.md) — `<mj-split-pane>`
+- [docklayout.md](docklayout.md) — `<mj-dock-layout>`
 - [scrollarea.md](scrollarea.md) — `<mj-scroll-area>`
 - [carousel.md](carousel.md) — `<mj-carousel>`
 - [feed.md](feed.md) — `<mj-feed>`
@@ -137,12 +140,17 @@ requirements in plan §3 are referenced, not repeated, by each spec.
 - [masterdetailview.md](masterdetailview.md) — `<mj-master-detail>`
 - [columnpicker.md](columnpicker.md) — `<mj-column-picker>`
 - [bulkactionbar.md](bulkactionbar.md) — `<mj-bulk-action-bar>`
+- [sortcontrol.md](sortcontrol.md) — `<mj-sort-control>`
+- [rowselector.md](rowselector.md) — `<mj-row-selector>`
 
 ## Media & visualization
 - [image.md](image.md) — `<mj-image>`
 - [avatar.md](avatar.md) — `<mj-avatar>`
 - [mediaplayer.md](mediaplayer.md) — `<mj-media-player>`
 - [chart.md](chart.md) — `<mj-chart>`
+  - [charttitle.md](charttitle.md) — `<mj-chart-title>` (chart part)
+  - [chartlegend.md](chartlegend.md) — `<mj-chart-legend>` (chart part)
+  - [chartdatatable.md](chartdatatable.md) — `<mj-chart-data-table>` (chart part)
 - [map.md](map.md) — `<mj-map>`
 - [gauge.md](gauge.md) — `<mj-gauge>`
 - [sparkline.md](sparkline.md) — `<mj-sparkline>`

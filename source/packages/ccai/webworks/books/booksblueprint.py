@@ -276,11 +276,28 @@ class BooksBlueprint(RestBlueprint):
         """
             Registers the blueprint's routes on a web application, before or after it starts.
 
+            Each route keeps the metadata of its descriptor -- version, tags, documentation, access policy and rate
+            limit -- so the book routes appear in the OpenAPI document and the security map as they are declared.
+
             :param webapp: The web application.
         """
         descriptors = self.get_descriptors(include_trailing_slash=True)
         for descriptor in descriptors:
-            decorator = webapp.attach_route(descriptor.path, methods=descriptor.methods)
+            access_policy = None
+            rate_limit = None
+            if descriptor.constraints is not None:
+                access_policy = descriptor.constraints.access_policy
+                rate_limit = descriptor.constraints.rate_limit
+
+            decorator = webapp.attach_route(
+                descriptor.path,
+                methods=descriptor.methods,
+                version=descriptor.version,
+                tags=list(descriptor.tags),
+                access_policy=access_policy,
+                rate_limit=rate_limit,
+                doc=descriptor.doc,
+            )
             decorator(descriptor.handler)
         return
 

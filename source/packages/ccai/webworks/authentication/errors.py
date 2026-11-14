@@ -699,6 +699,193 @@ class AccountLockoutPolicy:
 
 
 # =============================================================================
+# Login Throttling
+# =============================================================================
+
+class LoginThrottle:
+    """
+        Applies rate limiting and account lockout to credential checks.
+        
+        This class is the single place where the :class:`RateLimiter`
+        (keyed by client, typically the remote address) and the
+        :class:`AccountLockoutPolicy` (keyed by account) are consulted
+        and updated. The Basic and Digest authenticators and the
+        authentication blueprints call it around every credential check.
+        
+        Example usage::
+        
+            throttle = LoginThrottle(
+                rate_limiter=RateLimiter(RateLimitConfig(max_attempts=5)),
+                lockout_policy=AccountLockoutPolicy(LockoutConfig(max_failures=5))
+            )
+            
+            error = throttle.check(client_key, username)
+            if error is not None:
+                ...  # answer 429
+            
+            principal = await provider.validate_credentials(username, password)
+            throttle.record(client_key, username, success=principal is not None)
+        
+        :param rate_limiter: Optional per-client rate limiter.
+        :param lockout_policy: Optional per-account lockout policy.
+    """
+    
+    def __init__(
+        self,
+        rate_limiter: Optional[RateLimiter] = None,
+        lockout_policy: Optional[AccountLockoutPolicy] = None
+    ):
+        """
+            Initialize the login throttle.
+            
+            :param rate_limiter: Optional per-client rate limiter.
+            :param lockout_policy: Optional per-account lockout policy.
+        """
+        self._rate_limiter = rate_limiter
+        self._lockout_policy = lockout_policy
+        return
+    
+    @property
+    def rate_limiter(self) -> Optional[RateLimiter]:
+        """
+            Get the per-client rate limiter.
+            
+            :returns: The RateLimiter instance, or None.
+        """
+        return self._rate_limiter
+    
+    @property
+    def lockout_policy(self) -> Optional[AccountLockoutPolicy]:
+        """
+            Get the per-account lockout policy.
+            
+            :returns: The AccountLockoutPolicy instance, or None.
+        """
+        return self._lockout_policy
+    
+    def check(
+        self,
+        client_key: Optional[str],
+        account_id: Optional[str]
+    ) -> Optional[AuthenticationError]:
+        """
+            Check whether a credential check may proceed.
+            
+            :param client_key: Key identifying the client (remote address),
+                               or None when it is unknown.
+            :param account_id: The account the attempt names, or None.
+            
+            :returns: None when the attempt is allowed, otherwise a
+                      :class:`RateLimitExceededError` or
+                      :class:`AccountLockedError` describing why not.
+        """
+        if self._rate_limiter is not None and client_key:
+            if not self._rate_limiter.is_allowed(client_key):
+                retry_after = self._rate_limiter.get_retry_after(client_key)
+                error = RateLimitExceededError(
+                    retry_after=retry_after,
+                    internal_message=f"Rate limit exceeded for client {client_key!r}"
+                )
+                return error
+        
+        if self._lockout_policy is not None and account_id:
+            if self._lockout_policy.is_locked(account_id):
+                locked_until = self._lockout_policy.get_locked_until(account_id)
+                error = AccountLockedError(
+                    locked_until=locked_until,
+                    internal_message="Account is locked"
+                )
+                return error
+        
+        return None
+    
+    def record(
+        self,
+        client_key: Optional[str],
+        account_id: Optional[str],
+        success: bool
+    ) -> None:
+        """
+            Record the outcome of a credential check.
+            
+            :param client_key: Key identifying the client, or None.
+            :param account_id: The account the attempt named, or None.
+            :param success: Whether the credentials were valid.
+        """
+        if self._rate_limiter is not None and client_key:
+            self._rate_limiter.record_attempt(client_key, success=success)
+        
+        if self._lockout_policy is not None and account_id:
+            if success:
+                self._lockout_policy.record_success(account_id)
+            else:
+                self._lockout_policy.record_failure(account_id)
+        
+        return
+    
+    def get_retry_after(
+        self,
+        client_key: Optional[str],
+        account_id: Optional[str]
+    ) -> Optional[int]:
+        """
+            Get the number of seconds after which a refused client may retry.
+            
+            :param client_key: Key identifying the client, or None.
+            :param account_id: The account the attempt named, or None.
+            
+            :returns: Seconds to wait, or None when it is not known.
+        """
+        rtnval = None
+        
+        if self._rate_limiter is not None and client_key:
+            rtnval = self._rate_limiter.get_retry_after(client_key)
+        
+        if rtnval is None and self._lockout_policy is not None and account_id:
+            locked_until = self._lockout_policy.get_locked_until(account_id)
+            if locked_until is not None:
+                remaining = (locked_until - datetime.now(timezone.utc)).total_seconds()
+                rtnval = max(1, int(remaining) + 1)
+        
+        return rtnval
+
+
+def get_client_key(request: Any) -> Optional[str]:
+    """
+        Get the key that identifies the client of a request for throttling.
+        
+        The key is the peer address the server reported (the ASGI
+        ``client`` entry or the WSGI ``REMOTE_ADDR``). Forwarded headers
+        are not consulted because the client controls them.
+        
+        :param request: The request: a framework Request, an ASGI scope
+                        or a dict-like test request.
+        
+        :returns: The client address, or None when it is not available.
+    """
+    scope = None
+    if isinstance(request, dict):
+        scope = request
+    else:
+        candidate = getattr(request, "scope", None)
+        if isinstance(candidate, dict):
+            scope = candidate
+    
+    if scope is None:
+        return None
+    
+    client = scope.get("client")
+    if isinstance(client, (list, tuple)) and len(client) > 0 and client[0]:
+        return str(client[0])
+    
+    remote_addr = scope.get("REMOTE_ADDR")
+    if remote_addr:
+        return str(remote_addr)
+    
+    return None
+
+
+# =============================================================================
 # Safe Error Response Handling
 # =============================================================================
 

@@ -2,12 +2,28 @@
  * mjcontextmenu.js
  *
  * <mj-context-menu> -- pointer- or keyboard-invoked actions menu. Opens on
- * right-click or ContextMenu key at cursor position; supports grouped items,
- * separators, checkbox/radio items, and type-ahead navigation.
+ * right-click at the pointer or on the ContextMenu key / Shift+F10 next to
+ * the target; supports groups, separators, checkbox and radio items, nested
+ * submenus, icons, shortcut hints and type-ahead navigation.
+ *
+ * Items are supplied through the `items` property:
+ *   { id, label, icon?, shortcut?, disabled?, type?, checked?, group?, submenu? }
+ * where `type` is "item" (default), "checkbox", "radio", "separator" or
+ * "group" (a heading), `group` names the radio group an item belongs to and
+ * `submenu` is a nested array of items. Labels, icons and shortcuts are text.
  */
 
 import { MjElement, nextId } from "../core/mjelement.js";
-import { position } from "../core/overlay.js";
+import { html } from "../core/html.js";
+import { t } from "../core/intl.js";
+import { deepActiveElement } from "../core/focustrap.js";
+import { position, positionAtPoint, removeFromTopLayer } from "../core/overlay.js";
+
+/* A submenu opens this long after the pointer comes to rest on its item. */
+const SUBMENU_HOVER_DELAY_MS = 150;
+
+/* Characters typed within this window extend the type-ahead search. */
+const TYPE_AHEAD_RESET_MS = 600;
 
 const STYLES = `
 :host {
@@ -16,10 +32,13 @@ const STYLES = `
 
 .menu {
   position: fixed;
-  z-index: var(--mj-layer-popover);
+  z-index: var(--mj-context-menu-z-index, var(--mj-layer-popover));
+  box-sizing: border-box;
   min-width: var(--mj-context-menu-width, 12rem);
+  max-height: calc(100vh - var(--mj-space-2));
+  overflow-y: auto;
   padding: var(--mj-context-menu-padding, var(--mj-space-1)) 0;
-  background: var(--mj-surface);
+  background: var(--mj-context-menu-bg, var(--mj-surface));
   border: 1px solid var(--mj-border);
   border-radius: var(--mj-context-menu-radius, var(--mj-radius-md));
   box-shadow: var(--mj-context-menu-shadow, var(--mj-elevation-3));
@@ -27,15 +46,10 @@ const STYLES = `
   list-style: none;
   margin: 0;
   outline: none;
-  opacity: 0;
-  transform: scale(0.97);
-  transition: opacity var(--mj-motion-fast) var(--mj-motion-ease),
-              transform var(--mj-motion-fast) var(--mj-motion-ease);
 }
 
 :host([open]) .menu {
-  opacity: 1;
-  transform: scale(1);
+  animation: mj-context-menu-in var(--mj-motion-fast) var(--mj-motion-ease);
 }
 
 :host(:not([open])) .menu {
@@ -43,10 +57,16 @@ const STYLES = `
   visibility: hidden;
 }
 
+@keyframes mj-context-menu-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+
 .menu-item {
   display: flex;
   align-items: center;
   gap: var(--mj-space-2);
+  box-sizing: border-box;
   padding: 0 var(--mj-space-3);
   height: var(--mj-context-menu-item-height, 2.25rem);
   cursor: pointer;
@@ -62,7 +82,8 @@ const STYLES = `
 }
 
 .menu-item:hover,
-.menu-item[data-active="true"] {
+.menu-item:focus,
+.menu-item[aria-expanded="true"] {
   background: var(--mj-bg-muted);
 }
 
@@ -83,12 +104,26 @@ const STYLES = `
   font-size: 0.75rem;
 }
 
+.menu-item .item-icon {
+  width: 1.25rem;
+  text-align: center;
+  flex-shrink: 0;
+}
+
 .menu-item .item-label { flex: 1; }
+
+.menu-item .item-shortcut {
+  color: var(--mj-text-muted);
+  font-size: var(--mj-font-size-xs);
+  margin-inline-start: var(--mj-space-4);
+}
 
 .menu-item .submenu-arrow {
   font-size: 0.65rem;
   color: var(--mj-text-muted);
 }
+
+:host(:dir(rtl)) .menu-item .submenu-arrow { transform: scaleX(-1); }
 
 .separator {
   height: 1px;
@@ -106,7 +141,7 @@ const STYLES = `
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .menu { transition: none; }
+  :host([open]) .menu { animation: none; }
 }
 `;
 
@@ -120,62 +155,104 @@ export class MjContextMenu extends MjElement {
     this._menuEl = null
     this._targetEl = null
     this._lastFocused = null
-    this._activeIndex = -1
-    this._menuItems = []
     this._menuId = nextId("mj-ctxmenu")
-    this.items = []
+    this._items = []
+
+    /* True from a successful open until the close has completed. */
+    this._isOpen = false
+
+    /*
+     * Open menu levels, outermost first: { listEl, parentItem, itemEls }.
+     * Level 0 is the main menu; deeper levels are open submenus.
+     */
+    this._levels = []
+
+    this._submenuTimer = null
+    this._typeAheadText = ""
+    this._typeAheadTimer = null
+    this._dismissInstalled = false
+
     this.openCoords = null
+
+    /* One bound function per listener, so each can be removed exactly. */
+    this._onContextMenu = this._handleContextMenu.bind(this)
+    this._onTargetKeydown = this._handleTargetKeydown.bind(this)
+    this._onOutsidePointer = this._handleOutsidePointer.bind(this)
+    this._onViewportChange = this._handleViewportChange.bind(this)
+    this._onWindowBlur = this._handleWindowBlur.bind(this)
   }
 
   render() {
-    const label = this.getAttribute("label") || "Actions"
-    const markup = `
+    const markup = html`
       <slot></slot>
-      <ul class="menu" part="menu" role="menu" id="${this._menuId}" aria-label="${label}" tabindex="-1"></ul>
+      <ul class="menu" part="menu" role="menu" id="${this._menuId}" tabindex="-1"></ul>
     `
     return markup
   }
 
   afterRender() {
     this._menuEl = this.$(".menu")
+    this._applyLabel()
+
+    this.listen(this.shadowRoot, "keydown", this._onMenuKeydown.bind(this))
+    this.listen(this.shadowRoot, "click", this._onMenuClick.bind(this))
+    this.listen(this.shadowRoot, "pointerover", this._onMenuPointerOver.bind(this))
+
+    /* A target slotted after the element connected is wired when it arrives. */
+    this.listen(this.$("slot:not([name])"), "slotchange", this._resolveTarget.bind(this))
+    this.onTeardown(this._detachTarget.bind(this))
+
     this._resolveTarget()
-    this.listen(this._menuEl, "keydown", this._onMenuKeydown.bind(this))
-    this.listen(this._menuEl, "click", this._onMenuClick.bind(this))
 
     if (this.hasAttribute("open") === true) {
-      this._renderMenu()
+      this._openMenu(null, "api")
     }
     return
   }
 
   onAttributeChanged(name, oldValue, newValue) {
-    if (name === "open" && this._menuEl !== null) {
-      if (newValue !== null) {
-        this._renderMenu()
-        this._focusFirstItem()
-      } else {
-        this._activeIndex = -1
-      }
+    if (this._menuEl === undefined || this._menuEl === null) {
+      return
     }
-    if (name === "target-id") {
+
+    if (name === "open") {
+      /* _openMenu sets the attribute itself after marking the menu open. */
+      if (newValue !== null && this._isOpen === false) {
+        this._openMenu(this.openCoords, "api")
+      } else if (newValue === null && this._isOpen === true) {
+        this._closeMenu("api")
+      }
+    } else if (name === "target-id") {
       this._resolveTarget()
+    } else if (name === "label") {
+      this._applyLabel()
+    } else if (name === "variant") {
+      if (this._isOpen === true) {
+        this._renderMenu()
+      }
     }
     return
   }
 
   onDisconnected() {
-    if (this._lightDismissHandler !== undefined) {
-      window.removeEventListener("pointerdown", this._lightDismissHandler, true)
+    /* Removed while open: release everything without events or refocus. */
+    if (this._isOpen === true) {
+      this._isOpen = false
+      this._closeSubmenus(0)
+      this._removeDismissListeners()
+      removeFromTopLayer(this._menuEl)
     }
     return
   }
 
-  _resolveTarget() {
-    if (this._targetEl !== null) {
-      this._targetEl.removeEventListener("contextmenu", this._onContextMenu)
-      this._targetEl.removeEventListener("keydown", this._onTargetKeydown)
-    }
+  _applyLabel() {
+    this._menuEl.setAttribute("aria-label", this.getAttribute("label") || t("mj.contextMenu.label"))
+    return
+  }
 
+  /* ----- target wiring ----- */
+
+  _resolveTarget() {
     const targetId = this.getAttribute("target-id")
     let el = null
 
@@ -183,7 +260,6 @@ export class MjContextMenu extends MjElement {
       el = document.getElementById(targetId)
       if (el === null) {
         console.error(`<mj-context-menu>: target-id "${targetId}" not found`)
-        return
       }
     } else {
       const slot = this.shadowRoot.querySelector("slot:not([name])")
@@ -193,215 +269,136 @@ export class MjContextMenu extends MjElement {
       }
     }
 
+    if (el === this._targetEl) {
+      return
+    }
+
+    this._detachTarget()
     this._targetEl = el
 
     if (el !== null) {
-      this._onContextMenu = this._handleContextMenu.bind(this)
-      this._onTargetKeydown = this._handleTargetKeydown.bind(this)
       el.addEventListener("contextmenu", this._onContextMenu)
       el.addEventListener("keydown", this._onTargetKeydown)
     }
     return
   }
 
-  _handleContextMenu(event) {
-    event.preventDefault()
-    const x = event.clientX
-    const y = event.clientY
+  _detachTarget() {
+    if (this._targetEl !== null) {
+      this._targetEl.removeEventListener("contextmenu", this._onContextMenu)
+      this._targetEl.removeEventListener("keydown", this._onTargetKeydown)
+      this._targetEl = null
+    }
+    return
+  }
 
-    const proceed = this.emit(
-      "mj-context-menu-before-open",
-      { x: x, y: y },
-      { cancelable: true }
-    )
-    if (proceed === false) {
+  _handleContextMenu(event) {
+    /*
+     * A component inside the target that has a menu of its own already
+     * handled this right-click (and called preventDefault): one menu only.
+     */
+    if (event.defaultPrevented === true) {
       return
     }
-
-    this._lastFocused = document.activeElement
-    this.openCoords = { x: x, y: y }
-    this._positionAtCoords(x, y)
-    this.setAttribute("open", "")
-    this._installLightDismiss()
-    this.emit("mj-context-menu-open", { x: x, y: y, targetEl: this._targetEl })
+    event.preventDefault()
+    this._openMenu({ x: event.clientX, y: event.clientY }, "pointer")
     return
   }
 
   _handleTargetKeydown(event) {
-    const isContextKey = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)
-    if (isContextKey === false) {
+    const isContextKey = event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey === true)
+    if (isContextKey === false || event.defaultPrevented === true) {
       return
     }
     event.preventDefault()
+    this._openMenu(null, "keyboard")
+    return
+  }
 
+  /* ----- open / close ----- */
+
+  /*
+   * The one way the menu opens -- pointer, keyboard, show() and the `open`
+   * attribute all come here. `coords` is a viewport point, or null to open
+   * next to the target. Records the element to refocus, positions the menu
+   * synchronously, installs light dismiss and moves focus inside.
+   */
+  _openMenu(coords, reason) {
+    if (this._menuEl === null || this.isConnected === false) {
+      return false
+    }
+
+    const point = coords !== null && coords !== undefined ? coords : null
     const proceed = this.emit(
       "mj-context-menu-before-open",
-      { x: 0, y: 0 },
+      { x: point !== null ? point.x : 0, y: point !== null ? point.y : 0, reason: reason },
       { cancelable: true }
     )
     if (proceed === false) {
-      return
+      if (this._isOpen === false && this.hasAttribute("open") === true) {
+        this.removeAttribute("open")
+      }
+      return false
     }
 
-    this._lastFocused = document.activeElement
-    this.openCoords = null
-
-    const rect = this._targetEl !== null ? this._targetEl.getBoundingClientRect() : null
-    if (rect !== null) {
-      this._positionAtCoords(rect.left, rect.bottom + 4)
+    const wasOpen = this._isOpen
+    if (wasOpen === false) {
+      this._lastFocused = deepActiveElement()
     }
 
-    this.setAttribute("open", "")
-    this._installLightDismiss()
-    this.emit("mj-context-menu-open", { x: 0, y: 0, targetEl: this._targetEl })
-    return
-  }
-
-  _positionAtCoords(x, y) {
-    if (this._menuEl === null) {
-      return
+    this._isOpen = true
+    this.openCoords = point
+    if (this.hasAttribute("open") === false) {
+      this.setAttribute("open", "")
     }
 
-    this._menuEl.style.position = "fixed"
-    this._menuEl.style.left = `${x}px`
-    this._menuEl.style.top = `${y}px`
-    this._menuEl.style.zIndex = "var(--mj-layer-popover)"
+    this._renderMenu()
+    this._placeMenu(point)
+    this._installDismissListeners()
+    this._focusFirstItem(0)
 
-    requestAnimationFrame(() => {
-      if (this._menuEl === null) {
-        return
-      }
-      const rect = this._menuEl.getBoundingClientRect()
-      const vw = window.innerWidth
-      const vh = window.innerHeight
-
-      let adjustedX = x
-      let adjustedY = y
-
-      if (x + rect.width > vw) {
-        adjustedX = Math.max(0, x - rect.width)
-      }
-      if (y + rect.height > vh) {
-        adjustedY = Math.max(0, y - rect.height)
-      }
-
-      this._menuEl.style.left = `${adjustedX}px`
-      this._menuEl.style.top = `${adjustedY}px`
+    this.emit("mj-context-menu-open", {
+      x: point !== null ? point.x : 0,
+      y: point !== null ? point.y : 0,
+      targetEl: this._targetEl
     })
-    return
+    return true
   }
 
-  _renderMenu() {
-    if (this._menuEl === null) {
-      return
+  _placeMenu(point) {
+    if (point !== null) {
+      positionAtPoint(this._menuEl, point.x, point.y, { padding: 4, constrain: true })
+    } else {
+      const anchor = this._targetEl !== null ? this._targetEl : this
+      position(this._menuEl, anchor, { placement: "bottom-start", offset: 4, constrain: true })
     }
-    this._menuEl.innerHTML = ""
-    this._menuItems = []
-
-    for (let index = 0; index < this.items.length; index = index + 1) {
-      const descriptor = this.items[index]
-      const el = this._buildItem(descriptor, index)
-      this._menuEl.appendChild(el)
-      if (descriptor.type !== "separator" && descriptor.type !== "group") {
-        this._menuItems.push(el)
-      }
-    }
-    return
-  }
-
-  _buildItem(descriptor, index) {
-    if (descriptor.type === "separator") {
-      const li = document.createElement("li")
-      li.className = "separator"
-      li.setAttribute("role", "separator")
-      li.setAttribute("part", "separator")
-      return li
-    }
-
-    if (descriptor.type === "group") {
-      const li = document.createElement("li")
-      li.className = "group-label"
-      li.setAttribute("role", "presentation")
-      li.setAttribute("part", "group-label")
-      li.textContent = descriptor.label || ""
-      return li
-    }
-
-    const li = document.createElement("li")
-    li.setAttribute("role", descriptor.type === "checkbox" ? "menuitemcheckbox" : "menuitem")
-    li.setAttribute("part", "item")
-    li.setAttribute("data-item-id", descriptor.id || String(index))
-    li.setAttribute("data-item-index", String(index))
-    li.setAttribute("tabindex", "-1")
-    li.className = "menu-item"
-
-    if (descriptor.disabled === true) {
-      li.setAttribute("aria-disabled", "true")
-    }
-
-    if (descriptor.type === "checkbox") {
-      li.setAttribute("aria-checked", descriptor.checked === true ? "true" : "false")
-    }
-
-    if (descriptor.submenu !== undefined) {
-      li.setAttribute("aria-haspopup", "menu")
-      li.setAttribute("aria-expanded", "false")
-    }
-
-    const checkIcon = descriptor.type === "checkbox"
-      ? `<span class="check-icon" aria-hidden="true">${descriptor.checked === true ? "&#x2713;" : ""}</span>`
-      : `<span class="check-icon" aria-hidden="true"></span>`
-
-    const submenuArrow = descriptor.submenu !== undefined
-      ? `<span class="submenu-arrow" part="submenu-arrow" aria-hidden="true">&#x276f;</span>`
-      : ""
-
-    li.innerHTML = `
-      ${checkIcon}
-      <span class="item-label">${descriptor.label || ""}</span>
-      ${submenuArrow}
-    `
-
-    return li
-  }
-
-  _focusFirstItem() {
-    const first = this._menuItems.find((el) => el.getAttribute("aria-disabled") !== "true")
-    if (first !== undefined) {
-      first.focus()
-      this._activeIndex = this._menuItems.indexOf(first)
-    } else if (this._menuItems.length > 0) {
-      this._menuItems[0].focus()
-      this._activeIndex = 0
-    }
-    return
-  }
-
-  _installLightDismiss() {
-    if (this._lightDismissHandler !== undefined) {
-      return
-    }
-    this._lightDismissHandler = (event) => {
-      const inside = this.contains(event.target) || this.shadowRoot.contains(event.target)
-      if (inside === false) {
-        this._closeMenu("light-dismiss")
-      }
-    }
-    window.addEventListener("pointerdown", this._lightDismissHandler, true)
     return
   }
 
   _closeMenu(reason) {
-    this.removeAttribute("open")
+    if (this._isOpen === false) {
+      return
+    }
+    this._isOpen = false
 
-    if (this._lightDismissHandler !== undefined) {
-      window.removeEventListener("pointerdown", this._lightDismissHandler, true)
-      this._lightDismissHandler = undefined
+    /* Decide about focus before the menu is hidden and focus is lost. */
+    const active = deepActiveElement()
+    const focusInMenu = active === null || active === document.body ||
+      this.shadowRoot.contains(active) === true
+
+    this._closeSubmenus(0)
+    this._removeDismissListeners()
+    this._clearTypeAhead()
+    removeFromTopLayer(this._menuEl)
+
+    if (this.hasAttribute("open") === true) {
+      this.removeAttribute("open")
     }
 
     const restoreEl = this._lastFocused
     this._lastFocused = null
-    if (restoreEl !== null && typeof restoreEl.focus === "function") {
+    if (focusInMenu === true && restoreEl !== null && restoreEl.isConnected === true &&
+        typeof restoreEl.focus === "function") {
       restoreEl.focus()
     }
 
@@ -409,32 +406,426 @@ export class MjContextMenu extends MjElement {
     return
   }
 
-  _onMenuKeydown(event) {
-    const items = this._menuItems.filter((el) => el.getAttribute("aria-disabled") !== "true")
-    const count = items.length
+  /* ----- light dismiss ----- */
 
-    if (count === 0) {
-      if (event.key === "Escape") {
+  _installDismissListeners() {
+    if (this._dismissInstalled === true) {
+      return
+    }
+    this._dismissInstalled = true
+    window.addEventListener("pointerdown", this._onOutsidePointer, true)
+    window.addEventListener("scroll", this._onViewportChange, true)
+    window.addEventListener("resize", this._onViewportChange)
+    window.addEventListener("blur", this._onWindowBlur)
+    return
+  }
+
+  _removeDismissListeners() {
+    if (this._dismissInstalled === false) {
+      return
+    }
+    this._dismissInstalled = false
+    window.removeEventListener("pointerdown", this._onOutsidePointer, true)
+    window.removeEventListener("scroll", this._onViewportChange, true)
+    window.removeEventListener("resize", this._onViewportChange)
+    window.removeEventListener("blur", this._onWindowBlur)
+    return
+  }
+
+  /*
+   * Inside means inside one of the menu panels. composedPath is used
+   * because a window listener sees a target retargeted to the outermost
+   * shadow host; the wrapped target region counts as outside, so a click
+   * next to the menu closes it as a native menu would.
+   */
+  _handleOutsidePointer(event) {
+    const path = event.composedPath()
+    const inside = this._levels.some((level) => path.includes(level.listEl) === true)
+    if (inside === false) {
+      this._closeMenu("light-dismiss")
+    }
+    return
+  }
+
+  _handleViewportChange(event) {
+    /* Scrolling inside a long menu is not a reason to close it. */
+    if (event.type === "scroll") {
+      const path = event.composedPath()
+      const inside = this._levels.some((level) => path.includes(level.listEl) === true)
+      if (inside === true) {
+        return
+      }
+    }
+    this._closeMenu("light-dismiss")
+    return
+  }
+
+  _handleWindowBlur() {
+    this._closeMenu("light-dismiss")
+    return
+  }
+
+  /* ----- rendering ----- */
+
+  _defaultType() {
+    const variant = this.getAttribute("variant") || "menu"
+    let type = "item"
+    if (variant === "checkbox-group") {
+      type = "checkbox"
+    } else if (variant === "radio-group") {
+      type = "radio"
+    }
+    return type
+  }
+
+  _typeOf(descriptor) {
+    const type = typeof descriptor.type === "string" && descriptor.type.length > 0
+      ? descriptor.type
+      : this._defaultType()
+    return type
+  }
+
+  _renderMenu() {
+    if (this._menuEl === null) {
+      return
+    }
+    this._closeSubmenus(0)
+    const itemEls = this._fillList(this._menuEl, this._items)
+    this._levels = [{ listEl: this._menuEl, parentItem: null, itemEls: itemEls }]
+    return
+  }
+
+  /* Build the entries of one menu level. Returns its focusable item elements. */
+  _fillList(listEl, descriptors) {
+    listEl.textContent = ""
+    const itemEls = []
+    const list = Array.isArray(descriptors) ? descriptors : []
+
+    for (let index = 0; index < list.length; index = index + 1) {
+      const descriptor = list[index]
+      if (descriptor === null || typeof descriptor !== "object") {
+        continue
+      }
+      const el = this._buildItem(descriptor, index)
+      listEl.appendChild(el)
+      if (el.classList.contains("menu-item") === true) {
+        itemEls.push(el)
+      }
+    }
+    return itemEls
+  }
+
+  _buildItem(descriptor, index) {
+    const type = this._typeOf(descriptor)
+
+    if (type === "separator") {
+      const li = document.createElement("li")
+      li.className = "separator"
+      li.setAttribute("role", "separator")
+      li.setAttribute("part", "separator")
+      return li
+    }
+
+    if (type === "group") {
+      const li = document.createElement("li")
+      li.className = "group-label"
+      li.setAttribute("role", "presentation")
+      li.setAttribute("part", "group-label")
+      li.textContent = this._text(descriptor.label)
+      return li
+    }
+
+    let role = "menuitem"
+    if (type === "checkbox") {
+      role = "menuitemcheckbox"
+    } else if (type === "radio") {
+      role = "menuitemradio"
+    }
+
+    const li = document.createElement("li")
+    li.className = "menu-item"
+    li.setAttribute("role", role)
+    li.setAttribute("part", "item")
+    li.setAttribute("data-item-id", descriptor.id !== undefined && descriptor.id !== null ? String(descriptor.id) : String(index))
+    li.setAttribute("data-item-index", String(index))
+    li.setAttribute("tabindex", "-1")
+    li._mjDescriptor = descriptor
+
+    if (descriptor.disabled === true) {
+      li.setAttribute("aria-disabled", "true")
+    }
+
+    const checkIcon = document.createElement("span")
+    checkIcon.className = "check-icon"
+    checkIcon.setAttribute("aria-hidden", "true")
+    li.appendChild(checkIcon)
+
+    if (descriptor.icon !== undefined && descriptor.icon !== null && String(descriptor.icon).length > 0) {
+      const icon = document.createElement("span")
+      icon.className = "item-icon"
+      icon.setAttribute("part", "item-icon")
+      icon.setAttribute("aria-hidden", "true")
+      icon.textContent = String(descriptor.icon)
+      li.appendChild(icon)
+    }
+
+    const label = document.createElement("span")
+    label.className = "item-label"
+    label.textContent = this._text(descriptor.label)
+    li.appendChild(label)
+
+    if (descriptor.shortcut !== undefined && descriptor.shortcut !== null && String(descriptor.shortcut).length > 0) {
+      const shortcut = document.createElement("span")
+      shortcut.className = "item-shortcut"
+      shortcut.setAttribute("part", "item-shortcut")
+      shortcut.textContent = String(descriptor.shortcut)
+      li.setAttribute("aria-keyshortcuts", String(descriptor.shortcut))
+      li.appendChild(shortcut)
+    }
+
+    if (this._hasSubmenu(descriptor) === true) {
+      li.setAttribute("aria-haspopup", "menu")
+      li.setAttribute("aria-expanded", "false")
+      const arrow = document.createElement("span")
+      arrow.className = "submenu-arrow"
+      arrow.setAttribute("part", "submenu-arrow")
+      arrow.setAttribute("aria-hidden", "true")
+      arrow.textContent = "❯"
+      li.appendChild(arrow)
+    }
+
+    this._applyChecked(li)
+    return li
+  }
+
+  _text(value) {
+    const text = value !== undefined && value !== null ? String(value) : ""
+    return text
+  }
+
+  _hasSubmenu(descriptor) {
+    const has = Array.isArray(descriptor.submenu) === true && descriptor.submenu.length > 0
+    return has
+  }
+
+  _applyChecked(li) {
+    const descriptor = li._mjDescriptor
+    const type = this._typeOf(descriptor)
+    const checkIcon = li.querySelector(".check-icon")
+
+    if (type === "checkbox" || type === "radio") {
+      const checked = descriptor.checked === true
+      li.setAttribute("aria-checked", checked === true ? "true" : "false")
+      let mark = ""
+      if (checked === true) {
+        mark = type === "radio" ? "●" : "✓"
+      }
+      checkIcon.textContent = mark
+    }
+    return
+  }
+
+  /* ----- submenus ----- */
+
+  _levelOf(element) {
+    let found = -1
+    for (let index = 0; index < this._levels.length; index = index + 1) {
+      if (this._levels[index].listEl.contains(element) === true) {
+        found = index
+      }
+    }
+    return found
+  }
+
+  /* Close every submenu deeper than `level` (0 closes all of them). */
+  _closeSubmenus(level) {
+    this._clearSubmenuTimer()
+    while (this._levels.length > level + 1) {
+      const closing = this._levels.pop()
+      removeFromTopLayer(closing.listEl)
+      closing.listEl.remove()
+      if (closing.parentItem !== null) {
+        closing.parentItem.setAttribute("aria-expanded", "false")
+      }
+    }
+    return
+  }
+
+  _openSubmenu(itemEl, focusFirst) {
+    const descriptor = itemEl._mjDescriptor
+    if (this._hasSubmenu(descriptor) === false || itemEl.getAttribute("aria-disabled") === "true") {
+      return
+    }
+
+    const level = this._levelOf(itemEl)
+    const alreadyOpen = this._levels.length > level + 1 && this._levels[level + 1].parentItem === itemEl
+    if (alreadyOpen === false) {
+      this._closeSubmenus(level)
+
+      const listEl = document.createElement("ul")
+      listEl.className = "menu submenu"
+      listEl.setAttribute("part", "menu submenu")
+      listEl.setAttribute("role", "menu")
+      listEl.setAttribute("tabindex", "-1")
+      listEl.setAttribute("aria-label", this._text(descriptor.label))
+      this.shadowRoot.appendChild(listEl)
+
+      const itemEls = this._fillList(listEl, descriptor.submenu)
+      this._levels.push({ listEl: listEl, parentItem: itemEl, itemEls: itemEls })
+      itemEl.setAttribute("aria-expanded", "true")
+
+      /* Beside its item, flipping to the other side when it does not fit. */
+      position(listEl, itemEl, { placement: "end-top", offset: 0, constrain: false })
+    }
+
+    if (focusFirst === true) {
+      this._focusFirstItem(level + 1)
+    }
+    return
+  }
+
+  _clearSubmenuTimer() {
+    if (this._submenuTimer !== null) {
+      window.clearTimeout(this._submenuTimer)
+      this._submenuTimer = null
+    }
+    return
+  }
+
+  /* ----- focus ----- */
+
+  _enabledItems(level) {
+    const entry = this._levels[level]
+    const items = entry !== undefined
+      ? entry.itemEls.filter((el) => el.getAttribute("aria-disabled") !== "true")
+      : []
+    return items
+  }
+
+  _focusFirstItem(level) {
+    const entry = this._levels[level]
+    if (entry === undefined) {
+      return
+    }
+    const enabled = this._enabledItems(level)
+    if (enabled.length > 0) {
+      enabled[0].focus()
+    } else if (entry.itemEls.length > 0) {
+      entry.itemEls[0].focus()
+    } else {
+      entry.listEl.focus()
+    }
+    return
+  }
+
+  _clearTypeAhead() {
+    if (this._typeAheadTimer !== null) {
+      window.clearTimeout(this._typeAheadTimer)
+      this._typeAheadTimer = null
+    }
+    this._typeAheadText = ""
+    return
+  }
+
+  _typeAhead(character, level, currentIdx) {
+    if (this._typeAheadTimer !== null) {
+      window.clearTimeout(this._typeAheadTimer)
+    }
+    this._typeAheadText = this._typeAheadText + character.toLowerCase()
+    this._typeAheadTimer = window.setTimeout(() => {
+      this._typeAheadText = ""
+      this._typeAheadTimer = null
+    }, TYPE_AHEAD_RESET_MS)
+
+    const items = this._enabledItems(level)
+    const count = items.length
+    /* A repeated single letter cycles through the items starting with it. */
+    const start = this._typeAheadText.length === 1 ? currentIdx + 1 : Math.max(currentIdx, 0)
+
+    for (let step = 0; step < count; step = step + 1) {
+      const candidate = items[(start + step + count) % count]
+      const label = candidate.querySelector(".item-label")
+      if (label !== null && label.textContent.trim().toLowerCase().startsWith(this._typeAheadText) === true) {
+        candidate.focus()
+        break
+      }
+    }
+    return
+  }
+
+  /* ----- events ----- */
+
+  _onMenuKeydown(event) {
+    if (this._isOpen === false) {
+      return
+    }
+
+    const level = this._levelOf(event.target)
+    if (level < 0) {
+      return
+    }
+
+    const items = this._enabledItems(level)
+    const count = items.length
+    const targetItem = event.target.closest(".menu-item")
+    const focused = targetItem !== null ? targetItem : this.shadowRoot.activeElement
+    let currentIdx = items.indexOf(focused)
+
+    const rtl = window.getComputedStyle(this._menuEl).direction === "rtl"
+    const openKey = rtl === true ? "ArrowLeft" : "ArrowRight"
+    const closeKey = rtl === true ? "ArrowRight" : "ArrowLeft"
+
+    if (event.key === "Escape") {
+      /* Handled here: a dialog around the menu must not close as well. */
+      event.preventDefault()
+      event.stopPropagation()
+      if (level > 0) {
+        const parentItem = this._levels[level].parentItem
+        this._closeSubmenus(level - 1)
+        parentItem.focus()
+      } else {
         this._closeMenu("escape")
       }
       return
     }
 
-    let currentIdx = items.findIndex((el) => el === document.activeElement || el === this.shadowRoot.activeElement)
+    if (event.key === "Tab") {
+      this._closeMenu("escape")
+      return
+    }
+
+    if (event.key === closeKey && level > 0) {
+      event.preventDefault()
+      const parentItem = this._levels[level].parentItem
+      this._closeSubmenus(level - 1)
+      parentItem.focus()
+      return
+    }
+
+    if (event.key === openKey) {
+      event.preventDefault()
+      if (focused !== null && items.includes(focused) === true && this._hasSubmenu(focused._mjDescriptor) === true) {
+        this._openSubmenu(focused, true)
+      }
+      return
+    }
+
+    if (count === 0) {
+      return
+    }
     if (currentIdx < 0) {
-      currentIdx = 0
+      currentIdx = -1
     }
 
     if (event.key === "ArrowDown") {
       event.preventDefault()
-      const next = (currentIdx + 1) % count
-      items[next].focus()
+      items[(currentIdx + 1) % count].focus()
       return
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault()
-      const prev = (currentIdx - 1 + count) % count
+      const prev = currentIdx < 0 ? count - 1 : (currentIdx - 1 + count) % count
       items[prev].focus()
       return
     }
@@ -451,85 +842,121 @@ export class MjContextMenu extends MjElement {
       return
     }
 
-    if (event.key === "Escape" || event.key === "Tab") {
-      this._closeMenu("escape")
-      return
-    }
-
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault()
-      const focused = this._menuItems.find(
-        (el) => el === document.activeElement || el === this.shadowRoot.activeElement
-      )
-      if (focused !== undefined) {
-        this._activateItem(focused)
+      if (focused !== null && items.includes(focused) === true) {
+        this._activateItem(focused, true)
       }
       return
     }
 
-    /* Type-ahead */
-    if (event.key.length === 1) {
-      const char = event.key.toLowerCase()
-      const startIdx = (currentIdx + 1) % count
-      let found = null
-
-      for (let i = 0; i < count; i = i + 1) {
-        const checkIdx = (startIdx + i) % count
-        const label = items[checkIdx].querySelector(".item-label")
-        if (label !== null && label.textContent.trim().toLowerCase().startsWith(char) === true) {
-          found = items[checkIdx]
-          break
-        }
-      }
-
-      if (found !== null) {
-        found.focus()
-      }
-      return
+    if (event.key.length === 1 && event.ctrlKey === false && event.metaKey === false && event.altKey === false) {
+      event.preventDefault()
+      this._typeAhead(event.key, level, currentIdx)
     }
     return
   }
 
   _onMenuClick(event) {
     const itemEl = event.target.closest(".menu-item")
-    if (itemEl === null) {
+    if (itemEl === null || this._levelOf(itemEl) < 0) {
       return
     }
     if (itemEl.getAttribute("aria-disabled") === "true") {
       return
     }
-    this._activateItem(itemEl)
+    this._activateItem(itemEl, false)
     return
   }
 
-  _activateItem(itemEl) {
-    const idx = parseInt(itemEl.getAttribute("data-item-index") || "0", 10)
-    const descriptor = this.items[idx]
-    if (descriptor === undefined) {
+  /* The item under the pointer takes focus; a submenu item opens after a pause. */
+  _onMenuPointerOver(event) {
+    const itemEl = event.target.closest(".menu-item")
+    if (itemEl === null || this._isOpen === false) {
+      return
+    }
+    const level = this._levelOf(itemEl)
+    if (level < 0) {
       return
     }
 
-    if (descriptor.type === "checkbox") {
-      const checked = itemEl.getAttribute("aria-checked") === "true"
-      descriptor.checked = !checked
-      itemEl.setAttribute("aria-checked", descriptor.checked === true ? "true" : "false")
-      const checkIcon = itemEl.querySelector(".check-icon")
-      if (checkIcon !== null) {
-        checkIcon.innerHTML = descriptor.checked === true ? "&#x2713;" : ""
+    if (this.shadowRoot.activeElement !== itemEl) {
+      itemEl.focus({ preventScroll: true })
+    }
+
+    this._clearSubmenuTimer()
+    this._submenuTimer = window.setTimeout(() => {
+      this._submenuTimer = null
+      if (this._hasSubmenu(itemEl._mjDescriptor) === true) {
+        this._openSubmenu(itemEl, false)
+      } else {
+        this._closeSubmenus(level)
       }
+    }, SUBMENU_HOVER_DELAY_MS)
+    return
+  }
+
+  _activateItem(itemEl, fromKeyboard) {
+    const descriptor = itemEl._mjDescriptor
+    if (descriptor === undefined || itemEl.getAttribute("aria-disabled") === "true") {
+      return
+    }
+
+    if (this._hasSubmenu(descriptor) === true) {
+      this._openSubmenu(itemEl, fromKeyboard)
+      return
+    }
+
+    const type = this._typeOf(descriptor)
+
+    if (type === "checkbox") {
+      descriptor.checked = descriptor.checked !== true
+      this._applyChecked(itemEl)
       this.emit("mj-context-menu-select", { item: descriptor, checked: descriptor.checked })
       return
     }
 
-    this.emit("mj-context-menu-select", { item: descriptor })
-
-    if (descriptor.submenu === undefined) {
-      this._closeMenu("item-select")
+    if (type === "radio") {
+      /* One checked item per radio group within the same menu level. */
+      const level = this._levels[this._levelOf(itemEl)]
+      const groupName = descriptor.group !== undefined ? String(descriptor.group) : ""
+      for (const other of level.itemEls) {
+        const otherDescriptor = other._mjDescriptor
+        const otherGroup = otherDescriptor.group !== undefined ? String(otherDescriptor.group) : ""
+        if (this._typeOf(otherDescriptor) === "radio" && otherGroup === groupName) {
+          otherDescriptor.checked = other === itemEl
+          this._applyChecked(other)
+        }
+      }
+      this.emit("mj-context-menu-select", { item: descriptor, checked: true })
+      return
     }
+
+    this.emit("mj-context-menu-select", { item: descriptor })
+    this._closeMenu("item-select")
     return
   }
 
   /* Scriptable API */
+
+  /*
+   * The menu items. An accessor (not a plain field) so that a value
+   * assigned before the element was upgraded is picked up, and so that a
+   * menu that is open shows the new items at once.
+   */
+  get items() {
+    return this._items
+  }
+
+  set items(value) {
+    this._items = Array.isArray(value) ? value : []
+    if (this._isOpen === true) {
+      this._renderMenu()
+      this._placeMenu(this.openCoords)
+      this._focusFirstItem(0)
+    }
+    return
+  }
 
   get open() {
     return this.hasAttribute("open")
@@ -544,15 +971,10 @@ export class MjContextMenu extends MjElement {
     return this._targetEl
   }
 
+  /* Open at the viewport point (x, y), or next to the target without one. */
   show(x, y) {
-    if (x !== undefined && y !== undefined) {
-      this.openCoords = { x: x, y: y }
-      this._positionAtCoords(x, y)
-    }
-    this._renderMenu()
-    this.setAttribute("open", "")
-    this._installLightDismiss()
-    this._focusFirstItem()
+    const hasPoint = typeof x === "number" && typeof y === "number"
+    this._openMenu(hasPoint === true ? { x: x, y: y } : null, "api")
     return
   }
 

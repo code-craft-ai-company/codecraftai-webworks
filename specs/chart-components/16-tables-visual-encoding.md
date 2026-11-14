@@ -42,11 +42,13 @@ icon arrays and small-multiples tables.
 - **Variants / modes:** `mode="striped"` alternates row fills; `mode="compact"`
   reduces cell padding; `mode="bordered"` adds cell borders. The `heatmap-table`
   renderer adds per-cell fill SVG — see below.
+- **Events:** none (not implemented).
 - **Phase:** P5
 - **Notes:** This is the accessible data-table alternative surfaced by every
   other chart type. As a standalone chart type it becomes a fully-featured
-  report table. Sorting is handled via a `sort` event on column headers;
-  pagination is caller-controlled through `data` updates. No SVG rendering
+  report table. Sorting on column headers is planned (no event is defined
+  while the type is not implemented); pagination is caller-controlled through
+  `data` updates. No SVG rendering
   occurs; `<mj-chart-data-table>` generates a real `<table>` that screen readers
   traverse normally.
 
@@ -81,6 +83,7 @@ icon arrays and small-multiples tables.
 - **Orientation:** `n/a`
 - **Variants / modes:** `mode="diverging"` uses a bi-directional color scale
   centred at zero; `mode="categorical"` maps discrete categories to hue bands.
+- **Events:** `mj-chart-cell-click` `{ row, column, value }` (each data cell of the table; `row` is the row index, `column` the column key; header cells emit nothing).
 - **Phase:** P5
 - **Notes:** The DOM `<table>` is emitted by `<mj-chart-data-table>`; each cell
   hosts a small inline `<svg>` that the `heatmap-table` cell-renderer injects.
@@ -92,8 +95,8 @@ icon arrays and small-multiples tables.
 ---
 
 ### Bar-in-cell table  *(inline bar table, magnitude table)*
-- **Renderer / `type`:** `bar-cell-table` — **Primary renderer**
-- **Controller:** `<mj-chart type="bar-cell-table" ...>`
+- **Renderer / `type`:** `bar-in-cell` — **Primary renderer** (`heatmaptable.js`, shared with `heatmap-table` and `conditional-format-table`)
+- **Controller:** `<mj-chart type="bar-in-cell" ...>`
 - **Purpose:** Render a DOM table where one or more numeric columns are replaced
   by miniature horizontal bars, enabling compact side-by-side magnitude
   comparisons across rows without leaving tabular alignment.
@@ -120,9 +123,10 @@ icon arrays and small-multiples tables.
 - **Variants / modes:** `mode="diverging"` centers bars on zero for delta
   columns; `mode="stacked"` splits a cell into a proportional pair (positive /
   negative segments).
+- **Events:** `mj-chart-cell-click` `{ row, column, value }` (each data cell of the table; `row` is the row index, `column` the column key; header cells emit nothing).
 - **Phase:** P5
 - **Notes:** Each cell flagged `"render": "bar"` receives an inline `<svg>` from
-  the `bar-cell-table` cell-renderer. Bars share the same domain across all rows
+  the `bar-in-cell` cell-renderer. Bars share the same domain across all rows
   in that column (set by `column.domain` or auto-computed from data). This is
   a DOM-first table; the bar SVGs are decorative and `aria-hidden`; the numeric
   value is present as accessible text inside the `<td>`.
@@ -154,6 +158,7 @@ icon arrays and small-multiples tables.
   columns top-to-bottom)
 - **Variants / modes:** `mode="person"` uses a person-silhouette `<path>`
   instead of circles; `mode="square"` uses `<rect>` icons.
+- **Events:** `mj-chart-icon-click` `{ series, count }` (each series' group of icons).
 - **Phase:** P5
 - **Notes:** Rendered entirely on `<mj-chart-plot>` as pure SVG — not a DOM
   table. The grid layout is computed in the renderer: `total` icons are placed
@@ -164,8 +169,8 @@ icon arrays and small-multiples tables.
 ---
 
 ### Conditional formatting table  *(highlight table, rules-based table)*
-- **Renderer / `type`:** `cf-table` — **Primary renderer**
-- **Controller:** `<mj-chart type="cf-table" ...>`
+- **Renderer / `type`:** `conditional-format-table` — **Primary renderer** (`heatmaptable.js`)
+- **Controller:** `<mj-chart type="conditional-format-table" ...>`
 - **Purpose:** Emphasize patterns in tabular data by applying color, icon, or
   typographic highlights to cells that satisfy declarative rules, analogous to
   spreadsheet conditional formatting.
@@ -194,6 +199,7 @@ icon arrays and small-multiples tables.
 - **Orientation:** `n/a`
 - **Variants / modes:** `mode="icon-only"` hides fill and shows only the icon;
   `mode="text-color"` applies rule color to the text rather than the background.
+- **Events:** `mj-chart-cell-click` `{ row, column, value }` (each data cell of the table; `row` is the row index, `column` the column key; header cells emit nothing).
 - **Phase:** P5
 - **Notes:** Rules are evaluated client-side by the renderer; order is
   first-match. Icons are drawn as `<path>` elements from a small icon set in
@@ -232,6 +238,7 @@ icon arrays and small-multiples tables.
 - **Variants / modes:** `mode="heatmap"` activates per-cell fill encoding (reuses
   the `heatmap-table` cell-renderer on value cells); `mode="bar"` activates
   bar-in-cell encoding on value cells.
+- **Events:** none (not implemented).
 - **Phase:** P5
 - **Notes:** Aggregation (`sum`, `mean`, `count`, `min`, `max`) is performed
   client-side by the controller from flat `rows` data; the pivot matrix is
@@ -275,6 +282,7 @@ icon arrays and small-multiples tables.
 - **Variants / modes:** `mode="compact"` shows only value + label; `mode="full"`
   adds target, delta, and sparkline; `mode="gauge"` replaces the progress bar
   with a radial arc (reuses the `gauge` renderer arc primitive).
+- **Events:** `mj-chart-tile-click` `{ metric, index }` (each tile; `metric` is the metric object from the data).
 - **Phase:** P5
 - **Notes:** Each metric's sparkline is a miniature `line` renderer path drawn
   directly on the scorecard SVG surface; a full `<mj-chart>` is not spawned per
@@ -323,6 +331,7 @@ icon arrays and small-multiples tables.
   `mode="bar"` renders bar sparklines; `mode="area"` renders area sparklines.
   The `faceted` renderer in category 17 is the general-purpose version of this
   pattern applied to any renderer — note the relationship.
+- **Events:** none (not implemented).
 - **Phase:** P5
 - **Notes:** When `sharedScales: true`, all panels share the same domain (union
   of all panel domains) so panel heights are visually comparable. Each mini-chart

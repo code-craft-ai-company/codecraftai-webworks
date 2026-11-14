@@ -33,9 +33,11 @@ a sequential set of slides — use `<mj-carousel>`.
 
 ## 3. Anatomy
 
-- **root** — rendered as a `<div>` with `role="feed"`; surfaced as `::part(root)`.
-- **items-container** — scrollable container holding `<mj-feed-item>` children;
-  surfaced as `::part(items-container)`.
+- **root** — a `<div>` wrapping the feed and its controls; surfaced as `::part(root)`.
+- **items-container** — the `<div>` with `role="feed"` holding the `<mj-feed-item>`
+  children and nothing else (a feed may own only articles); surfaced as
+  `::part(items-container)`. The trigger, button, loading indicator, live region and
+  empty state are its siblings inside the root.
 - **load-more-trigger** — an `IntersectionObserver` sentinel element at the bottom
   of the list that fires a load request.
 - **load-more-button** — an explicit "Load more" button as a non-scroll alternative
@@ -89,8 +91,8 @@ a sequential set of slides — use `<mj-carousel>`.
 ## 9. CSS parts & custom properties
 
 **Parts**
-- `::part(root)` — the feed container with `role="feed"`
-- `::part(items-container)` — the scrollable items region
+- `::part(root)` — the wrapper around the feed and its controls
+- `::part(items-container)` — the items region, the element with `role="feed"`
 - `::part(load-more-button)` — the explicit load-more button
 - `::part(loading-indicator)` — the loading state indicator
 - `::part(empty)` — the empty state container
@@ -105,7 +107,7 @@ a sequential set of slides — use `<mj-carousel>`.
 ## 10. States
 
 - **default** — items displayed; load-more trigger active.
-- **loading** — `aria-busy="true"` on root; loading indicator visible; load-more button disabled.
+- **loading** — `aria-busy="true"` on the feed element; loading indicator visible; load-more button disabled.
 - **all-loaded** — `has-more="false"`; load-more trigger/button hidden.
 - **empty** — no items slotted; `empty` slot content displayed.
 
@@ -139,7 +141,10 @@ well for prepend-style feeds.
 
 ## 13. Accessibility
 
-- Root element has `role="feed"` and `aria-busy` reflecting the `loading` state.
+- The items container has `role="feed"` and `aria-busy` reflecting the `loading` state;
+  it owns only the articles (load controls, live region and empty state sit outside it).
+  While the feed has no item and is not loading the container has no role (an empty
+  feed is invalid ARIA); the empty state is shown instead.
 - Each `<mj-feed-item>` has `role="article"` and must have an accessible name
   (from a heading or `aria-label`).
 - Feed items expose their position: `aria-setsize` and `aria-posinset` are set
@@ -193,7 +198,7 @@ navigation. The SSR items remain in the DOM unchanged.
 
 ## 19. Acceptance criteria
 
-- [ ] Root has `role="feed"` and `aria-busy` reflects the `loading` attribute.
+- [ ] The items container has `role="feed"`, owns only articles, and `aria-busy` reflects the `loading` attribute.
 - [ ] Each `<mj-feed-item>` has `role="article"` with `aria-setsize` and `aria-posinset`.
 - [ ] `Page Down`/`Page Up` move focus between feed items.
 - [ ] `load-mode="scroll"` emits `mj-feed-load-more` when the sentinel enters the viewport.

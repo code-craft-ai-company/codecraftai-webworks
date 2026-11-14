@@ -711,7 +711,7 @@ def test_missing_parent_template_raises_error():
                 raise AssertionError(
                     "Expected non-empty error message for missing parent"
                 )
-        except TemplateError as exc:
+        except TemplateError:
             caught_error = True
         
         if not caught_error:
@@ -756,7 +756,7 @@ def test_missing_include_template_raises_error():
                 raise AssertionError(
                     "Expected non-empty error message for missing include"
                 )
-        except TemplateError as exc:
+        except TemplateError:
             caught_error = True
         
         if not caught_error:
@@ -803,7 +803,7 @@ def test_circular_inheritance_raises_error():
         
         try:
             adapter.render("a.html", {})
-        except (TemplateError, TemplateInheritanceError) as exc:
+        except (TemplateError, TemplateInheritanceError):
             caught_error = True
         except RecursionError:
             # Jinja2 may raise RecursionError for circular inheritance
@@ -845,7 +845,7 @@ def test_self_referencing_extends_raises_error():
         
         try:
             adapter.render("self_ref.html", {})
-        except (TemplateError, TemplateInheritanceError) as exc:
+        except (TemplateError, TemplateInheritanceError):
             caught_error = True
         except RecursionError:
             caught_error = True

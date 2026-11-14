@@ -53,6 +53,7 @@ from ccai.webworks.security.auditlogger import (
     AuditEntry,
     AuditLevel,
     AuditDestination,
+    FileAuditDestination,
 )
 
 # Policy factories
@@ -121,6 +122,7 @@ __all__ = [
     "AuditEntry",
     "AuditLevel",
     "AuditDestination",
+    "FileAuditDestination",
     # Policy factories
     "public",
     "authenticated",

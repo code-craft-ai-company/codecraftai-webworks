@@ -695,3 +695,186 @@ def test_is_process_running_returns_false_for_nonexistent():
         raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Unit Tests for PID file creation and the group taken when dropping privileges
+# =============================================================================
+
+def test_write_pid_file_does_not_write_through_symlink():
+    """
+        Test that a symbolic link planted at the PID file path is not
+        followed: the file it points to keeps its content.
+    """
+    if not hasattr(os, "symlink") or sys.platform == "win32":
+        raise SkipError("Symbolic links are needed for this test")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        victim_path = os.path.join(tmpdir, "victim.conf")
+        pid_path = os.path.join(tmpdir, "server.pid")
+
+        with open(victim_path, "w") as fh:
+            fh.write("important content")
+
+        os.symlink(victim_path, pid_path)
+
+        config = ServerConfig(pid_file=pid_path)
+        manager = ProcessManager(config)
+
+        manager.write_pid_file()
+
+        with open(victim_path, "r") as fh:
+            victim_content = fh.read()
+
+        pid_path_is_link = os.path.islink(pid_path)
+
+        manager.cleanup_pid_file()
+
+    if victim_content != "important content":
+        errmsg = f"Expected the file behind the link to be left alone, it now holds '{victim_content}'"
+        raise AssertionError(errmsg)
+
+    if pid_path_is_link:
+        errmsg = "Expected the PID file to be a new regular file, not the planted link"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_write_pid_file_writes_pid_into_new_file_replacing_link():
+    """
+        Test that the PID is written to a file of its own when a link
+        was planted at the PID file path.
+    """
+    if not hasattr(os, "symlink") or sys.platform == "win32":
+        raise SkipError("Symbolic links are needed for this test")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        victim_path = os.path.join(tmpdir, "victim.conf")
+        pid_path = os.path.join(tmpdir, "server.pid")
+
+        with open(victim_path, "w") as fh:
+            fh.write("important content")
+
+        os.symlink(victim_path, pid_path)
+
+        config = ServerConfig(pid_file=pid_path)
+        manager = ProcessManager(config)
+
+        manager.write_pid_file()
+
+        with open(pid_path, "r") as fh:
+            pid_content = fh.read()
+
+        manager.cleanup_pid_file()
+
+    if pid_content != str(os.getpid()):
+        errmsg = f"Expected the PID file to hold '{os.getpid()}', got '{pid_content}'"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def _record_privilege_calls(calls: list) -> list:
+    """
+        Replace the calls that change the identity of the process with
+        recorders, so dropping privileges can be observed without having
+        any privileges to drop.
+
+        :param calls: List the calls are recorded in.
+
+        :returns: The activated patches, to be deactivated by the caller.
+    """
+    from ccai.testbase.mocking import create_module_patch
+
+    def record_setgid(gid):
+        calls.append(("setgid", gid))
+        return
+
+    def record_initgroups(user_name, gid):
+        calls.append(("initgroups", user_name, gid))
+        return
+
+    def record_setuid(uid):
+        calls.append(("setuid", uid))
+        return
+
+    patches = []
+
+    for name, recorder in (("setgid", record_setgid), ("initgroups", record_initgroups), ("setuid", record_setuid)):
+        patch = create_module_patch(os, name)
+        mock = patch.activate()
+        mock.configure(side_effect=recorder)
+        patches.append(patch)
+
+    return patches
+
+
+def test_apply_user_takes_primary_group_of_user_when_no_group_configured():
+    """
+        Test that a user configured without a group makes the process take
+        the primary group of that user, before the user is changed.
+    """
+    _require_posix_privileges()
+
+    import pwd
+
+    user_info = pwd.getpwuid(os.getuid())
+
+    config = ServerConfig(user=user_info.pw_name)
+    manager = ProcessManager(config)
+
+    calls = []
+    patches = _record_privilege_calls(calls)
+
+    try:
+        manager.drop_privileges()
+    finally:
+        for patch in patches:
+            patch.deactivate()
+
+    expected = [
+        ("setgid", user_info.pw_gid),
+        ("initgroups", user_info.pw_name, user_info.pw_gid),
+        ("setuid", user_info.pw_uid),
+    ]
+
+    if calls != expected:
+        errmsg = f"Expected the calls {expected}, got {calls}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_apply_user_keeps_configured_group():
+    """
+        Test that a configured group is the group of the process and is
+        not replaced by the primary group of the user.
+    """
+    _require_posix_privileges()
+
+    import grp
+    import pwd
+
+    user_info = pwd.getpwuid(os.getuid())
+    group_info = grp.getgrgid(os.getgid())
+
+    config = ServerConfig(user=user_info.pw_name, group=group_info.gr_name)
+    manager = ProcessManager(config)
+
+    calls = []
+    patches = _record_privilege_calls(calls)
+
+    try:
+        manager.drop_privileges()
+    finally:
+        for patch in patches:
+            patch.deactivate()
+
+    setgid_calls = [call for call in calls if call[0] == "setgid"]
+
+    if setgid_calls != [("setgid", group_info.gr_gid)]:
+        errmsg = f"Expected one setgid call for the configured group, got {setgid_calls}"
+        raise AssertionError(errmsg)
+
+    return

@@ -139,6 +139,12 @@ class AuthenticationSystem:
             If multiple authenticators return CHALLENGE, their challenges
             are combined in the response.
             
+            When the request carries no credentials that any authenticator
+            recognises, or an authenticator rejects the credentials, the
+            result carries the challenges of every challenge-capable
+            authenticator (see :meth:`get_challenge`) so the transport
+            layer can emit ``WWW-Authenticate`` with the 401 response.
+            
             :param request: The HTTP request to authenticate.
             
             :returns: An AuthenticationResult with:
@@ -167,7 +173,10 @@ class AuthenticationSystem:
                 if result.challenge:
                     challenges.append(result.challenge)
             elif result.status == AuthenticationStatus.FAILURE:
-                # Definitive failure, stop trying
+                # Definitive failure, stop trying. Attach the available
+                # challenges so the client learns how to authenticate.
+                if result.challenge is None:
+                    result.challenge = self.get_challenge()
                 return result
             # SKIP status: continue to next authenticator
         
@@ -179,12 +188,67 @@ class AuthenticationSystem:
                 challenge=", ".join(challenges)
             )
         
-        # No authenticator could handle the request
+        # No authenticator could handle the request. The request carried
+        # no recognisable credentials, so advertise the schemes that can
+        # issue a challenge (Basic, Digest, Bearer).
         return AuthenticationResult(
             status=AuthenticationStatus.FAILURE,
+            challenge=self.get_challenge(),
             error_code="no_credentials",
             error_description="No valid credentials provided"
         )
+    
+    def get_challenge(self) -> Optional[str]:
+        """
+            Build the combined ``WWW-Authenticate`` challenge of the
+            registered authenticators.
+            
+            An authenticator takes part when it defines a callable
+            ``get_challenge`` that returns a challenge string. The
+            challenges are joined in priority order.
+            
+            :returns: The combined challenge value, or None when no
+                      registered authenticator can issue a challenge.
+        """
+        challenges: List[str] = []
+        
+        for scheme in self._scheme_order:
+            authenticator, _ = self._authenticators[scheme]
+            
+            challenge_source = getattr(authenticator, "get_challenge", None)
+            if not callable(challenge_source):
+                continue
+            
+            challenge = challenge_source()
+            if challenge:
+                challenges.append(challenge)
+        
+        rtnval = None
+        if len(challenges) > 0:
+            rtnval = ", ".join(challenges)
+        
+        return rtnval
+    
+    @property
+    def requires_body(self) -> bool:
+        """
+            Whether any registered authenticator needs the request body.
+            
+            An authenticator declares this with a truthy ``requires_body``
+            attribute (HMAC request signing covers a digest of the body).
+            The middleware then buffers the body before authenticating.
+            
+            :returns: True if at least one authenticator needs the body.
+        """
+        rtnval = False
+        
+        for scheme in self._scheme_order:
+            authenticator, _ = self._authenticators[scheme]
+            if getattr(authenticator, "requires_body", False) is True:
+                rtnval = True
+                break
+        
+        return rtnval
     
     def _update_order(self) -> None:
         """

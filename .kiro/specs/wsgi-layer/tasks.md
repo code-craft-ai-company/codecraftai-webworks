@@ -516,6 +516,28 @@ This implementation plan creates the WSGI Layer feature providing both the WSGI 
 - [x] 30. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [x] 31. Serve a WebApplication over WSGI (audit WW-0175, decision 2026-11-12)
+  - [x] 31.1 `ASGIBridge` in `wsgi/asgibridge.py`: one loop per process, chunked `receive()` from `wsgi.input`, streamed `send()` with backpressure, lifespan per process (lazy or `on_worker_start`), 503 after a failed startup, 504 request timeout, HEAD, disconnects, `IncompleteResponse`, fork reset, BaseException propagation
+    - _Requirements: 16.1-16.13_
+    - Tests: `wsgi/test_asgibridge.py`
+  - [x] 31.2 `WebApplication.wsgi_app` property (one bridge per application, `asgi_app` resolved when the bridge starts)
+    - _Requirements: 16.1-16.3_
+    - Tests: `wsgi/test_webapplication_serving.py` (real sockets, parity with `asgi_app`, auth, body limit, cookies, streaming, lifespan per worker, 503)
+  - [x] 31.3 `get_wsgi_application()` resolves `set_wsgi_application()`, `WEBWORKS_SERVER_APP`, then the persona; `application` module attribute; `resolve_wsgi_application`, `as_wsgi_application`; ConfigurationError when there is nothing to serve
+    - _Requirements: 5a.1, 5a.3, 5a.6-5a.8_
+    - Tests: `wsgi/test_application.py`, `wsgi/test_webapplication_serving.py#test_gunicorn_entry_point_serves_the_application`
+
+- [x] 32. Server support for the production layer (audit WW-0174)
+  - [x] 32.1 Worker lifecycle methods (`on_worker_start`/`on_worker_exit`), `WorkerBootError`, boot-failure exit code and server stop
+    - _Requirements: 13.9, 13.10_
+  - [x] 32.2 `max_requests` / `max_requests_jitter` recycling, last response `Connection: close`
+    - _Requirements: 13.11, 15.4_
+  - [x] 32.3 `WorkerManager.replace_workers()`, exit callback; graceful shutdown serves accepted connections, a stopping worker accepts none
+    - _Requirements: 13.12, 13.13_
+  - [x] 32.4 `WSGIServer` hook methods; `SocketListener.set_ssl_context`; no SO_REUSEPORT; `gevent` worker class (patched in the worker, validated when gevent is missing)
+    - _Requirements: 14.3, 14.9, 15.4_
+    - Tests: `wsgi/test_worker.py`, `wsgi/test_workermanager.py`, `wsgi/test_server.py`, `wsgi/test_socketlistener.py`, `wsgi/test_serverconfig.py`
+
 ## Notes
 
 - All tasks are required for comprehensive implementation
@@ -529,3 +551,5 @@ This implementation plan creates the WSGI Layer feature providing both the WSGI 
 - The built-in server reduces dependencies on external packages like Gunicorn
 - Server components (tasks 14-27) implement the complete WSGI server stack
 - Application components (tasks 1-13) implement the WSGI application interface
+- Tasks 31-32 (November 2026 audit): a WebApplication is served over WSGI by the ASGI bridge, and the server gained what the production server builds on
+- The gevent worker class is implemented but not exercised by the test suite: gevent is an optional extra and is not installed in the development environment
