@@ -54,6 +54,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
   - `group="stack"` — stacked bins for multi-series histograms.
   - `normalize="density"` — y-axis shows probability density instead of count (area sums to 1); used by the density plot variant.
   - `bin-count` / `bin-width` attributes control automatic bin generation from `samples`.
+- **Events:** `mj-chart-bar-click` `{ series, x0, x1, count }` (each bin bar); with `smooth="kde"` `mj-chart-density-click` `{ series, bandwidth }` (each curve); with `display="polygon"` `mj-chart-polygon-click` `{ series, x0, x1, count }` (each polygon point).
 - **Phase:** P2
 - **Notes:** When `samples` is provided the renderer computes bins using a configurable algorithm (Sturges, Scott, or Freedman–Diaconis, defaulting to Sturges). When `bins` is provided, bin edges are taken as-is. Scales used: `linear` for the value (count/density) axis; `linear` or `band` for the bin-range axis. The data-table model lists each bin as a row with columns `[range, count]`.
 
@@ -77,6 +78,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **SVG primitives:** `<path>` (filled area curve per series using a smooth cubic-bezier or monotone spline from `svgdraw.js`), `<text>` (axis labels), `<g>` (per-series group)
 - **Orientation:** `vertical` (density on y, range on x) and `horizontal` (density on x, range on y).
 - **Variants / modes:** `fill="area"` adds a translucent fill under each density curve; `fill="none"` renders line only.
+- **Events:** `mj-chart-density-click` `{ series, bandwidth }` (each density curve; the same for `type="density"`).
 - **Phase:** P2
 - **Notes:** Rendered by the `histogram` renderer with `normalize="density"` and `smooth="kde"`. The KDE bandwidth is auto-selected via Silverman's rule-of-thumb but overridable with a `bandwidth` attribute. The renderer evaluates density at evenly-spaced points across the data range and emits a `<path>` using the curve builder in `svgdraw.js`. Scales: `linear` for both axes.
 
@@ -129,6 +131,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **Variants / modes:**
   - `notched="true"` — notched box to indicate confidence interval around the median.
   - Combined with `violin` renderer via `overlay="violin"` to add a violin silhouette behind each box.
+- **Events:** `mj-chart-boxplot-click` `{ series, category, stats }` (each box; `stats` is `{ count, q1, median, q3, whiskerLow, whiskerHigh, outliers }`, plus `min`, `max`, `mean` when computed from samples).
 - **Phase:** P2
 - **Notes:** Outliers are defined as points beyond 1.5 × IQR from Q1/Q3 by default; the multiplier is configurable. Scales: `band` for the category axis; `linear` for the value axis. The data-table model exposes min, Q1, median, Q3, max, and outlier count per group.
 
@@ -162,6 +165,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
   - `show-box="true"` — renders a miniature box-plot inside each violin.
   - `show-points="true"` — overlays a strip plot of raw sample points.
   - `half="true"` — renders only the right half of each violin (half-violin / raincloud left side).
+- **Events:** `mj-chart-violin-click` `{ series, category, median, bandwidth }` (each violin).
 - **Phase:** P2
 - **Notes:** KDE computed from `samples` using the same engine as the density plot renderer. Each violin is drawn as a symmetric `<path>` around the group's band center using `svgdraw.js` curve helpers. Scales: `band` (category), `linear` (value).
 
@@ -195,6 +199,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
   - `jitter="random"` (default) — points offset randomly along the category axis to reduce overplotting.
   - `jitter="none"` — all points aligned on the category center (pure strip).
   - Overlaid on `boxplot` or `violin` via respective renderers' `overlay="strip"` attribute.
+- **Events:** `mj-chart-point-click` `{ series, category, value }` (each dot).
 - **Phase:** P2
 - **Notes:** The random jitter seed is deterministic (derived from value) so the chart is stable across re-renders. Point opacity is reduced for dense data. Scales: `band` (category), `linear` (value). The data-table model lists individual observations.
 
@@ -209,6 +214,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **SVG primitives:** `<circle>` (one per data point, placed by swarm algorithm), `<g>` (per-group)
 - **Orientation:** `vertical` and `horizontal`; the swarm expands perpendicular to the value axis.
 - **Variants / modes:** None beyond those of the `strip` renderer; `jitter="swarm"` activates the non-overlapping placement pass.
+- **Events:** `mj-chart-point-click` `{ series, category, value }` (each dot), as Strip Plot.
 - **Phase:** P2
 - **Notes:** The swarm layout runs a greedy bin-packing pass: points are sorted by value, then placed at the first position along the category band that does not overlap any already-placed point (within one point radius). This is a single-pass O(n log n) approximation, not a full force simulation. Scales: `band` (category), `linear` (value).
 
@@ -232,6 +238,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **SVG primitives:** `<line>` (one short vertical or horizontal tick per observation), `<g>` (per-series)
 - **Orientation:** `horizontal` (ticks run vertically along a horizontal value axis) and `vertical` (ticks run horizontally along a vertical value axis). The rug is rendered as a thin strip; `height` / `width` of the `mj-chart-plot` element controls the strip thickness.
 - **Variants / modes:** No standalone variants; the rug renderer is most often composed as an `overlay` on a scatter or density chart using `<mj-chart-annotation>` or a secondary `mj-chart-plot` sharing the same controller.
+- **Events:** `mj-chart-rug-click` `{ series, value }` (each tick).
 - **Phase:** P2
 - **Notes:** Tick opacity is reduced for overlapping observations. The renderer intentionally has no value axis — ticks are purely positional along a shared scale owned by the parent controller. Scales: `linear` for the value axis (shared with host chart when used as overlay).
 
@@ -262,6 +269,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **SVG primitives:** `<circle>` (one per unit count, stacked within each bin), `<g>` (per-bin)
 - **Orientation:** `vertical` (dots stack upward — default) and `horizontal` (dots stack rightward).
 - **Variants / modes:** `dot-size` attribute controls circle radius relative to bin width. Multiple series stack dots side-by-side within each bin (grouped mode) or atop one another with different colors (overlay mode, `group="overlay"`).
+- **Events:** `mj-chart-dot-click` `{ series, x0, x1, count }` (one mark per bin: its dot stack, or its bar when the dots do not fit).
 - **Phase:** P2
 - **Notes:** Dot radius is auto-sized so dots fill the bin width without overlap; the renderer computes `radius = binWidth / 2` and stacks `count` circles per bin. Scales: `band` or `linear` for bin axis; `linear` for count axis. For large counts, the renderer auto-switches to a bar representation with an info annotation rather than rendering thousands of dots.
 
@@ -298,6 +306,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
   - `mode="density"` (default) — KDE curves.
   - `mode="histogram"` — binned bars per row instead of smooth curves.
   - `overlap` attribute controls the fractional row-height overlap between adjacent groups (default `0.5`).
+- **Events:** `mj-chart-ridge-click` `{ series, category, median }` (each ridge).
 - **Phase:** P2
 - **Notes:** Each group's KDE is computed independently at the same set of x evaluation points so all curves share one common value scale. Row offsets are computed from a `band` scale over the category axis; the KDE amplitude is scaled to fit within one row height (×`1 + overlap`). Fill opacity is set so overlapping rows remain legible. Scales: `linear` (value), `band` (group/category offset).
 
@@ -335,6 +344,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **SVG primitives:** `<circle>` (one per quantile pair), `<line>` (45° reference line, rendered via `mj-chart-annotation`), `<g>` (per-series)
 - **Orientation:** `n/a` — x always carries theoretical/reference quantiles; y always carries observed quantiles.
 - **Variants / modes:** `theoretical` field accepts `"normal"`, `"uniform"`, `"exponential"`, or `"lognormal"` for single-sample mode; omitting it and providing two series activates empirical-vs-empirical mode.
+- **Events:** `mj-chart-qq-click` `{ series, theoretical, observed }` (each point).
 - **Phase:** P3
 - **Notes:** The renderer sorts `samples`, computes empirical quantiles at equally-spaced probability points, then maps them against the theoretical inverse CDF (percent-point function). For two-sample mode the shorter sample's quantiles are interpolated to align with the longer. Scales: `linear` on both axes with symmetric domain expansion to show the diagonal clearly. The 45° reference line is injected as an `mj-chart-annotation` reference-line record.
 
@@ -382,6 +392,7 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
   - `direction="descending"` — fraction above (survival function / complementary CDF).
   - `scale="percent"` — y-axis shown as 0–100% instead of 0–1.
   - `smooth="true"` — connects points with a monotone spline instead of a step function (appropriate for pre-computed theoretical CDFs).
+- **Events:** `mj-chart-cdf-point-click` `{ series, x, y }` (each step point; `y` as plotted, after `direction` and `scale="percent"`); when markers are off (`markers="false"`, or `auto` with more than 60 distinct values) the line is the mark and emits `mj-chart-cdf-click` `{ series }`.
 - **Phase:** P2
 - **Notes:** The ECDF is computed by sorting `samples` and assigning rank/(n) as cumulative probability. Scales: `linear` for both axes. Reference annotation lines (e.g., p50, p95, p99) can be added via `mj-chart-annotation`.
 
@@ -405,5 +416,6 @@ from raw `samples: [n …]` arrays; callers may also supply pre-binned
 - **SVG primitives:** `<path>` (polyline through bin-midpoint coordinates — straight segments, not a smooth curve), `<circle>` (optional midpoint markers), `<g>` (per-series)
 - **Orientation:** `vertical` (count on y, bin midpoints on x) and `horizontal` (count on x, bin midpoints on y).
 - **Variants / modes:** `fill="area"` adds a translucent filled area beneath each polygon line. When `fill="area"` and multiple series are present, `group="stack"` stacks the polygons.
+- **Events:** `mj-chart-polygon-click` `{ series, x0, x1, count }` (each bin midpoint; the same for `type="frequency-polygon"`).
 - **Phase:** P2
 - **Notes:** Rendered by the `histogram` renderer's `display="polygon"` mode: bins are computed identically, but instead of `<rect>` elements the renderer emits a `<path>` connecting the midpoint of each bin at the appropriate count height, with anchor points at `(x0_first, 0)` and `(x1_last, 0)` to close the polygon. Scales: `linear` (count/frequency axis), `linear` (bin-midpoint axis).

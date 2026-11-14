@@ -36,6 +36,7 @@ renderers.
   - `sort="none"` reverts to an unordered comparison bar chart.
   - `group="cluster"` + `sort` → sorted grouped bar.
   - See `01-comparison.md` for the `bar` primary renderer.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each bar).
 - **Phase:** P1 (`sort` attribute added alongside the base `bar` renderer; no new renderer file).
 - **Notes:** `chartmodel.js` re-indexes categories and values together when `sort` is set, preserving series alignment. Rank numbers can be drawn as a leading `<text>` element in the bar or on the category axis label via a `meta.show-rank: true` flag.
 
@@ -61,6 +62,7 @@ renderers.
 - **SVG primitives:** `<rect>` (sorted frequency bars), `<path>` (cumulative % polyline via `svgdraw.line()`), `<circle>` (data points on the cumulative line), `<text>` (axis labels, optional 80% reference annotation), `<line>` (reference line at 80%), `<g>`
 - **Orientation:** `vertical` only — Pareto convention requires bars descending left-to-right.
 - **Variants / modes:** None. Pareto is a distinct renderer because it requires a dual value axis (absolute counts left, cumulative % right) and mandatory sort, which cannot be expressed cleanly as `bar` attributes.
+- **Events:** `mj-chart-bar-click` `{ category, value, cumulativePct }` (each bar); `mj-chart-dot-click` `{ category, cumulativePct }` (each point of the cumulative line — pointer only, the points are not focusable).
 - **Phase:** P2
 - **Notes:** Left value axis: `linear` scale over `[0, grand total]`. Right value axis: `linear` scale fixed `[0, 100]` (percentage). The cumulative line is drawn by the same renderer file; no second series needs to be supplied in JSON. A reference annotation at 80% on the right axis is drawn automatically via the `mj-chart-annotation` protocol; it can be suppressed with `meta.pareto-line: false`.
 
@@ -90,6 +92,7 @@ renderers.
 - **SVG primitives:** `<path>` (smoothed S-curve connecting rank positions via `svgdraw.curve()`), `<circle>` (rank dots at each period), `<text>` (entity name labels at start and/or end of line), `<g>` (per-series group)
 - **Orientation:** `n/a` — bump charts are always horizontal (time/ordinal left-to-right, rank top-to-bottom). The rank Y axis is necessarily inverted.
 - **Variants / modes:** `meta.show-values: true` replaces rank integers with raw values on the Y axis (value bump chart). This is a display mode, not a separate renderer.
+- **Events:** `mj-chart-bump-click` `{ series, x, rank }` (each dot; `rank` is the plotted y value).
 - **Phase:** P5
 - **Notes:** A new primary renderer because the inverted ordinal rank axis and the S-curve interpolation between discrete rank positions cannot be expressed as a `line` renderer variant without special-casing that would pollute `line.js`. Color is assigned per series via `ordinal-color`. Interactive hover highlights the hovered series and dims others.
 
@@ -114,6 +117,7 @@ renderers.
 - **SVG primitives:** `<line>` (the stick from axis baseline to dot), `<circle>` (the dot at the data value), `<text>` (axis labels, optional value labels), `<g>`
 - **Orientation:** `horizontal` | `vertical`
 - **Variants / modes:** `sort="none"` degrades to an unranked lollipop comparison chart.
+- **Events:** `mj-chart-lollipop-click` `{ series, category, value }` (each dot head; drawn by `lollipop.js`).
 - **Phase:** P2
 - **Notes:** Implemented in `bar.js` under a `style="lollipop"` branch: the renderer emits `<line>` + `<circle>` instead of `<rect>`. Dot radius comes from the `--mj-chart-dot-radius` design token. Sorting is handled the same way as for sorted bar (category re-indexing in `chartmodel.js`).
 
@@ -142,6 +146,7 @@ renderers.
   - Two-series input → dumbbell chart (dot pair connected by a `<line>`).
   - `sort="none"` → unranked Cleveland dot plot.
   - See `04-relationship.md` for the `scatter` primary renderer.
+- **Events:** `mj-chart-dotplot-click` `{ series, category, value }` (each dot).
 - **Phase:** P2
 - **Notes:** Differs from a lollipop in that there is no baseline stick to zero; dots are placed directly at their value on the value axis. Implemented as a thin mode in `scatter.js` where the category axis uses a `band` scale (as in bar charts) rather than a continuous `linear` or `time` scale.
 
@@ -169,6 +174,7 @@ renderers.
 - **SVG primitives:** `<line>` (one slope line per series, straight — no curve interpolation), `<circle>` (endpoints), `<text>` (entity name labels at left and right endpoints, value annotations), `<g>`
 - **Orientation:** `n/a` — left column is always "before", right column is always "after"; rotation is not meaningful.
 - **Variants / modes:** For more than two time periods, use `type="line"` (see `02-trend.md`). For rank positions specifically, use `type="bump"`.
+- **Events:** `mj-chart-slope-click` `{ series, leftValue, rightValue }` (each slope line).
 - **Phase:** P5
 - **Notes:** Implemented in `line.js` under a `style="slope"` branch: the renderer enforces the two-period constraint, draws straight `<line>` segments (no `svgdraw.curve()`), and places inline text labels at endpoints rather than relying on `mj-chart-axis`. Label collision detection offsets overlapping right-side labels vertically.
 
@@ -197,5 +203,6 @@ renderers.
 - **SVG primitives:** `<rect>` (proportional inline bar), `<text>` (rank number, label, numeric value, column headers), `<line>` (optional row separator), `<g>` (per-row group)
 - **Orientation:** `vertical` (rows top-to-bottom) only; the bar within each row is always horizontal.
 - **Variants / modes:** `sort="asc"` reverses rank order. `style="leaderboard"` on a multi-series `bar` controller adds secondary text columns. Degrades to a plain sorted bar if `meta.columns` is absent.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each bar; the `bar` renderer adds no table-specific event).
 - **Phase:** P5
 - **Notes:** The leaderboard layout is a table-like arrangement of SVG rows, not an HTML `<table>`. The `mj-chart-data-table` part always provides the accessible HTML table equivalent. The proportional bar width uses a `linear` scale over `[0, max-value]`. Row height is derived from the `--mj-chart-row-height` token.

@@ -37,6 +37,7 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<path>` (polyline via `svgdraw.linePath`), `<circle>` (point markers, optional), `<text>` (axis labels, value labels), `<line>` (axis, gridlines, crosshair), `<g>` (series group)
 - **Orientation:** `vertical` (time on x-axis) / `horizontal` (time on y-axis)
 - **Variants / modes:** Multi-line chart (multiple `series[]` entries on the same renderer); see below.
+- **Events:** `mj-chart-line-click` `{ series, x, y }` (each point target; `x` is the point's `x` — or its category — as given, `y` its value; a long series gets about one target per 6 px).
 - **Phase:** P1
 - **Notes:** Uses `time` scale on the temporal axis and `linear` scale on the value axis. A `curve` attribute on `<mj-chart>` (values: `linear` | `monotone` | `step`) selects the path interpolation algorithm in `svgdraw.js`. Dot markers are toggled by `show-points` attribute. This renderer is reused by the Sparkline (stripped-down mode).
 
@@ -63,6 +64,7 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<path>` (one per series), `<circle>` (markers), `<text>`, `<line>`, `<g>`
 - **Orientation:** `vertical` / `horizontal`
 - **Variants / modes:** Single-series line chart is a degenerate case of the same renderer.
+- **Events:** `mj-chart-line-click` `{ series, x, y }` (each point target of every series), as Line Chart.
 - **Phase:** P1
 - **Notes:** No separate renderer; the `line` renderer handles any number of `series[]` entries. Legend is essential here and becomes interactive (series toggle via `mj-chart-series-toggle` event).
 
@@ -88,6 +90,7 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<path>` (closed area fill + upper stroke), `<text>`, `<line>`, `<g>`
 - **Orientation:** `vertical` / `horizontal`
 - **Variants / modes:** Stacked Area Chart (`stack="stack"`); 100% Stacked Area Chart (`stack="stack100"`). Both are served by this renderer with a different stacking computation applied to the model before drawing.
+- **Events:** `mj-chart-area-click` — `{ series, x, y }` from each point target; a click on the filled area itself (pointer only) emits `{ series }`.
 - **Phase:** P1
 - **Notes:** The renderer closes the path to the baseline (zero or stacked baseline). Fill opacity is controlled by `--mj-chart-area-fill-opacity` token (default ~0.3). Curve interpolation follows the same `curve` attribute as `line`. When `stack="stack100"` the value axis range is forced to `[0, 1]` and axis labels are formatted as percentages.
 
@@ -112,6 +115,7 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<path>` (one closed band per series), `<text>`, `<line>`, `<g>`
 - **Orientation:** `vertical` / `horizontal`
 - **Variants / modes:** Base `area` renderer; controlled via `stack="stack"`.
+- **Events:** `mj-chart-area-click` — `{ series, x, y, share }` from each point target (`y` the series' own value, `share` its percentage of the stack total); a click on a filled band (pointer only) emits `{ series }`.
 - **Phase:** P1
 - **Notes:** Stack baselines are computed by `chartmodel.js` before the renderer runs; the renderer receives pre-stacked `y0`/`y1` pairs per point.
 
@@ -127,6 +131,7 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<path>`, `<text>`, `<line>`, `<g>`
 - **Orientation:** `vertical` / `horizontal`
 - **Variants / modes:** Base `area` renderer; controlled via `stack="stack100"`.
+- **Events:** `mj-chart-area-click` — `{ series, x, y, share }` from each point target (`y` the series' own value, `share` the percentage drawn); a click on a filled band (pointer only) emits `{ series }`.
 - **Phase:** P1
 - **Notes:** Value axis is locked to `[0%, 100%]`. Tooltip shows both absolute value and percentage share. Accessibility note: color alone does not distinguish layers — patterns or labels are added when `forced-colors` is active.
 
@@ -160,6 +165,7 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<path>` (horizontal + vertical segments via `svgdraw.stepPath`), `<circle>` (change markers, optional), `<text>`, `<line>`, `<g>`
 - **Orientation:** `vertical` / `horizontal`
 - **Variants / modes:** Filled step area possible by applying `area`-style path closing — not a separate renderer, controlled by a `fill` boolean attribute.
+- **Events:** `mj-chart-step-click` `{ series, x, y }` (each point target).
 - **Phase:** P1
 - **Notes:** The step path builder in `svgdraw.js` is a sibling of `linePath`; it emits only horizontal and vertical segments. Reuses the `time` + `linear` scale pair from `line`.
 
@@ -188,6 +194,7 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<path>` (line or area), `<circle>` (start/end/min/max markers), `<rect>` (bar variant), `<text>` (optional last-value label)
 - **Orientation:** `vertical` (default) / `horizontal`
 - **Variants / modes:** Sparkline bar variant (`sparkline-variant="bar"`) renders a row of `<rect>` instead of a `<path>`. Both share this renderer.
+- **Events:** `mj-chart-sparkline-click` `{ x, y }` (`x` is the point's label). Line variant: each first / last / min / max marker, and a click on the line for the point nearest the pointer (without markers the line is focusable and Enter / Space emit the point chosen with the arrow keys); bar variant: each bar.
 - **Phase:** P1
 - **Notes:** The element is designed to be 60–200 px wide and 20–40 px tall. No axis ticks are drawn; the `time` and `linear` scales are still used internally for accurate proportional placement. Highlight markers (first, last, min, max) are configurable via attributes. Supersedes the existing `mjsparkline.js` in `components/` (Phase 5 compatibility wrapper).
 
@@ -214,6 +221,7 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<rect>` (candle body; filled green/red per token `--mj-chart-up-color` / `--mj-chart-down-color`), `<line>` (upper and lower wicks), `<g>` (per candle group), `<text>` (axis labels)
 - **Orientation:** `vertical` only (time on x-axis is conventional; horizontal is not supported and the attribute is ignored).
 - **Variants / modes:** OHLC Chart (`style="ohlc"`) — same renderer, different mark shape (tick lines instead of filled rect); see below.
+- **Events:** `mj-chart-candle-click` `{ t, o, h, l, c, direction, count }` (each session; `t` is the session's first date, `direction` `rising` / `falling`, `count` the data rows merged into it).
 - **Phase:** P3
 - **Notes:** Uses `time` scale (x) and `linear` scale (y, auto-domain from min `l` to max `h`). Candle width is computed from the time scale band width; the renderer adjusts at zoom levels. Bullish/bearish coloring never uses color alone — bodies are also distinguished by fill vs. outline when `forced-colors` is active.
 
@@ -229,6 +237,7 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<line>` (vertical range bar from `l` to `h`; left tick at `o`; right tick at `c`), `<g>`, `<text>`
 - **Orientation:** `vertical` only.
 - **Variants / modes:** Base `ohlc` renderer; controlled via `style="ohlc"`.
+- **Events:** `mj-chart-candle-click` `{ t, o, h, l, c, direction, count }` (each session; `t` is the session's first date, `direction` `rising` / `falling`, `count` the data rows merged into it); the same event as the candlestick drawing.
 - **Phase:** P3
 - **Notes:** The only difference from Candlestick is the mark drawing routine inside the renderer; all scale and model logic is shared. Both styles may be toggled at runtime by changing the `style` attribute.
 
@@ -260,8 +269,9 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<g>` per task mark with `<rect>` (bar, progress fill) or `<polygon>` (diamond, edge arrow); `<path>` dependency arrows (right-angle elbows, `<marker>` arrowhead in `<defs>`); `<g role="button">` group headers; `<rect>` phase bands; `<g>` markers; `<text>` labels and ticks.
 - **Orientation:** `horizontal` only (time on x, one row per task); `vertical` is not meaningful.
 - **Variants / modes:** grouped rows come from `groups` / `task.group` (collapsible headers, `collapsed-groups` option); `variant="roadmap"` (or `type="roadmap"`) draws the lane / column roadmap from the same data. Options: `today`, `start-date`, `end-date`, `scale`, `show-progress`, `show-dependencies`, `density`, `row-height`, `collapsed-groups`.
+- **Events:** `mj-chart-bar-click` `{ id, label, start, end, index }`, `mj-chart-marker-click` `{ label, date, index }`, `mj-chart-group-toggle` `{ group, collapsed, collapsedGroups }` (a group header); see the full entry.
 - **Phase:** P3 — implemented.
-- **Notes:** Uses a `time` scale (x); rows are laid out by the renderer at a minimum height (`row-height`, 32 px, 24 px compact) and the chart asks for that height (`ctx.setContentHeight`; registered `minHeight` 120). Events: `mj-chart-bar-click`, `mj-chart-marker-click`, `mj-chart-group-toggle`. The former standalone `mjganttchart.js` is now a wrapper of this type.
+- **Notes:** Uses a `time` scale (x); rows are laid out by the renderer at a minimum height (`row-height`, 32 px, 24 px compact) and the chart asks for that height (`ctx.setContentHeight`; registered `minHeight` 120). The former standalone `mjganttchart.js` is now a wrapper of this type.
 
 ---
 
@@ -288,8 +298,9 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<circle>` / `<polygon>` (event marker), `<line>` (stems, spine, today line), `<text>` (labels, ticks), `<rect>` (phase bands), `<g>`.
 - **Orientation:** `horizontal` (time on x, labels in tiers above and below the spine) is the default; `vertical` (time on y, labels to the right) is supported.
 - **Variants / modes:** single lane vs one lane per `group`; `variant="milestone"` (or `type="milestone"`) draws diamonds. Options: `today`, `start-date`, `end-date`, `dim-past`, `density`, `orientation`.
+- **Events:** `mj-chart-event-click` `{ id, label, date, group, status, kind, index }` (each event marker).
 - **Phase:** P3 — implemented.
-- **Notes:** Label placement is a greedy tier search in the renderer; events on the same date are nudged apart. Event: `mj-chart-event-click` `{ id, label, date, group, status, kind, index }`.
+- **Notes:** Label placement is a greedy tier search in the renderer; events on the same date are nudged apart.
 
 ---
 
@@ -315,6 +326,7 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<clipPath>` + `<path>` (each band is a filled area clipped to a fixed row height), `<rect>` (row background), `<text>` (row labels, axis ticks), `<g>` (per-row group)
 - **Orientation:** `horizontal` (time on x-axis, series stacked vertically); `vertical` is not meaningful.
 - **Variants / modes:** Positive-only (default) vs. diverging (negative values folded downward in a contrasting hue) — controlled by `diverging` boolean attribute.
+- **Events:** `mj-chart-horizon-click` `{ series }` (each series row).
 - **Phase:** P5
 - **Notes:** Uses `time` scale (x) and a fixed pixel height per row (configurable via `--mj-chart-horizon-row-height` token). The folding/layering is achieved by rendering N `<path>` fills at offset `y` positions inside a `<clipPath>` per row. The `band` count determines the sequential color ramp depth drawn from `--mj-chart-sequential-*` tokens.
 
@@ -342,6 +354,7 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<path>` (one closed organic band per series, drawn with monotone curve interpolation), `<text>` (inline series labels, axis ticks), `<g>` (series group)
 - **Orientation:** `horizontal` (time on x-axis) is primary; `vertical` is not conventional.
 - **Variants / modes:** Layout baseline modes — `wiggle` (default, minimises slope), `silhouette` (centered), `zero` (bottom-aligned, equivalent to stacked area) — controlled by `baseline` attribute.
+- **Events:** `mj-chart-stream-click` — `{ series, x, y, share }` from each point target (`share` the percentage of the total at that x); a click on a stream itself (pointer only) emits `{ series }`.
 - **Phase:** P5
 - **Notes:** The streamgraph layout algorithm (Stacked Wiggle) is implemented in `chartmodel.js` as a pre-render transform that computes `y0`/`y1` pairs. When `baseline="zero"` the result is indistinguishable from a stacked area chart. The value axis is hidden because the y-positions carry no absolute meaning; a percentage tooltip is shown instead. Smooth `monotone` curves are used via `svgdraw.areaPath`.
 
@@ -382,5 +395,6 @@ names map to **nine primary renderers** after consolidation.
 - **SVG primitives:** `<path>` (smooth S-curve connector between rank positions, drawn with monotone curve), `<circle>` (rank dot at each time period), `<text>` (series labels at start/end, axis ticks), `<g>` (per-series group)
 - **Orientation:** `horizontal` (time/categories on x-axis, ranks on y-axis) is canonical; `vertical` is not meaningful.
 - **Variants / modes:** None — the renderer is purpose-built for rank data. When `y` values are continuous (not integer ranks) the renderer still works but the y-axis is not inverted.
+- **Events:** `mj-chart-bump-click` `{ series, x, rank }` (each dot; `rank` is the plotted y value).
 - **Phase:** P5
 - **Notes:** Uses `point` scale (x — evenly-spaced category positions) and `linear` scale (y — inverted domain, e.g. `[N, 1]`). The S-curve between rank dots is produced by `svgdraw.bumpPath` (horizontal-to-vertical monotone cubic). Dots and curves share the same series color from the token ramp. End-of-line labels use a collision-avoidance nudge so they do not overlap when two series share the same final rank.

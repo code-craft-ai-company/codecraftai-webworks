@@ -162,6 +162,11 @@ All events bubble and are composed; none is cancelable.
 
 `mj-chart-legend-toggle` is emitted by `<mj-chart-legend>`, not by the chart.
 
+Each chart type keeps its own interaction event names and detail shapes; there is
+no common point or select event across types (decided for WW-1660 and WW-1269). A
+page that switches `type` rewires its listeners to the new type's events, listed
+in the **Events** line of each chart-type page.
+
 ## 9. CSS parts & custom properties
 
 **Parts**

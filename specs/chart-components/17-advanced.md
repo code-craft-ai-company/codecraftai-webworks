@@ -45,6 +45,7 @@ noted per entry.
 - **Variants / modes:** `mode="overlay"` renders cells as a transparent hit-test
   layer over another chart (e.g. scatter) to improve tooltip targeting;
   `mode="clipped"` clips cells to a bounding rectangle.
+- **Events:** `mj-chart-cell-click` `{ series, label, x, y }` (each cell; `x`, `y` its site in data units, `label` the labels of the sites sharing it).
 - **Phase:** P5
 - **Notes:** Voronoi cell polygons are computed client-side using Fortune's
   algorithm implemented in `svgdraw.js` (no external library). Each cell's path
@@ -83,6 +84,7 @@ noted per entry.
   (observations along the y-axis)
 - **Variants / modes:** `mode="strip"` allows overlap (no jitter); `mode="violin"`
   delegates to the `violin` renderer for a density envelope behind the dots.
+- **Events:** `mj-chart-dot-click` `{ series, value, label }` (each dot).
 - **Phase:** P5
 - **Notes:** Dot placement uses a greedy collision-avoidance algorithm: dots are
   sorted by value and placed at the closest available y-position (for horizontal
@@ -120,6 +122,7 @@ noted per entry.
 - **Orientation:** `horizontal` (nodes along x) / `vertical` (nodes along y)
 - **Variants / modes:** `mode="below"` draws arcs below the baseline; `mode="both"`
   draws arcs on both sides (alternating by edge group).
+- **Events:** `mj-chart-node-click` `{ id, label, group, index }` (each node); `mj-chart-edge-click` `{ source, target, value, label }` (each arc — pointer only, arcs are not focusable).
 - **Phase:** P5
 - **Notes:** Uses the flow/network JSON shape (plan §3.4). Node order along the
   line can be set explicitly via `nodes[].order` or auto-computed by minimizing
@@ -159,11 +162,12 @@ noted per entry.
 - **Variants / modes:** `mode="binary"` fills cells as solid if any link exists;
   `mode="weighted"` uses a sequential color scale on cell fill; `mode="grouped"`
   reorders nodes by group to reveal block structure.
+- **Events:** none (not implemented).
 - **Phase:** P5
 - **Notes:** Uses the flow/network JSON shape (plan §3.4). The renderer builds
   an N×N matrix from `nodes` and `links`, then emits N² `<rect>` elements. Node
-  ordering by group uses a stable sort; interactive reordering can be triggered
-  via `mj-chart-select` events. Relationship to the `heatmap` renderer: the
+  ordering by group uses a stable sort; no interaction event is defined while
+  the type is not implemented. Relationship to the `heatmap` renderer: the
   matrix-plot is topologically identical but the axes are node labels rather than
   independent category/value dimensions. Relationship to the `node-link` and
   `edge-bundling` renderers: all three share the same JSON contract and can be
@@ -201,12 +205,14 @@ noted per entry.
   of force simulation (requires a DAG or tree); `mode="radial-tree"` uses a
   radial tree layout; `mode="static"` uses fixed `nodes[].x` / `nodes[].y`
   coordinates and skips the simulation.
+- **Events:** `mj-chart-node-click` `{ id, label, group, index }` (each node); `mj-chart-edge-click` `{ source, target, value, label }` (each link — pointer only, links are not focusable).
 - **Phase:** P5
 - **Notes:** Uses the flow/network JSON shape (plan §3.4). The force simulation
   is a lightweight Verlet integrator implemented in the renderer — no external
   physics library. Tick count is capped to prevent long first-render times;
   the simulation runs to completion off-screen and then a single repaint occurs.
-  Drag interaction updates node fixed positions via `mj-chart-select` events.
+  Nodes cannot be dragged and no `mj-chart-select` event is emitted: a node
+  reports a click with `mj-chart-node-click`, a link with `mj-chart-edge-click`.
   Relationship to `arc-diagram` and `matrix-plot`: all three consume the same
   JSON; switching `type` changes the layout strategy only.
 
@@ -240,6 +246,7 @@ noted per entry.
 - **Orientation:** `n/a` (radial layout)
 - **Variants / modes:** inherits `mode="static"` from `node-link`; `tension`
   controls bundling strength (0 = straight edges, 1 = fully bundled).
+- **Events:** `mj-chart-node-click` `{ id, label, group, index }` (each node); `mj-chart-edge-click` `{ source, target, value, label }` (each bundled link — pointer only, links are not focusable).
 - **Phase:** P5
 - **Notes:** Shares the flow/network JSON shape with `node-link` and `matrix-plot`.
   Nodes are arranged on a circle; edges are Bézier curves routed through
@@ -277,6 +284,7 @@ noted per entry.
   `vertical` (weeks along y, days along x)
 - **Variants / modes:** `mode="month"` restricts the grid to one month;
   `mode="week"` shows a single week in detail.
+- **Events:** `mj-chart-day-click` `{ date, value }` (each day that has a value; `date` is `YYYY-MM-DD`).
 - **Phase:** P5
 - **Notes:** The renderer builds a `time` scale over the date range and a `band`
   scale for day-of-week. Missing dates are rendered as low-opacity empty cells.
@@ -320,6 +328,7 @@ noted per entry.
 - **Variants / modes:** `mode="bar"` renders the value as a radial bar extending
   outward from the spiral path rather than coloring the path stroke; `mode="line"`
   offsets the path radially by value magnitude.
+- **Events:** line mode: `mj-chart-point-click` `{ series, t, value }` (each point; a series with more than 600 points draws no point marks); `mode="bar"`: `mj-chart-bar-click` `{ series, t, value }` (each non-zero bar).
 - **Phase:** P5
 - **Notes:** The Archimedean spiral parametric equations (`x = r·cos θ`, `y = r·sin θ`,
   `r = a + b·θ`) are computed in the renderer; `b` is chosen so one full cycle
@@ -356,6 +365,7 @@ noted per entry.
   `mode` attribute; side-by-side grouping is not implemented). The `coxcomb`
   key draws this same equal-angle chart; the proportional-angle Coxcomb entry
   below is not implemented.
+- **Events:** `mj-chart-nightingale-click` `{ series, category, value }` (each sector).
 - **Phase:** P5
 - **Notes:** Each sector subtends an equal angle (`2π / N` where N = category
   count). Radius is mapped by a `sqrt` scale from data value to pixel radius,
@@ -380,6 +390,7 @@ noted per entry.
 - **Orientation:** `n/a`
 - **Variants / modes:** planned as a proportional-angle mode of the
   `nightingale` renderer; `polar.js` reads no `mode` attribute today.
+- **Events:** none of its own (not implemented); `type="coxcomb"` draws the Nightingale rose and emits `mj-chart-nightingale-click` `{ series, category, value }`.
 - **Phase:** P5
 - **Notes:** In the planned proportional mode both the angle subtended and the
   radius encode value magnitude, making it a doubly-encoded variant. The
@@ -420,6 +431,7 @@ noted per entry.
 - **Variants / modes:** `mode="hex"` uses `<polygon>` hexagonal tiles instead
   of rectangular tiles; `mode="value"` scales tile sizes by value (breaking the
   equal-area guarantee).
+- **Events:** `mj-chart-select` `{ id, label, value }` (each tile).
 - **Phase:** P5
 - **Notes:** The grid layout (which row/col each region occupies) is specified by
   the `topology` reference — a small JSON lookup bundled in the renderer for
@@ -468,6 +480,7 @@ noted per entry.
 - **Variants / modes:** any value of `childType` supported by the renderer
   registry (bar, line, area, scatter, …); `mode="free-scale"` disables shared
   scales so each panel auto-scales independently.
+- **Events:** panels drawn by `faceted` itself (`child-type` `bar`, `column`, `line` or `area` with shared scales) emit `mj-chart-series-click` `{ panelIndex, panel, series, category, value }` (each bar or point); other child types, and every child type with `mode="free-scale"`, are drawn by the child's renderer and emit its events with `panelIndex` and `panel` added to the detail.
 - **Phase:** P5
 - **Notes:** The `faceted` renderer is a meta-layout: it calls the `childType`
   renderer function once per panel with a sub-region of the plot surface. It does
@@ -514,6 +527,7 @@ noted per entry.
 - **Orientation:** `horizontal` (faces in a row) / `vertical` (faces stacked)
 - **Variants / modes:** `mode="simple"` uses fewer features (eyes + mouth only)
   for legibility with more than ~8 observations.
+- **Events:** none (not implemented).
 - **Phase:** P5
 - **Notes:** Each feature is mapped through a `linear` scale `[data-min, data-max]`
   → `[feature-min-px, feature-max-px]`. The face geometry is parameterized by
@@ -560,6 +574,7 @@ noted per entry.
 - **Variants / modes:** `mode="radar"` (filled polygon, same as the `radar`
   renderer but as a miniature tiled glyph); `mode="star"` (line spokes without
   fill); `mode="bar-glyph"` (radial bars per axis, similar to `nightingale`).
+- **Events:** `mj-chart-glyph-click` `{ series, values }` (each glyph).
 - **Phase:** P5
 - **Notes:** The `radar` renderer (category 4) is the full-sized single-observation
   variant; the `glyph` renderer tiles many miniature instances. Axis values are
@@ -600,6 +615,7 @@ noted per entry.
 - **Variants / modes:** `mode="svg"` forces individual `<rect>` elements (default
   for ≤ 10 000 bins); `mode="canvas"` renders to an off-screen `<canvas>` and
   embeds the result as `<image>` for performance with very large bin counts.
+- **Events:** `mj-chart-pixel-click` `{ x, y, value }` (each cell; `x`, `y` are the category labels when categories are used, else the indices). Above 2,000 bins the cells are not focusable, so only a click emits.
 - **Phase:** P5
 - **Notes:** For `mode="svg"` (the primary SVG path) the renderer groups `<rect>`
   elements in row-level `<g>` elements to keep the DOM tree shallow. Each `<rect>`

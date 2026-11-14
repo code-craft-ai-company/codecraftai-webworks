@@ -35,6 +35,7 @@ drawing conventions.
 - **Variants / modes:**
   - `fill: false` — line-only contour (isolines without color fill).
   - `fill: true` — filled contour / heatmap-style color bands.
+- **Events:** `mj-chart-contour-click` `{ level, index, lines }` (each level's path; `lines` is its number of line pieces); with `fill: true` (or `density-style="fill"` / `"both"`) the surface also emits `mj-chart-density-click` `{ x, y, density }` (click: the value under the pointer; Enter / Space: the peak).
 - **Phase:** P4
 - **Notes:** The renderer implements the marching-squares algorithm to trace iso-contour `<path>` strings from the grid. Scales are `linear` for x, y, and z. The z scale maps to the categorical color ramp (or a sequential ramp from design tokens). Also cross-referenced from category 4 (Relationship & correlation) where contour density plots appear. When used as a density/hexbin overlay, the same renderer is invoked with a pre-computed kernel-density `grid` produced by `chartmodel.js`.
 
@@ -65,6 +66,7 @@ drawing conventions.
   - `style: "wireframe"` — mesh lines only, no fill.
   - `style: "shaded"` — filled polygon faces colored by z value.
   - `style: "both"` — shaded faces with wireframe overlay.
+- **Events:** `mj-chart-surface-click` `{ row, col, x0, x1, y0, y1, corners, zAvg }` (each face: its grid cell, x / y extent, four corner values and their mean).
 - **Phase:** P4
 - **Notes:** Rendered entirely as a 2-D SVG projection; no WebGL. The projection transform (isometric or oblique) is computed in `svgdraw.js`. Faces are sorted by painter's algorithm (furthest-center-y first) before emitting `<polygon>` elements so nearer faces paint over farther ones. The z scale maps to the sequential color ramp from design tokens. The three projected axis legs are drawn as `<line>` elements by `mj-chart-axis` in a special `kind="projected"` mode unique to this renderer.
 
@@ -94,6 +96,7 @@ drawing conventions.
 - **SVG primitives:** `<polygon>` or `<path>` (filled region areas), `<path>` (boundary curves), `<text>` (region labels, phase-transition labels), `<circle>` (triple-point or critical-point markers), `<g>` (per-region groups).
 - **Orientation:** `n/a` — x and y parameter axes are fixed by convention.
 - **Variants / modes:** None; boundary styles cover common sub-types.
+- **Events:** `mj-chart-phase-region-click` `{ name, index }` (each region); `mj-chart-phase-boundary-click` `{ name }` (each boundary curve); `mj-chart-phase-point-click` `{ name, x, y }` (each special point).
 - **Phase:** P4
 - **Notes:** Regions are drawn back-to-front by array order. Boundary paths support both straight-line segments and spline curves (pass `"curve": "monotone-x"` on a boundary to enable cubic interpolation via `svgdraw.js`). Scales are `linear` or `log` independently per axis — the `scale` attribute on each `mj-chart-axis` drives this. Accessibility: each region polygon carries `aria-label` set to the region name.
 
@@ -122,6 +125,7 @@ drawing conventions.
 - **Variants / modes:**
   - `normalize: true` — unit-length arrows (direction-only quiver plot).
   - Color-mapped magnitude — arrows colored by `sqrt(u²+v²)` via the `sqrt` scale.
+- **Events:** `mj-chart-vector-click` `{ x, y, u, v, magnitude }` (each arrow).
 - **Phase:** P4
 - **Notes:** Arrow length in pixels = `sqrt(u²+v²) * scale * cellSize`, clamped to avoid overlap. The `sqrt` scale from `scales.js` maps magnitude to the color ramp and optionally to arrow width. Arrowhead size is fixed in design tokens (`--mj-chart-arrow-head-size`). For grid-sampled data `chartmodel.js` accepts a structured-grid shorthand analogous to `contour`'s `grid` object.
 
@@ -153,6 +157,7 @@ drawing conventions.
 - **Variants / modes:**
   - Color-mapped speed — path stroke colored by local `sqrt(u²+v²)`.
   - Pre-computed paths — skip integration, render supplied `lines` directly.
+- **Events:** `mj-chart-streamline-click` `{ index, seed, points, meanSpeed }` (each line; `points` is its point count).
 - **Phase:** P4
 - **Notes:** The RK4 integrator runs in `chartmodel.js` at model-build time; the renderer receives ready-to-draw polylines. Bilinear interpolation of the `(u, v)` grid is done inside the integrator. Integration stops at `maxSteps`, on leaving the domain, or when speed drops below a tolerance. Streamlines share the vector-field grid format; when both `type="streamline"` and a quiver overlay are desired, a second `mj-chart-plot` referencing the same controller with `type="vectorfield"` can be layered.
 
@@ -180,6 +185,7 @@ drawing conventions.
 - **Variants / modes:**
   - `scale: "linear"` — linear power mapping.
   - `scale: "log"` — dB (logarithmic) color mapping via the `log` scale in `scales.js`.
+- **Events:** `mj-chart-spectrogram-click` `{ timeBin, freqBin, time, frequency, power, value }` (`power` the cell's value, `value` as displayed — dB on the log scale). The grid is one focusable mark: a click emits for the cell under the pointer; the arrow keys and Home / End move a cell cursor and Enter / Space emit for that cell.
 - **Phase:** P4
 - **Notes:** For large spectrograms the renderer quantizes colors to a palette of 64 shades and merges adjacent same-color cells into a single wider `<rect>` to bound SVG element count. The `log` scale from `scales.js` drives the y-axis frequency when `freqAxis.logScale: true` is set. Pre-windowed FFT output is accepted directly; `chartmodel.js` does not perform the FFT itself.
 
@@ -217,6 +223,7 @@ drawing conventions.
   - Line mode (default) — open polar path connecting data points.
   - Area mode (`fill: true`) — closed filled polar region.
   - Wind rose / Nightingale — use `wind-rose` entry below (same renderer, petal layout).
+- **Events:** `mj-chart-polar-click` `{ series, theta, r }` (each data point, in line and area mode).
 - **Phase:** P4
 - **Notes:** The θ scale is always circular; the r scale is `linear` by default and can be `log`. Angular labels are placed at the perimeter using `svgdraw.js` polar text positioning (labels rotate to stay readable). Multiple series are drawn as overlaid polar paths. The `polar` renderer is shared by wind-rose and Nightingale-rose (see those entries).
 
@@ -244,6 +251,7 @@ drawing conventions.
 - **Variants / modes:**
   - Filled wedges (default) — opaque stacked petals per direction.
   - Line rose — just the perimeter of the total-frequency polygon (single series, no fill).
+- **Events:** `mj-chart-windrose-click` `{ series, direction, value }` (each petal segment).
 - **Phase:** P4
 - **Notes:** Implemented as the `polar` renderer in `petal` layout mode, triggered by `type="wind-rose"`. The controller internally re-maps the `directions` + `values` structure to `theta/r` point arrays. The `band` scale is used for angular bin width. North-up convention is enforced by setting θ-origin to −90° in the SVG arc calculation.
 
@@ -270,6 +278,7 @@ drawing conventions.
 - **SVG primitives:** `<path>` (arc-wedge per category per series), `<circle>` (concentric grid rings), `<line>` (sector-boundary spokes), `<text>` (category and value labels), `<g>` (per-sector groups).
 - **Orientation:** `n/a`.
 - **Variants / modes:** None beyond standard Nightingale area encoding.
+- **Events:** `mj-chart-nightingale-click` `{ series, category, value }` (each sector).
 - **Phase:** P4
 - **Notes:** Shares the `polar` renderer's angular-layout engine. The `sqrt` scale from `scales.js` maps value to radius so that area (not radius) is proportional to value, matching Nightingale's original intent. Sectors use the `band` scale for equal angular widths. Distinguished from wind-rose by area (not length) encoding and by the categorical (not directional) nature of the sectors.
 
@@ -306,6 +315,7 @@ drawing conventions.
   - Scatter mode (default) — individual point markers.
   - Path mode — `connect: true` draws lines between points in series order.
   - Region overlay — named zones drawn as filled polygons from the `regions` array.
+- **Events:** `mj-chart-ternary-click` `{ series, a, b, c }` (each point; the components as given, not normalised).
 - **Phase:** P4
 - **Notes:** The ternary-to-Cartesian transform (`x = b + c/2`, `y = c * sqrt(3)/2`, normalized to the triangle height) lives in `svgdraw.js`. The three `mj-chart-axis` elements use `kind="ternary-axis"` and render tick marks and labels along the three edges. Gridlines are lines parallel to each side, spaced at equal-percentage intervals. Region polygons are converted to SVG pixel coordinates the same way as data points.
 
@@ -338,6 +348,7 @@ drawing conventions.
 - **Variants / modes:**
   - `scale-x="log" scale-y="linear"` — semi-log X (see Semi-log plot).
   - `scale-x="linear" scale-y="log"` — semi-log Y (see Semi-log plot).
+- **Events:** `mj-chart-loglog-click` `{ series, x, y }` (each point) — emitted by the `log-log` key (`loglog.js`, which reads `scale-x` / `scale-y`). `type="line"` as shown above ignores `scale-x` / `scale-y` and emits `mj-chart-line-click` `{ series, x, y }`.
 - **Phase:** P4 (scale support added to `line` renderer; the `log` scale is in `scales.js` from Phase 0)
 - **Notes:** No new renderer; the `log` scale from `scales.js` is simply set on the axis. Tick labels are formatted as `10^n` or as the actual value (configurable via `tickFormat` on the axis). Zero and negative values are excluded from the domain before scale construction; `chartmodel.js` warns via `mj-chart-error` if any data point has `x ≤ 0` or `y ≤ 0`.
 
@@ -371,6 +382,7 @@ drawing conventions.
 - **Variants / modes:**
   - Semi-log Y (`scale-y="log"`) — exponential y data; linear x (time, frequency).
   - Semi-log X (`scale-x="log"`) — logarithmic x data (e.g. frequency response on log-frequency axis).
+- **Events:** `mj-chart-loglog-click` `{ series, x, y }` (each point) — emitted by the `semi-log` key (`loglog.js`, which reads `scale-x` / `scale-y`). `type="line"` as shown above ignores `scale-x` / `scale-y` and emits `mj-chart-line-click` `{ series, x, y }`.
 - **Phase:** P4 (scale support; see Log-log note)
 - **Notes:** Same implementation path as log-log. The `scatter` renderer also supports `scale-x="log"` / `scale-y="log"` by the same attribute mechanism, giving log-scale scatter plots without a separate renderer.
 
@@ -405,6 +417,7 @@ drawing conventions.
 - **Variants / modes:**
   - `mirror: true` — shows both positive- and negative-frequency loci.
   - Unit-circle overlay — `showUnitCircle: true` adds a `<circle r="…">` at the origin.
+- **Events:** `mj-chart-nyquist-click` `{ series, omega, re, im }` (each point).
 - **Phase:** P4
 - **Notes:** The `scatter` renderer's XY curve drawing is reused for the locus path; `nyquist` is a thin wrapper that pre-processes `(re, im)` as `(x, y)` and adds the domain-specific annotations (critical point, encirclement direction arrows). Encirclement arrows (small `<polygon>` arrowheads placed along the curve) indicate the direction of increasing ω. Both axes use `linear` scale centered at 0; the controller auto-ranges to include the critical point.
 
@@ -438,6 +451,7 @@ drawing conventions.
 - **Variants / modes:**
   - `asymptotes: true` — piecewise-linear Bode asymptotes overlaid.
   - Gain/phase margin markers — `<circle>` at the gain crossover and phase crossover frequencies.
+- **Events:** `mj-chart-bode-click` `{ series, omega, magnitude_db, phase_deg }` (each point, on both the magnitude and the phase panel).
 - **Phase:** P4
 - **Notes:** The Bode renderer manages two distinct SVG drawing areas within one `mj-chart-plot` (each panel is a `<g>` with its own y-scale). The x axis uses the `log` scale from `scales.js`, with tick labels formatted as powers of 10. Gain and phase margin can be annotated automatically when `showMargins: true` is set; the renderer computes the crossover frequencies from the data and places `mj-chart-annotation` markers. The two panels share the x-axis pixel range — the plot's reported box width drives both y-scales consistently.
 
@@ -471,6 +485,7 @@ drawing conventions.
 - **Variants / modes:**
   - Admittance (Y) chart — rotated 180° within the unit circle, toggled via `mode: "admittance"`.
   - Combined Z+Y overlay — `mode: "both"` overlays the admittance chart in a contrasting color.
+- **Events:** `mj-chart-smith-click` `{ series, freq_hz, r, x, gamma_re, gamma_im }` (each point; `r`, `x` the normalised impedance, null at the open circuit).
 - **Phase:** P4
 - **Notes:** The constant-resistance circles `(center = (r/(r+1), 0), radius = 1/(r+1))` and constant-reactance arcs `(center = (1, 1/x), radius = 1/|x|)` are computed analytically in `svgdraw.js` and drawn as SVG `<circle>` elements (resistance circles are complete circles; reactance arcs are clipped by the unit-circle boundary using `<clipPath>`). There are no standard linear scales; all coordinate transforms are custom Smith-chart geometry. This is one of the most geometrically complex renderers in the library.
 
@@ -516,5 +531,6 @@ drawing conventions.
   - `layout: "diagonal"` — angled straight branches.
   - `layout: "circular"` — radial tree (root at center, tips around the circumference); orientation is `n/a` in this sub-mode.
   - `branchLengths: false` — equal-length branches (cladogram, topology only).
+- **Events:** none (not implemented).
 - **Phase:** P4
 - **Notes:** Shares the hierarchical layout engine from the dendrogram renderer (category 9, hierarchical charts) with a `kind="phylo"` parameter that enables branch-length scaling along the root-to-tip axis. The y (vertical layout) or x (horizontal layout) position of each leaf is computed by the same even-spacing algorithm used in dendrogram. The root-to-tip axis uses a `linear` scale when `branchLengths: true`; the scale is omitted for cladograms. The circular layout reuses the `polar` renderer's radial positioning utilities from `svgdraw.js`. Branch-support values (bootstrap or posterior probability) may be added as `{ "support": 95 }` on internal nodes and are rendered as small `<text>` labels near the node `<circle>`.

@@ -47,13 +47,15 @@ no meaningful horizontal/vertical swap.
   labels, optional), `<line>` (graticule lines, optional).
 - **Orientation:** `n/a`
 - **Variants / modes:** none — choropleth is a distinct primary renderer.
+- **Events:** `mj-chart-select` `{ id, label, value }` (each region — or, without geometry, each region dot).
 - **Phase:** P4
 - **Notes:** Uses a `sequential` or `diverging` color scale from
   `charts/core/scales.js` mapped over the value domain. Regions with no
   matching data value receive a neutral fill from design tokens
   (`--mj-chart-geo-no-data`). The accessible data-table lists region name and
-  value; the SVG carries `role="img"` with a generated summary. Interactive
-  click/hover emits `mj-chart-select` with the region `id` and value.
+  value; the SVG carries `role="img"` with a generated summary. A click on a
+  region, or Enter / Space on the focused region, emits `mj-chart-select`
+  `{ id, label, value }` (see **Events**); hovering only shows the tooltip.
 
 ---
 
@@ -92,6 +94,7 @@ no meaningful horizontal/vertical swap.
 - **Variants / modes:** Bubble Map (`size` attribute on each point, uses `sqrt`
   size scale — see Bubble Map entry), Proportional Symbol Map (same `size`
   mechanism, different framing — see Proportional Symbol Map entry).
+- **Events:** `mj-chart-select` `{ id, label, lon, lat, value, series }` (each symbol; `id` falls back to the label, `value` is the point's `size`).
 - **Phase:** P4
 - **Notes:** Symbol shape is controlled by `series[].symbol`
   (`circle|square|triangle|diamond`); defaults to `circle`. Multiple series
@@ -135,6 +138,7 @@ no meaningful horizontal/vertical swap.
 - **Orientation:** `n/a`
 - **Variants / modes:** activates the `size-scale="sqrt"` mode of `symbol-map`;
   Proportional Symbol Map is the same renderer with non-circular symbols.
+- **Events:** `mj-chart-select` `{ id, label, lon, lat, value, series }` (each symbol; `id` falls back to the label, `value` is the point's `size`).
 - **Phase:** P4
 - **Notes:** Bubbles are rendered largest-first (painter's order) so smaller
   bubbles are not hidden behind larger ones. The size legend shows a set of
@@ -178,6 +182,7 @@ no meaningful horizontal/vertical swap.
 - **Orientation:** `n/a`
 - **Variants / modes:** Contour rendering mode (SVG `<path>` bands) vs raster
   mode (`<image>`) selected by `render-mode="contour|raster"` attribute.
+- **Events:** `mj-chart-select` `{ id, label, series, lon, lat, weight, density, distance }` from the density surface: a click reports the data point nearest the pointer (`density` the surface there relative to the peak, 0–1; `distance` in px), Enter / Space the point nearest the hottest spot.
 - **Phase:** P4
 - **Notes:** The kernel density estimate is computed in JavaScript over the
   projected pixel coordinates using a Gaussian kernel with configurable
@@ -222,6 +227,7 @@ no meaningful horizontal/vertical swap.
 - **Variants / modes:** Dorling cartogram variant (regions replaced by
   scaled circles, no polygon distortion) selected by `style="dorling"`;
   uses `<circle>` instead of `<path>` for region marks.
+- **Events:** `mj-chart-select` `{ id, label, value }` (each region shape, or each circle with `variant="dorling"`).
 - **Phase:** P4
 - **Notes:** Cartogram layout is computationally expensive; the iterative
   algorithm runs in a `Worker` thread and posts completed path data back to the
@@ -266,6 +272,7 @@ no meaningful horizontal/vertical swap.
 - **Variants / modes:** Straight-line mode (`arc="straight"`) draws `<line>`
   segments instead of cubic-Bézier arcs. Tapered mode (`taper="true"`, default)
   varies stroke width from source to destination proportional to `value`.
+- **Events:** `mj-chart-select` — flows `{ source, target, value }`, node markers `{ id, label }`.
 - **Phase:** P4
 - **Notes:** Arc curvature direction (clockwise/counter-clockwise) is chosen
   automatically to prevent self-intersecting arcs between bidirectional pairs.
@@ -316,6 +323,7 @@ no meaningful horizontal/vertical swap.
 - **Orientation:** `n/a`
 - **Variants / modes:** `style="great-circle"` interpolates waypoints along the
   geodesic and renders a smooth `<path>` curve rather than straight segments.
+- **Events:** `mj-chart-select` — routes `{ id, series }`; with `show-stops="true"` each stop `{ routeId, waypointIndex, label }`.
 - **Phase:** P4
 - **Notes:** Routes within the same series share a color from the design-token
   color ramp; `series[].color` overrides. Stop markers at each waypoint are
@@ -365,6 +373,7 @@ no meaningful horizontal/vertical swap.
   `style="filled"` draws filled contour bands between consecutive levels using
   closed `<path>` polygons and a sequential color scale. Shares contour-tracing
   logic with the `geo-heatmap` contour render mode.
+- **Events:** `mj-chart-isoline-click` `{ series, level }` (each contour line; filled bands are not interactive).
 - **Phase:** P4
 - **Notes:** Contour tracing uses the marching-squares algorithm implemented in
   JavaScript. The resulting polyline coordinates are in grid space; the renderer
@@ -407,6 +416,7 @@ no meaningful horizontal/vertical swap.
 - **Orientation:** `n/a`
 - **Variants / modes:** `shape="square"` switches to a square tile grid
   (tile map); uses `<rect>` instead of `<polygon>`.
+- **Events:** `mj-chart-select` `{ id, label, value }` (each tile).
 - **Phase:** P4
 - **Notes:** Hexagon geometry is calculated from axial (q, r) coordinates
   converted to pixel (x, y) using flat-top or pointy-top orientation
@@ -455,6 +465,7 @@ no meaningful horizontal/vertical swap.
 - **Orientation:** `n/a`
 - **Variants / modes:** Activates the `symbol` + `size-scale` mode of the
   `symbol-map` renderer. Bubble Map is the circular variant of the same renderer.
+- **Events:** `mj-chart-select` `{ id, label, lon, lat, value, series }` (each symbol; `id` falls back to the label, `value` is the point's `size`).
 - **Phase:** P4
 - **Notes:** Symbol `<path>` definitions for standard shapes (square, triangle,
   diamond, cross) are generated by `svgdraw.js` given a target area in pixels,

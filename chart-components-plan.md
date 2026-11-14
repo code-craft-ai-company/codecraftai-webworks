@@ -108,9 +108,15 @@ Key attributes / properties:
 | `orientation` | attr | `horizontal` \| `vertical` default for parts. |
 | `theme` | attr | Token theme scope (inherited from `MjElement`). |
 
-Events: `mj-chart-ready`, `mj-chart-model` (model recomputed),
-`mj-chart-error`, plus interaction events relayed from parts
-(`mj-chart-point`, `mj-chart-series-toggle`, `mj-chart-select`).
+Events (as shipped; `specs/web-components/chart.md` §8): `mj-chart-render`,
+`mj-chart-empty`, `mj-chart-error`, `mj-chart-series-toggle` and
+`mj-chart-connect` from the controller, and the interaction events of each
+chart type. Each type keeps its own event names and detail shapes
+(`mj-chart-bar-click`, `mj-chart-slice-click`, `mj-chart-word-click`, ...),
+listed on its chart-type page; there is no common `mj-chart-point` /
+`mj-chart-select` event across types, by decision (WW-1660, WW-1269). An
+earlier draft of this plan proposed `mj-chart-ready`, `mj-chart-model` and
+a common `mj-chart-point`; they were not built.
 
 ### 3.3 Chart part components
 

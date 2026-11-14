@@ -57,6 +57,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   notch at the median for visual confidence-interval indication, rendered as a
   narrowed `<rect>` or `<path>` polygon. Grouped boxes — multiple series share
   a category axis position with a band-scale sub-group offset.
+- **Events:** `mj-chart-boxplot-click` `{ series, category, stats }` (each box; `stats` is `{ count, q1, median, q3, whiskerLow, whiskerHigh, outliers }`, plus `min`, `max`, `mean` when computed from samples).
 - **Phase:** P2
 - **Notes:** Also cross-listed in the Distribution category (03-distribution.md).
   Scales: `band` for category axis, `linear` for value axis. Whisker extent is
@@ -110,6 +111,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Variants / modes:** Box-inside violin — `box-overlay="true"` superimposes
   the IQR box (reuses `boxplot` renderer primitives). Half-violin — `half="true"`
   draws only one side of the mirrored path, useful for paired comparisons.
+- **Events:** `mj-chart-violin-click` `{ series, category, median, bandwidth }` (each violin).
 - **Phase:** P2
 - **Notes:** Also cross-listed in the Distribution category (03-distribution.md).
   The mirrored path is built by reflecting the density array across the group
@@ -160,6 +162,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Variants / modes:** Grouped error bars — multiple series share a category
   axis using band-scale offsets. The `bar` mode is a variant that pairs error
   bars with a bar chart background.
+- **Events:** `mj-chart-errorbar-click` `{ series, category, value, low, high }` (each estimate with its interval).
 - **Phase:** P3
 - **Notes:** Cap width is configurable via `cap-width` attribute (px, default 8;
   `0` draws no caps; never wider than the series' sub-band). `null-value`
@@ -211,6 +214,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Variants / modes:** None beyond the `errorbar` parent. `null-value`
   (number, default 0) places the reference line — e.g. `null-value="1"` for
   ratios; `cap-width` as on `errorbar`.
+- **Events:** `mj-chart-errorbar-click` `{ series, category, value, low, high }` (each estimate with its interval).
 - **Phase:** P3
 - **Notes:** There is no `ci.js`: `errorbar.js` registers
   `confidence-interval` beside `errorbar`, with `orientation="horizontal"` as
@@ -271,6 +275,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   no `control_limits` gets these computed limits too. X-bar, R-chart, S-chart,
   p-chart, c-chart — all use the same renderer with pre-computed
   `control_limits`; there is no sub-type option.
+- **Events:** `mj-chart-point-click` `{ series, x, y, ooc, shift }` (each point; `ooc` is true for a point beyond the outermost limits or flagged `ooc` in the data; `shift` is always false on this type).
 - **Phase:** P3
 - **Notes:** A point is flagged out of control automatically when its `y`
   lies beyond the outermost limits (the highest UCL or the lowest LCL of all
@@ -327,6 +332,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   median (points on the median neither break nor extend a run) — is marked
   with rings (larger hollow circles), named in the point's accessible name and
   table row, and adds a legend entry.
+- **Events:** `mj-chart-point-click` `{ series, x, y, ooc, shift }` (each point; `shift` is true for points in a run of six or more on one side of the median; `ooc` is always false on this type).
 - **Phase:** P3
 - **Notes:** Not a `line` variant: `control.js` registers `run-chart` beside
   `control-chart` and draws it with the same code minus the limits. Scales:
@@ -374,6 +380,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Variants / modes:** Percentage Bland-Altman — `mode="percent"` changes
   the y-axis to `(A−B)/mean × 100`; the data layer recomputes `y` accordingly,
   the renderer is unchanged.
+- **Events:** none (not implemented).
 - **Phase:** P3
 - **Notes:** The three annotation lines (mean, upper LoA, lower LoA) are
   injected into the model as horizontal `<mj-chart-annotation>` entries so
@@ -422,6 +429,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   when a series has at most 50 points. Hidden markers stay as transparent
   marks that show on hover / focus, so every point remains focusable and
   clickable. Multiple series for multi-model comparison.
+- **Events:** `mj-chart-point-click` `{ series, x, y, n }` (each point, including the transparent marks left when markers are hidden; `n` is the point's `n`, or null).
 - **Phase:** P3
 - **Notes:** The `roc` type key selects the shared `curve` renderer
   (`charts/core/renderers/curve.js`) with preset axis domain [0,1]×[0,1],
@@ -465,6 +473,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Orientation:** `n/a`
 - **Variants / modes:** Average precision (AP) shading — `shade-auc="true"`.
   `markers` as on the ROC curve.
+- **Events:** `mj-chart-point-click` `{ series, x, y, n }` (each point, including the transparent marks left when markers are hidden; `n` is the point's `n`, or null).
 - **Phase:** P3
 - **Notes:** Shares the `curve` renderer with `roc`, `lift`, and `calibration`.
   Preset axis domain [0,1]×[0,1], axis labels "Recall" / "Precision". No
@@ -509,6 +518,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   so the data supplies gains `y` values, not lift), and a dashed chance
   diagonal replaces the `y = 1` baseline. `markers` as on the ROC curve.
   `shade-auc` does not apply.
+- **Events:** `mj-chart-point-click` `{ series, x, y, n }` (each point, including the transparent marks left when markers are hidden; `n` is the point's `n`, or null).
 - **Phase:** P3
 - **Notes:** Shares the `curve` renderer. Preset axis label "% Population
   Contacted" / "Lift". The baseline (`y = 1`) is drawn by the renderer. No
@@ -554,6 +564,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   draws translucent bars of `n` along the bottom of the plot (at most 20 % of
   its height); points need `n`. `markers` as on the ROC curve. `shade-auc`
   does not apply.
+- **Events:** `mj-chart-point-click` `{ series, x, y, n }` (each bin point, including the transparent marks left when markers are hidden; `n` is the bin's count, or null).
 - **Phase:** P3
 - **Notes:** Shares the `curve` renderer. Preset axis domain [0,1]×[0,1],
   axis labels "Mean Predicted Probability" / "Fraction of Positives". No
@@ -609,6 +620,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   incidence"). Numbers at risk — `at-risk="true"` draws a "Number at risk"
   table under the x-axis, one row per series, showing the latest `at_risk` at
   or before each x tick.
+- **Events:** `mj-chart-point-click` `{ series, x, y, censored, at_risk }` — each event step (`censored: false`) and each censor tick (`censored: true`, `y` the curve level there).
 - **Phase:** P3
 - **Notes:** The step-function path is built using the `svgdraw.js` step-line
   builder (same helper as the `step` line renderer). Scales: `linear` or `time`
@@ -652,6 +664,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Variants / modes:** None beyond `survival` parent: `ci`, `at-risk` and
   `mode="cumulative"` (1 − S(t)) work the same, and percent `y` values and
   date `x` values are read the same way. No log-rank p-value is drawn.
+- **Events:** `mj-chart-point-click` `{ series, x, y, censored, at_risk }` — each event step (`censored: false`) and each censor tick (`censored: true`, `y` the curve level there).
 - **Phase:** P3
 - **Notes:** `survival.js` registers `kaplan-meier` beside `survival`; both
   keys draw the same chart. Censored ticks are always drawn; the at-risk table
@@ -712,6 +725,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
 - **Variants / modes:** Log scale — `scale="log"` applies a `log` x-scale for
   odds-ratio or hazard-ratio data. The null-effect reference line moves to
   `x = 1` automatically in the model builder.
+- **Events:** `mj-chart-study-click` `{ series, category, value, ci_lower, ci_upper, weight }` (each study row); `mj-chart-pooled-click` `{ value, ci_lower, ci_upper, label }` (the pooled diamond).
 - **Phase:** P3
 - **Notes:** Study labels are rendered as `<text>` to the left of the plot
   area; the plot SVG must leave left padding sufficient for the longest label,
@@ -773,6 +787,7 @@ default axis labelling and tooltip behaviour, not a different drawing path.
   dropped on overlap). Also cross-listed in the Flow & Process category where
   `type="funnel"` refers to the marketing/sales funnel chart — these are
   completely different renderers sharing only a name.
+- **Events:** `mj-chart-study-click` `{ series, x, y, label }` (each study point).
 - **Phase:** P4
 - **Notes:** The y-axis is inverted (larger SE at the bottom, zero at top);
   the model builder sets `y_invert: true` in the scale config. The funnel

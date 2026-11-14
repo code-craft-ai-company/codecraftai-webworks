@@ -135,7 +135,7 @@
   | `today` | on | `"false"` hides the today line (calendar mode) |
   | `density` | `normal` | `compact`: 24 px bars instead of 32 px |
 - **Height:** the renderer asks for the height of its header, lanes and footer rows (`ctx.setContentHeight`); registered `minHeight` 120. The columns share the chart's width.
-- **Events:** `mj-chart-bar-click` `{ id, label, start, end, index }`, `mj-chart-marker-click` `{ label, date, index }`.
+- **Events:** `mj-chart-bar-click` `{ id, label, start, end, index }`, `mj-chart-marker-click` `{ label, date, index }` (calendar mode).
 - **Parts:** `plot`, `column-header`, `swimlane-label`, `bar initiative-bar`, `initiative-label`, `milestone-marker`, `phase-band`, `phase-label`, `today-marker`, `today-label`, `unplaced-note`; bars carry `data-mark="task:<index>"`.
 - **Accessible table:** Initiative, Group, Timeframe ("Not placed" when unplaced), Status, Progress, Description.
 - **Phase:** P3 — implemented.
@@ -164,6 +164,7 @@
 - **SVG primitives:** `<polygon>` (diamond / triangle marker), `<circle>` (tag / milestone kinds), `<line>` (stem), `<text>` (label), `<rect>` (phase bands), `<g>`.
 - **Orientation:** `horizontal` (default) and `vertical` — same as Timeline.
 - **Options, events, parts, table:** as Timeline (`variant="timeline"` switches the default shape back to circles).
+- **Events:** `mj-chart-event-click` `{ id, label, date, group, status, kind, index }` (each marker), as Timeline.
 - **Phase:** P3 — implemented.
 - **Notes:** The `timeline` renderer dispatches on `ctx.type` (and the `variant` option); no separate module.
 
@@ -194,6 +195,7 @@
 - **SVG primitives:** `<path>` (line per series via `svgdraw.js` line builder), `<circle>` (data point markers), `<text>`, `<g>`
 - **Orientation:** `vertical` (time → x, remaining work → y). Horizontal is `n/a` — the downward slope is the defining visual.
 - **Variants / modes:** The `Burnup chart` is a variant of this same renderer entry — see below.
+- **Events:** `mj-chart-line-click` `{ series, x, y }` (each point target).
 - **Phase:** P3
 - **Notes:** Uses `time` scale on the x-axis and `linear` scale on the y-axis. The "Ideal" series is a straight line from total scope to zero; the "Actual" series is the measured remaining work. `mj-chart-annotation kind="line"` marks today's date.
 
@@ -223,6 +225,7 @@
 - **SVG primitives:** `<path>`, `<circle>`, `<text>`, `<g>` — identical to Burndown.
 - **Orientation:** `vertical` only — matching Burndown for comparability.
 - **Variants / modes:** Uses the standard `line` renderer; the distinction from Burndown is purely in how the data layer populates the series (completed work ascending vs remaining work descending). No renderer attribute needed.
+- **Events:** `mj-chart-line-click` `{ series, x, y }` (each point target).
 - **Phase:** P3
 - **Notes:** The area between the "Scope" and "Completed" lines may optionally be filled using `mj-chart-annotation kind="band"` to highlight the gap. Scope creep is visible when the "Scope" line rises; a flat "Scope" line with a rising "Completed" line indicates a healthy burnup.
 
@@ -250,6 +253,7 @@
 - **SVG primitives:** `<path>` (filled stacked area band per series via `svgdraw.js` area builder), `<text>`, `<g>`
 - **Orientation:** `vertical` (time → x, count → y). Horizontal is `n/a` — time flows left to right by convention.
 - **Variants / modes:** Consolidates onto the `area` renderer with `group="stack"`. The CFD is distinguished from a generic stacked area only by the nature of the data (workflow state counts over time) — no renderer change needed.
+- **Events:** `mj-chart-area-click` — `{ series, x, y }` from each point target, with `share` added when the areas are stacked (`area` reads `stack="stack"`, not `group`); a click on a filled band (pointer only) emits `{ series }`.
 - **Phase:** P3
 - **Notes:** Uses `time` scale on the x-axis (the `categories` array values are parsed as dates) and `linear` scale on the y-axis. Series should be ordered so that "Done" accumulates at the bottom and "Backlog" sits at the top; the slope of the "Done" band's upper boundary indicates throughput. Bottlenecks appear as expanding bands for a given state.
 

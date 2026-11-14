@@ -16,6 +16,7 @@ Each entry uses this format:
 - **SVG primitives:** the SVG elements the renderer emits.
 - **Orientation:** `horizontal` / `vertical` support, or `n/a`.
 - **Variants / modes:** related catalog names satisfied by an attribute mode.
+- **Events:** the interaction events the renderer emits for this type, with their `detail` keys; `none` when it emits none.
 - **Phase:** P0–P5 per the plan's phasing.
 - **Notes:** anything implementation-relevant.
 
@@ -46,6 +47,7 @@ Each entry uses this format:
 - **Orientation:** `horizontal` (left-to-right default) / `vertical` (top-to-bottom); swaps the primary axis along which stages are laid out.
 - **Variants / modes:**
   - `alluvial` — Variant of `sankey`; see Alluvial Diagram entry below.
+- **Events:** `mj-chart-link-click` `{ source, target, value }` (each link band); `mj-chart-node-click` `{ id, label }` (each node bar).
 - **Phase:** P4
 - **Notes:** Layout engine iterates node ranks using a force-relaxation or iterative positioning algorithm; node `y` positions are resolved to avoid overlap. Link paths are cubic Bézier curves whose stroke-width encodes `value`. Uses `band` scale for node positioning and `linear` scale for link widths. Accessibility: data-table lists source → target → value rows.
 
@@ -76,6 +78,7 @@ Each entry uses this format:
 - **SVG primitives:** `<path>` (smooth ribbon bands), `<rect>` (column blocks), `<text>` (group / node labels), `<g>`
 - **Orientation:** `horizontal` (columns left-to-right) / `vertical` (columns top-to-bottom).
 - **Variants / modes:** None beyond the `sankey` primary.
+- **Events:** `mj-chart-link-click` `{ source, target, value }` (each link band); `mj-chart-node-click` `{ id, label }` (each node bar), as Sankey.
 - **Phase:** P4
 - **Notes:** Rendered by the `sankey` renderer with `mode="alluvial"`; the renderer pins nodes into explicit columns derived from the `group` field instead of computing ranks from topology. Coloring follows group or series color ramp from design tokens.
 
@@ -106,6 +109,7 @@ Each entry uses this format:
 - **SVG primitives:** `<path>` (arc segments on the ring, cubic-Bézier chord ribbons), `<text>` (group labels), `<g>`
 - **Orientation:** `n/a` — radial layout has no meaningful horizontal/vertical orientation.
 - **Variants / modes:** None.
+- **Events:** `mj-chart-chord-click` `{ source, target, value, reverseValue }` (each ribbon; `value` source → target, `reverseValue` target → source); `mj-chart-node-click` `{ id, label, total, sent, received }` (each outer arc).
 - **Phase:** P4
 - **Notes:** Arc positions derived from summed link values per node; chord ribbons are quadratic or cubic Bézier paths whose two anchors lie on the ring. Uses `linear` scale to map cumulative value to angle in `[0, 2π]`. Accessibility: data-table lists pairwise flow values. Marks are `role="img"` with generated `aria-label`.
 
@@ -142,6 +146,7 @@ Each entry uses this format:
 - **SVG primitives:** `<rect>` (process boxes), `<path>` (diamond decisions, ovals, arrows/connectors), `<line>` (straight connector segments), `<polygon>` (arrowheads), `<text>` (node and edge labels), `<g>`
 - **Orientation:** `horizontal` (left-to-right flow) / `vertical` (top-to-bottom flow); controls the primary layout direction of the auto-routing algorithm.
 - **Variants / modes:** None in this file; see Dependency Graph and Decision Tree for specialisations.
+- **Events:** `mj-chart-node-click` `{ id, label }` (each node); `mj-chart-edge-click` `{ source, target, label }` (each connector — pointer only, connectors are not focusable).
 - **Phase:** P4
 - **Notes:** Auto-layout via layered (Sugiyama-style) graph layout: assign ranks, sort within ranks to minimise crossings, route edges with orthogonal or curved connectors. Cycle detection required (back-edges from `reorder` to `receive` in example). Node `shape` controls which SVG primitive is used per node.
 
@@ -167,6 +172,7 @@ Each entry uses this format:
 - **Orientation:** `vertical` (stages flow top-to-bottom, widths narrow downward, default) / `horizontal` (stages flow left-to-right).
 - **Variants / modes:**
   - Pyramid chart — same renderer with `mode="pyramid"` (widths increase toward the last stage instead of narrowing).
+- **Events:** `mj-chart-segment-click` `{ category, value, index }` (each stage; `category` is the stage name).
 - **Phase:** P2
 - **Notes:** Width of each stage segment is proportional to its value relative to the first (largest) stage. The `linear` scale maps value → half-width. Gap between stages is configurable via a design token or attribute. Drop-off percentage between adjacent stages may be annotated via `mj-chart-value-labels`.
 
@@ -201,6 +207,7 @@ Each entry uses this format:
 - **SVG primitives:** `<rect>` (floating bars for incremental steps, grounded bars for totals), `<line>` (connector lines between bars), `<text>` (value labels, category labels), `<g>`
 - **Orientation:** `vertical` (bars rise/fall on the value axis, categories on the x-axis, default) / `horizontal` (rotated; categories on the y-axis).
 - **Variants / modes:** None.
+- **Events:** `mj-chart-bar-click` `{ category, index, value, kind, runningTotal }` (each bar).
 - **Phase:** P2
 - **Notes:** Each `<rect>` is positioned by computing a running cumulative baseline; `linear` scale maps value domain → pixel range. `total`/`subtotal` steps always start at zero baseline. Connector `<line>` elements link the top of one bar to the base of the next. Color distinguishes positive, negative, and total steps using design tokens (`--mj-color-positive`, `--mj-color-negative`, `--mj-color-neutral` or equivalent).
 
@@ -245,7 +252,7 @@ Each entry uses this format:
   | Event | `detail` |
   |---|---|
   | `mj-chart-node-click` | `{ id, label, group, index }` |
-  | `mj-chart-edge-click` | `{ source, target, value, label }` |
+  | `mj-chart-edge-click` | `{ source, target, value, label }` — pointer only (edges are not focusable) |
   | `mj-chart-cycle-detect` | `{ cycles: [[nodeId, ...]] }` — one array per link that closes a cycle; emitted once per data object, not on every redraw |
 - **Parts:** `plot`, `node` (`node critical-path-node` on the path), `edge` (`edge critical-path-edge`; a cycle link carries `data-cycle-edge`), `cycle-badge`; nodes carry `data-mark="node:<index>"`.
 - **Accessibility:** each node's accessible name gives its label, group, value, link count, status, "on the critical path" and "in a cycle". The accessible table lists every node: Node, Group, Value, Status, Critical path (each when present), Links to, Linked from; the caption counts nodes, links and cycles.
@@ -279,8 +286,9 @@ Each entry uses this format:
 - **Orientation:** `n/a` — force-directed layout is orientation-independent.
 - **Variants / modes:**
   - Arc diagram — `layout="arc"` places nodes on a single axis and draws edges as arcs above/below.
+- **Events:** `mj-chart-node-click` `{ id, label, group, index }` (each node); `mj-chart-edge-click` `{ source, target, value, label }` (each edge — pointer only, edges are not focusable).
 - **Phase:** P4
-- **Notes:** Default layout is force-directed (iterative spring-repulsion, fully in-renderer, no external library). The `mj-chart-brush` part enables lasso selection of nodes. Node `group` drives the categorical color ramp (`ordinal-color` scale). `mj-chart-brush` reports selected node ids via `mj-chart-select`. Zoom/pan handled by updating the SVG `viewBox` on pointer events. Compare with Dependency Graph (`dependency-graph`) which uses a directed layered layout of labelled boxes.
+- **Notes:** Default layout is force-directed (iterative spring-repulsion, fully in-renderer, no external library). Node `group` drives the categorical color ramp (`ordinal-color` scale). There is no lasso / brush selection and no `mj-chart-select` event: a node reports a click with `mj-chart-node-click` and an edge with `mj-chart-edge-click` (see **Events**). Zoom/pan handled by updating the SVG `viewBox` on pointer events. Compare with Dependency Graph (`dependency-graph`) which uses a directed layered layout of labelled boxes.
 
 ---
 
@@ -316,6 +324,7 @@ Each entry uses this format:
 - **Variants / modes:**
   - Radial tree — `layout="radial"` arranges the tree in polar coordinates (root at center).
   - Dendrogram — see `specs/chart-components/09-hierarchical.md`; the `tree` renderer with `mode="dendrogram"` clusters leaves by similarity.
+- **Events:** `mj-chart-node-click` `{ name, value, depth, role, path }` (each node; `path` lists the names from the root).
 - **Phase:** P4
 - **Notes:** Layout uses a Reingold-Tilford (tidy tree) algorithm to assign x/y positions with minimal crossings and balanced subtrees. Edge connectors are cubic Bézier paths or elbow connectors based on an attribute (`edge-style="curve|elbow"`). This chart also appears in `09-hierarchical.md`; both files reference the same `tree` renderer. See that file for the dendrogram variant and cross-reference.
 
@@ -352,5 +361,6 @@ Each entry uses this format:
 - **SVG primitives:** `<rect>` (decision and leaf nodes), `<path>` (connectors), `<text>` (node question labels, edge condition labels, outcome labels), `<g>`
 - **Orientation:** `vertical` (root at top, decisions downward, default) / `horizontal`.
 - **Variants / modes:** None beyond the `tree` primary.
+- **Events:** `mj-chart-node-click` `{ name, value, depth, role, path }` (each node; `path` lists the names from the root).
 - **Phase:** P4
 - **Notes:** Reuses the `tree` renderer layout engine; `mode="decision"` activates edge-label rendering via `mj-chart-annotation`-style text along connectors, and rectangular node shapes instead of circles. Node coloring can encode class purity or a probability value via the `linear` scale mapped to a diverging color ramp from design tokens.
