@@ -1,267 +1,265 @@
 /*
  * glyph.js
  *
- * Glyph chart renderer — tiles miniature multi-variable star/radar
- * polygons (one glyph per series/observation) in a grid.
+ * Glyph chart renderer — tiles miniature multi-variable star / radar /
+ * bar glyphs (one glyph per series = observation) in a grid.
  *
  * Registered types:
  *   "glyph"
  *
  * ctx.raw shape:
- *   raw.axes      [string]                  axis names (variables)
- *   raw.series    [{name, values:[0..1]}]   one entry per observation
- *   raw.glyphType "star" | "radar" | "bar-glyph"
+ *   raw.axes      [string]                axis names (variables)
+ *   raw.series    [{name, values:[...]}]  one entry per observation; a
+ *                 null / missing value is "no data" (drawn at the centre
+ *                 with a hollow marker and said so in the label)
+ *   raw.glyphType "star" | "radar" (default) | "bar-glyph"; the `mode`
+ *                 attribute is the fallback
  *   raw.grid      {cols: N}
+ *   raw.domains   optional [[min, max], ...] per axis, or raw.domain
+ *                 [min, max] for every axis
+ *   raw.scale     "absolute" (default) | "relative"
+ *
+ * Scale: by default every axis runs from 0 (the centre) to 1 when all of
+ * its values lie in [0, 1], else from 0 to the axis maximum -- so glyph size
+ * is proportional to the value and equal values never collapse. "relative"
+ * rescales each axis to the observed [min, max] (the key then says
+ * "relative"). Each glyph has reference rings at half and full scale.
+ *
+ * The first grid cell is a key glyph with the axis names around it.
+ *
+ * Interaction: each glyph is one focusable mark; click / Enter emits
+ * `mj-chart-glyph-click` { series, values }.
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber } from "../svgdraw.js";
-import { linearScale } from "../scales.js";
-import { extent } from "../svgdraw.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
 
 
-/* ── per-axis normalisation ──────────────────────────────────────────── */
-
-function _buildAxisScales(raw) {
+function _number(value) {
   /*
-   * Build a per-axis linear scale from [data-min, data-max] → [0, 1].
-   * Falls back to [0, 1] identity when all values are equal.
-   *
-   * :returns: Array of scale functions, one per axis.
+   * A finite number, else null.
    */
-  const axes   = (raw !== null && raw !== undefined && Array.isArray(raw.axes))
-    ? raw.axes
-    : []
-  const series = (raw !== null && raw !== undefined && Array.isArray(raw.series))
-    ? raw.series
-    : []
-  const scales = []
-
-  for (let a = 0; a < axes.length; a = a + 1) {
-    const vals = []
-    for (let s = 0; s < series.length; s = s + 1) {
-      const v = series[s].values && series[s].values[a]
-      if (typeof v === "number") {
-        vals.push(v)
-      }
-    }
-    const ext = extent(vals.length > 0 ? vals : [0, 1])
-    const lo  = ext[0]
-    const hi  = ext[1] === ext[0] ? ext[0] + 1 : ext[1]
-    scales.push(linearScale([lo, hi], [0, 1]))
-  }
-
-  return scales
+  const numeric = typeof value === "number" && Number.isFinite(value) === true ? value : null
+  return numeric
 }
 
 
-/* ── single glyph drawing ────────────────────────────────────────────── */
-
-function _drawStarGlyph(cx, cy, r, normValues, axisCount, glyphType, color) {
+function _axisDomains(raw, axes, series) {
   /*
-   * Draw one star / radar glyph centred at (cx, cy) with outer radius r.
+   * [min, max] per axis; see the file header for the rules.
+   */
+  const domains = []
+  const relative = raw.scale === "relative"
+  for (let a = 0; a < axes.length; a = a + 1) {
+    const given = Array.isArray(raw.domains) === true ? raw.domains[a] : raw.domain
+    if (Array.isArray(given) === true && given.length === 2 && _number(given[0]) !== null &&
+        _number(given[1]) !== null && given[0] !== given[1]) {
+      domains.push([Math.min(given[0], given[1]), Math.max(given[0], given[1])])
+      continue
+    }
+    const values = series.map((entry) => _number(entry.values[a])).filter((value) => value !== null)
+    const low = values.length > 0 ? Math.min(...values) : 0
+    const high = values.length > 0 ? Math.max(...values) : 1
+    if (relative === true && high > low) {
+      domains.push([low, high])
+    } else if (low >= 0 && high <= 1) {
+      domains.push([0, 1])
+    } else if (low >= 0) {
+      domains.push([0, high])
+    } else {
+      domains.push([low, high > low ? high : low + 1])
+    }
+  }
+  return domains
+}
+
+
+function _angle(index, count) {
+  /*
+   * Spoke angle (radians, 0 = up, clockwise).
+   */
+  return (index / count) * 2 * Math.PI - Math.PI / 2
+}
+
+
+function _drawGlyph(cx, cy, r, shares, glyphType, color) {
+  /*
+   * One glyph: rings, spokes and the value shape.
    *
-   * :returns: SVGElement.
+   * :param shares: Per axis share of the radius in [0, 1], or null.
    */
   const group = svgEl("g", {}, [])
+  const count = shares.length
+  const frame = svgEl("g", { "aria-hidden": "true" }, [])
+  group.appendChild(frame)
+  frame.appendChild(svgEl("circle", {
+    cx: cx, cy: cy, r: r, fill: "none", stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 0.75
+  }, []))
+  frame.appendChild(svgEl("circle", {
+    cx: cx, cy: cy, r: r / 2, fill: "none", stroke: "var(--mj-border, #e0e3e9)",
+    "stroke-width": 0.5, "stroke-dasharray": "2 2"
+  }, []))
+  for (let a = 0; a < count; a = a + 1) {
+    const angle = _angle(a, count)
+    frame.appendChild(svgEl("line", {
+      x1: cx, y1: cy, x2: cx + r * Math.cos(angle), y2: cy + r * Math.sin(angle),
+      stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 0.5
+    }, []))
+  }
 
-  /* Axis spokes */
-  for (let a = 0; a < axisCount; a = a + 1) {
-    const angle  = (a / axisCount) * 2 * Math.PI - Math.PI / 2
-    const spokeX = cx + r * Math.cos(angle)
-    const spokeY = cy + r * Math.sin(angle)
-    const spoke = svgEl("line", {
-      x1: cx, y1: cy, x2: spokeX, y2: spokeY,
-      stroke: "var(--mj-border, #e0e3e9)",
-      "stroke-width": 0.5,
-      "pointer-events": "none"
-    }, [])
-    spoke.setAttribute("aria-hidden", "true")
-    group.appendChild(spoke)
+  const at = (a, share) => {
+    const angle = _angle(a, count)
+    return { x: cx + share * r * Math.cos(angle), y: cy + share * r * Math.sin(angle) }
   }
 
   if (glyphType === "bar-glyph") {
-    /* Radial bars: line from centre outward proportional to value */
-    for (let a = 0; a < axisCount; a = a + 1) {
-      const angle  = (a / axisCount) * 2 * Math.PI - Math.PI / 2
-      const v      = normValues[a] !== undefined ? normValues[a] : 0
-      const barR   = v * r
-      const barX   = cx + barR * Math.cos(angle)
-      const barY   = cy + barR * Math.sin(angle)
+    for (let a = 0; a < count; a = a + 1) {
+      if (shares[a] === null) {
+        continue
+      }
+      const end = at(a, shares[a])
       group.appendChild(svgEl("line", {
-        x1: cx, y1: cy, x2: barX, y2: barY,
-        stroke: color,
-        "stroke-width": 3,
-        "stroke-linecap": "round",
-        "pointer-events": "none"
+        x1: cx, y1: cy, x2: end.x.toFixed(2), y2: end.y.toFixed(2), stroke: color,
+        "stroke-width": Math.max(Math.min(r * 0.12, 4), 2), "stroke-linecap": "round"
       }, []))
     }
   } else {
-    /* Star / radar polygon */
-    const points = []
-    for (let a = 0; a < axisCount; a = a + 1) {
-      const angle  = (a / axisCount) * 2 * Math.PI - Math.PI / 2
-      const v      = normValues[a] !== undefined ? normValues[a] : 0
-      const px     = cx + v * r * Math.cos(angle)
-      const py     = cy + v * r * Math.sin(angle)
-      points.push(`${px.toFixed(2)},${py.toFixed(2)}`)
-    }
-    const polyEl = svgEl("polygon", {
-      points: points.join(" "),
-      fill: color,
-      "fill-opacity": glyphType === "radar" ? "0.25" : "0",
-      stroke: color,
-      "stroke-width": 1.5,
-      "stroke-linejoin": "round",
-      "pointer-events": "none"
-    }, [])
-    group.appendChild(polyEl)
-
-    /* Axis value dots */
-    for (let a = 0; a < axisCount; a = a + 1) {
-      const angle  = (a / axisCount) * 2 * Math.PI - Math.PI / 2
-      const v      = normValues[a] !== undefined ? normValues[a] : 0
-      const px     = cx + v * r * Math.cos(angle)
-      const py     = cy + v * r * Math.sin(angle)
-      const dotEl  = svgEl("circle", {
-        cx: px, cy: py, r: 2,
-        fill: color,
-        "pointer-events": "none"
-      }, [])
-      dotEl.setAttribute("aria-hidden", "true")
-      group.appendChild(dotEl)
-    }
+    const points = shares.map((share, a) => at(a, share === null ? 0 : share))
+    group.appendChild(svgEl("polygon", {
+      points: points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" "),
+      fill: color, "fill-opacity": glyphType === "radar" ? "0.25" : "0",
+      stroke: color, "stroke-width": 1.5, "stroke-linejoin": "round"
+    }, []))
+    points.forEach((point, a) => {
+      group.appendChild(svgEl("circle", {
+        cx: point.x.toFixed(2), cy: point.y.toFixed(2), r: 2,
+        fill: shares[a] === null ? "var(--mj-surface, #ffffff)" : color,
+        stroke: color, "stroke-width": shares[a] === null ? 1 : 0
+      }, []))
+    })
   }
-
   return group
 }
 
 
-/* ── renderer ─────────────────────────────────────────────────────────── */
-
 export function render(ctx) {
   /*
-   * Render a glyph chart (tiled star/radar/bar-glyph observations).
+   * Render a glyph chart (tiled star / radar / bar-glyph observations).
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
-  const raw  = ctx.raw
+  const raw = ctx.raw !== null && ctx.raw !== undefined ? ctx.raw : {}
   const root = svgEl("g", { part: "plot" }, [])
+  const axes = (Array.isArray(raw.axes) === true ? raw.axes : []).map((axis) => String(axis))
+  const series = ctx.model.series
 
-  const axes   = (raw !== null && raw !== undefined && Array.isArray(raw.axes))
-    ? raw.axes
-    : []
-  const series = (raw !== null && raw !== undefined && Array.isArray(raw.series))
-    ? raw.series
-    : []
+  ctx.setTable({
+    columns: ["Series"].concat(axes),
+    rows: series.map((entry) => [entry.name].concat(axes.map((axis, a) => _number(entry.values[a])))),
+    caption: ctx.label
+  })
 
   if (axes.length === 0 || series.length === 0) {
     return root
   }
 
-  const glyphType = (raw !== null && raw !== undefined && raw.glyphType)
-    ? raw.glyphType
-    : ctx.attrs("mode", "radar")
-  const gridCols  = (raw !== null && raw !== undefined && raw.grid && raw.grid.cols)
-    ? raw.grid.cols
-    : Math.ceil(Math.sqrt(series.length))
-  const gridRows  = Math.ceil(series.length / gridCols)
+  const typeSource = raw.glyphType !== undefined && raw.glyphType !== null ? raw.glyphType : ctx.attrs("mode", "radar")
+  const glyphType = typeSource === "star" || typeSource === "bar-glyph" ? typeSource : "radar"
+  const domains = _axisDomains(raw, axes, series)
+  const relative = raw.scale === "relative"
 
-  const margin = { top: 8, right: 8, bottom: 8, left: 8 }
-  const plotW  = Math.max(ctx.width  - margin.left - margin.right,  10)
-  const plotH  = Math.max(ctx.height - margin.top  - margin.bottom, 10)
+  const cellsNeeded = series.length + 1
+  const requested = raw.grid !== null && typeof raw.grid === "object" && Number.isInteger(raw.grid.cols) === true &&
+    raw.grid.cols > 0 ? raw.grid.cols : null
+  const fit = Math.max(Math.floor(ctx.width / 90), 1)
+  const gridCols = Math.max(1, Math.min(requested !== null ? requested + 1 : Math.ceil(Math.sqrt(cellsNeeded * 2)),
+    fit, cellsNeeded))
+  const gridRows = Math.ceil(cellsNeeded / gridCols)
+  const pad = 6
+  const plotW = Math.max(ctx.width - pad * 2, 10)
+  const plotH = Math.max(ctx.height - pad * 2, 10)
+  const cellW = plotW / gridCols
+  const cellH = plotH / gridRows
+  const labelH = 14
+  const glyphR = Math.max(Math.min(cellW * 0.32, (cellH - labelH) * 0.36), 4)
 
-  const cellW   = plotW / gridCols
-  const cellH   = plotH / gridRows
-  const glyphR  = Math.min(cellW, cellH) * 0.35
-  const labelH  = 14
+  const center = (slot) => ({
+    x: pad + (slot % gridCols) * cellW + cellW / 2,
+    y: pad + Math.floor(slot / gridCols) * cellH + (cellH - labelH) / 2 + 2
+  })
 
-  const axisScales = _buildAxisScales(raw)
-
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
-  root.appendChild(plot)
+  /* Key glyph: axis names around a frame. */
+  const key = svgEl("g", { "aria-hidden": "true", part: "glyph-key" }, [])
+  root.appendChild(key)
+  const keySpot = center(0)
+  /* The key frame is smaller than a glyph so the axis names fit beside it. */
+  const keyR = Math.max(Math.min(glyphR, cellW * 0.18), 4)
+  key.appendChild(_drawGlyph(keySpot.x, keySpot.y, keyR, axes.map(() => null), "bar-glyph",
+    "var(--mj-text-muted, #5f6673)"))
+  const maxChars = Math.max(Math.floor((cellW / 2 - keyR - 8) / (8 * 0.6)), 3)
+  for (let a = 0; a < axes.length; a = a + 1) {
+    const angle = _angle(a, axes.length)
+    const cos = Math.cos(angle)
+    const text = axes[a].length > maxChars ? axes[a].slice(0, maxChars - 1) + "…" : axes[a]
+    key.appendChild(svgEl("text", {
+      x: (keySpot.x + (keyR + 4) * cos).toFixed(2),
+      y: (keySpot.y + (keyR + 6) * Math.sin(angle)).toFixed(2),
+      "text-anchor": Math.abs(cos) < 0.3 ? "middle" : (cos > 0 ? "start" : "end"),
+      "dominant-baseline": "middle", "font-size": 8, fill: "var(--mj-text-muted, #5f6673)"
+    }, text))
+  }
+  key.appendChild(svgEl("text", {
+    x: keySpot.x, y: keySpot.y + glyphR + labelH, "text-anchor": "middle", "font-size": 10,
+    "font-style": "italic", fill: "var(--mj-text-muted, #5f6673)"
+  }, relative === true ? "Key (relative scale)" : "Key"))
 
   for (let s = 0; s < series.length; s = s + 1) {
-    const ser    = series[s]
-    const col    = s % gridCols
-    const row    = Math.floor(s / gridCols)
-    const cx     = col * cellW + cellW / 2
-    const cy     = row * cellH + cellH / 2 - labelH / 2
-    const color  = ctx.colorFor(ser.name)
+    const entry = series[s]
+    const spot = center(s + 1)
+    const color = ctx.colorFor(entry.name)
+    const shares = axes.map((axis, a) => {
+      const value = _number(entry.values[a])
+      if (value === null) {
+        return null
+      }
+      const domain = domains[a]
+      const share = (value - domain[0]) / (domain[1] - domain[0])
+      return Math.max(0, Math.min(1, share))
+    })
+    const summary = axes.map((axis, a) => {
+      const value = _number(entry.values[a])
+      return `${axis}: ${value !== null ? formatNumber(value) : "no data"}`
+    }).join(", ")
 
-    /* Normalise values through per-axis scales */
-    const normValues = []
-    for (let a = 0; a < axes.length; a = a + 1) {
-      const raw_v = ser.values && typeof ser.values[a] === "number" ? ser.values[a] : 0
-      const norm  = axisScales[a] ? axisScales[a](raw_v) : raw_v
-      normValues.push(Math.max(0, Math.min(1, norm)))
-    }
+    const glyph = _drawGlyph(spot.x, spot.y, glyphR, shares, glyphType, color)
+    glyph.setAttribute("part", "glyph")
+    glyph.setAttribute("tabindex", "0")
+    glyph.setAttribute("role", "img")
+    glyph.setAttribute("aria-label", `${entry.name}: ${summary}`)
+    glyph.appendChild(svgEl("title", null, `${entry.name}: ${summary}`))
+    glyph.insertBefore(svgEl("circle", {
+      cx: spot.x, cy: spot.y, r: glyphR, fill: "transparent", stroke: "none"
+    }, []), glyph.firstChild)
+    const nameChars = Math.max(Math.floor((cellW - 4) / 6), 3)
+    glyph.appendChild(svgEl("text", {
+      x: spot.x, y: spot.y + glyphR + labelH, "text-anchor": "middle", "font-size": 10,
+      fill: "var(--mj-text, #14181f)", "aria-hidden": "true"
+    }, entry.name.length > nameChars ? entry.name.slice(0, nameChars - 1) + "…" : entry.name))
 
-    /* Glyph group */
-    const glyphG = _drawStarGlyph(cx, cy, glyphR, normValues, axes.length, glyphType, color)
-
-    /* Make the whole glyph interactive */
-    const valSummary = axes.map((ax, ai) =>
-      `${ax}: ${formatNumber(ser.values && ser.values[ai])}`
-    ).join(", ")
-    glyphG.setAttribute("part", "glyph")
-    glyphG.setAttribute("tabindex", "0")
-    glyphG.setAttribute("role", "img")
-    glyphG.setAttribute("aria-label", `${ser.name} — ${valSummary}`)
-    glyphG.appendChild(svgEl("title", null, `${ser.name}: ${valSummary}`))
-
-    /* Transparent hit-box */
-    const hitBox = svgEl("circle", {
-      cx: cx, cy: cy, r: glyphR,
-      fill: "transparent",
-      stroke: "none"
-    }, [])
-    const capturedName   = ser.name
-    const capturedValues = ser.values
+    const capturedName = entry.name
+    const capturedValues = entry.values
     const handler = () => {
-      ctx.emit("mj-chart-glyph-click", {
-        series: capturedName, values: capturedValues
-      })
+      ctx.emit("mj-chart-glyph-click", { series: capturedName, values: capturedValues })
     }
-    hitBox.addEventListener("click", handler)
-    glyphG.addEventListener("keydown", (event) => {
+    glyph.addEventListener("click", handler)
+    glyph.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault()
         handler()
       }
     })
-    glyphG.appendChild(hitBox)
-    plot.appendChild(glyphG)
-
-    /* Axis labels around the glyph (first glyph only to reduce clutter) */
-    if (s === 0) {
-      for (let a = 0; a < axes.length; a = a + 1) {
-        const angle  = (a / axes.length) * 2 * Math.PI - Math.PI / 2
-        const labelR = glyphR + 10
-        const lx     = cx + labelR * Math.cos(angle)
-        const ly     = cy + labelR * Math.sin(angle)
-        plot.appendChild(svgEl("text", {
-          x: lx, y: ly,
-          "text-anchor": "middle",
-          "dominant-baseline": "middle",
-          "font-size": 8,
-          fill: "var(--mj-text-muted, #6b7280)",
-          "pointer-events": "none"
-        }, escapeHtml(axes[a])))
-      }
-    }
-
-    /* Observation label below glyph */
-    plot.appendChild(svgEl("text", {
-      x: cx, y: cy + glyphR + labelH,
-      "text-anchor": "middle",
-      "font-size": 10,
-      fill: "var(--mj-text, #14181f)",
-      "pointer-events": "none"
-    }, escapeHtml(ser.name)))
+    root.appendChild(glyph)
   }
 
   return root

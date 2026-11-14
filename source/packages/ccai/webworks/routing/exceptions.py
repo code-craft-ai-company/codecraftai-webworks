@@ -164,6 +164,56 @@ class BadRequest(HTTPException):
         return
 
 
+class MalformedRequestBody(BadRequest, ValueError):
+    """
+        400 Bad Request raised when a request body can not be decoded or
+        parsed as the format the handler asked for.
+
+        Raised by :meth:`Request.json` and :meth:`Request.form`. It is a
+        :class:`BadRequest`, so a handler that lets it propagate answers
+        400 rather than 500, and it is also a :class:`ValueError`, so code
+        written as ``except ValueError`` around ``request.json()`` keeps
+        working.
+
+        :param detail: Optional detail message.
+
+        Example:
+            raise MalformedRequestBody("The request body is not valid JSON")
+    """
+
+    def __init__(self, detail: str = "Malformed request body"):
+        """
+            Construct a MalformedRequestBody exception.
+
+            :param detail: Detail message.
+        """
+        super().__init__(detail)
+        return
+
+
+class PayloadTooLarge(HTTPException):
+    """
+        413 Payload Too Large exception.
+
+        Raised when a request body, or a part of one, exceeds the limit
+        the framework accepts.
+
+        :param detail: Optional detail message (default: "Payload Too Large").
+
+        Example:
+            raise PayloadTooLarge("The form has more than 1000 parts")
+    """
+
+    def __init__(self, detail: str = "Payload Too Large"):
+        """
+            Construct a PayloadTooLarge exception.
+
+            :param detail: Detail message.
+        """
+        super().__init__(413, detail)
+        return
+
+
 class Unauthorized(HTTPException):
     """
         401 Unauthorized exception.
@@ -171,19 +221,24 @@ class Unauthorized(HTTPException):
         Raised when authentication is required but not provided or invalid.
         
         :param detail: Optional detail message (default: "Unauthorized").
+        :param headers: Optional dict of additional headers, typically the
+            ``WWW-Authenticate`` challenge that tells the client how to
+            authenticate.
         
         Example:
             raise Unauthorized()
             raise Unauthorized("Invalid or expired token")
+            raise Unauthorized("Authentication required", headers={"WWW-Authenticate": "Bearer"})
     """
     
-    def __init__(self, detail: str = "Unauthorized"):
+    def __init__(self, detail: str = "Unauthorized", headers: Optional[Dict[str, str]] = None):
         """
             Construct an Unauthorized exception.
             
             :param detail: Detail message.
+            :param headers: Optional dict of additional headers.
         """
-        super().__init__(401, detail)
+        super().__init__(401, detail, headers)
         return
 
 

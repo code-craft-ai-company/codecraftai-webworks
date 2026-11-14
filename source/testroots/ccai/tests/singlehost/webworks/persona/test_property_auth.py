@@ -251,14 +251,14 @@ def test_property_configure_auth_middleware_creates_wired_middleware(exclude_pat
 
         testbase.assert_true(
             middleware.app is app._asgi_app,
-            f"Expected middleware.app to be the same object as app._asgi_app "
-            f"(identity check failed)"
+            "Expected middleware.app to be the same object as app._asgi_app "
+            "(identity check failed)"
         )
 
         testbase.assert_true(
             middleware.auth_system is app._auth_system,
-            f"Expected middleware.auth_system to be the same object as "
-            f"app._auth_system (identity check failed)"
+            "Expected middleware.auth_system to be the same object as "
+            "app._auth_system (identity check failed)"
         )
 
         testbase.assert_equal(

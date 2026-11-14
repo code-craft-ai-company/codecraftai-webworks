@@ -5,9 +5,18 @@
  * Supports incoming/outgoing/system variants, delivery status, reactions,
  * consecutive grouping, reply previews, and action menu.
  * Designed to live inside role="feed" per APG.
+ *
+ * `author-id` identifies the author for the host: it is exposed as
+ * `authorId` and carried in the detail of every event this message fires,
+ * so a thread can tell whose message was reacted to or acted on. It changes
+ * nothing in the rendering, so it is not observed.
  */
 
 import { MjElement, nextId } from "../core/mjelement.js";
+import { autoPosition } from "../core/overlay.js";
+import { safeUrl, safeLinkUrl } from "../core/html.js";
+import { sanitizeHtmlToFragment } from "../core/sanitize.js";
+import { formatDate, formatRelativeTime, t } from "../core/intl.js";
 
 const STYLES = `
 :host {
@@ -122,8 +131,9 @@ const STYLES = `
   font-size: var(--mj-font-size-xs);
 }
 
+/* Tinted from the bubble's own text colour, so it shows on light, dark and accent bubbles. */
 .reply-preview {
-  background: rgba(0,0,0,0.08);
+  background: var(--mj-msg-reply-bg, color-mix(in srgb, currentColor 8%, transparent));
   border-inline-start: 3px solid currentColor;
   opacity: 0.8;
   padding: var(--mj-space-1) var(--mj-space-2);
@@ -136,6 +146,53 @@ const STYLES = `
 }
 
 .reply-preview[hidden] { display: none; }
+
+.msg-html[hidden],
+.msg-attachments[hidden] { display: none; }
+
+.msg-html a,
+.attachment-link {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.msg-attachments {
+  list-style: none;
+  margin: var(--mj-space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--mj-space-2);
+}
+
+.attachment-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mj-space-1);
+  font-size: var(--mj-font-size-xs);
+}
+
+.attachment-link:focus-visible {
+  outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring);
+  outline-offset: var(--mj-focus-ring-offset);
+}
+
+.attachment-image {
+  display: block;
+  max-width: var(--mj-msg-attachment-size, 160px);
+  max-height: var(--mj-msg-attachment-size, 160px);
+  border-radius: var(--mj-radius-sm);
+  object-fit: cover;
+}
+
+.attachment-size {
+  opacity: 0.75;
+}
+
+.msg-article:focus-visible {
+  outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring);
+  outline-offset: calc(-1 * var(--mj-focus-ring-width));
+}
 
 .msg-status {
   display: flex;
@@ -186,10 +243,8 @@ const STYLES = `
 }
 
 .actions-trigger {
-  position: absolute;
-  inset-block-start: 50%;
-  translate: 0 -50%;
-  inset-inline-end: calc(-1 * var(--mj-control-height-sm) - var(--mj-space-1));
+  align-self: center;
+  flex-shrink: 0;
   opacity: 0;
   background: var(--mj-surface);
   border: 1px solid var(--mj-border);
@@ -257,77 +312,144 @@ const STYLES = `
 `;
 
 const STATUS_ICONS = {
-  sent: "&#10003;",
-  delivered: "&#10003;&#10003;",
-  read: "&#10003;&#10003;",
-  failed: "&#9888;"
+  sent: "✓",
+  delivered: "✓✓",
+  read: "✓✓",
+  failed: "⚠"
 };
 
-const STATUS_LABELS = {
-  sent: "Sent",
-  delivered: "Delivered",
-  read: "Read",
-  failed: "Failed to send"
+/* Keys of the status labels; resolved with t() when the status is shown. */
+const STATUS_LABEL_KEYS = {
+  sent: "mj.chatMessage.status.sent",
+  delivered: "mj.chatMessage.status.delivered",
+  read: "mj.chatMessage.status.read",
+  failed: "mj.chatMessage.status.failed"
 };
 
-function relativeTime(ts) {
-  if (ts === null || ts === undefined || ts === "") {
-    return ""
+/* Tags a message body may contain. Everything else is unwrapped or dropped. */
+const BODY_ALLOWED_TAGS = ["b", "i", "em", "strong", "a", "br", "p", "span", "mark", "code", "pre"];
+
+/* Attributes kept per tag. No tag keeps style, class, id, target or on*. */
+const BODY_ALLOWED_ATTRIBUTES = {
+  a: ["href", "title"]
+};
+
+/*
+ * Message bodies go through the shared allow-list sanitizer (core/sanitize.js):
+ * parsed in an inert document, only the tags and attributes above kept, link
+ * targets through safeLinkUrl (no script, data: or blob: URLs), every link
+ * forced to rel="noopener noreferrer", and the result imported as nodes --
+ * never re-parsed in the page. Unknown wrappers (a <div>) are unwrapped.
+ */
+const BODY_SANITIZE_OPTIONS = {
+  allowedTags: BODY_ALLOWED_TAGS,
+  allowedAttributes: BODY_ALLOWED_ATTRIBUTES,
+  aliases: {},
+  linkRel: "noopener noreferrer"
+};
+
+/*
+ * Text that may be a date: ISO 8601 or a written date with a four-digit year,
+ * made only of the characters dates use. Anything else is not parsed.
+ */
+const TIMESTAMP_TEXT_PATTERN = /^(?=.*\d{4})[0-9A-Za-z ,.:+\-\/]+$/;
+
+/*
+ * Parse a timestamp into a Date, or null when it cannot be parsed. A bare
+ * `YYYY-MM-DD` is a local calendar day, not midnight UTC.
+ */
+function parseTimestamp(value) {
+  let date = null
+
+  if (typeof value === "string" && value.length > 0) {
+    const dayMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+    if (dayMatch !== null) {
+      date = new Date(Number(dayMatch[1]), Number(dayMatch[2]) - 1, Number(dayMatch[3]))
+    } else if (TIMESTAMP_TEXT_PATTERN.test(value) === true) {
+      /*
+       * The engine's date parser is lenient and reads arbitrary text with a
+       * number in it as some date, so only date-like text is handed to it.
+       */
+      date = new Date(value)
+    }
   }
-  const diff = Date.now() - new Date(ts).getTime()
-  const seconds = Math.floor(diff / 1000)
-  const minutes = Math.floor(seconds / 60)
-  const hours = Math.floor(minutes / 60)
-  const days = Math.floor(hours / 24)
-  if (seconds < 60) { return "just now" }
-  if (minutes < 60) { return `${minutes}m ago` }
-  if (hours < 24) { return `${hours}h ago` }
-  return `${days}d ago`
+
+  if (date !== null && Number.isNaN(date.getTime()) === true) {
+    date = null
+  }
+  return date
+}
+
+/* Locale-aware "5 minutes ago" / "in 2 hours" / "now" for a Date. */
+function relativeTime(date) {
+  const diffSeconds = Math.round((date.getTime() - Date.now()) / 1000)
+  const magnitude = Math.abs(diffSeconds)
+  const direction = diffSeconds < 0 ? -1 : 1
+  let text = ""
+
+  if (magnitude < 60) {
+    text = formatRelativeTime(0, "second")
+  } else if (magnitude < 3600) {
+    text = formatRelativeTime(direction * Math.floor(magnitude / 60), "minute")
+  } else if (magnitude < 86400) {
+    text = formatRelativeTime(direction * Math.floor(magnitude / 3600), "hour")
+  } else {
+    text = formatRelativeTime(direction * Math.floor(magnitude / 86400), "day")
+  }
+  return text
 }
 
 function initials(name) {
-  if (name === null || name === undefined || name.length === 0) {
+  const text = name !== null && name !== undefined ? String(name).trim() : ""
+  if (text.length === 0) {
     return "?"
   }
-  const parts = name.trim().split(/\s+/)
+  const parts = text.split(/\s+/)
   if (parts.length >= 2) {
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
   }
   return parts[0][0].toUpperCase()
 }
 
-function sanitizeHtml(html) {
-  // Minimal allowlist sanitization
-  const allowed = new Set(["b", "i", "em", "strong", "a", "br", "p", "span", "mark", "code", "pre"])
-  const temp = document.createElement("div")
-  temp.innerHTML = html
-  const allEls = temp.querySelectorAll("*")
-  for (let i = 0; i < allEls.length; i = i + 1) {
-    const el = allEls[i]
-    if (allowed.has(el.tagName.toLowerCase()) === false) {
-      el.replaceWith(document.createTextNode(el.textContent))
-    }
+function formatSize(bytes) {
+  if (bytes < 1024) { return `${bytes} B` }
+  if (bytes < 1024 * 1024) { return `${(bytes / 1024).toFixed(1)} KB` }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/*
+ * One timer refreshes the relative timestamp of every connected message,
+ * however many there are. It runs only while at least one is connected.
+ */
+const TICK_SUBSCRIBERS = new Set();
+let tickTimer = null;
+
+function subscribeTick(message) {
+  TICK_SUBSCRIBERS.add(message)
+  if (tickTimer === null) {
+    tickTimer = window.setInterval(() => {
+      TICK_SUBSCRIBERS.forEach((subscriber) => {
+        subscriber._syncTimestamp()
+      })
+    }, 60000)
   }
-  // Remove all event-handler attributes
-  const remaining = temp.querySelectorAll("*")
-  for (let i = 0; i < remaining.length; i = i + 1) {
-    const el = remaining[i]
-    const attrs = Array.from(el.attributes)
-    for (let j = 0; j < attrs.length; j = j + 1) {
-      const attr = attrs[j]
-      if (attr.name.startsWith("on") || attr.name === "href" && !attr.value.startsWith("https") && !attr.value.startsWith("http") && !attr.value.startsWith("/")) {
-        el.removeAttribute(attr.name)
-      }
-    }
+  return
+}
+
+function unsubscribeTick(message) {
+  TICK_SUBSCRIBERS.delete(message)
+  if (TICK_SUBSCRIBERS.size === 0 && tickTimer !== null) {
+    window.clearInterval(tickTimer)
+    tickTimer = null
   }
-  return temp.innerHTML
+  return
 }
 
 export class MjChatMessage extends MjElement {
   static tagName = "mj-chat-message";
   static styles = STYLES;
   static watched = [
-    "variant", "consecutive", "author-name", "author-id", "author-avatar",
+    "variant", "consecutive", "author-name", "author-avatar",
     "timestamp", "status", "message-id", "allow-reactions", "allow-actions"
   ];
 
@@ -339,132 +461,394 @@ export class MjChatMessage extends MjElement {
     this._replyTo = null
     this._currentUserId = ""
     this._menuOpen = false
+    this._menuPositionDispose = null
+    this._onDocumentPointerDown = this._handleDocumentPointerDown.bind(this)
     this._headerId = nextId("mj-msg-hdr")
+    this._menuId = nextId("mj-msg-menu")
+
     this._articleEl = null
+    this._avatarEl = null
+    this._authorEl = null
+    this._timeEl = null
+    this._bodySlot = null
+    this._htmlEl = null
+    this._attachmentsEl = null
+    this._replyPreviewEl = null
+    this._reactionBar = null
+    this._statusEl = null
+    this._actionsTrigger = null
     this._contextMenu = null
   }
 
+  /*
+   * The markup holds no attribute or property values or localized text;
+   * `afterRender`, `_syncAttributes` and the render helpers fill it in with
+   * textContent / setAttribute.
+   */
   render() {
-    const variant = this.getAttribute("variant") || "incoming"
-    const authorName = this.getAttribute("author-name") || ""
-    const authorAvatar = this.getAttribute("author-avatar") || ""
-    const timestamp = this.getAttribute("timestamp") || ""
-    const status = this.getAttribute("status") || "sent"
-    const msgId = this.getAttribute("message-id") || nextId("mj-msg")
-    const consecutive = this.hasAttribute("consecutive")
-    const allowReactions = this.getAttribute("allow-reactions") !== "false"
-
-    const relTs = relativeTime(timestamp)
-    const absTs = timestamp !== "" ? new Date(timestamp).toLocaleString() : ""
-
-    const avatarHtml = authorAvatar.length > 0
-      ? `<img src="${authorAvatar}" alt="${authorName}"/>`
-      : initials(authorName)
-
-    const statusHtml = variant === "outgoing"
-      ? `<div class="msg-status status-${status}" part="status"
-              aria-label="${STATUS_LABELS[status] || status}">
-           <span class="status-icon" aria-hidden="true">${STATUS_ICONS[status] || ""}</span>
-           <span class="sr-only" style="position:absolute;opacity:0;">${STATUS_LABELS[status] || status}</span>
-         </div>`
-      : ""
-
-    const consecutiveAriaLabel = consecutive && authorName.length > 0
-      ? `aria-label="Message from ${authorName}"`
-      : ""
-
     const markup = `
-      <article class="msg-article" part="root" tabindex="-1"
-               aria-labelledby="${this._headerId}"
-               ${consecutiveAriaLabel}>
-        <div class="msg-avatar" part="avatar" aria-hidden="true">
-          ${avatarHtml}
-        </div>
+      <article class="msg-article" part="root" tabindex="-1">
+        <div class="msg-avatar" part="avatar" aria-hidden="true"></div>
         <div class="msg-main">
           <header class="msg-header" part="header" id="${this._headerId}">
-            <strong class="msg-author-name" part="author-name">${authorName}</strong>
-            <time class="msg-timestamp" part="timestamp"
-                  datetime="${timestamp}" title="${absTs}">${relTs}</time>
+            <strong class="msg-author-name" part="author-name"></strong>
+            <time class="msg-timestamp" part="timestamp"></time>
           </header>
           <div class="msg-bubble" part="bubble">
             <div class="reply-preview" part="reply-preview" hidden></div>
-            <div class="msg-body" part="body">
-              <slot name="body"></slot>
-            </div>
+            <div class="msg-body" part="body"><slot name="body"><slot></slot></slot><div class="msg-html" hidden></div></div>
+            <ul class="msg-attachments" part="attachments" hidden></ul>
           </div>
           <div class="reaction-bar" part="reaction-bar"></div>
-          ${statusHtml}
+          <div class="msg-status" part="status" role="img">
+            <span class="status-icon" aria-hidden="true"></span>
+          </div>
         </div>
         <button class="actions-trigger" part="actions-trigger" type="button"
-                aria-label="Message actions" aria-haspopup="menu"
-                aria-expanded="false">&#8943;</button>
+                aria-haspopup="menu"
+                aria-expanded="false" aria-controls="${this._menuId}">&#8943;</button>
       </article>
-      <ul class="context-menu" part="context-menu" role="menu"
-          aria-label="Message actions" hidden></ul>
+      <ul class="context-menu" part="context-menu" role="menu" id="${this._menuId}"
+          hidden></ul>
     `
     return markup
   }
 
   afterRender() {
     this._articleEl = this.$(".msg-article")
-    this._bodyEl = this.$(".msg-body")
+    this._avatarEl = this.$(".msg-avatar")
+    this._authorEl = this.$(".msg-author-name")
+    this._timeEl = this.$(".msg-timestamp")
+    this._bodySlot = this.$("slot[name=body]")
+    this._htmlEl = this.$(".msg-html")
+    this._attachmentsEl = this.$(".msg-attachments")
     this._replyPreviewEl = this.$(".reply-preview")
     this._reactionBar = this.$(".reaction-bar")
+    this._statusEl = this.$(".msg-status")
     this._actionsTrigger = this.$(".actions-trigger")
     this._contextMenu = this.$(".context-menu")
+    this._menuOpen = false
 
-    if (this._bodyHtml !== null) {
-      this._renderBodyHtml()
-    }
-    if (this._reactions.length > 0) {
-      this._renderReactions()
-    }
-    if (this._replyTo !== null) {
-      this._renderReplyPreview()
-    }
+    this._attachmentsEl.setAttribute("aria-label", t("mj.chatMessage.attachmentsLabel"))
+    this._actionsTrigger.setAttribute("aria-label", t("mj.chatMessage.actionsLabel"))
+    this._contextMenu.setAttribute("aria-label", t("mj.chatMessage.actionsLabel"))
 
     this.listen(this._actionsTrigger, "click", this._onActionsClick.bind(this))
-    this.listen(this._articleEl, "keydown", this._onArticleKeydown.bind(this))
+    this.listen(this._contextMenu, "click", this._onMenuClick.bind(this))
+    this.listen(this._contextMenu, "keydown", this._onMenuKeydown.bind(this))
+    this.listen(this._reactionBar, "click", this._onReactionClick.bind(this))
+    this.listen(this._htmlEl, "click", this._onBodyLinkClick.bind(this))
 
-    // Close menu on outside click
-    this.listen(document, "click", (event) => {
-      if (this._menuOpen === true && !this.contains(event.target)) {
-        this._closeMenu()
-      }
+    subscribeTick(this)
+    this.onTeardown(() => {
+      unsubscribeTick(this)
+      this._closeMenu()
     })
 
-    this._buildContextMenu()
+    this._syncAttributes()
+    this._renderBodyHtml()
+    this._renderAttachments()
+    this._renderReactions()
+    this._renderReplyPreview()
     return
   }
 
-  _buildContextMenu() {
-    if (this._contextMenu === null) {
+  onAttributeChanged(name, oldValue, newValue) {
+    if (this._articleEl === undefined || this._articleEl === null) {
       return
     }
-    const msgId = this.getAttribute("message-id") || ""
+
+    if (name === "allow-reactions") {
+      this._renderReactions()
+    } else if (name === "allow-actions") {
+      if (this._actionsAllowed() === false) {
+        this._closeMenu()
+      }
+    } else {
+      this._syncAttributes()
+      if (name === "variant" || name === "status") {
+        /* The menu's items depend on both; an open menu would be stale. */
+        this._closeMenu()
+      }
+    }
+    return
+  }
+
+  /* ----- attribute-derived content ----- */
+
+  _messageId() {
+    const messageId = this.getAttribute("message-id") || ""
+    return messageId
+  }
+
+  _authorId() {
+    const authorId = this.getAttribute("author-id") || ""
+    return authorId
+  }
+
+  _actionsAllowed() {
+    const allowed = this.hasAttribute("allow-actions") === true && this.getAttribute("allow-actions") !== "false"
+    return allowed
+  }
+
+  /* Author, avatar, timestamp, status and the article's accessible name. */
+  _syncAttributes() {
+    const authorName = this.getAttribute("author-name") || ""
+    const consecutive = this.hasAttribute("consecutive")
+
+    this._authorEl.textContent = authorName
+
+    /* Avatar: an image when the URL is acceptable, initials otherwise. */
+    const avatarUrl = safeUrl(this.getAttribute("author-avatar") || "", "")
+    this._avatarEl.textContent = ""
+    if (avatarUrl.length > 0) {
+      const img = document.createElement("img")
+      img.alt = ""
+      img.src = avatarUrl
+      this._avatarEl.appendChild(img)
+    } else {
+      this._avatarEl.textContent = initials(authorName)
+    }
+
+    /*
+     * A consecutive message hides its header, so the article is named
+     * directly; otherwise the visible header names it.
+     */
+    if (consecutive === true && authorName.length > 0) {
+      this._articleEl.removeAttribute("aria-labelledby")
+      this._articleEl.setAttribute("aria-label", t("mj.chatMessage.messageFrom", { name: authorName }))
+    } else {
+      this._articleEl.removeAttribute("aria-label")
+      this._articleEl.setAttribute("aria-labelledby", this._headerId)
+    }
+
+    const statusValue = this.getAttribute("status") || "sent"
+    const knownStatus = Object.prototype.hasOwnProperty.call(STATUS_LABEL_KEYS, statusValue)
+    const status = knownStatus === true ? statusValue : "sent"
+    this._statusEl.className = `msg-status status-${status}`
+    this._statusEl.setAttribute("aria-label", t(STATUS_LABEL_KEYS[status]))
+    this._statusEl.querySelector(".status-icon").textContent = STATUS_ICONS[status]
+
+    this._syncTimestamp()
+    return
+  }
+
+  /* Also called by the shared ticker to keep the relative time current. */
+  _syncTimestamp() {
+    if (this._timeEl === null) {
+      return
+    }
+    const raw = this.getAttribute("timestamp") || ""
+    const date = parseTimestamp(raw)
+
+    if (date !== null) {
+      this._timeEl.setAttribute("datetime", date.toISOString())
+      this._timeEl.setAttribute("title", formatDate(date, { dateStyle: "medium", timeStyle: "short" }))
+      this._timeEl.textContent = relativeTime(date)
+    } else {
+      /* Not a date: shown as given, never as "NaN". */
+      this._timeEl.removeAttribute("datetime")
+      this._timeEl.removeAttribute("title")
+      this._timeEl.textContent = raw
+    }
+    return
+  }
+
+  /* ----- body, attachments, reply preview ----- */
+
+  _renderBodyHtml() {
+    if (this._htmlEl === null) {
+      return
+    }
+
+    if (this._bodyHtml === null) {
+      /* No HTML body: the slotted content (or plain child text) shows again. */
+      this._htmlEl.textContent = ""
+      this._htmlEl.hidden = true
+      this._bodySlot.hidden = false
+    } else {
+      this._htmlEl.replaceChildren(sanitizeHtmlToFragment(this._bodyHtml, BODY_SANITIZE_OPTIONS))
+      this._htmlEl.hidden = false
+      this._bodySlot.hidden = true
+    }
+    return
+  }
+
+  /* Links in the HTML body can be intercepted by the host. */
+  _onBodyLinkClick(event) {
+    const link = event.target.closest("a")
+    if (link === null || link.hasAttribute("href") === false) {
+      return
+    }
+    const proceed = this.emit("mj-message-link-click", {
+      href: link.href,
+      messageId: this._messageId(),
+      authorId: this._authorId()
+    }, { cancelable: true })
+    if (proceed === false) {
+      event.preventDefault()
+    }
+    return
+  }
+
+  /* Image attachments show a thumbnail; other files a named link with their size. */
+  _renderAttachments() {
+    if (this._attachmentsEl === null) {
+      return
+    }
+
+    this._attachmentsEl.textContent = ""
+    this._attachmentsEl.hidden = this._attachments.length === 0
+
+    for (let i = 0; i < this._attachments.length; i = i + 1) {
+      const attachment = this._attachments[i]
+      const name = attachment.name !== undefined && attachment.name !== null ? String(attachment.name) : t("mj.chatMessage.attachmentFallbackName")
+      const url = safeLinkUrl(attachment.url, "")
+      const mimeType = typeof attachment.mimeType === "string" ? attachment.mimeType : ""
+      const thumbnailUrl = safeUrl(attachment.thumbnailUrl !== undefined ? attachment.thumbnailUrl : attachment.url, "")
+
+      const li = document.createElement("li")
+      const holder = url.length > 0 ? document.createElement("a") : document.createElement("span")
+      holder.className = "attachment-link"
+      if (url.length > 0) {
+        holder.setAttribute("href", url)
+        holder.setAttribute("target", "_blank")
+        holder.setAttribute("rel", "noopener noreferrer")
+      }
+
+      if (mimeType.startsWith("image/") === true && thumbnailUrl.length > 0) {
+        const img = document.createElement("img")
+        img.className = "attachment-image"
+        img.alt = name
+        img.src = thumbnailUrl
+        holder.appendChild(img)
+      } else {
+        const nameEl = document.createElement("span")
+        nameEl.textContent = name
+        holder.appendChild(nameEl)
+        const size = Number(attachment.size)
+        if (Number.isFinite(size) === true && size > 0) {
+          const sizeEl = document.createElement("span")
+          sizeEl.className = "attachment-size"
+          sizeEl.textContent = `(${formatSize(size)})`
+          holder.appendChild(sizeEl)
+        }
+      }
+
+      li.appendChild(holder)
+      this._attachmentsEl.appendChild(li)
+    }
+    return
+  }
+
+  _renderReplyPreview() {
+    if (this._replyPreviewEl === null) {
+      return
+    }
+    if (this._replyTo === null) {
+      this._replyPreviewEl.hidden = true
+      this._replyPreviewEl.textContent = ""
+      return
+    }
+    const authorName = this._replyTo.authorName !== undefined && this._replyTo.authorName !== null ? String(this._replyTo.authorName) : ""
+    const preview = this._replyTo.preview !== undefined && this._replyTo.preview !== null ? String(this._replyTo.preview) : ""
+    this._replyPreviewEl.hidden = false
+    this._replyPreviewEl.textContent = authorName.length > 0 ? `${authorName}: ${preview}` : preview
+    return
+  }
+
+  /* ----- reactions ----- */
+
+  _renderReactions() {
+    if (this._reactionBar === null) {
+      return
+    }
+
+    const hadFocusOn = this.shadowRoot.activeElement !== null && this._reactionBar.contains(this.shadowRoot.activeElement) === true
+      ? this.shadowRoot.activeElement.getAttribute("data-emoji")
+      : null
+
+    this._reactionBar.textContent = ""
+
+    const allowReactions = this.getAttribute("allow-reactions") !== "false"
+    if (allowReactions === false) {
+      return
+    }
+
+    for (let i = 0; i < this._reactions.length; i = i + 1) {
+      const reaction = this._reactions[i]
+      const emoji = String(reaction.emoji)
+      const userIds = Array.isArray(reaction.userIds) === true ? reaction.userIds.map((userId) => String(userId)) : []
+      const active = this._currentUserId.length > 0 && userIds.indexOf(this._currentUserId) >= 0
+
+      const chip = document.createElement("button")
+      chip.className = "reaction-chip"
+      chip.setAttribute("type", "button")
+      chip.setAttribute("aria-pressed", active === true ? "true" : "false")
+      chip.setAttribute("aria-label", t("mj.chatMessage.reactWith", { emoji: emoji, count: reaction.count }))
+      chip.setAttribute("data-emoji", emoji)
+
+      const emojiEl = document.createElement("span")
+      emojiEl.textContent = emoji
+      const countEl = document.createElement("span")
+      countEl.textContent = String(reaction.count)
+      chip.appendChild(emojiEl)
+      chip.appendChild(countEl)
+
+      this._reactionBar.appendChild(chip)
+      if (hadFocusOn === emoji) {
+        chip.focus()
+      }
+    }
+    return
+  }
+
+  _onReactionClick(event) {
+    const chip = event.target.closest(".reaction-chip")
+    if (chip === null) {
+      return
+    }
+    const wasActive = chip.getAttribute("aria-pressed") === "true"
+    chip.setAttribute("aria-pressed", wasActive === true ? "false" : "true")
+    this.emit("mj-message-react", {
+      messageId: this._messageId(),
+      authorId: this._authorId(),
+      emoji: chip.getAttribute("data-emoji"),
+      active: wasActive === false
+    })
+    return
+  }
+
+  /* ----- action menu ----- */
+
+  /* Build the menu items for the message as it is now (variant, status). */
+  _buildContextMenu() {
     const actions = [
-      { action: "reply", label: "Reply" },
-      { action: "copy", label: "Copy text" }
+      { action: "reply", label: t("mj.chatMessage.reply") },
+      { action: "copy", label: t("mj.chatMessage.copyText") }
     ]
 
     const variant = this.getAttribute("variant") || "incoming"
     if (variant === "outgoing") {
-      actions.push({ action: "edit", label: "Edit" })
-      actions.push({ action: "delete", label: "Delete" })
+      if (this.getAttribute("status") === "failed") {
+        actions.push({ action: "retry", label: t("mj.chatMessage.retry") })
+      }
+      actions.push({ action: "edit", label: t("mj.chatMessage.edit") })
+      actions.push({ action: "delete", label: t("mj.chatMessage.delete") })
     }
 
-    this._contextMenu.innerHTML = ""
+    this._contextMenu.textContent = ""
     for (let i = 0; i < actions.length; i = i + 1) {
       const item = actions[i]
       const li = document.createElement("li")
-      li.setAttribute("role", "presentation")
+      li.setAttribute("role", "none")
       const btn = document.createElement("button")
       btn.className = "ctx-item"
       btn.setAttribute("role", "menuitem")
       btn.setAttribute("type", "button")
+      btn.setAttribute("tabindex", "-1")
       btn.setAttribute("data-action", item.action)
       btn.textContent = item.label
-      this.listen(btn, "click", this._onContextAction.bind(this, item.action, msgId))
       li.appendChild(btn)
       this._contextMenu.appendChild(li)
     }
@@ -481,17 +865,23 @@ export class MjChatMessage extends MjElement {
   }
 
   _openMenu() {
-    if (this._contextMenu === null || this._actionsTrigger === null) {
+    if (this._contextMenu === null || this._actionsAllowed() === false) {
       return
     }
+
+    this._buildContextMenu()
     this._menuOpen = true
     this._contextMenu.hidden = false
     this._actionsTrigger.setAttribute("aria-expanded", "true")
 
-    const rect = this._actionsTrigger.getBoundingClientRect()
-    this._contextMenu.style.position = "fixed"
-    this._contextMenu.style.top = `${rect.bottom + 4}px`
-    this._contextMenu.style.left = `${rect.left}px`
+    /* Kept against the trigger while scrolling; flips and shifts into view. */
+    this._menuPositionDispose = autoPosition(this._contextMenu, this._actionsTrigger, {
+      placement: "bottom-start",
+      offset: 4
+    })
+
+    /* The outside-press listener exists only while this menu is open. */
+    document.addEventListener("pointerdown", this._onDocumentPointerDown, true)
 
     const firstItem = this._contextMenu.querySelector(".ctx-item")
     if (firstItem !== null) {
@@ -501,124 +891,88 @@ export class MjChatMessage extends MjElement {
   }
 
   _closeMenu() {
-    if (this._contextMenu === null) {
+    if (this._contextMenu === null || this._menuOpen === false) {
       return
     }
     this._menuOpen = false
     this._contextMenu.hidden = true
-    if (this._actionsTrigger !== null) {
-      this._actionsTrigger.setAttribute("aria-expanded", "false")
+    this._actionsTrigger.setAttribute("aria-expanded", "false")
+
+    if (this._menuPositionDispose !== null) {
+      this._menuPositionDispose()
+      this._menuPositionDispose = null
+    }
+    document.removeEventListener("pointerdown", this._onDocumentPointerDown, true)
+    return
+  }
+
+  _handleDocumentPointerDown(event) {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : []
+    const inside = path.indexOf(this._contextMenu) >= 0 || path.indexOf(this._actionsTrigger) >= 0
+    if (inside === false) {
+      this._closeMenu()
     }
     return
   }
 
-  _onContextAction(action, msgId) {
+  _onMenuClick(event) {
+    const item = event.target.closest(".ctx-item")
+    if (item === null) {
+      return
+    }
+    const action = item.getAttribute("data-action")
+    const messageId = this._messageId()
+
     this._closeMenu()
+    this._actionsTrigger.focus()
 
     if (action === "reply") {
-      this.emit("mj-message-reply", { messageId: msgId })
+      this.emit("mj-message-reply", { messageId: messageId, authorId: this._authorId() })
     } else {
-      this.emit("mj-message-action", { messageId: msgId, action: action })
+      this.emit("mj-message-action", { messageId: messageId, authorId: this._authorId(), action: action })
     }
     return
   }
 
-  _onArticleKeydown(event) {
-    if (event.key === "Escape" && this._menuOpen === true) {
+  /* APG menu keys. Enter and Space activate the focused button natively. */
+  _onMenuKeydown(event) {
+    const items = Array.from(this._contextMenu.querySelectorAll(".ctx-item"))
+    const current = items.indexOf(this.shadowRoot.activeElement)
+    let target = -1
+
+    if (event.key === "Escape") {
       event.preventDefault()
+      event.stopPropagation()
       this._closeMenu()
-      if (this._actionsTrigger !== null) {
-        this._actionsTrigger.focus()
-      }
+      this._actionsTrigger.focus()
+    } else if (event.key === "Tab") {
+      /* Focus leaves the menu; it must not stay open behind it. */
+      this._closeMenu()
+    } else if (event.key === "ArrowDown") {
+      target = current + 1 < items.length ? current + 1 : 0
+    } else if (event.key === "ArrowUp") {
+      target = current - 1 >= 0 ? current - 1 : items.length - 1
+    } else if (event.key === "Home") {
+      target = 0
+    } else if (event.key === "End") {
+      target = items.length - 1
+    }
+
+    if (target >= 0 && target < items.length) {
+      event.preventDefault()
+      items[target].focus()
     }
     return
   }
 
-  _renderBodyHtml() {
-    if (this._bodyEl === null || this._bodyHtml === null) {
-      return
-    }
-    const sanitized = sanitizeHtml(this._bodyHtml)
-    const existingSlot = this._bodyEl.querySelector("slot")
-    if (existingSlot !== null) {
-      existingSlot.remove()
-    }
-    this._bodyEl.innerHTML = sanitized
+  /* ----- public API ----- */
 
-    // Intercept links
-    const links = this._bodyEl.querySelectorAll("a")
-    const msgId = this.getAttribute("message-id") || ""
-    for (let i = 0; i < links.length; i = i + 1) {
-      const link = links[i]
-      this.listen(link, "click", (event) => {
-        const proceed = this.emit("mj-message-link-click", {
-          href: link.href,
-          messageId: msgId
-        }, { cancelable: true })
-        if (proceed === false) {
-          event.preventDefault()
-        }
-      })
-    }
-    return
-  }
-
-  _renderReactions() {
-    if (this._reactionBar === null) {
-      return
-    }
-    const allowReactions = this.getAttribute("allow-reactions") !== "false"
-    if (allowReactions === false || this._reactions.length === 0) {
-      this._reactionBar.innerHTML = ""
-      return
-    }
-
-    const msgId = this.getAttribute("message-id") || ""
-    this._reactionBar.innerHTML = ""
-    for (let i = 0; i < this._reactions.length; i = i + 1) {
-      const r = this._reactions[i]
-      const active = Array.isArray(r.userIds) &&
-        this._currentUserId.length > 0 &&
-        r.userIds.indexOf(this._currentUserId) >= 0
-
-      const chip = document.createElement("button")
-      chip.className = "reaction-chip"
-      chip.setAttribute("type", "button")
-      chip.setAttribute("aria-pressed", active ? "true" : "false")
-      chip.setAttribute("aria-label", `React with ${r.emoji}, ${r.count} reactions`)
-      chip.setAttribute("data-emoji", r.emoji)
-      chip.innerHTML = `${r.emoji} <span>${r.count}</span>`
-
-      this.listen(chip, "click", () => {
-        const wasActive = chip.getAttribute("aria-pressed") === "true"
-        chip.setAttribute("aria-pressed", wasActive ? "false" : "true")
-        this.emit("mj-message-react", {
-          messageId: msgId,
-          emoji: r.emoji,
-          active: !wasActive
-        })
-      })
-      this._reactionBar.appendChild(chip)
-    }
-    return
-  }
-
-  _renderReplyPreview() {
-    if (this._replyPreviewEl === null) {
-      return
-    }
-    if (this._replyTo === null) {
-      this._replyPreviewEl.hidden = true
-      return
-    }
-    this._replyPreviewEl.hidden = false
-    this._replyPreviewEl.textContent = `${this._replyTo.authorName}: ${this._replyTo.preview}`
-    return
-  }
-
-  onAttributeChanged(name, oldValue, newValue) {
-    if (name === "allow-reactions" && this._reactionBar !== null) {
-      this._renderReactions()
+  /* A parent feed moves focus to a message; the article is the focus target. */
+  focus(options) {
+    if (this._articleEl !== null) {
+      this._articleEl.focus(options)
+    } else {
+      super.focus(options)
     }
     return
   }
@@ -627,11 +981,14 @@ export class MjChatMessage extends MjElement {
     return this._bodyHtml
   }
 
+  /*
+   * HTML for the body (for example the output of a Markdown renderer). It is
+   * sanitized against an allowlist before it is shown. null restores the
+   * slotted body.
+   */
   set bodyHtml(html) {
     this._bodyHtml = html !== null && html !== undefined ? String(html) : null
-    if (this._bodyEl !== null) {
-      this._renderBodyHtml()
-    }
+    this._renderBodyHtml()
     return
   }
 
@@ -641,6 +998,7 @@ export class MjChatMessage extends MjElement {
 
   set attachments(value) {
     this._attachments = Array.isArray(value) ? value : []
+    this._renderAttachments()
     return
   }
 
@@ -650,9 +1008,7 @@ export class MjChatMessage extends MjElement {
 
   set reactions(value) {
     this._reactions = Array.isArray(value) ? value : []
-    if (this._reactionBar !== null) {
-      this._renderReactions()
-    }
+    this._renderReactions()
     return
   }
 
@@ -662,8 +1018,20 @@ export class MjChatMessage extends MjElement {
 
   set replyTo(value) {
     this._replyTo = value !== undefined ? value : null
-    if (this._replyPreviewEl !== null) {
-      this._renderReplyPreview()
+    this._renderReplyPreview()
+    return
+  }
+
+  /* The `author-id` attribute ("" when absent). */
+  get authorId() {
+    return this._authorId()
+  }
+
+  set authorId(value) {
+    if (value === null || value === undefined) {
+      this.removeAttribute("author-id")
+    } else {
+      this.setAttribute("author-id", String(value))
     }
     return
   }
@@ -673,10 +1041,8 @@ export class MjChatMessage extends MjElement {
   }
 
   set currentUserId(id) {
-    this._currentUserId = id || ""
-    if (this._reactionBar !== null) {
-      this._renderReactions()
-    }
+    this._currentUserId = id !== null && id !== undefined ? String(id) : ""
+    this._renderReactions()
     return
   }
 }

@@ -866,3 +866,359 @@ def test_property_11_extension_discovery_from_paths():
             shutil.rmtree(temp_dir, ignore_errors=True)
 
     return
+
+
+# =============================================================================
+# load_extension() only instantiates Extension subclasses
+# =============================================================================
+
+class _NotAnExtension:
+    """
+        A class that does not derive from Extension. Creating one is recorded
+        so a test can tell that the loader did not call it.
+    """
+
+    created = 0
+
+    def __init__(self):
+        _NotAnExtension.created += 1
+        return
+
+
+class _FailingConstructorExtension(Extension):
+    """
+        An extension whose constructor exits the process.
+    """
+
+    name = "failing-constructor"
+
+    def __init__(self):
+        raise SystemExit(3)
+
+
+_function_entry_point_calls = []
+
+
+def _function_entry_point():
+    """
+        A module-level function a manifest can wrongly name as its entry point.
+    """
+    _function_entry_point_calls.append(True)
+    return None
+
+
+def _load_and_expect_manifest_error(loader: ExtensionLoader, entry_point: str) -> ExtensionManifestError:
+    """
+        Load an extension from an entry point that must be refused.
+
+        :param loader: The loader to use.
+        :param entry_point: The entry point to put in the manifest.
+
+        :returns: The ExtensionManifestError that was raised.
+    """
+    manifest = ExtensionManifest(name="refused-ext", version="1.0.0", entry_point=entry_point)
+
+    raised = None
+    try:
+        loader.load_extension(manifest)
+    except ExtensionManifestError as err:
+        raised = err
+
+    if raised is None:
+        errmsg = "Expected ExtensionManifestError for entry_point '{}'".format(entry_point)
+        raise AssertionError(errmsg)
+
+    return raised
+
+
+def test_load_extension_refuses_function_entry_point_without_calling_it():
+    """
+        Test that an entry point naming a function is refused and the
+        function is not called.
+    """
+    loader = ExtensionLoader(registry=ExtensionRegistry(app_context=_FakeAppContext()))
+    del _function_entry_point_calls[:]
+
+    _load_and_expect_manifest_error(
+        loader, "ccai.tests.singlehost.webworks.extensibility.test_loader._function_entry_point"
+    )
+
+    if len(_function_entry_point_calls) != 0:
+        errmsg = "The function named by the manifest was called"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_load_extension_refuses_sys_exit_entry_point():
+    """
+        Test that a manifest naming sys.exit does not end the process.
+    """
+    loader = ExtensionLoader(registry=ExtensionRegistry(app_context=_FakeAppContext()))
+
+    raised = _load_and_expect_manifest_error(loader, "sys.exit")
+
+    if "Extension" not in str(raised):
+        errmsg = "Expected the error to say the entry point is not an Extension, got: {}".format(raised)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_load_extension_refuses_class_that_is_not_an_extension():
+    """
+        Test that a class that does not derive from Extension is refused
+        without being instantiated.
+    """
+    loader = ExtensionLoader(registry=ExtensionRegistry(app_context=_FakeAppContext()))
+    _NotAnExtension.created = 0
+
+    _load_and_expect_manifest_error(
+        loader, "ccai.tests.singlehost.webworks.extensibility.test_loader._NotAnExtension"
+    )
+
+    if _NotAnExtension.created != 0:
+        errmsg = "The class named by the manifest was instantiated"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_load_extension_contains_system_exit_from_constructor():
+    """
+        Test that a constructor that raises SystemExit is reported as a
+        manifest error.
+    """
+    loader = ExtensionLoader(registry=ExtensionRegistry(app_context=_FakeAppContext()))
+
+    _load_and_expect_manifest_error(
+        loader, "ccai.tests.singlehost.webworks.extensibility.test_loader._FailingConstructorExtension"
+    )
+
+    return
+
+
+def test_load_extension_contains_any_exception_raised_by_import():
+    """
+        Test that a module that raises something other than ImportError
+        while it is imported is reported as a manifest error.
+    """
+    import sys
+
+    temp_dir = _create_temp_dir()
+    module_name = "wwtest_module_that_raises_{}".format(_generate_random_string())
+
+    try:
+        module_path = os.path.join(temp_dir, module_name + ".py")
+        with open(module_path, "w") as module_file:
+            module_file.write("raise RuntimeError('raised while importing')\n")
+
+        sys.path.insert(0, temp_dir)
+        try:
+            loader = ExtensionLoader(registry=ExtensionRegistry(app_context=_FakeAppContext()))
+            raised = _load_and_expect_manifest_error(loader, module_name + ".SomeExtension")
+        finally:
+            sys.path.remove(temp_dir)
+            sys.modules.pop(module_name, None)
+
+        if "RuntimeError" not in str(raised):
+            errmsg = "Expected the error to name the RuntimeError, got: {}".format(raised)
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return
+
+
+def test_load_extension_attaches_manifest():
+    """
+        Test that the loaded extension carries the manifest it was loaded from.
+    """
+    loader = ExtensionLoader(registry=ExtensionRegistry(app_context=_FakeAppContext()))
+
+    manifest = ExtensionManifest(
+        name="test-loader-ext",
+        version="1.0.0",
+        entry_point="ccai.tests.singlehost.webworks.extensibility.test_loader._TestExtension",
+        config_schema={"type": "object", "properties": {"greeting": {"type": "string", "default": "hello"}}},
+    )
+
+    ext = loader.load_extension(manifest)
+
+    if ext.manifest is not manifest:
+        errmsg = "Expected the loaded extension to carry its manifest"
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Allowed extension packages
+# =============================================================================
+
+def test_load_extension_refuses_module_outside_allowed_packages():
+    """
+        Test that an entry point outside the allowed packages is refused
+        before the module is imported.
+    """
+    import sys
+
+    temp_dir = _create_temp_dir()
+    module_name = "wwtest_module_not_allowed_{}".format(_generate_random_string())
+    marker_path = os.path.join(temp_dir, "imported.marker")
+
+    try:
+        module_path = os.path.join(temp_dir, module_name + ".py")
+        with open(module_path, "w") as module_file:
+            module_file.write("open({!r}, 'w').close()\n".format(marker_path))
+
+        sys.path.insert(0, temp_dir)
+        try:
+            loader = ExtensionLoader(
+                registry=ExtensionRegistry(app_context=_FakeAppContext()),
+                allowed_packages=["ccai.tests.singlehost.webworks.extensibility"]
+            )
+            _load_and_expect_manifest_error(loader, module_name + ".SomeExtension")
+        finally:
+            sys.path.remove(temp_dir)
+            sys.modules.pop(module_name, None)
+
+        if os.path.exists(marker_path):
+            errmsg = "The module outside the allowed packages was imported"
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return
+
+
+def test_load_extension_allows_module_inside_allowed_packages():
+    """
+        Test that an entry point inside an allowed package is loaded.
+    """
+    loader = ExtensionLoader(
+        registry=ExtensionRegistry(app_context=_FakeAppContext()),
+        allowed_packages=["ccai.tests.singlehost.webworks.extensibility"]
+    )
+
+    manifest = ExtensionManifest(
+        name="test-loader-ext",
+        version="1.0.0",
+        entry_point="ccai.tests.singlehost.webworks.extensibility.test_loader._TestExtension",
+    )
+
+    ext = loader.load_extension(manifest)
+
+    if not isinstance(ext, _TestExtension):
+        errmsg = "Expected a _TestExtension instance, got {}".format(type(ext).__name__)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_allowed_package_name_is_not_matched_as_a_prefix_of_another_package():
+    """
+        Test that allowing 'pkg' does not allow 'pkg_other'.
+    """
+    loader = ExtensionLoader(
+        registry=ExtensionRegistry(app_context=_FakeAppContext()),
+        allowed_packages=["ccai.tests.singlehost.webworks.ext"]
+    )
+
+    _load_and_expect_manifest_error(
+        loader, "ccai.tests.singlehost.webworks.extensibility.test_loader._TestExtension"
+    )
+
+    return
+
+
+# =============================================================================
+# Loading extensions named by import strings and entry points
+# =============================================================================
+
+from ccai.webworks.extensibility.exceptions import ExtensionLoadError
+
+
+_THIS_MODULE = "ccai.tests.singlehost.webworks.extensibility.test_loader"
+
+
+def _not_an_extension() -> None:
+    """A module-level function an import string can name."""
+    return
+
+
+def test_load_from_import_string_accepts_both_notations():
+    """
+        Test that 'module:Class' and 'module.Class' both load the extension.
+    """
+    loader = ExtensionLoader(ExtensionRegistry(app_context=_FakeAppContext()), allowed_packages=["ccai.tests"])
+
+    colon = loader.load_from_import_string(_THIS_MODULE + ":_TestExtension")
+    dotted = loader.load_from_import_string(_THIS_MODULE + "._TestExtension")
+
+    if not isinstance(colon, _TestExtension) or not isinstance(dotted, _TestExtension):
+        raise AssertionError("Expected both notations to load a _TestExtension")
+
+    return
+
+
+def test_load_from_import_string_refuses_a_package_outside_the_allow_list_before_importing():
+    """
+        Test that a module outside the allowed packages is refused without
+        being imported: the refusal names the allow-list even for a module
+        that does not exist.
+    """
+    loader = ExtensionLoader(ExtensionRegistry(app_context=_FakeAppContext()), allowed_packages=["mycompany"])
+
+    caught = None
+    try:
+        loader.load_from_import_string("nosuchpackage.never.imported:Extension")
+    except ExtensionLoadError as err:
+        caught = err
+
+    if caught is None:
+        raise AssertionError("Expected ExtensionLoadError")
+
+    if "allowed extension packages" not in str(caught):
+        raise AssertionError("Expected the allow-list refusal, got {}".format(caught))
+
+    return
+
+
+def test_load_from_import_string_refuses_what_is_not_an_extension_class():
+    """
+        Test that a name that is not an Extension subclass is refused and a
+        malformed import string is reported.
+    """
+    loader = ExtensionLoader(ExtensionRegistry(app_context=_FakeAppContext()), allowed_packages=["ccai.tests"])
+
+    for reference in (_THIS_MODULE + ":_not_an_extension", _THIS_MODULE + ":NoSuchClass", "justaname"):
+        caught = None
+        try:
+            loader.load_from_import_string(reference)
+        except ExtensionLoadError as err:
+            caught = err
+
+        if caught is None or caught.reference != reference:
+            raise AssertionError("Expected ExtensionLoadError for {!r}, got {!r}".format(reference, caught))
+
+    return
+
+
+def test_load_from_entry_point_requires_exactly_one_named_entry_point():
+    """
+        Test that an entry point name nobody publishes is reported, and that
+        nothing else in the group is loaded.
+    """
+    loader = ExtensionLoader(ExtensionRegistry(app_context=_FakeAppContext()), allowed_packages=["ccai.tests"])
+
+    caught = None
+    try:
+        loader.load_from_entry_point("no-such-webworks-extension")
+    except ExtensionLoadError as err:
+        caught = err
+
+    if caught is None or "exactly one entry point" not in str(caught):
+        raise AssertionError("Expected an ExtensionLoadError about the entry point, got {!r}".format(caught))
+
+    return

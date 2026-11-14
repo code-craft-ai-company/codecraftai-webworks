@@ -10,8 +10,9 @@
 
 import logging
 
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
+from ccai.webworks.extensibility.datastructures import HookPriority
 from ccai.webworks.extensibility.exceptions import ExtensionContextFrozenError
 
 if TYPE_CHECKING:
@@ -31,21 +32,48 @@ class ExtensionContext:
         After initialization is complete, the context can be frozen
         to prevent further modifications.
 
+        An extension hooks into the application through its context, during
+        :meth:`Extension.initialize`:
+
+        * :meth:`register_hook` registers a callback for an application
+          lifecycle hook (``on_config_loaded``, ``on_app_init``,
+          ``on_routes_registered``, ``on_app_ready``, ``on_app_shutdown``),
+          a request lifecycle hook (``before_first_request``,
+          ``before_request``, ``after_request``, ``on_request_error``,
+          ``teardown_request``) or ``on_extension_error``;
+        * :attr:`component_hooks` registers components -- middleware,
+          authentication providers, serializers -- with the application;
+        * :attr:`endpoint_registry` takes routes, which the application
+          serves when its routes are finalised.
+
+        The service registry is what extensions use to reach each other:
+        a service registered through one extension's context is found
+        through every context that shares the same ``services`` map. The
+        ExtensionRegistry gives all the contexts it creates one map. A
+        context created without a map has a private one.
+
         :param extension_name: The name of the extension this context belongs to.
         :param app_context: The application context providing framework services.
         :param config: Extension-specific configuration dictionary.
+        :param services: The service map shared with the contexts of other
+            extensions. When None, the context keeps a map of its own.
     """
 
     def __init__(
         self,
         extension_name: str,
         app_context: Any,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
+        services: Optional[Dict[str, Any]] = None
     ):
         self._extension_name = extension_name
         self._app_context = app_context
         self._config = config if config is not None else {}
-        self._services: Dict[str, Any] = {}
+
+        if services is None:
+            services = {}
+        self._services: Dict[str, Any] = services
+
         self._frozen = False
         return
 
@@ -105,14 +133,73 @@ class ExtensionContext:
         return rtnval
 
     @property
-    def middleware(self) -> List[Any]:
+    def middleware(self) -> Any:
         """
-            Get registered middleware.
+            Get the application's middleware.
 
-            :returns: A list of registered middleware from the application context.
+            For a web application this is its :class:`MiddlewareRegistry`;
+            components registered through ``component_hooks`` are added
+            to it.
+
+            :returns: The middleware of the application context.
         """
         rtnval = self._app_context.middleware
         return rtnval
+
+    @property
+    def component_hooks(self) -> Any:
+        """
+            Get the application's component registration hooks.
+
+            ``context.component_hooks.fire_register_middleware(component)``
+            validates the component and hands it to the application's
+            registry for its kind (see :class:`ComponentRegistrationHooks`).
+
+            :returns: The ComponentRegistrationHooks of the application.
+        """
+        rtnval = self._app_context.component_hooks
+        return rtnval
+
+    def register_hook(
+        self,
+        hook_name: str,
+        callback: Callable,
+        priority: int = HookPriority.NORMAL,
+        before: Optional[List[str]] = None,
+        after: Optional[List[str]] = None
+    ) -> None:
+        """
+            Register a callback for a hook on behalf of this extension.
+
+            The callback is registered under this extension's name, so it is
+            suspended while the extension is disabled or quarantined and its
+            failures count against this extension. Hooks are registered
+            while the extension initializes; the context is frozen
+            afterwards.
+
+            :param hook_name: The hook to register for, e.g. ``"before_request"``.
+            :param callback: The synchronous callable to run when the hook fires.
+            :param priority: Numeric priority (lower runs first).
+            :param before: Names of extensions this callback runs before.
+            :param after: Names of extensions this callback runs after.
+
+            :raises ExtensionContextFrozenError: If the context is frozen.
+            :raises SemanticError: If the callback is a coroutine function.
+        """
+        if self._frozen is True:
+            raise ExtensionContextFrozenError(self._extension_name)
+
+        hook_manager = self._app_context.extension_registry.hook_manager
+        hook_manager.register(
+            hook_name,
+            callback,
+            priority=priority,
+            extension_name=self._extension_name,
+            before=before,
+            after=after
+        )
+
+        return
 
     def register_service(self, name: str, service: Any) -> None:
         """
@@ -120,7 +207,8 @@ class ExtensionContext:
 
             Services provide a mechanism for extensions to expose
             functionality to other extensions through a named
-            registry.
+            registry. The service is visible through the context of
+            every extension that shares this context's service map.
 
             :param name: The service name.
             :param service: The service instance.
@@ -135,7 +223,8 @@ class ExtensionContext:
 
     def get_service(self, name: str) -> Optional[Any]:
         """
-            Get a registered service by name.
+            Get a registered service by name, whichever extension
+            registered it.
 
             :param name: The service name.
 
@@ -185,3 +274,13 @@ class ExtensionContext:
         """
         self._frozen = True
         return
+
+    @property
+    def frozen(self) -> bool:
+        """
+            Whether the context has been frozen.
+
+            :returns: True once freeze() has been called.
+        """
+        rtnval = self._frozen
+        return rtnval

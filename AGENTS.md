@@ -26,6 +26,19 @@ that are well design, cohesive, and easy to use and that provide rapid but stabl
 
 
 # Project Overview
+This repository is 'codecraftai-webworks', the web framework of the Code Craft AI stack. It ships one Python package,
+'ccai.webworks' (source in 'source/packages/ccai/webworks'), for building web applications and REST APIs: ASGI and
+WSGI layers, routing and a dispatcher, endpoints and blueprints, REST/OpenAPI support, authentication and security,
+templating, layered configuration, markdown books, and the developer command line 'webworks' (serve, prodserve, new,
+routes, shell, generate, db; also 'python -m ccai.webworks.devexp.cli'). It also ships the browser-side 'mj-*' web component
+library and chart library as static assets under 'source/packages/ccai/webworks/static'.
+
+An application is built around a web application persona: 'establish_webapp_persona(...)' creates the
+'WebApplication', the application collects its endpoints ('webapp.registry.collect_from(...)'), and
+'webapp.startup()' builds the router, the dispatcher and the ASGI application ('webapp.asgi_app').
+
+The sample applications under 'source/testsites' (helloworld, testcomponents, blueprintdemo) are fixtures used by the
+test suites.
 
 # Testing Conventions
 The 'codecraftai-webworks' package repository utilizes the 'testbase' framework in order to run tests.  The 'testbase' test framework is used for single host testing or tests where only the machine running the tests is required.
@@ -70,8 +83,8 @@ The code structure of this repository follows the [Code Organization](userguide/
 
 Remember to make the test hierarchy match the source hierarchy when adding test files.  For example:
 
-File to test: 'source/packages/ccai/interop/protocols/dns/dnsquestion.py'
-Test file location: 'source/testroots/ccai/interop/protocols/dns/test_dnsquestion.py'
+File to test: 'source/packages/ccai/webworks/routing/router.py'
+Test file location: 'source/testroots/ccai/tests/singlehost/webworks/routing/test_router.py'
 
 # File Locations
 
@@ -88,17 +101,19 @@ For all the code in this repository, follow the coding standards specified at [C
 
 # Environment Setup
 
-## Codex Container Setup
-When work is being done on this repository using the Codex web environment.  Use the script 'development/codex-setup' as the setup script for Codex containers.
+## Agent Container Setup
+When work is being done on this repository in a hosted agent container (for example the Codex web environment), use the script 'development/setup-agent-container' as the container setup script. It stores the git credentials and then runs 'repository-setup/rehome-repository' and 'development/setup-environment'.
 
 ## Development Environments
 When checking out the code for this repository in order to test changes, agents must do the following for an initial code checkout to prepare the environment:
 
 * run the 'repository-setup/rehome-repository' script.  It creates a needed '.env' file.
-* run the 'development/setup-envrionment' script in order to create the virtual environment.
+* run the 'development/setup-environment' script in order to create the virtual environment.
+
+With poetry directly, 'poetry install --extras "templating test"' installs the package with the template engines and the test runner, which is what the Merge Gate installs.
 
 ## Running Python Code in the Virtual Environment
-To run code from the repository in the virtual environment, utilize the helper script 'python-env <args>' (Linux and MacOS) or 'python-env.ps1 <args>' (Windows)
+To run code from the repository in the virtual environment, utilize the helper script 'python-env <args>' (Linux and MacOS) or 'python-env.ps1 <args>' (Windows). The helper is created by 'development/setup-environment' in '.venv/bin', so it exists only after the environment has been set up.
 
 # Writing Tests
 
@@ -455,8 +470,8 @@ Property test files follow the same naming convention as regular tests but with 
 
 | Source File | Unit Test File | Property Test File |
 |---|---|---|
-| agentkit/agentidentity.py | test_agentidentity.py | test_agentidentity_properties.py |
-| agentkit/tracecontext.py | test_tracecontext.py | test_tracecontext_properties.py |
+| webworks/endpoints/accesspolicy.py | test_accesspolicy.py | test_accesspolicy_properties.py |
+| webworks/endpoints/constraints.py | test_constraints.py | test_constraints_properties.py |
 
 Property test files should include the standard testbase entrypoint at the bottom:
 
@@ -467,6 +482,8 @@ if __name__ == "__main__":
 ```
 
 ## Complete Example: Round-Trip Property Test
+
+The example below is illustrative; 'ccai.agentkit' is not part of this repository.
 
 ```python
 """
@@ -630,10 +647,13 @@ When a test finishes it writes a result to the stream.  A test result will alway
 ```
 
 # Project Specific Rules
-
+- Python code lives in 'source/packages/ccai/webworks'; the 'ccai' directory is a namespace shared with the other 'codecraftai-*' packages, so do not add an '__init__.py' to it (its README.md is kept out of the wheel).
+- Web components and their styles live in 'source/packages/ccai/webworks/static' and are served without a build step; they are shipped in the wheel as package data.
+- Exceptions follow the coding standards: 'ConfigurationError' and 'SemanticError' derive from 'BaseException' so they end a run; never catch them with a bare 'except:' (the ruff E722 gate enforces this).
+- Do not add a new third-party dependency without asking; the dependency list in 'pyproject.toml' is deliberately small.
 
 # Pull Request Guidelines
-
+This repository is source-available and accepts issues, not pull requests, from outside the company (see 'CONTRIBUTING.md'). Pull requests are opened by maintainers only. Agents do not commit, push or open pull requests unless asked to. A pull request must pass the Merge Gate ('.github/workflows/merge_gate.yml'): the single host suite on Linux, macOS and Windows, the wheel build and smoke test, and the browser suite.
 
 # Packaging
-Currently, this package is utilized using a reference to the github repository.  It is currently not published.
+The package is published as 'codecraftai-webworks' by '.github/workflows/publish.yml'. It runs when the version in 'pyproject.toml' changes on 'main' (or on demand), runs the full Merge Gate for that commit first, and only then builds the wheel and sdist with poetry and uploads them to the Code Craft AI package repository (https://artifacts.code-craft.ai/repository/legacy) and, when enabled, to PyPI. The wheel declares the 'webworks' console script ('ccai.webworks.devexp.cli.webworkscli:main').

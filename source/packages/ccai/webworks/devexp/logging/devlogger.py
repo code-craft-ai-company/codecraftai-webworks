@@ -18,6 +18,7 @@
 """
 
 import contextvars
+import copy
 import logging
 import sys
 import uuid
@@ -121,7 +122,11 @@ class ColoredFormatter(logging.Formatter):
         :data:`LOG_LEVEL_COLORS`.
 
         When colors are not supported or are disabled, the formatter
-        behaves identically to the standard :class:`logging.Formatter`.
+        only adds the request ID prefix.
+
+        The formatter never modifies the record it is given. A record is
+        handed to every handler in turn, so a change made here would show
+        up in the output of the handlers that follow.
     """
 
     def __init__(
@@ -139,8 +144,10 @@ class ColoredFormatter(logging.Formatter):
             :param datefmt: The date format string for timestamps.
             :param use_colors: Whether to apply ANSI colors to the
                 log level name.
-            :param stream: Optional output stream for color detection.
-                When ``None``, color detection uses ``sys.stderr``.
+            :param stream: The stream the handler writes to, used for
+                color detection. Colors are only emitted when this stream
+                is a terminal. When ``None``, ``sys.stderr`` is checked,
+                which is where :class:`DevLogger` writes.
         """
         if fmt is None:
             fmt = DEFAULT_LOG_FORMAT_WITH_LOCATION
@@ -174,25 +181,33 @@ class ColoredFormatter(logging.Formatter):
 
             :returns: The formatted log string.
         """
-        # Inject request ID into the record if available
         request_id = get_request_id()
-        if request_id is not None:
-            record.msg = "[{}] {}".format(request_id, record.msg)
+        color = None
 
         if self._use_colors:
-            original_levelname = record.levelname
             color = LOG_LEVEL_COLORS.get(record.levelname)
 
-            if color is not None:
-                record.levelname = colorize(
-                    record.levelname, color, stream=self._stream
-                )
-
+        if request_id is None and color is None:
             result = super().format(record)
+            return result
 
-            record.levelname = original_levelname
-        else:
-            result = super().format(record)
+        # Work on a copy: the same record object goes to the next handler.
+        display_record = copy.copy(record)
+
+        if request_id is not None:
+            display_record.msg = "[{}] {}".format(request_id, record.msg)
+
+        if color is not None:
+            stream = self._stream if self._stream is not None else sys.stderr
+            display_record.levelname = colorize(
+                record.levelname, color, stream=stream
+            )
+
+        result = super().format(display_record)
+
+        # The exception text is cached on the record that was formatted;
+        # keep it on the original so later handlers do not format it again.
+        record.exc_text = display_record.exc_text
 
         return result
 
@@ -349,14 +364,19 @@ class DevLogger:
         numeric_level = getattr(logging, self._log_level, logging.WARNING)
         root_logger.setLevel(numeric_level)
 
-        # Create the console handler with colored formatter
-        console_handler = logging.StreamHandler(sys.stderr)
+        # Create the console handler with colored formatter. Colors are
+        # decided by the stream the handler writes to, so redirecting
+        # stderr to a file yields plain text.
+        console_stream = sys.stderr
+        console_handler = logging.StreamHandler(console_stream)
         console_handler.setLevel(numeric_level)
+
+        color_stream = self._stream if self._stream is not None else console_stream
 
         formatter = ColoredFormatter(
             fmt=self._log_format,
             use_colors=self._use_colors,
-            stream=self._stream,
+            stream=color_stream,
         )
         console_handler.setFormatter(formatter)
 
@@ -387,9 +407,11 @@ class DevLogger:
         numeric_level = getattr(logging, self._log_level, logging.WARNING)
         file_handler.setLevel(numeric_level)
 
-        # File handler uses plain formatter (no colors)
-        plain_formatter = logging.Formatter(
+        # File handler uses the same formatter without colors, so the
+        # request ID appears in the file whatever the handler order.
+        plain_formatter = ColoredFormatter(
             fmt=self._log_format,
+            use_colors=False,
         )
         file_handler.setFormatter(plain_formatter)
 

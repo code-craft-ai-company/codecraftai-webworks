@@ -14,8 +14,12 @@ import shutil
 import tempfile
 
 from ccai.webworks.templating.exceptions import (
+    TemplateConfigurationError,
     TemplateError,
     TemplateNotFoundError,
+    TemplateRenderError,
+    TemplateSyntaxError,
+    UndefinedVariableError,
 )
 from ccai.webworks.templating.mako_adapter import MakoAdapter
 
@@ -959,5 +963,312 @@ def test_mako_adapter_exported_from_package():
     
     if ExportedAdapter is not MakoAdapter:
         raise AssertionError("MakoAdapter should be exported from package")
+    
+    return
+
+
+# =============================================================================
+# Registered filters are usable in templates
+# =============================================================================
+
+def test_added_filter_is_usable_in_render_string():
+    """
+        Test that a filter added with add_filter() works in a template string.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        adapter.add_filter("shout", lambda value: str(value).upper())
+        
+        output = adapter.render_string("${ name | shout }", {"name": "abc"})
+        
+        if output != "ABC":
+            raise AssertionError(f"Expected 'ABC', got {output!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_added_filter_is_usable_in_render():
+    """
+        Test that a filter added with add_filter() works in a template file.
+    """
+    temp_dir = _create_temp_template_dir({
+        "page.html": "${ name | shout }"
+    })
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        adapter.add_filter("shout", lambda value: str(value).upper())
+        
+        output = adapter.render("page.html", {"name": "abc"})
+        
+        if output != "ABC":
+            raise AssertionError(f"Expected 'ABC', got {output!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_added_filter_is_usable_in_render_compiled():
+    """
+        Test that a filter added with add_filter() works in a compiled
+        template.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        adapter.add_filter("shout", lambda value: str(value).upper())
+        
+        compiled = adapter.compile_template("${ name | shout }", template_name="page.html")
+        output = adapter.render_compiled(compiled, {"name": "abc"})
+        
+        if output != "ABC":
+            raise AssertionError(f"Expected 'ABC', got {output!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_context_variable_hides_filter_of_same_name():
+    """
+        Test that a caller's variable takes priority over a filter with the
+        same name.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        adapter.add_filter("title", lambda value: str(value).title())
+        
+        output = adapter.render_string("${ title }", {"title": "Home"})
+        
+        if output != "Home":
+            raise AssertionError(f"Expected 'Home', got {output!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_has_filter_reports_added_and_mako_filters():
+    """
+        Test that has_filter() is True for added filters and Mako's own.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        adapter.add_filter("shout", lambda value: str(value).upper())
+        
+        if adapter.has_filter("shout") is not True:
+            raise AssertionError("has_filter('shout') should be True after add_filter()")
+        
+        if adapter.has_filter("h") is not True:
+            raise AssertionError("has_filter('h') should be True for Mako's own filter")
+        
+        if adapter.has_filter("no_such_filter") is not False:
+            raise AssertionError("has_filter('no_such_filter') should be False")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+# =============================================================================
+# Native Mako lookup options
+# =============================================================================
+
+def test_init_passes_lookup_options_to_mako():
+    """
+        Test that extra keyword options reach Mako for file and string
+        templates.
+    """
+    temp_dir = _create_temp_template_dir({
+        "page.html": "${ missing_name }"
+    })
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir], strict_undefined=True)
+        
+        try:
+            adapter.render("page.html", {})
+            raise AssertionError("Expected UndefinedVariableError for a file template")
+        except UndefinedVariableError as exc:
+            if exc.variable_name != "missing_name":
+                raise AssertionError(f"Expected variable_name 'missing_name', got {exc.variable_name!r}")
+        
+        try:
+            adapter.render_string("${ other_name }", {})
+            raise AssertionError("Expected UndefinedVariableError for a string template")
+        except UndefinedVariableError as exc:
+            if exc.variable_name != "other_name":
+                raise AssertionError(f"Expected variable_name 'other_name', got {exc.variable_name!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_init_rejects_reserved_lookup_option():
+    """
+        Test that an option the adapter sets itself cannot be passed again.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        try:
+            MakoAdapter(template_dirs=[temp_dir], directories=["/elsewhere"])
+            raise AssertionError("Expected TemplateConfigurationError for a reserved option")
+        except TemplateConfigurationError:
+            pass  # Expected
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_init_rejects_unknown_lookup_option():
+    """
+        Test that an option Mako does not know raises
+        TemplateConfigurationError.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        try:
+            MakoAdapter(template_dirs=[temp_dir], no_such_option=True)
+            raise AssertionError("Expected TemplateConfigurationError for an unknown option")
+        except TemplateConfigurationError:
+            pass  # Expected
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+# =============================================================================
+# Engine exceptions are mapped to the specific templating exceptions
+# =============================================================================
+
+def test_render_raises_template_syntax_error_for_file():
+    """
+        Test that a syntax error in a template file raises
+        TemplateSyntaxError with the template name and line.
+    """
+    temp_dir = _create_temp_template_dir({
+        "broken.html": "line one\n% if True:\nnever closed\n"
+    })
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        
+        try:
+            adapter.render("broken.html", {})
+            raise AssertionError("Expected TemplateSyntaxError")
+        except TemplateSyntaxError as exc:
+            if exc.template_name != "broken.html":
+                raise AssertionError(f"Expected template_name 'broken.html', got {exc.template_name!r}")
+            if not isinstance(exc.line_number, int):
+                raise AssertionError(f"Expected an integer line_number, got {exc.line_number!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_string_raises_template_syntax_error():
+    """
+        Test that render_string() raises TemplateSyntaxError for bad syntax.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        
+        try:
+            adapter.render_string("% if True:\nnever closed\n", {})
+            raise AssertionError("Expected TemplateSyntaxError")
+        except TemplateSyntaxError:
+            pass  # Expected
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_compile_template_raises_template_syntax_error():
+    """
+        Test that compile_template() raises TemplateSyntaxError naming the
+        template.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        
+        try:
+            adapter.compile_template("% for x in y:\nnever closed\n", template_name="page.html")
+            raise AssertionError("Expected TemplateSyntaxError")
+        except TemplateSyntaxError as exc:
+            if exc.template_name != "page.html":
+                raise AssertionError(f"Expected template_name 'page.html', got {exc.template_name!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_wraps_python_exception_in_template_render_error():
+    """
+        Test that an ordinary exception raised by template code is wrapped
+        in TemplateRenderError with the template name and line.
+    """
+    temp_dir = _create_temp_template_dir({
+        "divide.html": "first\nsecond\n${ 1 / zero }\n"
+    })
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        
+        try:
+            adapter.render("divide.html", {"zero": 0})
+            raise AssertionError("Expected TemplateRenderError")
+        except TemplateRenderError as exc:
+            if exc.template_name != "divide.html":
+                raise AssertionError(f"Expected template_name 'divide.html', got {exc.template_name!r}")
+            if exc.line_number != 3:
+                raise AssertionError(f"Expected line_number 3, got {exc.line_number!r}")
+            if not isinstance(exc.__cause__, ZeroDivisionError):
+                raise AssertionError(f"Expected the ZeroDivisionError as the cause, got {exc.__cause__!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
+    
+    return
+
+
+def test_render_compiled_wraps_python_exception_in_template_render_error():
+    """
+        Test that render_compiled() wraps an ordinary exception.
+    """
+    temp_dir = _create_temp_template_dir({})
+    
+    try:
+        adapter = MakoAdapter(template_dirs=[temp_dir])
+        compiled = adapter.compile_template("${ 1 / zero }", template_name="page.html")
+        
+        try:
+            adapter.render_compiled(compiled, {"zero": 0})
+            raise AssertionError("Expected TemplateRenderError")
+        except TemplateRenderError as exc:
+            if exc.template_name != "page.html":
+                raise AssertionError(f"Expected template_name 'page.html', got {exc.template_name!r}")
+    finally:
+        _cleanup_temp_dir(temp_dir)
     
     return

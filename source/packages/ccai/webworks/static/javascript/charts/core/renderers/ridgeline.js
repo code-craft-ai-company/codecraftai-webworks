@@ -1,313 +1,216 @@
 /*
  * ridgeline.js
  *
- * Ridgeline (joy) plot renderer — vertically offset density curves per group.
+ * Ridgeline (joy) plot renderer — vertically offset density curves, one
+ * row per category.
  *
  * Registers: "ridgeline"
  *
  * ctx.model.series data shape:
  *   series[].groups[]: { category, samples: [n, …] }
- *   categories: [string, …]  — display order (top-to-bottom)
+ *   categories (optional): row order, top to bottom; derived from the
+ *   groups when omitted. Non-finite samples are missing data.
+ * With one series each row has its own colour; with several series every
+ * row overlays one curve per series, coloured by series.
  *
  * Relevant ctx.attrs:
- *   mode       "density" (default) | "histogram"
- *   overlap    fractional row-height overlap (default 0.5)
- *   bandwidth  KDE bandwidth override
- *   bin-count  bins for histogram mode
+ *   mode       "density" (default) | "histogram" (stepped ridges)
+ *   overlap    how far a full-height ridge reaches into the row above, in
+ *              row heights (default 0.5; 0 = no overlap)
+ *   bandwidth  KDE bandwidth in data units (Silverman's rule otherwise)
+ *   bin-count  bins of histogram mode (default Sturges of the largest group)
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, formatNumber, smoothPath, linePath, areaPath } from "../svgdraw.js";
-import { linearScale, niceTicks } from "../scales.js";
+import { svgEl, formatNumber, linePath, areaPath } from "../svgdraw.js";
+import { linearScale } from "../scales.js";
+import {
+  sortNumbers, summarize, silvermanBandwidth, gaussianDensity, linspace, binEdges,
+  countBins, isFiniteNumber, groupCategories, seriesGroups, hasGroupData, axisLayer,
+  drawTicks, fitText, tickCount, activateOnKey, focusableMark, TEXT_COLOR, GRID_COLOR, fitDomain
+} from "./diststats.js";
+
+const KDE_POINTS = 81;
+const KDE_TAIL_BANDWIDTHS = 3;
 
 
-/* ── KDE helpers ─────────────────────────────────────────────────────────── */
-
-function _silvermanBw(samples) {
-  const n = samples.length
-  if (n < 2) { return 1 }
-  let mean = 0
-  for (let i = 0; i < n; i = i + 1) { mean = mean + samples[i] }
-  mean = mean / n
-  let variance = 0
-  for (let i = 0; i < n; i = i + 1) {
-    const diff = samples[i] - mean
-    variance = variance + diff * diff
-  }
-  const std = Math.sqrt(variance / (n - 1))
-  const sorted = samples.slice().sort((a, b) => a - b)
-  const q1 = sorted[Math.floor(n * 0.25)]
-  const q3 = sorted[Math.floor(n * 0.75)]
-  const iqr = q3 - q1
-  const spread = Math.min(std, iqr / 1.34)
-  const bw = 0.9 * spread * Math.pow(n, -0.2)
-  return bw > 0 ? bw : 1
-}
-
-
-function _gaussianKernel(u) {
-  return Math.exp(-0.5 * u * u) / Math.sqrt(2 * Math.PI)
-}
-
-
-function _kde(samples, bw, evalPoints) {
-  const n = samples.length
-  const densities = []
-  for (let ei = 0; ei < evalPoints.length; ei = ei + 1) {
-    const x = evalPoints[ei]
-    let sum = 0
-    for (let si = 0; si < n; si = si + 1) {
-      sum = sum + _gaussianKernel((x - samples[si]) / bw)
+function _ridgeCurve(sorted, mode, bandwidthOverride, edges) {
+  /*
+   * The (x, amplitude) points of one ridge.
+   *
+   * :returns: { xs, ys, bandwidth } -- density mode evaluates the KDE on
+   *     the group's own range (three bandwidths past its data); histogram
+   *     mode gives a closed step outline over the shared bin edges.
+   */
+  if (mode === "histogram") {
+    const bins = countBins(sorted, edges)
+    const xs = []
+    const ys = []
+    for (let bi = 0; bi < bins.length; bi = bi + 1) {
+      const height = sorted.length > 0 ? bins[bi].count / sorted.length : 0
+      xs.push(bins[bi].x0, bins[bi].x1)
+      ys.push(height, height)
     }
-    densities.push(sum / (n * bw))
+    return { xs: xs, ys: ys, bandwidth: null, bins: bins }
   }
-  return densities
+  const bandwidth = bandwidthOverride > 0 ? bandwidthOverride : silvermanBandwidth(sorted)
+  const xs = linspace(sorted[0] - KDE_TAIL_BANDWIDTHS * bandwidth,
+    sorted[sorted.length - 1] + KDE_TAIL_BANDWIDTHS * bandwidth, KDE_POINTS)
+  const ys = gaussianDensity(sorted, bandwidth, xs)
+  return { xs: xs, ys: ys, bandwidth: bandwidth, bins: null }
 }
 
-
-/* ── histogram helpers ───────────────────────────────────────────────────── */
-
-function _sturgesBinCount(n) {
-  return Math.max(Math.ceil(Math.log2(Math.max(n, 1)) + 1), 2)
-}
-
-
-function _makeBins(samples, binCount, globalMin, globalMax) {
-  const binW = globalMax === globalMin ? 1 : (globalMax - globalMin) / binCount
-  const bins = []
-  for (let i = 0; i < binCount; i = i + 1) {
-    bins.push({ x0: globalMin + i * binW, x1: globalMin + (i + 1) * binW, count: 0 })
-  }
-  for (let si = 0; si < samples.length; si = si + 1) {
-    const v = samples[si]
-    let bi = Math.floor((v - globalMin) / binW)
-    if (bi < 0) { bi = 0 }
-    if (bi >= binCount) { bi = binCount - 1 }
-    bins[bi].count = bins[bi].count + 1
-  }
-  return bins
-}
-
-
-/* ── main render ─────────────────────────────────────────────────────────── */
 
 export function render(ctx) {
   /*
    * Render a ridgeline plot.
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
   const model = ctx.model
-  const mode = ctx.attrs("mode", "density")
-  const overlap = parseFloat(ctx.attrs("overlap", "0.5")) || 0.5
-  const bwOverride = parseFloat(ctx.attrs("bandwidth", "0")) || 0
-  const binCountAttr = parseInt(ctx.attrs("bin-count", "0"), 10) || 0
+  const mode = ctx.attrs("mode", "density") === "histogram" ? "histogram" : "density"
+  const overlapAttr = parseFloat(ctx.attrs("overlap", "0.5"))
+  const overlap = isFiniteNumber(overlapAttr) === true ? Math.max(0, Math.min(overlapAttr, 3)) : 0.5
+  const bandwidthAttr = parseFloat(ctx.attrs("bandwidth", ""))
+  const bandwidthOverride = isFiniteNumber(bandwidthAttr) === true && bandwidthAttr > 0 ? bandwidthAttr : 0
+  const binCountAttr = parseInt(ctx.attrs("bin-count", ""), 10)
 
   const root = svgEl("g", { part: "plot" }, [])
-
-  const series = model.series
-  const categories = model.categories
-  if (series === null || series === undefined || series.length === 0) {
-    return root
-  }
-  if (categories === null || categories === undefined || categories.length === 0) {
+  const series = Array.isArray(model.series) === true ? model.series : []
+  const categories = groupCategories(model)
+  if (series.length === 0 || categories.length === 0) {
     return root
   }
 
-  /* Collect all samples for global value extent. */
+  /* Every (category, series) pair with data. */
+  const pooled = []
+  let largestGroup = 0
+  const groupsByRow = categories.map(() => [])
+  for (let si = 0; si < series.length; si = si + 1) {
+    const groups = seriesGroups(series[si])
+    for (let gi = 0; gi < groups.length; gi = gi + 1) {
+      const row = categories.findIndex((category) => String(category) === String(groups[gi].category))
+      const sorted = sortNumbers(groups[gi].samples)
+      if (row < 0 || sorted.length === 0) {
+        continue
+      }
+      groupsByRow[row].push({ seriesIndex: si, sorted: sorted })
+      largestGroup = Math.max(largestGroup, sorted.length)
+      for (let vi = 0; vi < sorted.length; vi = vi + 1) {
+        pooled.push(sorted[vi])
+      }
+    }
+  }
+  if (pooled.length === 0) {
+    return root
+  }
+
+  const binCount = isFiniteNumber(binCountAttr) === true && binCountAttr > 0
+    ? binCountAttr : Math.max(Math.ceil(Math.log2(largestGroup) + 1), 1)
+  const edges = binEdges(pooled, { count: binCount })
+
   let valMin = Infinity
   let valMax = -Infinity
-  for (let si = 0; si < series.length; si = si + 1) {
-    const groups = series[si].groups || []
-    for (let gi = 0; gi < groups.length; gi = gi + 1) {
-      const samples = groups[gi].samples || []
-      for (let vi = 0; vi < samples.length; vi = vi + 1) {
-        if (samples[vi] < valMin) { valMin = samples[vi] }
-        if (samples[vi] > valMax) { valMax = samples[vi] }
+  let maxAmplitude = 0
+  const ridges = []
+  for (let row = 0; row < groupsByRow.length; row = row + 1) {
+    for (let index = 0; index < groupsByRow[row].length; index = index + 1) {
+      const entry = groupsByRow[row][index]
+      const curve = _ridgeCurve(entry.sorted, mode, bandwidthOverride, edges)
+      for (let pi = 0; pi < curve.xs.length; pi = pi + 1) {
+        valMin = Math.min(valMin, curve.xs[pi])
+        valMax = Math.max(valMax, curve.xs[pi])
+        maxAmplitude = Math.max(maxAmplitude, curve.ys[pi])
       }
+      ridges.push({ row: row, seriesIndex: entry.seriesIndex, sorted: entry.sorted, curve: curve })
     }
   }
-  if (valMin === Infinity) {
-    return root
-  }
-  const valPad = (valMax - valMin) * 0.05 || 0.5
-  valMin = valMin - valPad
-  valMax = valMax + valPad
-
-  /* Build shared eval points. */
-  const evalCount = 60
-  const evalPoints = []
-  for (let i = 0; i <= evalCount; i = i + 1) {
-    evalPoints.push(valMin + (valMax - valMin) * (i / evalCount))
+  if (maxAmplitude <= 0) {
+    maxAmplitude = 1
   }
 
-  const binCount = binCountAttr > 0 ? binCountAttr : _sturgesBinCount(30)
-
-  /* Pre-compute per-group curves and find global max amplitude. */
-  let globalMaxAmp = 0
-  const groupCurves = []  /* parallel to categories */
-
+  let longest = 0
   for (let ci = 0; ci < categories.length; ci = ci + 1) {
-    const category = categories[ci]
-    let samples = null
-
-    /* Use first series that has this category. */
-    outer: for (let si = 0; si < series.length; si = si + 1) {
-      const groups = series[si].groups || []
-      for (let gi = 0; gi < groups.length; gi = gi + 1) {
-        if (groups[gi].category === category) {
-          samples = groups[gi].samples || []
-          break outer
-        }
-      }
-    }
-
-    if (samples === null || samples.length === 0) {
-      groupCurves.push(null)
-      continue
-    }
-
-    let amplitudes = null
-    let curveEvalPoints = null
-
-    if (mode === "histogram") {
-      const bins = _makeBins(samples, binCount, valMin, valMax)
-      const midPoints = bins.map((b) => (b.x0 + b.x1) / 2)
-      amplitudes = bins.map((b) => b.count)
-      curveEvalPoints = midPoints
-    } else {
-      const bw = bwOverride > 0 ? bwOverride : _silvermanBw(samples)
-      amplitudes = _kde(samples, bw, evalPoints)
-      curveEvalPoints = evalPoints
-    }
-
-    const localMax = Math.max(...amplitudes)
-    if (localMax > globalMaxAmp) { globalMaxAmp = localMax }
-    groupCurves.push({ points: curveEvalPoints, amplitudes: amplitudes, samples: samples })
+    longest = Math.max(longest, String(categories[ci]).length)
   }
-
-  if (globalMaxAmp === 0) { globalMaxAmp = 1 }
-
-  const margin = { top: 16, right: 16, bottom: 40, left: 80 }
+  const labelRoom = Math.min(Math.max(longest * 6.4 + 14, 44), Math.max(ctx.width * 0.3, 44))
+  const margin = { top: 12, right: 16, bottom: 32, left: labelRoom }
   const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
 
-  /* Row height: divide plotH by category count; overlap allows curves to spill into next row. */
-  const rowH = plotH / Math.max(categories.length, 1)
+  /* Headroom: the top ridge may rise overlap row heights above its row. */
+  const rowH = plotH / (categories.length + overlap)
   const amplitudeH = rowH * (1 + overlap)
+  const baselineOf = (row) => (row + 1 + overlap) * rowH
 
-  const valScale = linearScale([valMin, valMax], [0, plotW])
+  const valueCount = tickCount(plotW, 70)
+  const domain = fitDomain(valMin, valMax, valueCount)
+  const valScale = linearScale(domain, [0, plotW])
 
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
+  const plot = svgEl("g", { transform: `translate(${margin.left},${margin.top})` }, [])
   root.appendChild(plot)
+  const axes = axisLayer(plot)
+  drawTicks(axes, valScale, { side: "bottom", extent: plotH, count: valueCount })
 
-  /* Value axis tick labels at the bottom. */
-  const valTicks = niceTicks(valMin, valMax, 6)
-  for (let ti = 0; ti < valTicks.length; ti = ti + 1) {
-    const tick = valTicks[ti]
-    const x = valScale(tick)
-    plot.appendChild(svgEl("text", {
-      x: x, y: plotH + 16, "text-anchor": "middle",
-      "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-    }, formatNumber(tick)))
-    plot.appendChild(svgEl("line", {
-      x1: x, y1: 0, x2: x, y2: plotH,
-      stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1, opacity: 0.4
+  for (let row = 0; row < categories.length; row = row + 1) {
+    const baseline = baselineOf(row)
+    axes.appendChild(svgEl("line", {
+      x1: 0, y1: baseline, x2: plotW, y2: baseline, stroke: GRID_COLOR, "stroke-width": 1
     }, []))
+    axes.appendChild(svgEl("text", {
+      x: -8, y: baseline - 3, "text-anchor": "end", "font-size": 11, fill: TEXT_COLOR
+    }, fitText(categories[row], margin.left - 12, 11)))
   }
 
-  /* Draw each group row from bottom to top (last category = top of chart). */
-  for (let ci = categories.length - 1; ci >= 0; ci = ci - 1) {
-    const category = categories[ci]
-    const curve = groupCurves[ci]
-
-    /* Baseline pixel for this row — rows stack from top to bottom. */
-    const rowBaseline = (ci + 1) * rowH
-    const color = ctx.colorFor(ci)
-
-    /* Row baseline line. */
-    plot.appendChild(svgEl("line", {
-      x1: 0, y1: rowBaseline, x2: plotW, y2: rowBaseline,
-      stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 0.5
-    }, []))
-
-    /* Group label. */
-    plot.appendChild(svgEl("text", {
-      x: -6, y: rowBaseline - 2, "text-anchor": "end",
-      "font-size": 11, fill: "var(--mj-text, #14181f)"
-    }, String(category)))
-
-    if (curve === null) { continue }
-
-    /* Amplitude scale: map 0..globalMaxAmp to rowBaseline..rowBaseline-amplitudeH. */
-    const ampScale = (amp) => rowBaseline - (amp / globalMaxAmp) * amplitudeH
-
-    const pathPoints = curve.points.map((x, i) => ({
+  /* Top row first, so each lower ridge is drawn over the one above it. */
+  const marks = svgEl("g", { part: "marks" }, [])
+  plot.appendChild(marks)
+  const singleSeries = series.length === 1
+  for (let ri = 0; ri < ridges.length; ri = ri + 1) {
+    const ridge = ridges[ri]
+    const category = categories[ridge.row]
+    const entry = series[ridge.seriesIndex]
+    const color = singleSeries === true ? ctx.colorFor(`category:${String(category)}`) : ctx.colorFor(entry.name)
+    const baseline = baselineOf(ridge.row)
+    const points = ridge.curve.xs.map((x, index) => ({
       x: valScale(x),
-      y: ampScale(curve.amplitudes[i])
+      y: baseline - (ridge.curve.ys[index] / maxAmplitude) * amplitudeH
     }))
-
-    /* Fill area. */
-    if (mode === "histogram") {
-      /* Step polygon for histogram mode. */
-      const stepPoints = []
-      for (let i = 0; i < curve.points.length; i = i + 1) {
-        const binHalf = i > 0
-          ? (curve.points[i] - curve.points[i - 1]) / 2
-          : (curve.points[1] - curve.points[0]) / 2
-        stepPoints.push({ x: valScale(curve.points[i] - binHalf), y: ampScale(curve.amplitudes[i]) })
-        stepPoints.push({ x: valScale(curve.points[i] + binHalf), y: ampScale(curve.amplitudes[i]) })
-      }
-      const fillD = areaPath(stepPoints, rowBaseline)
-      if (fillD !== "") {
-        plot.appendChild(svgEl("path", {
-          d: fillD, fill: color, opacity: 0.5, stroke: "none"
-        }, []))
-      }
-      const lineD = linePath(stepPoints)
-      if (lineD !== "") {
-        plot.appendChild(svgEl("path", {
-          d: lineD, fill: "none", stroke: color, "stroke-width": 1.5
-        }, []))
-      }
-    } else {
-      const fillD = areaPath(pathPoints, rowBaseline)
-      if (fillD !== "") {
-        plot.appendChild(svgEl("path", {
-          d: fillD, fill: color, opacity: 0.5, stroke: "none"
-        }, []))
-      }
-      const lineD = smoothPath(pathPoints)
-      if (lineD !== "") {
-        const linePath = svgEl("path", {
-          d: lineD, fill: "none", stroke: color, "stroke-width": 1.5
-        }, [])
-        linePath.setAttribute("part", "ridge")
-        linePath.setAttribute("tabindex", "0")
-        linePath.setAttribute("role", "img")
-        linePath.setAttribute("aria-label", `${category} density ridge`)
-        linePath.appendChild(svgEl("title", null, `${category}`))
-        const handlerCategory = category
-        const clickHandler = () => {
-          ctx.emit("mj-chart-ridge-click", { category: handlerCategory })
-        }
-        linePath.addEventListener("click", clickHandler)
-        linePath.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault()
-            clickHandler()
-          }
-        })
-        plot.appendChild(linePath)
-      }
-    }
+    const group = svgEl("g", { part: "ridge-group" }, [])
+    group.appendChild(svgEl("path", {
+      d: areaPath(points, baseline), fill: color, "fill-opacity": 0.55, stroke: "none"
+    }, []))
+    const line = svgEl("path", {
+      d: linePath(points), fill: "none", stroke: color, "stroke-width": 1.5,
+      "stroke-linejoin": "round", part: "ridge"
+    }, [])
+    const summary = summarize(ridge.sorted, 1.5)
+    const seriesText = singleSeries === true ? "" : `${entry.name}, `
+    focusableMark(line, `${seriesText}${category}: ${formatNumber(summary.count)} observations, ` +
+      `median ${formatNumber(summary.median)}, range ${formatNumber(summary.min)}–${formatNumber(summary.max)}`)
+    activateOnKey(line, () => {
+      ctx.emit("mj-chart-ridge-click", { series: entry.name, category: category, median: summary.median })
+    })
+    group.appendChild(line)
+    marks.appendChild(group)
+    ridge.summary = summary
   }
 
+  if (singleSeries === true) {
+    /* The row labels name the colours; a one-entry series legend would not. */
+    ctx.setLegend([])
+  }
+  ctx.setTable({
+    columns: ["Series", "Category", "Count", "Min", "Q1", "Median", "Q3", "Max"],
+    rows: ridges.map((ridge) => [
+      series[ridge.seriesIndex].name, String(categories[ridge.row]), ridge.summary.count,
+      ridge.summary.min, ridge.summary.q1, ridge.summary.median, ridge.summary.q3, ridge.summary.max
+    ]),
+    caption: "Distribution summary per row"
+  })
   return root
 }
 
 
-registerRenderer("ridgeline", render)
+registerRenderer("ridgeline", render, { isEmpty: (model) => hasGroupData(model, true) === false })

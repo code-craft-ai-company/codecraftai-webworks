@@ -234,3 +234,22 @@ def test_cutting_a_pane_document_does_not_change_the_document_and_unknown_refere
         },
     )
     return
+
+
+def test_path_words_and_keys_named_like_inherited_object_members_are_ordinary_names():
+    """
+        **Feature: API explorer model**
+        **Property: a document whose path words are ``constructor``, ``toString`` or ``hasOwnProperty`` builds a tree with those groups; the map of
+        operations by key has no entry for a name it was never given, such as ``constructor``; and a ``$ref`` to a component called ``constructor``
+        that does not exist reaches nothing.**
+    """
+    results = _probe_results()
+    prototype_names = results["prototypeNames"]
+
+    testbase.assert_equal(prototype_names["topLevel"], ["constructor", "hasOwnProperty / valueOf", "toString"])
+    testbase.assert_equal(prototype_names["count"], 3)
+    testbase.assert_equal(prototype_names["inheritedNamesAreNotKeys"], [])
+    testbase.assert_equal(prototype_names["realKeyIsFound"], True)
+    testbase.assert_equal(prototype_names["reachable"], {"schemas": {"Real": {"type": "object"}}})
+    return
+

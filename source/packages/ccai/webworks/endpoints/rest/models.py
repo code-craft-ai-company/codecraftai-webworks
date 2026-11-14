@@ -138,11 +138,17 @@ class ErrorMapping:
                             # Best-effort: an attribute whose getter raises is simply left out of the template values.
                             pass
                 
-                # Also add the string representation as a default
-                attrs[''] = str(exception)
-                
-                message = self.message_template.format(**attrs)
-            except (KeyError, IndexError, ValueError):
+                # A bare ``{}`` in the template stands for the exception's
+                # message. It is a positional field, so the message has to
+                # be passed positionally: ``format(**attrs)`` alone raised
+                # IndexError for every such template and the fallback below
+                # then returned ``str(exception)`` -- for a KeyError, the
+                # quoted repr of the key.
+                message = self.message_template.format(
+                    self._exception_message(exception),
+                    **attrs
+                )
+            except (KeyError, IndexError, ValueError, AttributeError):
                 # If interpolation fails, fall back to exception string
                 message = str(exception)
         else:
@@ -158,6 +164,27 @@ class ErrorMapping:
             message=message,
             field_errors=field_errors
         )
+
+    @staticmethod
+    def _exception_message(exception: Exception) -> str:
+        """
+            The message of an exception, for interpolation into a template.
+
+            An exception raised with one argument reports that argument:
+            ``KeyError("user_42")`` gives ``user_42``, where ``str()`` would
+            give the quoted ``'user_42'``. Anything else reports ``str()``.
+
+            Args:
+                exception: The exception to describe.
+
+            Returns:
+                The message text.
+        """
+        args = getattr(exception, "args", ())
+        if len(args) == 1:
+            return str(args[0])
+
+        return str(exception)
 
 
 @dataclass

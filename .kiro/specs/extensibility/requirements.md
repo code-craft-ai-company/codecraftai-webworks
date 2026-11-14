@@ -62,13 +62,14 @@ The extensibility system enables registration of custom components (middleware, 
 #### Acceptance Criteria
 
 1. THE Extension_Loader SHALL discover extensions from configured directory paths.
-2. THE Extension_Loader SHALL discover extensions from Python entry points (e.g., `ccai.extensions`).
-3. THE Extension_Loader SHALL discover extensions from the application's `extensions/` directory.
+2. THE Extension_Loader SHALL load extensions published as Python entry points (group `ccai.extensions`) that the configuration names; other entry points of the group are never imported.
+3. Discovery SHALL be explicit: an application loads the extensions its code adds and the ones its configuration names (import strings, entry point names, manifest directories). No directory is scanned and no module is imported that the configuration does not name; an application with no `extensions` configuration loads none. (This replaces an earlier criterion that scanned the application's `extensions/` directory implicitly.)
 4. THE Extension_Loader SHALL read Extension_Manifest files to determine extension metadata.
 5. WHEN an extension is discovered, THE Extension_Loader SHALL validate its manifest before registration.
 6. IF an extension manifest is invalid, THEN THE Extension_Loader SHALL log a warning and skip the extension.
 7. THE Extension_Loader SHALL support filtering discovered extensions by name pattern or capability.
 8. THE Extension_Loader SHALL support lazy loading of extensions until they are first accessed.
+9. Every extension loaded from configuration SHALL be inside one of the packages listed in `extensions.allowed_packages`; the loader SHALL refuse any other module before importing it. Configuring extensions to load without an allow-list, or naming an extension that is unknown, disallowed or cannot be loaded, SHALL fail the application's startup with `ConfigurationError`.
 
 ### Requirement 4: Extension Manifest
 
@@ -154,7 +155,7 @@ The extensibility system enables registration of custom components (middleware, 
 
 1. THE Extension_Context SHALL provide access to extension-specific configuration.
 2. THE configuration SHALL be loaded from the application's configuration system.
-3. THE configuration keys SHALL be namespaced by extension name (e.g., `extensions.my_extension.setting`).
+3. THE configuration keys SHALL be namespaced by extension name (e.g., `extensions.my_extension.setting`), read from a nested dictionary or from the dot-notation keys of the application's configuration registry. The names `load`, `entry_points`, `paths` and `allowed_packages` are the settings of the `extensions` section and SHALL NOT be used as extension names.
 4. THE Extension_Manifest SHALL support declaring a configuration schema.
 5. WHEN an extension is loaded, THE framework SHALL validate its configuration against the schema.
 6. IF configuration validation fails, THEN THE framework SHALL raise ExtensionConfigurationError.
@@ -238,3 +239,21 @@ The extensibility system enables registration of custom components (middleware, 
 
 </content>
 </invoke>
+
+### Requirement 15: Application Integration
+
+**User Story:** As a framework user, I want the extensions of my web application to be started, hooked into its lifecycle and its request handling, and stopped by the application, so that an extension works without wiring code of my own.
+
+#### Acceptance Criteria
+
+1. THE WebApplication SHALL own one Extension_Registry and the one HookManager it creates, created in the application's constructor and exposed as the `extension_registry` and `hook_manager` properties.
+2. THE WebApplication SHALL give its extensions an ApplicationContext providing a logger namespace (`<app logger>.extension.<name>`), the application configuration, the endpoint registry, a URL node map of the served routes, the middleware registry, the extension registry and the component registration hooks.
+3. THE WebApplication SHALL provide `add_extension(extension)` (an instance or an Extension subclass) before the extensions start, and SHALL raise `LifecycleError` afterwards.
+4. THE WebApplication SHALL load the configured extensions, initialize every extension in dependency order and activate the ones that initialized during `setup_infrastructure`, before its routes are finalised, so routes, middleware and other components an extension registers while it initializes are in effect.
+5. THE application lifecycle hooks SHALL fire once each, receiving the ApplicationContext: `on_config_loaded` and `on_app_init` after the extensions start (in `setup_infrastructure`); `on_routes_registered` once the routes are final; `on_app_ready` when the application starts serving -- at the ASGI lifespan startup after the startup handlers succeeded, or, for an application served without a lifespan startup, before its first request; `on_app_shutdown` at the ASGI lifespan shutdown (before the shutdown handlers) or in `shutdown()`, whichever comes first, followed by every started extension's `shutdown()` in reverse dependency order, continuing past an extension whose shutdown raises.
+6. THE dispatcher SHALL fire the request lifecycle hooks identically in its synchronous and asynchronous dispatch: `before_first_request` once (thread- and task-safe), `before_request` (a returned response short-circuits the pipeline), `on_request_error` before an unhandled exception becomes the 500 response, `after_request` (a returned response replaces the response) and `teardown_request` always, last, with the response and the exception.
+7. WHEN no request lifecycle hook has a callback, THE dispatcher SHALL not execute any hook for a request.
+8. A request hook callback that raises SHALL be reported through the HookManager's error callback; a failing `before_first_request`, `before_request` or `after_request` callback SHALL make that request a 500 response. `ConfigurationError` and `SemanticError` SHALL propagate.
+9. Components registered through `register_middleware` SHALL be added to the application's MiddlewareRegistry as global middleware; components registered through `register_auth_provider` SHALL be registered with the application's AuthenticationSystem; components registered through `register_serializer` SHALL be registered with the serializer registry of the application's REST processing.
+10. THE ExtensionContext SHALL provide `register_hook(hook_name, callback, priority, before, after)`, registering the callback under the extension's name while the extension initializes.
+11. THE HookManager SHALL refuse to register a coroutine function, since it calls callbacks synchronously.

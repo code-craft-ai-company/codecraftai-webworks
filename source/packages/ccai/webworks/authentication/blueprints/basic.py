@@ -21,11 +21,17 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 
-import asyncio
+import logging
+import time
 
 from typing import Any, List, Optional
 
 from ccai.webworks.authentication.basic import IdentityProvider
+from ccai.webworks.authentication.bearer import (
+    encode_jwt,
+    extract_bearer_token,
+    generate_token_id
+)
 from ccai.webworks.authentication.core import AuthenticationContext
 from ccai.webworks.authentication.blueprints.responses import (
     AuthError,
@@ -36,50 +42,14 @@ from ccai.webworks.authentication.blueprints.schemas import (
     LoginResponse
 )
 from ccai.webworks.authentication.blueprints.security import (
-    SecurityBlueprint
+    SecurityBlueprint,
+    run_async as _run_async
 )
 from ccai.webworks.endpoints.doc import Doc
 
 
-def _run_async(coro: Any) -> Any:
-    """
-        Run an asynchronous coroutine synchronously, regardless of
-        whether the calling thread already has a running event loop.
-
-        Uvicorn / Hypercorn workers always have a running loop on the
-        request-handling thread, so the naive pattern
-        ``asyncio.get_event_loop().run_until_complete(coro)`` raises
-        ``RuntimeError: This event loop is already running``. When a
-        running loop is detected this helper offloads the coroutine
-        to a fresh worker thread with its own loop and blocks on the
-        thread's result; the sync caller observes a normal return
-        value with no nested-loop interleaving.
-
-        :param coro: The coroutine to execute.
-
-        :returns: The result of the coroutine.
-    """
-    try:
-        running_loop = asyncio.get_running_loop()
-    except RuntimeError:
-        running_loop = None
-
-    if running_loop is None:
-        # No running loop on this thread — drive the coroutine here
-        # with a fresh loop.
-        result = asyncio.run(coro)
-        return result
-
-    # A running loop is present (the typical ASGI case). Offload to
-    # a worker thread that owns its own loop so we never recurse
-    # into the live loop.
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(asyncio.run, coro)
-        result = future.result()
-
-    return result
+# Module-level logger for the Basic blueprint handlers.
+logger = logging.getLogger(__name__)
 
 
 class BasicAuthBlueprint(SecurityBlueprint):
@@ -104,8 +74,16 @@ class BasicAuthBlueprint(SecurityBlueprint):
             identity_provider: The :class:`IdentityProvider` used for
                                credential validation. Must be set before
                                the login endpoint can process requests.
-            issue_token: When True, return a JWT token on successful login.
-                         Defaults to False.
+            issue_token: When True, a successful login returns a signed
+                         JWT access token (``access_token``, ``token_type``
+                         and ``expires_in`` in the response body) and
+                         logout revokes the token presented with the
+                         request. Requires :attr:`jwt_secret`. Defaults
+                         to False.
+            jwt_secret: The secret key used for signing the access token.
+            jwt_algorithm: The signing algorithm. Defaults to ``"HS256"``.
+            access_token_expires: Lifetime of the access token in
+                                  seconds. Defaults to 3600 (1 hour).
     """
 
     base_path: str = "/auth/basic"
@@ -113,6 +91,9 @@ class BasicAuthBlueprint(SecurityBlueprint):
 
     identity_provider: Optional[IdentityProvider] = None
     issue_token: bool = False
+    jwt_secret: Optional[str] = None
+    jwt_algorithm: str = "HS256"
+    access_token_expires: int = 3600
 
     # --- Class constants ---
     # Override these on a subclass to rebrand wire-format strings without
@@ -130,6 +111,10 @@ class BasicAuthBlueprint(SecurityBlueprint):
 
     # Authentication scheme label written into AuthenticationContext
     SCHEME_LABEL: str = "Basic"
+
+    # Token literals used when ``issue_token`` is enabled
+    TOKEN_TYPE_BEARER: str = "Bearer"
+    TOKEN_TYPE_ACCESS: str = "access"
 
     @classmethod
     @SecurityBlueprint.create(
@@ -176,11 +161,15 @@ class BasicAuthBlueprint(SecurityBlueprint):
             return response
 
         # Extract credentials from request body
-        body = request.json()
+        body = cls.read_request_data(request)
+        if body is None:
+            response = cls.invalid_body_response()
+            return response
+
         username = body.get("username")
         password = body.get("password")
 
-        if username is None or password is None:
+        if not isinstance(username, str) or not isinstance(password, str):
             error = AuthError(
                 error=cls.INVALID_REQUEST_ERROR_CODE,
                 error_description="Username and password required"
@@ -205,9 +194,29 @@ class BasicAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=500)
             return response
 
+        if cls.issue_token and cls.jwt_secret is None:
+            # A login that promises a token must not silently succeed
+            # without one.
+            logger.error(
+                "%s: issue_token is enabled but jwt_secret is not configured",
+                cls.__name__,
+            )
+            error = AuthError(
+                error=cls.SERVER_ERROR_CODE,
+                error_description="JWT secret is not configured"
+            )
+            response = cls.format_error(error, status_code=500)
+            return response
+
+        throttled_response = cls.check_login_throttle(request, username)
+        if throttled_response is not None:
+            return throttled_response
+
         principal = _run_async(
             cls.identity_provider.validate_credentials(username, password)
         )
+
+        cls.record_login_attempt(request, username, principal is not None)
 
         if principal is None:
             error = AuthError(
@@ -234,6 +243,13 @@ class BasicAuthBlueprint(SecurityBlueprint):
         )
 
         auth_response = AuthResponse()
+        if cls.issue_token:
+            auth_response = AuthResponse(
+                access_token=cls._encode_access_token(principal.identifier),
+                token_type=cls.TOKEN_TYPE_BEARER,
+                expires_in=cls.access_token_expires
+            )
+
         response = cls.format_success(auth_response, status_code=200)
 
         # Merge login-specific fields into the response body
@@ -255,9 +271,16 @@ class BasicAuthBlueprint(SecurityBlueprint):
         """
             Handle a logout request.
 
-            Ends the current authentication session. The endpoint can be
-            disabled via the ``enabled_endpoints`` configuration. When
-            disabled, a 404 response is returned.
+            Ends the current authentication session. When
+            :attr:`issue_token` is enabled, the access token presented in
+            the ``Authorization: Bearer`` header is put on the revocation
+            list (see :meth:`get_revocation_list`), so it stops being
+            accepted by a :class:`BearerAuthenticator` that was given the
+            same list. Without ``issue_token`` there is no server-side
+            state to end: Basic credentials are sent with every request.
+
+            The endpoint can be disabled via the ``enabled_endpoints``
+            configuration. When disabled, a 404 response is returned.
 
             :param request: The incoming HTTP request object.
 
@@ -272,9 +295,43 @@ class BasicAuthBlueprint(SecurityBlueprint):
             response = cls.format_error(error, status_code=404)
             return response
 
+        if cls.issue_token:
+            authorization = cls.get_request_header(request, "Authorization")
+            token_value = extract_bearer_token(authorization or "")
+            if token_value is not None:
+                cls.revoke_signed_token(
+                    token_value, cls.jwt_secret, cls.jwt_algorithm
+                )
+
         response = {
             "status": 200,
             "body": {"message": cls.LOGOUT_MESSAGE},
             "content_type": cls.JSON_CONTENT_TYPE
         }
         return response
+
+    @classmethod
+    def _encode_access_token(cls, subject: str) -> str:
+        """
+            Build and sign the JWT access token returned by login.
+
+            :param subject: The identifier of the authenticated principal.
+
+            :returns: The encoded access token.
+        """
+        now = time.time()
+
+        payload = {
+            "sub": subject,
+            "iat": int(now),
+            "exp": int(now) + cls.access_token_expires,
+            "token_type": cls.TOKEN_TYPE_ACCESS,
+            "jti": generate_token_id()
+        }
+
+        access_token = encode_jwt(
+            payload,
+            cls.jwt_secret,
+            algorithm=cls.jwt_algorithm
+        )
+        return access_token

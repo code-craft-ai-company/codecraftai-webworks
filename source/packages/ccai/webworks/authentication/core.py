@@ -144,6 +144,10 @@ class AuthenticationResult:
         :param challenge: WWW-Authenticate header value (on CHALLENGE).
         :param error_code: Error code identifier (on FAILURE).
         :param error_description: Human-readable error description (on FAILURE).
+        :param response_headers: Response headers the authenticator asks the
+                                 transport layer to emit with the response,
+                                 for example a renewed or cleared session
+                                 cookie (``Set-Cookie``) or ``Retry-After``.
     """
     
     status: AuthenticationStatus
@@ -151,6 +155,7 @@ class AuthenticationResult:
     challenge: Optional[str] = None
     error_code: Optional[str] = None
     error_description: Optional[str] = None
+    response_headers: Dict[str, str] = field(default_factory=dict)
 
 
 # =============================================================================

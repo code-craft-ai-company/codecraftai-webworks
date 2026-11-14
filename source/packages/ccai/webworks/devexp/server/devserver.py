@@ -13,17 +13,30 @@
     creates an :class:`AsyncServerCore` and :class:`LifespanManager`,
     then runs the asyncio event loop to block the calling thread until
     the server is stopped via signal or programmatic call.
+
+    With auto-reload enabled the calling process does not serve requests.
+    It supervises a child process that does, and replaces that process
+    whenever a watched file changes, so edited code is imported afresh
+    (see :mod:`ccai.webworks.devexp.server.reloader`).
 """
 
 import asyncio
+import errno
+import ipaddress
 import logging
+import os
 import signal
 import socket
 
 from typing import Any, List, Optional
 
+from ccai.webworks.devexp.apploader import load_application
+from ccai.webworks.devexp.logging.devlogger import DevLogger
 from ccai.webworks.devexp.server.asyncservercore import AsyncServerCore
 from ccai.webworks.devexp.server.lifespanmanager import LifespanManager
+from ccai.webworks.devexp.server.reloader import ReloadSupervisor
+from ccai.webworks.devexp.server.reloader import get_reload_command
+from ccai.webworks.devexp.server.reloader import is_reload_child
 
 
 logger = logging.getLogger(__name__)
@@ -90,26 +103,82 @@ def check_port_available(host: str, port: int) -> bool:
 
         Attempts to bind a TCP socket to the specified address. If the bind
         succeeds the port is available and the socket is immediately closed.
+        The socket uses the address family of the host, so an IPv6 address
+        such as ``::1`` is probed with an IPv6 socket.
+
+        The probe binds the way the server itself does. On POSIX the server
+        sets ``SO_REUSEADDR``, which lets it bind a port whose previous
+        owner has just exited and left connections in ``TIME_WAIT``; a probe
+        without the option would report such a port as occupied for up to a
+        minute after every restart. With the option set, the bind still
+        fails when another socket is listening on the port.
 
         :param host: The host address to check.
         :param port: The port number to check.
 
         :returns: ``True`` if the port is available, ``False`` otherwise.
     """
-    # SO_REUSEADDR is deliberately not set here. On Linux a probe socket with
-    # SO_REUSEADDR can bind alongside another bound-but-not-listening socket
-    # on the same address, which would report an occupied port as available.
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
     try:
-        sock.bind((host, port))
-        available = True
-    except OSError:
-        available = False
-    finally:
-        sock.close()
+        candidates = socket.getaddrinfo(
+            host, port, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE,
+        )
+    except socket.gaierror:
+        # The host cannot be resolved, so nothing can be bound to it.
+        return False
+
+    available = len(candidates) > 0
+
+    for family, socktype, proto, _canonname, sockaddr in candidates:
+        try:
+            sock = socket.socket(family, socktype, proto)
+        except OSError:
+            # The address family is not usable on this machine.
+            available = False
+            break
+
+        try:
+            if os.name == "posix":
+                # Mirror asyncio's create_server(reuse_address=True). On
+                # Windows the option means something else (it would allow
+                # binding a port another process is listening on), and
+                # asyncio does not set it there either.
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+            if family == socket.AF_INET6 and hasattr(socket, "IPV6_V6ONLY"):
+                # Probe only the IPv6 address; the IPv4 address of a
+                # dual-stack name is probed by its own candidate.
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+
+            sock.bind(sockaddr)
+        except OSError:
+            available = False
+        finally:
+            sock.close()
+
+        if not available:
+            break
 
     return available
+
+
+def is_loopback_host(host: str) -> bool:
+    """
+        Determine whether a bind address is reachable only from this machine.
+
+        :param host: The host address the server binds to.
+
+        :returns: ``True`` for ``localhost`` and loopback IP addresses.
+    """
+    if host.lower() == "localhost":
+        return True
+
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        # Any other name may resolve to a routable address.
+        return False
+
+    return address.is_loopback
 
 
 def format_port_in_use_message(host: str, port: int) -> str:
@@ -165,11 +234,17 @@ class DevelopmentServer:
         reload: bool = False,
         watch_patterns: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None,
+        reload_command: Optional[List[str]] = None,
+        max_body_bytes: Optional[int] = None,
+        reload_directory: Optional[str] = None,
     ):
         """
             Construct a DevelopmentServer.
 
-            :param app: The ASGI application instance to serve.
+            :param app: The ASGI application instance to serve, or an import
+                target of the form ``"module:attribute"``. A target is
+                imported in the process that serves requests, which with
+                reload enabled is the child process and never this one.
             :param host: The host address to bind to.
             :param port: The port number to bind to.
             :param debug: Whether to enable debug mode.
@@ -178,6 +253,13 @@ class DevelopmentServer:
                 Defaults to ``["**/*.py"]``.
             :param exclude_patterns: Patterns to exclude from watching.
                 Defaults to ``[".git", "__pycache__", ".venv", "*.pyc"]``.
+            :param reload_command: The command that starts the server
+                process when reload is enabled. Defaults to the command
+                that started the current process.
+            :param max_body_bytes: The largest request body accepted, in
+                bytes. ``None`` uses the protocol handler's default.
+            :param reload_directory: The directory watched for changes when
+                reload is enabled. Defaults to the current working directory.
         """
         self._app = app
         self._host = host
@@ -196,9 +278,17 @@ class DevelopmentServer:
         else:
             self._exclude_patterns = list(DEFAULT_EXCLUDE_PATTERNS)
 
+        if reload_command is not None:
+            self._reload_command: Optional[List[str]] = list(reload_command)
+        else:
+            self._reload_command = None
+
+        self._max_body_bytes = max_body_bytes
+        self._reload_directory = reload_directory
+        self._startup_failed: bool = False
+
         self._request_logger: Optional[Any] = None
-        self._watcher: Optional[Any] = None
-        self._restart_count: int = 0
+        self._supervisor: Optional[ReloadSupervisor] = None
         self._last_reload_error: Optional[Exception] = None
 
         self._server_core: Optional[AsyncServerCore] = None
@@ -285,6 +375,18 @@ class DevelopmentServer:
         return self._running
 
     @property
+    def startup_failed(self) -> bool:
+        """
+            Whether the application's lifespan startup failed.
+
+            A server whose application failed to start never accepts
+            requests; :meth:`serve_forever` returns instead.
+
+            :returns: ``True`` if lifespan startup failed.
+        """
+        return self._startup_failed
+
+    @property
     def request_logger(self) -> Optional[Any]:
         """
             The request logging middleware instance, if configured.
@@ -300,30 +402,47 @@ class DevelopmentServer:
 
             :returns: The file watcher or ``None``.
         """
-        return self._watcher
+        watcher = None
+
+        if self._supervisor is not None:
+            watcher = self._supervisor.watcher
+
+        return watcher
 
     @property
     def restart_count(self) -> int:
         """
-            The number of times the server has been restarted by
-            the file watcher.
+            The number of times the server process has been restarted
+            by the file watcher.
 
             :returns: The restart count.
         """
-        return self._restart_count
+        restart_count = 0
+
+        if self._supervisor is not None:
+            restart_count = self._supervisor.restart_count
+
+        return restart_count
 
     @property
     def last_reload_error(self) -> Optional[Exception]:
         """
             The last error encountered during a reload attempt.
 
-            When a syntax error or import error occurs during reload,
-            it is stored here so callers can inspect it. The server
-            continues watching for fixes.
+            When the server process ends with an error after a reload
+            (for example because the edited file has a syntax error or
+            fails to import), a :class:`ReloadChildError` is stored here
+            so callers can inspect it. The server continues watching for
+            fixes.
 
             :returns: The exception or ``None``.
         """
-        return self._last_reload_error
+        last_error = self._last_reload_error
+
+        if self._supervisor is not None and self._supervisor.last_error is not None:
+            last_error = self._supervisor.last_error
+
+        return last_error
 
     # -------------------------------------------------------------------------
     # Lifecycle Methods
@@ -336,13 +455,16 @@ class DevelopmentServer:
             Checks that the configured port is available before starting.
             If the port is already in use, raises :class:`PortInUseError`.
 
-            When debug mode is enabled, sets up debug middleware. Request
-            logging is always configured. When reload is enabled, starts
-            the file watcher to monitor for source changes.
+            When reload is enabled, this process supervises a child process
+            that serves requests and restarts it whenever a watched file
+            changes. The child is started by re-running the command that
+            started this process; it finds the reload marker in its
+            environment and serves directly.
 
-            If the application is a callable ASGI application, creates an
-            :class:`AsyncServerCore` and :class:`LifespanManager`, then
-            runs the asyncio event loop to block the calling thread until
+            Otherwise the application is served in this process: when debug
+            mode is enabled, debug middleware is set up, request logging is
+            configured, and an :class:`AsyncServerCore` and
+            :class:`LifespanManager` run on the asyncio event loop until
             the server is stopped.
 
             :param host: The interface IP to bind to.  Overrides the value
@@ -353,6 +475,8 @@ class DevelopmentServer:
                 uses the constructor value (``8000``).
 
             :raises PortInUseError: If the configured port is already in use.
+            :raises ApplicationLoadError: If the application was given as an
+                import target that cannot be imported.
         """
         if host is not None:
             self._host = host
@@ -365,13 +489,75 @@ class DevelopmentServer:
         if not port_available:
             raise PortInUseError(self._host, self._port)
 
+        dev_logger = self._setup_default_logging()
+
+        try:
+            self._serve()
+        finally:
+            if dev_logger is not None:
+                dev_logger.teardown()
+
+        return
+
+    def _setup_default_logging(self) -> Optional[DevLogger]:
+        """
+            Give the server a console log when nothing else has set one up.
+
+            The startup banner and the request lines are written through
+            :mod:`logging`. An application started with ``python app.py``
+            that has not configured logging would otherwise show nothing.
+            Logging that is already configured (by ``webworks serve``, by
+            the application or by a test runner) is left alone.
+
+            :returns: The :class:`DevLogger` that was set up, to be torn
+                down when serving ends, or ``None`` if logging was already
+                configured.
+        """
+        root_logger = logging.getLogger()
+
+        if len(root_logger.handlers) > 0:
+            return None
+
+        log_level = "DEBUG" if self._debug else "INFO"
+
+        dev_logger = DevLogger(debug=self._debug, log_level=log_level)
+        dev_logger.setup()
+
+        return dev_logger
+
+    def _serve(self) -> None:
+        """
+            Serve until shutdown: supervise a reloading server process, or
+            serve the application in this process.
+
+            Called by :meth:`serve_forever` once the address has been
+            checked and logging is available.
+
+            :raises PortInUseError: If another process takes the port
+                between the availability check and the bind.
+            :raises ApplicationLoadError: If the application was given as an
+                import target that cannot be imported.
+        """
+        if self._debug and not is_loopback_host(self._host):
+            logger.warning(
+                "Debug mode is enabled while binding to '%s', which is reachable from other machines. "
+                "Debug responses include tracebacks, file paths and exception messages. "
+                "Disable debug or bind to 127.0.0.1.",
+                self._host,
+            )
+
+        if self._reload is True and not is_reload_child():
+            self._supervise_reload()
+            return
+
+        if isinstance(self._app, str):
+            # An import target is resolved here, in the process that serves.
+            self._app = load_application(self._app)
+
         if self._debug:
             self._setup_debug_middleware()
 
         self._setup_request_logging()
-
-        if self._reload is True:
-            self._setup_file_watcher()
 
         self._running = True
 
@@ -390,8 +576,20 @@ class DevelopmentServer:
         if callable(self._app):
             try:
                 asyncio.run(self._run_async())
+            except OSError as err:
+                if err.errno == errno.EADDRINUSE:
+                    # Another process took the port between the check
+                    # above and the bind.
+                    raise PortInUseError(self._host, self._port) from err
+                raise
             finally:
                 self._running = False
+
+            if self._startup_failed and is_reload_child():
+                # The reload supervisor reads the exit code: a non-zero code
+                # tells it the server did not come up, so it keeps watching
+                # for a fix instead of treating this as a requested shutdown.
+                raise SystemExit(1)
 
         return
 
@@ -399,13 +597,13 @@ class DevelopmentServer:
         """
             Stop the server and clean up resources.
 
-            If a file watcher is running, it is stopped first. If the
+            If this process supervises a reloading server process, the
+            supervisor is asked to stop it and its file watcher. If the
             async server core is running, signals the shutdown event
             to trigger graceful shutdown of the event loop.
         """
-        if self._watcher is not None:
-            self._watcher.stop()
-            self._watcher = None
+        if self._supervisor is not None:
+            self._supervisor.stop()
 
         # Signal the async event loop to shut down.
         # Use call_soon_threadsafe when the event loop is running in
@@ -421,6 +619,68 @@ class DevelopmentServer:
         self._running = False
 
         logger.info("Development server stopped.")
+
+        return
+
+    # -------------------------------------------------------------------------
+    # Auto-Reload
+    # -------------------------------------------------------------------------
+
+    def _supervise_reload(self) -> None:
+        """
+            Supervise a child server process and restart it on file changes.
+
+            Blocks until the supervisor is stopped, the child shuts down
+            cleanly, or the process is interrupted. The file watcher is
+            owned by the supervisor and is stopped on every exit path.
+        """
+        if self._reload_command is not None:
+            command = list(self._reload_command)
+        else:
+            command = get_reload_command()
+
+        self._supervisor = ReloadSupervisor(
+            command=command,
+            watch_patterns=self._watch_patterns,
+            exclude_patterns=self._exclude_patterns,
+            base_directory=self._reload_directory,
+        )
+
+        logger.info(
+            "Auto-reload is enabled. Supervising a server process on %s:%d; watching %s.",
+            self._host,
+            self._port,
+            self._watch_patterns,
+        )
+
+        self._running = True
+
+        try:
+            self._supervisor.run()
+        finally:
+            self._running = False
+
+        return
+
+    def _restart_server(self) -> None:
+        """
+            Restart the server in response to a file change.
+
+            Asks the reload supervisor to replace the server process with a
+            fresh one, which imports the application code again. Requests
+            are serialised by the supervisor, so calling this repeatedly
+            never starts overlapping restarts. Without a supervisor (reload
+            is not enabled, or this is the serving process itself) there is
+            no process to replace and the request is ignored.
+        """
+        if self._supervisor is None or not self._supervisor.running:
+            logger.warning(
+                "A restart was requested but no reload supervisor is running; "
+                "enable reload to restart the server on file changes."
+            )
+            return
+
+        self._supervisor.request_restart()
 
         return
 
@@ -451,6 +711,7 @@ class DevelopmentServer:
                 "Lifespan startup failed: %s. Stopping server.",
                 self._lifespan_manager.failure_message,
             )
+            self._startup_failed = True
             self._running = False
             return
 
@@ -461,8 +722,17 @@ class DevelopmentServer:
             port=self._port,
             debug=self._debug,
             request_logger=self._request_logger,
+            max_body_bytes=self._max_body_bytes,
         )
-        await self._server_core.start()
+
+        try:
+            await self._server_core.start()
+        except OSError:
+            # The socket could not be bound after startup had run; give the
+            # application its shutdown event before the error propagates.
+            await self._lifespan_manager.shutdown()
+            self._server_core = None
+            raise
 
         # Install signal handlers for graceful shutdown.
         loop = asyncio.get_running_loop()
@@ -499,6 +769,11 @@ class DevelopmentServer:
             If the event loop is running in a non-main thread, the
             handlers are skipped with a debug log message.
 
+            Event loops on Windows do not implement
+            ``loop.add_signal_handler``. There the handlers are installed
+            with :func:`signal.signal` and hand the shutdown over to the
+            loop thread-safely.
+
             :param loop: The running asyncio event loop.
         """
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -507,6 +782,8 @@ class DevelopmentServer:
                     sig,
                     self._shutdown_event.set,
                 )
+            except NotImplementedError:
+                self._install_fallback_signal_handler(loop, sig)
             except RuntimeError:
                 logger.debug(
                     "Cannot install signal handler for %s: "
@@ -516,6 +793,39 @@ class DevelopmentServer:
                 return
 
         logger.debug("Signal handlers installed for SIGINT and SIGTERM.")
+
+        return
+
+    def _install_fallback_signal_handler(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        sig: signal.Signals,
+    ) -> None:
+        """
+            Install a shutdown handler with :func:`signal.signal`.
+
+            Used where the event loop cannot register signal handlers
+            itself. The handler runs between bytecodes of the main thread,
+            so it only schedules the shutdown on the loop.
+
+            :param loop: The running asyncio event loop.
+            :param sig: The signal to handle.
+        """
+        shutdown_event = self._shutdown_event
+
+        def _on_signal(signum: int, frame: Any) -> None:
+            loop.call_soon_threadsafe(shutdown_event.set)
+            return
+
+        try:
+            signal.signal(sig, _on_signal)
+        except (ValueError, OSError):
+            # Not the main thread, or the signal does not exist on this
+            # platform; the server is then stopped with stop().
+            logger.debug(
+                "Cannot install signal handler for %s on this platform or thread.",
+                sig.name,
+            )
 
         return
 
@@ -545,169 +855,6 @@ class DevelopmentServer:
         self._request_logger = RequestLogger(use_colors=self._debug)
 
         logger.debug("Request logging configured.")
-
-        return
-
-    def _setup_file_watcher(self) -> None:
-        """
-            Configure and start the file watcher for auto-reload.
-
-            Creates a :class:`FileWatcher` that monitors files matching
-            the configured watch patterns and excludes files matching
-            the exclude patterns. When a change is detected, the
-            server restart callback is invoked.
-        """
-        from ccai.webworks.devexp.server.filewatcher import FileWatcher
-
-        self._watcher = FileWatcher(
-            patterns=self._watch_patterns,
-            excludes=self._exclude_patterns,
-            callback=self._restart_server,
-        )
-        self._watcher.start()
-
-        logger.debug(
-            "File watcher configured with patterns=%s, excludes=%s.",
-            self._watch_patterns,
-            self._exclude_patterns,
-        )
-
-        return
-
-    def _restart_server(self) -> None:
-        """
-            Restart the server in response to a file change.
-
-            Preserves the bound host and port across the restart.
-            Increments the restart counter. If a syntax error or
-            import error occurs during the restart, the error is
-            logged and the server continues watching for further
-            changes.
-
-            When an async server core is running, stops and restarts
-            it. Otherwise, performs the legacy restart logic.
-        """
-        logger.info(
-            "File change detected. Restarting server on %s:%d...",
-            self._host,
-            self._port,
-        )
-
-        # Preserve the bound address
-        host = self._host
-        port = self._port
-
-        try:
-            # Simulate stopping the application layer
-            self._running = False
-
-            # Re-setup middleware
-            if self._debug is True:
-                self._setup_debug_middleware()
-
-            self._setup_request_logging()
-
-            # If the async server core is running, stop and restart it.
-            # This method is invoked from the FileWatcher's daemon
-            # thread, which has no running event loop —
-            # ``asyncio.get_running_loop()`` raises ``RuntimeError``
-            # there. Schedule the restart coroutine onto the serving
-            # loop captured in ``_run_async``, the same way the
-            # cross-thread shutdown path does.
-            if self._server_core is not None:
-                if self._loop is None:
-                    logger.error(
-                        "Reload requested but no serving loop is "
-                        "captured; skipping the async core restart."
-                    )
-                else:
-                    asyncio.run_coroutine_threadsafe(
-                        self._restart_server_core(),
-                        self._loop,
-                    )
-            else:
-                self._running = True
-                self._restart_count += 1
-
-                logger.info(
-                    "Server restarted successfully on %s:%d (restart #%d).",
-                    host,
-                    port,
-                    self._restart_count,
-                )
-        except (SyntaxError, ImportError) as exc:
-            # Display the error and continue watching for fixes
-            self._last_reload_error = exc
-            self._running = False
-
-            logger.error(
-                "Error during reload: %s: %s. Watching for fixes...",
-                type(exc).__name__,
-                exc,
-            )
-        except Exception as exc:
-            self._last_reload_error = exc
-            self._running = False
-
-            logger.error(
-                "Unexpected error during reload: %s: %s. Watching for fixes...",
-                type(exc).__name__,
-                exc,
-            )
-
-        return
-
-    async def _restart_server_core(self) -> None:
-        """
-            Stop and restart the async server core during a file-change
-            reload.
-
-            Stops the current server core, creates a new one, and starts
-            it. Increments the restart count on success. Catches
-            ``SyntaxError`` and ``ImportError`` and logs on failure.
-        """
-        host = self._host
-        port = self._port
-
-        try:
-            await self._server_core.stop()
-
-            self._server_core = AsyncServerCore(
-                app=self._app,
-                host=host,
-                port=port,
-                debug=self._debug,
-                request_logger=self._request_logger,
-            )
-            await self._server_core.start()
-
-            self._running = True
-            self._restart_count += 1
-
-            logger.info(
-                "Server restarted successfully on %s:%d (restart #%d).",
-                host,
-                port,
-                self._restart_count,
-            )
-        except (SyntaxError, ImportError) as exc:
-            self._last_reload_error = exc
-            self._running = False
-
-            logger.error(
-                "Error during reload: %s: %s. Watching for fixes...",
-                type(exc).__name__,
-                exc,
-            )
-        except Exception as exc:
-            self._last_reload_error = exc
-            self._running = False
-
-            logger.error(
-                "Unexpected error during reload: %s: %s. Watching for fixes...",
-                type(exc).__name__,
-                exc,
-            )
 
         return
 

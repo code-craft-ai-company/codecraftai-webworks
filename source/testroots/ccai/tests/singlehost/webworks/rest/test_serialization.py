@@ -774,3 +774,134 @@ def test_property_2_json_serialization_round_trip_list():
                 raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# Values without a direct JSON type
+# =============================================================================
+
+import datetime
+import decimal
+import enum
+import uuid
+
+from ccai.webworks.endpoints.rest.models import PaginatedResponse, PaginationInfo
+from ccai.webworks.endpoints.rest.serialization import to_json_compatible
+
+
+class SerializedColour(enum.Enum):
+    RED = "red"
+
+
+@dataclass
+class StampedRecord:
+    """A response model whose fields json.dumps cannot write unaided."""
+    created: datetime.datetime
+    day: datetime.date
+    ident: uuid.UUID
+    price: decimal.Decimal
+    colour: SerializedColour
+    raw: bytes = b""
+
+
+def _stamped_record() -> StampedRecord:
+    return StampedRecord(
+        created=datetime.datetime(2026, 1, 2, 3, 4, 5),
+        day=datetime.date(2026, 1, 2),
+        ident=uuid.UUID("12345678-1234-5678-1234-567812345678"),
+        price=decimal.Decimal("9.99"),
+        colour=SerializedColour.RED,
+        raw=b"hi",
+    )
+
+
+def test_serialize_dataclass_with_datetime_uuid_decimal_and_enum_fields():
+    """A dataclass with datetime, date, UUID, Decimal, Enum and bytes fields serializes to JSON."""
+    serializer = JSONSerializer()
+
+    parsed = json.loads(serializer.serialize(_stamped_record()))
+
+    expected = {
+        "created": "2026-01-02T03:04:05",
+        "day": "2026-01-02",
+        "ident": "12345678-1234-5678-1234-567812345678",
+        "price": "9.99",
+        "colour": "red",
+        "raw": "aGk=",
+    }
+    if parsed != expected:
+        raise AssertionError(f"Expected {expected}, got {parsed}")
+
+
+def test_serialize_top_level_datetime_as_iso_8601():
+    """A datetime at the top level is written in ISO 8601 form, not str() form."""
+    serializer = JSONSerializer()
+
+    parsed = json.loads(serializer.serialize(datetime.datetime(2026, 1, 2, 3, 4, 5)))
+
+    if parsed != "2026-01-02T03:04:05":
+        raise AssertionError(f"Expected '2026-01-02T03:04:05', got {parsed!r}")
+
+
+def test_serialize_nested_values_inside_containers():
+    """Values are converted wherever they sit: in a list inside a dict inside a list."""
+    serializer = JSONSerializer()
+
+    data = [{"when": [datetime.date(2026, 5, 6)], "ids": {uuid.UUID(int=1)}}]
+    parsed = json.loads(serializer.serialize(data))
+
+    expected = [{"when": ["2026-05-06"], "ids": ["00000000-0000-0000-0000-000000000001"]}]
+    if parsed != expected:
+        raise AssertionError(f"Expected {expected}, got {parsed}")
+
+
+def test_serialize_uses_an_objects_own_to_dict_form():
+    """An object that defines to_dict(), such as PaginatedResponse, is written in that form."""
+    serializer = JSONSerializer()
+
+    page = PaginatedResponse(
+        items=[_stamped_record()],
+        pagination=PaginationInfo.create(total=1, page=1, page_size=10, base_url="/records"),
+    )
+    parsed = json.loads(serializer.serialize(page))
+
+    if "links" not in parsed["pagination"]:
+        raise AssertionError(f"Expected the to_dict() layout with 'links', got {parsed['pagination']}")
+
+    if parsed["items"][0]["price"] != "9.99":
+        raise AssertionError(f"Expected the items to be converted too, got {parsed['items'][0]}")
+
+
+def test_serialize_rejects_an_object_with_no_json_form():
+    """An arbitrary object is refused rather than written as its str() text."""
+
+    class Opaque:
+        pass
+
+    try:
+        to_json_compatible({"thing": Opaque()})
+    except TypeError as err:
+        if "Opaque" not in str(err):
+            raise AssertionError(f"Expected the error to name the type, got: {err}")
+    else:
+        raise AssertionError("Expected TypeError for an object with no JSON representation")
+
+
+def test_deserialize_optional_nested_dataclass_written_with_pep_604():
+    """A nested dataclass field written ``Inner | None`` is built as the nested dataclass, not left a dict."""
+
+    @dataclass
+    class InnerPart:
+        city: str
+
+    @dataclass
+    class OuterPart:
+        name: str
+        inner: InnerPart | None = None
+
+    deserializer = JSONDeserializer()
+
+    result = deserializer.deserialize(b'{"name": "a", "inner": {"city": "Oslo"}}', OuterPart)
+
+    if result != OuterPart(name="a", inner=InnerPart(city="Oslo")):
+        raise AssertionError(f"Expected the nested dataclass to be built, got {result!r}")

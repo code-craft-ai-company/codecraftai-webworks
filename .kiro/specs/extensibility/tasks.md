@@ -552,6 +552,27 @@ This implementation plan creates the extensibility system for the ccai web frame
 - [x] 24. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [x] 25. Wire the extension system into WebApplication (audit WW-0146, WW-0121)
+  - [x] 25.1 ApplicationContext with the members ExtensionContext reads
+    - _Requirements: 10.1-10.5, 15.2_
+  - [x] 25.2 ExtensionSettings: explicit `extensions` configuration, allow-list, ConfigurationError on misuse
+    - _Requirements: 3.1-3.3, 3.9, 9.3_
+  - [x] 25.3 ExtensionLoader.load_from_import_string / load_from_entry_point checking the allow-list before importing
+    - _Requirements: 3.2, 3.9_
+  - [x] 25.4 ExtensionHost: add/load/start/fire/stop, each phase once
+    - _Requirements: 15.1, 15.3, 15.4, 15.5_
+  - [x] 25.5 ExtensionRegistry.shutdown_all in reverse dependency order, continuing past failures
+    - _Requirements: 1.4, 15.5_
+  - [x] 25.6 Request lifecycle hooks fired by the dispatcher (sync and async), thread-safe before_first_request, chained after_request, strict failures
+    - _Requirements: 5.1-5.8, 15.6, 15.7, 15.8_
+  - [x] 25.7 Component forwarding (middleware via ExtensionMiddleware, auth providers, serializers)
+    - _Requirements: 7.1-7.7, 15.9_
+  - [x] 25.8 ExtensionContext.register_hook and component_hooks; HookManager refuses coroutine functions
+    - _Requirements: 15.10, 15.11_
+  - [x] 25.9 Tests: test_applicationcontext, test_extensionsettings, test_extensionmiddleware, test_extensionhost, test_webapplication_extensions (hook order under ASGI, short-circuit, teardown after an error, shutdown past a failing extension, extension middleware, no-extension fast path), additions to test_hookmanager, test_requestlifecyclehooks, test_componenthooks, test_context, test_configuration, test_loader, test_registry
+  - [ ] 25.10 Forward `register_template_engine`, `register_error_handler` and `register_cli_command` components to framework registries
+    - Deferred: the application has no registry that serves template engine instances, its ASGI error handlers are not reached for dispatcher-handled exceptions, and CLI commands run in another process. Needs a decision on those registries first.
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP

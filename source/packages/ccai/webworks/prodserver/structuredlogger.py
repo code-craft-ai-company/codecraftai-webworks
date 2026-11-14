@@ -10,6 +10,7 @@
 
 import json
 import sys
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, TextIO, TYPE_CHECKING
 
@@ -52,6 +53,9 @@ class StructuredLogger:
 
         self._access_log_file: Optional[TextIO] = None
         self._error_log_file: Optional[TextIO] = None
+        # The handler threads of a worker write entries concurrently, a
+        # line must not be interleaved with another
+        self._write_lock = threading.Lock()
 
         return
 
@@ -299,8 +303,9 @@ class StructuredLogger:
 
             :param formatted: The formatted log entry string.
         """
-        sys.stdout.write(formatted + "\n")
-        sys.stdout.flush()
+        with self._write_lock:
+            sys.stdout.write(formatted + "\n")
+            sys.stdout.flush()
 
         return
 
@@ -313,12 +318,13 @@ class StructuredLogger:
 
             :param formatted: The formatted log entry string.
         """
-        if self._access_log_file is not None:
-            self._access_log_file.write(formatted + "\n")
-            self._access_log_file.flush()
-        else:
-            sys.stdout.write(formatted + "\n")
-            sys.stdout.flush()
+        with self._write_lock:
+            if self._access_log_file is not None:
+                self._access_log_file.write(formatted + "\n")
+                self._access_log_file.flush()
+            else:
+                sys.stdout.write(formatted + "\n")
+                sys.stdout.flush()
 
         return
 
@@ -331,12 +337,13 @@ class StructuredLogger:
 
             :param formatted: The formatted log entry string.
         """
-        if self._error_log_file is not None:
-            self._error_log_file.write(formatted + "\n")
-            self._error_log_file.flush()
-        else:
-            sys.stderr.write(formatted + "\n")
-            sys.stderr.flush()
+        with self._write_lock:
+            if self._error_log_file is not None:
+                self._error_log_file.write(formatted + "\n")
+                self._error_log_file.flush()
+            else:
+                sys.stderr.write(formatted + "\n")
+                sys.stderr.flush()
 
         return
 

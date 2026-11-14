@@ -72,15 +72,21 @@ class AssetResolver:
         """
             Read a bundled asset file.
 
+            The file name usually comes straight from a request, so it is
+            treated as untrusted. Only a file that sits directly inside the
+            asset group's own directory is ever read; see
+            :meth:`_locate_asset` for the checks.
+
             :param asset_group: The asset group name such as 'swagger-ui'
                 or 'redoc'.
             :param filename: File name within the asset group directory.
 
-            :returns: File contents as bytes, or None if not found.
+            :returns: File contents as bytes, or None if the file is not
+                found or the name is not one this resolver serves.
         """
-        file_path = os.path.join(self._static_dir, asset_group, filename)
+        file_path = self._locate_asset(asset_group, filename)
 
-        if not os.path.isfile(file_path):
+        if file_path is None:
             rtnval = None
             return rtnval
 
@@ -88,6 +94,72 @@ class AssetResolver:
             rtnval = af.read()
 
         return rtnval
+
+    def _locate_asset(self, asset_group: str, filename: str) -> Optional[str]:
+        """
+            Find the file a request for an asset may read, or refuse it.
+
+            A name is refused, never corrected, when:
+
+            - the group or the file name is not a single plain path
+              component (it is empty, is ``.`` or ``..``, is absolute, or
+              contains a path separator or a NUL);
+            - the manifest lists the files of the group and the name is not
+              one of them;
+            - the resolved file -- after following symbolic links -- is not
+              inside the group's directory.
+
+            :param asset_group: The asset group name.
+            :param filename: The requested file name.
+
+            :returns: The real path of the asset file, or None when the
+                request is refused or the file does not exist.
+        """
+        for component in (asset_group, filename):
+            if not self._is_plain_component(component):
+                return None
+
+        group_entry = self._manifest.get(asset_group)
+        if isinstance(group_entry, dict):
+            listed_files = group_entry.get("files")
+            if isinstance(listed_files, dict) and len(listed_files) > 0:
+                if filename not in listed_files:
+                    return None
+
+        group_dir = os.path.realpath(os.path.join(self._static_dir, asset_group))
+        file_path = os.path.realpath(os.path.join(group_dir, filename))
+
+        if os.path.dirname(file_path) != group_dir:
+            return None
+
+        if not os.path.isfile(file_path):
+            return None
+
+        return file_path
+
+    @staticmethod
+    def _is_plain_component(name: Any) -> bool:
+        """
+            Whether a name is a single, ordinary path component.
+
+            :param name: The name to check.
+
+            :returns: True when the name can only refer to an entry directly
+                inside the directory it is joined to.
+        """
+        if not isinstance(name, str):
+            return False
+
+        if len(name) == 0 or name == "." or name == "..":
+            return False
+
+        if "/" in name or "\\" in name or "\x00" in name:
+            return False
+
+        if os.path.isabs(name) or os.path.basename(name) != name:
+            return False
+
+        return True
 
     def content_type(self, filename: str) -> str:
         """
@@ -243,8 +315,6 @@ class AssetUpdater:
             :returns: A dictionary with ``version`` and ``files`` keys
                 summarizing what was downloaded.
         """
-        import requests
-
         if version is None:
             version = self._get_latest_release(self.SWAGGER_UI_GITHUB)
 
@@ -284,8 +354,6 @@ class AssetUpdater:
             :returns: A dictionary with ``version`` and ``files`` keys
                 summarizing what was downloaded.
         """
-        import requests
-
         if version is None:
             version = self._get_latest_release(self.REDOC_GITHUB)
 

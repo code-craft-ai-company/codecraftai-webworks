@@ -9,7 +9,18 @@
  */
 
 import { MjElement } from "../core/mjelement.js";
+import { html, raw, safeUrl } from "../core/html.js";
 import { t } from "../core/intl.js";
+
+/* Box-with-arrow icon shown after an external link (static markup). */
+const EXTERNAL_ICON = raw(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" ' +
+  'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M6 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V10"/>' +
+  '<polyline points="10 2 14 2 14 6"/>' +
+  '<line x1="14" y1="2" x2="7" y2="9"/>' +
+  '</svg>'
+);
 
 const STYLES = `
 :host {
@@ -36,7 +47,7 @@ const STYLES = `
 .anchor:focus-visible {
   outline: var(--mj-focus-ring-width) solid var(--mj-focus-ring);
   outline-offset: var(--mj-focus-ring-offset);
-  border-radius: 2px;
+  border-radius: var(--mj-radius-sm);
 }
 :host([variant="subtle"]) .anchor {
   text-decoration: none;
@@ -66,6 +77,8 @@ const STYLES = `
   display: inline-flex;
   align-items: center;
 }
+/* An empty prefix takes no room (no flex gap before the text when standalone). */
+.prefix[hidden] { display: none; }
 .external-icon {
   display: inline-flex;
   width: var(--mj-link-external-icon-size, 0.875em);
@@ -93,33 +106,38 @@ export class MjLink extends MjElement {
   static watched = ["href", "target", "rel", "download", "external", "variant", "disabled", "visited-cue"];
 
   render() {
-    const href = this.getAttribute("href") || "";
-    const disabled = this.hasAttribute("disabled");
-    const externalLabel = t("mj.link.externalLabel") || "opens in a new tab";
+    /*
+     * The anchor is rendered without any author-supplied value: href, target,
+     * rel and download are applied by `_syncAnchor` through setAttribute, so
+     * no attribute text is ever parsed as markup.
+     *
+     * The children of the anchor are written without any whitespace between
+     * them: the host is an inline element in running text, so a line break
+     * here would render as an underlined space before or after the link text.
+     */
+    const prefix = html`<span class="prefix" part="prefix"><slot name="prefix"></slot></span>`
+    const externalIcon = html`<span class="external-icon" part="external-icon" aria-hidden="true">${EXTERNAL_ICON}</span>`
+    const externalLabel = html`<span class="external-label">, ${t("mj.link.externalLabel")}</span>`
 
-    const markup = `
-      <a class="anchor" part="anchor"${disabled === false ? ` href="${href}"` : ""}
-         aria-disabled="${disabled === true ? "true" : "false"}">
-        <span class="prefix" part="prefix"><slot name="prefix"></slot></span>
-        <slot></slot>
-        <span class="external-icon" part="external-icon" aria-hidden="true">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"
-               stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M6 2H3a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V10"/>
-            <polyline points="10 2 14 2 14 6"/>
-            <line x1="14" y1="2" x2="7" y2="9"/>
-          </svg>
-        </span>
-        <span class="external-label">, ${externalLabel}</span>
-      </a>
-    `;
+    const markup = html`<a class="anchor" part="anchor">${prefix}<slot></slot>${externalIcon}${externalLabel}</a>`
     return markup
   }
 
   afterRender() {
-    this._anchor = this.$(".anchor");
-    this.listen(this._anchor, "click", this._onClick.bind(this));
-    this._syncAnchor();
+    this._anchor = this.$(".anchor")
+    this._prefix = this.$(".prefix")
+    this._prefixSlot = this.$("slot[name='prefix']")
+    this.listen(this._anchor, "click", this._onClick.bind(this))
+    this.listen(this._prefixSlot, "slotchange", this._syncPrefix.bind(this))
+    this._syncAnchor()
+    this._syncPrefix()
+    return
+  }
+
+  /* Hide the prefix wrapper while nothing is slotted into it. */
+  _syncPrefix() {
+    const hasPrefix = this._prefixSlot.assignedNodes({ flatten: true }).length > 0
+    this._prefix.hidden = hasPrefix === false
     return
   }
 
@@ -127,70 +145,103 @@ export class MjLink extends MjElement {
     if (this._anchor === undefined || this._anchor === null) {
       return
     }
-    this._syncAnchor();
+    this._syncAnchor()
     return
   }
 
+  /* Set an attribute on the inner anchor, or remove it when the value is empty. */
+  _setOrRemove(name, value) {
+    if (value !== null && value !== undefined && value.length > 0) {
+      this._anchor.setAttribute(name, value)
+    } else {
+      this._anchor.removeAttribute(name)
+    }
+    return
+  }
+
+  /*
+   * Bring the inner anchor in line with the host attributes. Every branch
+   * either sets or removes its attribute, so a value taken away from the host
+   * never lingers on the anchor.
+   */
   _syncAnchor() {
-    const anchor = this._anchor;
-    const disabled = this.hasAttribute("disabled");
-    const external = this.hasAttribute("external");
-    const href = this.getAttribute("href") || "";
-    const targetAttr = this.getAttribute("target");
-    const relAttr = this.getAttribute("rel") || "";
-    const download = this.getAttribute("download");
+    const anchor = this._anchor
+    const disabled = this.hasAttribute("disabled")
+    const external = this.hasAttribute("external")
+    const hrefAttr = this.getAttribute("href")
+    const targetAttr = this.getAttribute("target")
+    const relAttr = this.getAttribute("rel")
+    const download = this.getAttribute("download")
 
     if (disabled === true) {
-      anchor.removeAttribute("href");
-      anchor.setAttribute("aria-disabled", "true");
+      /*
+       * A disabled link has no destination but is still announced as a link
+       * and stays in the tab order (spec sec.13).
+       */
+      anchor.removeAttribute("href")
+      anchor.setAttribute("role", "link")
+      anchor.setAttribute("tabindex", "0")
+      anchor.setAttribute("aria-disabled", "true")
     } else {
-      anchor.setAttribute("href", href);
-      anchor.setAttribute("aria-disabled", "false");
+      anchor.removeAttribute("role")
+      anchor.removeAttribute("tabindex")
+      anchor.setAttribute("aria-disabled", "false")
+
+      /* Without a host href the anchor is an inert placeholder, not a link to this page. */
+      if (hrefAttr !== null) {
+        anchor.setAttribute("href", safeUrl(hrefAttr))
+      } else {
+        anchor.removeAttribute("href")
+      }
     }
 
-    if (external === true) {
-      const target = targetAttr !== null ? targetAttr : "_blank";
-      anchor.setAttribute("target", target);
-      let rel = relAttr;
-      if (rel.indexOf("noopener") === -1) {
-        rel = rel + (rel.length > 0 ? " " : "") + "noopener noreferrer";
-      }
-      anchor.setAttribute("rel", rel);
-    } else {
-      if (targetAttr !== null) {
-        anchor.setAttribute("target", targetAttr);
-      }
-      if (relAttr.length > 0) {
-        anchor.setAttribute("rel", relAttr);
+    let target = targetAttr !== null ? targetAttr : ""
+    if (external === true && target.length === 0) {
+      target = "_blank"
+    }
+
+    /* A new browsing context must never receive a reference to this window. */
+    let rel = relAttr !== null ? relAttr.trim() : ""
+    const relTokens = rel.toLowerCase().split(/\s+/)
+    const opensNewContext = target.toLowerCase() === "_blank"
+    if (external === true || opensNewContext === true) {
+      if (relTokens.indexOf("noopener") === -1) {
+        rel = rel + (rel.length > 0 ? " " : "") + "noopener"
       }
     }
+    if (external === true && relTokens.indexOf("noreferrer") === -1) {
+      rel = rel + (rel.length > 0 ? " " : "") + "noreferrer"
+    }
+
+    this._setOrRemove("target", target)
+    this._setOrRemove("rel", rel)
 
     if (download !== null) {
-      anchor.setAttribute("download", download);
+      anchor.setAttribute("download", download)
     } else {
-      anchor.removeAttribute("download");
+      anchor.removeAttribute("download")
     }
     return
   }
 
   _onClick(event) {
-    const disabled = this.hasAttribute("disabled");
+    const disabled = this.hasAttribute("disabled")
     if (disabled === true) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      event.preventDefault()
+      event.stopImmediatePropagation()
       return
     }
 
-    const href = this.getAttribute("href") || "";
-    const external = this.hasAttribute("external");
+    const href = this.getAttribute("href") || ""
+    const external = this.hasAttribute("external")
     const proceed = this.emit("mj-link-click", {
       href: href,
       external: external,
       originalEvent: event
-    }, { cancelable: true });
+    }, { cancelable: true })
 
     if (proceed === false) {
-      event.preventDefault();
+      event.preventDefault()
     }
     return
   }
@@ -204,7 +255,7 @@ export class MjLink extends MjElement {
   }
 
   set disabled(value) {
-    this.reflectBoolean("disabled", value === true);
+    this.reflectBoolean("disabled", value === true)
     return
   }
 }

@@ -812,3 +812,93 @@ def test_property_7_basic_auth_malformed_header_produces_error():
     
     return
 
+
+# =============================================================================
+# Challenge and Login Throttling
+# =============================================================================
+
+from ccai.webworks.authentication.errors import (
+    AccountLockoutPolicy,
+    LockoutConfig,
+    LoginThrottle,
+)
+
+
+def test_basic_authenticator_get_challenge_names_realm():
+    """
+        Test that the authenticator supplies the challenge sent to clients
+        that presented no credentials.
+    """
+    authenticator = BasicAuthenticator(MockIdentityProvider(), realm="Site")
+    
+    if authenticator.get_challenge() != 'Basic realm="Site"':
+        errmsg = f"Unexpected challenge {authenticator.get_challenge()!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_basic_authenticator_reports_locked_account():
+    """
+        Test that a configured login throttle locks an account after
+        repeated failures; the correct password is then refused too.
+    """
+    provider = MockIdentityProvider()
+    provider.add_user("alice", "right-password")
+    
+    throttle = LoginThrottle(
+        lockout_policy=AccountLockoutPolicy(LockoutConfig(max_failures=2))
+    )
+    authenticator = BasicAuthenticator(provider, login_throttle=throttle)
+    
+    wrong = MockRequest(headers={
+        "Authorization": create_basic_auth_header("alice", "wrong-password")
+    })
+    for _ in range(2):
+        run_async(authenticator.authenticate(wrong))
+    
+    right = MockRequest(headers={
+        "Authorization": create_basic_auth_header("alice", "right-password")
+    })
+    result = run_async(authenticator.authenticate(right))
+    
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = f"Expected FAILURE for a locked account, got {result.status}"
+        raise AssertionError(errmsg)
+    
+    if result.error_code != "account_locked":
+        errmsg = f"Expected account_locked, got {result.error_code}"
+        raise AssertionError(errmsg)
+    
+    if "Retry-After" not in result.response_headers:
+        errmsg = "Expected a Retry-After response header"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_basic_authenticator_without_throttle_keeps_checking_credentials():
+    """
+        Test that without a login throttle repeated failures do not lock
+        the account.
+    """
+    provider = MockIdentityProvider()
+    provider.add_user("alice", "right-password")
+    authenticator = BasicAuthenticator(provider)
+    
+    wrong = MockRequest(headers={
+        "Authorization": create_basic_auth_header("alice", "wrong-password")
+    })
+    for _ in range(10):
+        run_async(authenticator.authenticate(wrong))
+    
+    right = MockRequest(headers={
+        "Authorization": create_basic_auth_header("alice", "right-password")
+    })
+    result = run_async(authenticator.authenticate(right))
+    
+    if result.status != AuthenticationStatus.SUCCESS:
+        errmsg = f"Expected SUCCESS, got {result.status}"
+        raise AssertionError(errmsg)
+    
+    return

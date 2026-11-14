@@ -21,12 +21,19 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 
+import base64
+import hashlib
+import json
+import logging
+import threading
 import time
 
 from dataclasses import asdict
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from ccai.webworks.authentication.bearer import encode_jwt
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
 from ccai.webworks.authentication.blueprints.oauth2 import OAuth2Blueprint
 from ccai.webworks.authentication.blueprints.responses import AuthError
 from ccai.webworks.authentication.blueprints.schemas import (
@@ -37,6 +44,45 @@ from ccai.webworks.authentication.blueprints.security import (
     SecurityBlueprint
 )
 from ccai.webworks.endpoints.doc import Doc
+
+
+# Module-level logger for the OIDC blueprint handlers.
+logger = logging.getLogger(__name__)
+
+# Hash used by each supported RSASSA-PKCS1-v1_5 signing algorithm.
+_RSA_SIGNING_HASHES = {
+    "RS256": hashes.SHA256,
+    "RS384": hashes.SHA384,
+    "RS512": hashes.SHA512,
+}
+
+# Serialises the lazy creation of signing keys across handler threads.
+_signing_key_lock = threading.Lock()
+
+
+def _base64url(data: bytes) -> str:
+    """
+        Encode bytes as unpadded base64url, as JOSE requires.
+
+        :param data: The bytes to encode.
+
+        :returns: The base64url text without padding.
+    """
+    rtnval = base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+    return rtnval
+
+
+def _base64url_uint(value: int) -> str:
+    """
+        Encode a non-negative integer as a JWK ``Base64urlUInt``.
+
+        :param value: The integer (an RSA modulus or exponent).
+
+        :returns: The big-endian base64url encoding.
+    """
+    length = max(1, (value.bit_length() + 7) // 8)
+    rtnval = _base64url(value.to_bytes(length, "big"))
+    return rtnval
 
 
 class OIDCBlueprint(OAuth2Blueprint):
@@ -58,9 +104,23 @@ class OIDCBlueprint(OAuth2Blueprint):
                        ``"/oidc"``.
             tags: Documentation tags applied to all endpoints.
             issuer: The issuer identifier for the OIDC provider. When
-                    None, the base URL from the request is used.
-            jwks: Optional dictionary containing the JSON Web Key Set.
-                  Defaults to None which returns an empty keys array.
+                    None, the public base URL of the request is used
+                    (see :meth:`resolve_public_base_url`). The same
+                    value is advertised by discovery and written into
+                    the ``iss`` claim of every ID token.
+            id_token_signing_key: The RSA private key ID tokens are
+                                  signed with: a PEM string or bytes, or
+                                  a ``cryptography`` RSA private key.
+                                  Its public half is published at the
+                                  JWKS endpoint. When None, a key is
+                                  generated for the life of the process,
+                                  which only suits a single worker.
+            id_token_signing_alg: The signing algorithm: ``"RS256"``
+                                  (default), ``"RS384"`` or ``"RS512"``.
+            id_token_key_id: The ``kid`` of the signing key. Defaults to
+                             a digest of the public key.
+            jwks: Optional dictionary with additional JSON Web Keys to
+                  publish next to the signing key (for key rotation).
             supported_scopes: List of supported OAuth 2.0 scopes.
                               Defaults to ``["openid", "profile", "email"]``.
             supported_claims: List of supported claims returned by the
@@ -78,6 +138,9 @@ class OIDCBlueprint(OAuth2Blueprint):
 
     # OIDC Configuration
     issuer: Optional[str] = None
+    id_token_signing_key: Optional[Any] = None
+    id_token_signing_alg: str = "RS256"
+    id_token_key_id: Optional[str] = None
     jwks: Optional[dict] = None
     supported_scopes: List[str] = ["openid", "profile", "email"]
     supported_claims: List[str] = [
@@ -111,6 +174,10 @@ class OIDCBlueprint(OAuth2Blueprint):
     ID_TOKEN_CLAIM_AUD: str = "aud"
     ID_TOKEN_CLAIM_EXP: str = "exp"
     ID_TOKEN_CLAIM_IAT: str = "iat"
+    ID_TOKEN_CLAIM_NONCE: str = "nonce"
+
+    # Size of the signing key generated when none is configured
+    GENERATED_SIGNING_KEY_BITS: int = 2048
 
     # Default issuer fallback when neither cls.issuer nor request can
     # provide one (only reached in unit-test paths in practice).
@@ -127,42 +194,171 @@ class OIDCBlueprint(OAuth2Blueprint):
     # Empty JWKS sentinel returned when no keys are configured.
     EMPTY_JWKS_KEY: str = "keys"
 
-    # In-memory user info store for testing
+    # In-memory user info store for testing. Like the client registry,
+    # a subclass starts with a copy of its parent's entries.
+    REGISTRY_MEMORY_STORES: Tuple[str, ...] = (
+        "_memory_client_store",
+        "_memory_user_store",
+    )
+
     _memory_user_store: Dict[str, Dict[str, Any]] = {}
 
     @classmethod
     def _get_base_url(cls, request: Any) -> str:
         """
-            Determine the base URL from the incoming request.
+            Determine the public base URL for the incoming request.
 
-            Inspects the request object for common attributes that
-            indicate the scheme and host. Falls back to
-            ``"https://localhost"`` when the request does not provide
-            sufficient information.
+            A request object that offers ``base_url`` is taken at its
+            word; otherwise the origin is resolved by
+            :meth:`resolve_public_base_url` (configured public base URL,
+            then the ``Host`` header including its port).
 
             :param request: The incoming HTTP request object.
 
             :returns: The base URL string without a trailing slash.
         """
-        if hasattr(request, "base_url"):
-            base_url = str(request.base_url).rstrip("/")
-            return base_url
+        base_url = getattr(request, "base_url", None)
+        if isinstance(base_url, str) and len(base_url) > 0:
+            rtnval = base_url.rstrip("/")
+            return rtnval
 
-        scheme = cls.DEFAULT_SCHEME
-        host = cls.DEFAULT_HOST
+        rtnval = cls.resolve_public_base_url(request)
+        return rtnval
 
-        if hasattr(request, "scheme"):
-            scheme = request.scheme
+    @classmethod
+    def _get_issuer(cls, request: Any) -> str:
+        """
+            Determine the issuer identifier.
 
-        if hasattr(request, "host"):
-            host = request.host
-        elif hasattr(request, "headers"):
-            headers = request.headers
-            if isinstance(headers, dict):
-                host = headers.get(cls.HOST_HEADER_NAME, headers.get(cls.HOST_HEADER_NAME.lower(), cls.DEFAULT_HOST))
+            Discovery and ID tokens both use this value, so a relying
+            party that reads the discovery document accepts the ``iss``
+            claim of the tokens.
 
-        base_url = "{}://{}".format(scheme, host)
-        return base_url
+            :param request: The incoming HTTP request object.
+
+            :returns: The configured :attr:`issuer`, or the public base
+                      URL of the request.
+        """
+        if cls.issuer:
+            return cls.issuer
+
+        rtnval = cls._get_base_url(request)
+        return rtnval
+
+    @classmethod
+    def _get_signing_key(cls) -> Tuple[rsa.RSAPrivateKey, str]:
+        """
+            Get the RSA key ID tokens are signed with, and its key id.
+
+            Loads :attr:`id_token_signing_key`. When none is configured
+            a key is generated once per blueprint class and kept for the
+            life of the process.
+
+            :returns: A tuple of (private key, key id).
+
+            :raises ValueError: If the configured key is not an RSA
+                                private key.
+        """
+        source = cls.id_token_signing_key
+
+        with _signing_key_lock:
+            cached = cls.__dict__.get("_signing_key_state")
+            if cached is not None and cached[0] is source:
+                return (cached[1], cached[2])
+
+            if source is None:
+                logger.warning(
+                    "%s: no id_token_signing_key is configured; generating "
+                    "a signing key that lives only in this process. ID "
+                    "tokens cannot be verified after a restart or by "
+                    "another worker. Configure a persistent RSA key.",
+                    cls.__name__,
+                )
+                private_key = rsa.generate_private_key(
+                    public_exponent=65537,
+                    key_size=cls.GENERATED_SIGNING_KEY_BITS
+                )
+            elif isinstance(source, (str, bytes)):
+                pem = source.encode("utf-8") if isinstance(source, str) else source
+                private_key = serialization.load_pem_private_key(pem, password=None)
+            else:
+                private_key = source
+
+            if not isinstance(private_key, rsa.RSAPrivateKey):
+                errmsg = "id_token_signing_key must be an RSA private key"
+                raise ValueError(errmsg)
+
+            key_id = cls.id_token_key_id
+            if not key_id:
+                public_der = private_key.public_key().public_bytes(
+                    encoding=serialization.Encoding.DER,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo
+                )
+                key_id = _base64url(hashlib.sha256(public_der).digest())[:16]
+
+            cls._signing_key_state = (source, private_key, key_id)
+
+        return (private_key, key_id)
+
+    @classmethod
+    def _get_signing_jwk(cls) -> Dict[str, Any]:
+        """
+            Build the public JSON Web Key of the ID token signing key.
+
+            :returns: The JWK dictionary published at the JWKS endpoint.
+        """
+        private_key, key_id = cls._get_signing_key()
+        public_numbers = private_key.public_key().public_numbers()
+
+        jwk = {
+            "kty": "RSA",
+            "use": "sig",
+            "alg": cls.id_token_signing_alg,
+            "kid": key_id,
+            "n": _base64url_uint(public_numbers.n),
+            "e": _base64url_uint(public_numbers.e),
+        }
+        return jwk
+
+    @classmethod
+    def _sign_id_token(cls, payload: Dict[str, Any]) -> str:
+        """
+            Sign an ID token payload as a compact JWS.
+
+            :param payload: The ID token claims.
+
+            :returns: The encoded ID token.
+
+            :raises ValueError: If :attr:`id_token_signing_alg` is not a
+                                supported RSA algorithm.
+        """
+        hash_class = _RSA_SIGNING_HASHES.get(cls.id_token_signing_alg)
+        if hash_class is None:
+            errmsg = "Unsupported id_token_signing_alg: {}".format(
+                cls.id_token_signing_alg
+            )
+            raise ValueError(errmsg)
+
+        private_key, key_id = cls._get_signing_key()
+
+        header = {
+            "alg": cls.id_token_signing_alg,
+            "typ": "JWT",
+            "kid": key_id,
+        }
+
+        header_segment = _base64url(json.dumps(header).encode("utf-8"))
+        payload_segment = _base64url(json.dumps(payload).encode("utf-8"))
+        signing_input = "{}.{}".format(header_segment, payload_segment)
+
+        signature = private_key.sign(
+            signing_input.encode("ascii"),
+            padding.PKCS1v15(),
+            hash_class()
+        )
+
+        id_token = "{}.{}".format(signing_input, _base64url(signature))
+        return id_token
 
     @classmethod
     @SecurityBlueprint.read(
@@ -199,7 +395,7 @@ class OIDCBlueprint(OAuth2Blueprint):
         base_url = cls._get_base_url(request)
 
         discovery_doc = OIDCDiscovery(
-            issuer=cls.issuer or base_url,
+            issuer=cls._get_issuer(request),
             authorization_endpoint="{}{}{}".format(
                 base_url, cls.base_path, cls.AUTHORIZE_LEAF
             ),
@@ -212,7 +408,7 @@ class OIDCBlueprint(OAuth2Blueprint):
             jwks_uri="{}{}".format(base_url, cls.JWKS_PATH),
             response_types_supported=list(cls.supported_response_types),
             subject_types_supported=list(cls.SUBJECT_TYPES_SUPPORTED),
-            id_token_signing_alg_values_supported=[cls.jwt_algorithm],
+            id_token_signing_alg_values_supported=[cls.id_token_signing_alg],
             scopes_supported=list(cls.supported_scopes),
             claims_supported=list(cls.supported_claims)
         )
@@ -307,8 +503,8 @@ class OIDCBlueprint(OAuth2Blueprint):
         """
             Return the JSON Web Key Set for token verification.
 
-            Returns the configured JWKS or an empty keys array when
-            no JWKS has been configured.
+            Returns the public key of the ID token signing key,
+            followed by any additional keys configured in :attr:`jwks`.
 
             :param request: The incoming HTTP request object.
 
@@ -323,7 +519,14 @@ class OIDCBlueprint(OAuth2Blueprint):
             response = cls.format_error(error, status_code=404)
             return response
 
-        jwks_data = cls.jwks or {cls.EMPTY_JWKS_KEY: []}
+        keys = [cls._get_signing_jwk()]
+
+        if isinstance(cls.jwks, dict):
+            for extra_key in cls.jwks.get(cls.EMPTY_JWKS_KEY, []):
+                if extra_key.get("kid") != keys[0]["kid"]:
+                    keys.append(extra_key)
+
+        jwks_data = {cls.EMPTY_JWKS_KEY: keys}
 
         response = {
             "status": 200,
@@ -341,30 +544,39 @@ class OIDCBlueprint(OAuth2Blueprint):
     def _issue_tokens(
         cls,
         subject: str,
-        scope: Optional[str] = None
+        scope: Optional[str] = None,
+        client_id: Optional[str] = None,
+        nonce: Optional[str] = None,
+        request: Optional[Any] = None
     ) -> dict:
         """
             Issue tokens including an OIDC id_token.
 
             Overrides the parent :meth:`OAuth2Blueprint._issue_tokens`
             to include an ``id_token`` in the response body. The
-            id_token contains the standard OIDC claims: ``iss``,
-            ``sub``, ``aud``, ``exp``, and ``iat``.
+            id_token identifies the authenticated user (``sub``) to the
+            client (``aud``) and echoes the ``nonce`` of the
+            authorization request.
 
-            :param subject: The subject identifier for the token claims.
+            :param subject: The identifier of the authenticated user.
             :param scope: Optional scope string.
+            :param client_id: The client the tokens are issued to.
+            :param nonce: The nonce of the authorization request.
+            :param request: The token request, used to derive the issuer.
 
             :returns: A response dictionary.
         """
-        # Call the parent to issue access and refresh tokens
-        response = super()._issue_tokens(subject, scope)
+        response = super()._issue_tokens(
+            subject, scope, client_id=client_id, nonce=nonce, request=request
+        )
 
-        # If the parent returned an error, pass it through
+        # Only add id_token on success
         if response.get("status", 200) != 200:
             return response
 
-        # Build and attach the id_token
-        id_token = cls._build_id_token(subject, scope)
+        id_token = cls._build_id_token(
+            subject, scope, client_id=client_id, nonce=nonce, request=request
+        )
         if id_token is not None:
             response["body"][cls.ID_TOKEN_RESPONSE_KEY] = id_token
 
@@ -374,37 +586,50 @@ class OIDCBlueprint(OAuth2Blueprint):
     def _build_id_token(
         cls,
         subject: str,
-        scope: Optional[str] = None
+        scope: Optional[str] = None,
+        client_id: Optional[str] = None,
+        nonce: Optional[str] = None,
+        request: Optional[Any] = None
     ) -> Optional[str]:
         """
             Build a signed OIDC ID token JWT.
 
-            The ID token contains the standard claims: ``iss`` (issuer),
-            ``sub`` (subject), ``aud`` (audience, set to the subject),
-            ``exp`` (expiration), and ``iat`` (issued at). Additional
-            claims from the user data are included when claim mappings
-            are configured.
+            The ID token contains the standard claims: ``iss`` (the same
+            issuer discovery advertises), ``sub`` (the authenticated
+            user), ``aud`` (the client the token is for), ``exp``,
+            ``iat`` and, when the authorization request carried one,
+            ``nonce``. It is signed with the asymmetric key published at
+            the JWKS endpoint, so any relying party can verify it.
+            Additional claims from the user data are included when claim
+            mappings are configured.
 
-            :param subject: The subject identifier.
+            :param subject: The identifier of the authenticated user.
             :param scope: Optional scope string.
+            :param client_id: The client the token is issued to.
+            :param nonce: The nonce of the authorization request.
+            :param request: The token request, used to derive the issuer.
 
-            :returns: The encoded ID token JWT string, or None if the
-                      JWT secret is not configured.
+            :returns: The encoded ID token JWT string, or None when
+                      there is no client to address the token to.
         """
-        if cls.jwt_secret is None:
+        if not client_id:
+            # An ID token without an audience is of no use to anyone
             return None
 
         now = time.time()
 
         id_token_payload = {
-            cls.ID_TOKEN_CLAIM_ISS: cls.issuer or cls.DEFAULT_ISSUER_FALLBACK,
+            cls.ID_TOKEN_CLAIM_ISS: cls._get_issuer(request),
             cls.ID_TOKEN_CLAIM_SUB: subject,
-            cls.ID_TOKEN_CLAIM_AUD: subject,
+            cls.ID_TOKEN_CLAIM_AUD: client_id,
             cls.ID_TOKEN_CLAIM_EXP: int(now) + cls.id_token_lifetime,
             cls.ID_TOKEN_CLAIM_IAT: int(now),
         }
 
-        # Add additional claims from user data if available
+        if nonce:
+            id_token_payload[cls.ID_TOKEN_CLAIM_NONCE] = nonce
+
+        # Add user claims if available
         user_data = cls._get_user_claims(subject)
         if user_data is not None:
             if cls.claim_mappings is not None:
@@ -413,23 +638,14 @@ class OIDCBlueprint(OAuth2Blueprint):
                     if claim_value is not None:
                         id_token_payload[claim_name] = claim_value
             else:
-                # Include supported claims from user data
                 for claim in cls.supported_claims:
                     if claim == cls.ID_TOKEN_CLAIM_SUB:
                         continue
                     if claim in user_data:
                         id_token_payload[claim] = user_data[claim]
 
-        id_token = encode_jwt(
-            id_token_payload,
-            cls.jwt_secret,
-            algorithm=cls.jwt_algorithm
-        )
+        id_token = cls._sign_id_token(id_token_payload)
         return id_token
-
-    # =========================================================================
-    # Private Helper Methods
-    # =========================================================================
 
     @classmethod
     def _get_authenticated_subject(cls, request: Any) -> Optional[str]:

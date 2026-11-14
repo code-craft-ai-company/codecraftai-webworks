@@ -71,7 +71,8 @@ This implementation plan creates the REST API Support feature providing resource
 
 - [x] 4. Implement error handling
   - [x] 4.1 Create `ErrorHandler` class with default mappings
-    - Include mappings for ValueError, KeyError, PermissionError, ValidationError
+    - Default mapping for ValidationError only; ValueError, KeyError and PermissionError
+      are the opt-in BUILTIN_EXCEPTION_MAPPINGS (builtin_mappings=True, register_builtin_mappings())
     - _Requirements: 8.4_
 
   - [x] 4.2 Implement `handle()` method in ErrorHandler
@@ -254,6 +255,20 @@ This implementation plan creates the REST API Support feature providing resource
 
 - [x] 14. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 15. Apply the REST processing to declared routes (audit WW-0075)
+  - [x] 15.1 RESTMiddleware works with routing Request/Response and the matched descriptor; `wrap_handler` per endpoint, coroutine wrapper for async handlers, processed-handler marker
+    - _Requirements: 13.2, 13.4, 13.7_
+  - [x] 15.2 `RestProcessingRouter` / `apply_rest_processing` / `needs_rest_processing`; WebApplication serves its routes from a RestProcessingRouter
+    - _Requirements: 13.1, 13.2, 13.3, 13.7_
+  - [x] 15.3 `rest_processing` keyword and class attribute on every registration API; `managed` / `processing` recorded in `extras["rest"]`; `attach_route` records the schema classes
+    - _Requirements: 13.5, 13.8_
+  - [x] 15.4 Authentication blueprints opt out (`SecurityBlueprint.rest_processing = False`)
+    - _Requirements: 13.6_
+  - [x] 15.5 4xx answers logged at debug level, 5xx with traceback
+    - _Requirements: 13.9_
+  - [x] 15.6 Tests: `rest/test_restprocessingrouter.py`, `rest/test_restprocessing.py` (served through `webapp.asgi_app` with the TestClient's ASGI transport: 415, 400, payload, 406, serialized dataclass, RESTError for a mapped exception, opt-out sees the raw request, async handler, blueprint and registry routes, ResourceEndpoint not wrapped twice), declaration tests in the `endpoints` package
+    - _Requirements: 13.1-13.8_
 
 ## Notes
 

@@ -3,6 +3,14 @@
  *
  * <mj-divider> -- a visual/semantic line separating adjacent content regions.
  * Supports horizontal/vertical orientation, optional label, and line variants.
+ *
+ * The label comes from the `label` attribute or from content placed in
+ * slot="label" (the slot wins). With a label the line is drawn on both sides
+ * of it, in either orientation. A vertical divider fills the height of a
+ * stretching flex or grid row; elsewhere it is at least one line tall.
+ *
+ * The markup is built once; attribute changes only update it, so the label
+ * text is never parsed as HTML.
  */
 
 import { MjElement } from "../core/mjelement.js";
@@ -25,20 +33,15 @@ const STYLES = `
 :host {
   display: block;
 }
+
 :host([orientation="vertical"]) {
-  display: inline-block;
-  block-size: 100%;
+  display: inline-flex;
+  vertical-align: middle;
   align-self: stretch;
+  min-block-size: 1em;
 }
 
-.root-hr {
-  border: none;
-  border-block-start: var(--mj-divider-thickness, 1px) var(--mj-divider-variant, solid) var(--mj-divider-color, var(--mj-border));
-  margin-block: var(--mj-divider-spacing, var(--mj-space-4));
-  width: 100%;
-}
-
-.root-div {
+.root {
   display: flex;
   align-items: center;
   gap: var(--mj-divider-label-gap, var(--mj-space-3));
@@ -47,38 +50,45 @@ const STYLES = `
   font-size: var(--mj-font-size-sm);
 }
 
-.root-div.vertical {
+.root.vertical {
+  flex: 1 1 auto;
   flex-direction: column;
   margin-block: 0;
   margin-inline: var(--mj-divider-spacing, var(--mj-space-4));
-  block-size: 100%;
+  min-block-size: 1em;
 }
 
 .line {
-  flex: 1;
+  flex: 1 1 0;
   display: block;
   border-block-start: var(--mj-divider-thickness, 1px) var(--mj-divider-variant, solid) var(--mj-divider-color, var(--mj-border));
 }
 
-.root-div.vertical .line {
+.root.vertical .line {
   border-block-start: none;
   border-inline-start: var(--mj-divider-thickness, 1px) var(--mj-divider-variant, solid) var(--mj-divider-color, var(--mj-border));
   inline-size: 0;
-  block-size: auto;
 }
 
-.root-vertical {
-  border: none;
-  border-inline-start: var(--mj-divider-thickness, 1px) var(--mj-divider-variant, solid) var(--mj-divider-color, var(--mj-border));
-  margin-inline: var(--mj-divider-spacing, var(--mj-space-4));
-  block-size: 100%;
-  align-self: stretch;
+/* Without a label one line runs the full length. */
+.root.unlabelled .label,
+.root.unlabelled .line-end {
+  display: none;
+}
+
+.root.unlabelled {
+  gap: 0;
 }
 
 .label {
   white-space: nowrap;
-  background: var(--mj-divider-label-bg, var(--mj-surface));
+  background: var(--mj-divider-label-bg, transparent);
   padding-inline: var(--mj-space-2);
+}
+
+.root.vertical .label {
+  padding-inline: 0;
+  padding-block: var(--mj-space-2);
 }
 `;
 
@@ -87,68 +97,128 @@ export class MjDivider extends MjElement {
   static styles = STYLES;
   static watched = ["orientation", "decorative", "label", "variant", "thickness", "spacing"];
 
+  constructor() {
+    super()
+    this._root = null
+    this._labelText = null
+    this._labelSlot = null
+  }
+
   render() {
-    const markup = this._buildMarkup()
+    const markup = `
+      <div class="root unlabelled" part="root">
+        <span class="line line-start" part="line-start"></span>
+        <span class="label" part="label"><slot name="label"><span class="label-text"></span></slot></span>
+        <span class="line line-end" part="line-end"></span>
+      </div>
+    `
     return markup
   }
 
   afterRender() {
+    this._root = this.$(".root")
+    this._labelText = this.$(".label-text")
+    this._labelSlot = this.$("slot[name='label']")
+    this.listen(this._labelSlot, "slotchange", this._syncSemantics.bind(this))
+    this._syncSemantics()
     this._syncStyles()
     return
   }
 
   onAttributeChanged(name, oldValue, newValue) {
-    if (this.shadowRoot !== null) {
-      this.shadowRoot.innerHTML = this._buildMarkup()
+    if (this._root === undefined || this._root === null) {
+      return
+    }
+
+    if (name === "variant" || name === "thickness" || name === "spacing") {
       this._syncStyles()
+    } else {
+      this._syncSemantics()
     }
     return
   }
 
-  _buildMarkup() {
-    const orientation = this.getAttribute("orientation") || "horizontal"
+  /*
+   * The label as plain text: slotted label content first, else the
+   * attribute. Not flattened: a flattened unassigned slot would report its
+   * fallback content (the attribute text) as slotted content.
+   */
+  _labelString() {
+    const slotted = this._labelSlot.assignedNodes()
+    let text = ""
+
+    if (slotted.length > 0) {
+      const parts = []
+      for (let index = 0; index < slotted.length; index = index + 1) {
+        parts.push(slotted[index].textContent || "")
+      }
+      text = parts.join(" ")
+    } else {
+      text = this.getAttribute("label") || ""
+    }
+
+    const compact = text.replace(/\s+/g, " ").trim()
+    return compact
+  }
+
+  /* Orientation, label and the separator role / name. */
+  _syncSemantics() {
+    const vertical = this.getAttribute("orientation") === "vertical"
     const decorative = this.hasAttribute("decorative")
-    const label = this.getAttribute("label") || ""
-    const hasLabel = label.length > 0
+    const hasSlottedLabel = this._labelSlot.assignedNodes().length > 0
+    const attributeLabel = this.getAttribute("label") || ""
+    const labelled = hasSlottedLabel === true || attributeLabel.length > 0
 
-    if (orientation === "vertical") {
-      const role = decorative === true ? "none" : "separator"
-      const ariaHidden = decorative === true ? ' aria-hidden="true"' : ""
-      const ariaOrientation = decorative === true ? "" : ' aria-orientation="vertical"'
-      return `<div class="root-vertical" part="root" role="${role}"${ariaHidden}${ariaOrientation}></div>`
-    }
-
-    if (hasLabel === true) {
-      const role = decorative === true ? "none" : "separator"
-      const ariaHidden = decorative === true ? ' aria-hidden="true"' : ""
-      const ariaLabel = decorative === false && label.length > 0 ? ` aria-label="${label}"` : ""
-      return `
-        <div class="root-div" part="root" role="${role}"${ariaHidden}${ariaLabel}>
-          <span class="line" part="line-start"></span>
-          <span class="label" part="label"><slot name="label">${label}</slot></span>
-          <span class="line" part="line-end"></span>
-        </div>
-      `
-    }
+    this._labelText.textContent = attributeLabel
+    this._root.classList.toggle("vertical", vertical)
+    this._root.classList.toggle("unlabelled", labelled === false)
 
     if (decorative === true) {
-      return `<hr class="root-hr" part="root" role="none" aria-hidden="true" />`
-    }
+      this._root.setAttribute("role", "none")
+      this._root.setAttribute("aria-hidden", "true")
+      this._root.removeAttribute("aria-orientation")
+      this._root.removeAttribute("aria-label")
+    } else {
+      this._root.setAttribute("role", "separator")
+      this._root.removeAttribute("aria-hidden")
+      this._root.setAttribute("aria-orientation", vertical === true ? "vertical" : "horizontal")
 
-    return `<hr class="root-hr" part="root" />`
+      const name = labelled === true ? this._labelString() : ""
+      if (name.length > 0) {
+        this._root.setAttribute("aria-label", name)
+      } else {
+        this._root.removeAttribute("aria-label")
+      }
+    }
+    return
+  }
+
+  /*
+   * Set a custom property on the host, or remove it when `value` is null so
+   * the stylesheet (the component default or an author rule) applies.
+   */
+  _setCustomProperty(name, value) {
+    if (value === null) {
+      this.style.removeProperty(name)
+    } else {
+      this.style.setProperty(name, value)
+    }
+    return
   }
 
   _syncStyles() {
-    const variant = this.getAttribute("variant") || "solid"
-    const thickness = this.getAttribute("thickness") || "thin"
-    const spacing = this.getAttribute("spacing") || "md"
+    const variant = this.getAttribute("variant")
+    const thickness = this.getAttribute("thickness")
+    const spacing = this.getAttribute("spacing")
 
-    const thicknessVal = THICKNESS_MAP[thickness] || THICKNESS_MAP.thin
-    const spacingVal = SPACING_MAP[spacing] || SPACING_MAP.md
+    const variants = ["solid", "dashed", "dotted", "double"]
+    const variantValue = variant !== null && variants.indexOf(variant) >= 0 ? variant : null
+    const thicknessValue = thickness !== null ? (THICKNESS_MAP[thickness] || THICKNESS_MAP.thin) : null
+    const spacingValue = spacing !== null ? (SPACING_MAP[spacing] || SPACING_MAP.md) : null
 
-    this.style.setProperty("--mj-divider-variant", variant)
-    this.style.setProperty("--mj-divider-thickness", thicknessVal)
-    this.style.setProperty("--mj-divider-spacing", spacingVal)
+    this._setCustomProperty("--mj-divider-variant", variantValue)
+    this._setCustomProperty("--mj-divider-thickness", thicknessValue)
+    this._setCustomProperty("--mj-divider-spacing", spacingValue)
     return
   }
 

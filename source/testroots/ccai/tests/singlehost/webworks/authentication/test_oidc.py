@@ -874,7 +874,7 @@ def test_oidc_provider_metadata_from_dict():
         raise AssertionError(errmsg)
     
     if "openid" not in metadata.scopes_supported:
-        errmsg = f"Expected 'openid' in scopes_supported"
+        errmsg = "Expected 'openid' in scopes_supported"
         raise AssertionError(errmsg)
     
     return

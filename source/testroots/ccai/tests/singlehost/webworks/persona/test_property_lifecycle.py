@@ -28,6 +28,7 @@ from ccai.webworks.webapplication import (
     reset_webapp_persona,
 )
 from ccai.webworks.persona.lifecycle import LifecycleError, LifecyclePhase
+from ccai.errors.exceptions import SemanticError
 from ccai.webworks.routing.router import Router
 from ccai.webworks.routing.dispatcher import Dispatcher
 from ccai.webworks.routing.request import Request
@@ -281,6 +282,12 @@ def test_property_sufficient_phase_allows_access(pair):
 
         app._current_phase = sufficient_phase
 
+        # The credential and data profile managers are placeholders that
+        # store nothing, and their properties refuse to return a missing
+        # manager. Stand-ins let this property test the phase guard alone.
+        app._credential_manager = object()
+        app._data_profile_manager = object()
+
         lifecycle_error_raised = False
 
         try:
@@ -378,22 +385,20 @@ def test_property_startup_initializes_all_subsystems(persona_name):
             f"{type(app.auth_system).__name__} (persona_name='{persona_name}')"
         )
 
-        # Verify credentials is accessible without LifecycleError (placeholder — currently None)
-        try:
-            _ = app.credentials
-        except LifecycleError as err:
-            raise AssertionError(
-                f"Accessing credentials raised LifecycleError after startup: {err} "
-                f"(persona_name='{persona_name}')"
-            )
+        # The credential and data profile managers are placeholders: past
+        # their phase the properties raise a SemanticError that says no
+        # manager is integrated, not a LifecycleError.
+        for placeholder_name in ("credentials", "data_profiles"):
+            placeholder_error = None
+            try:
+                _ = getattr(app, placeholder_name)
+            except SemanticError as err:
+                placeholder_error = err
 
-        # Verify data_profiles is accessible without LifecycleError (placeholder — currently None)
-        try:
-            _ = app.data_profiles
-        except LifecycleError as err:
-            raise AssertionError(
-                f"Accessing data_profiles raised LifecycleError after startup: {err} "
-                f"(persona_name='{persona_name}')"
+            testbase.assert_true(
+                placeholder_error is not None and not isinstance(placeholder_error, LifecycleError),
+                f"Expected '{placeholder_name}' to raise a placeholder SemanticError after startup, "
+                f"got {placeholder_error!r} (persona_name='{persona_name}')"
             )
 
     finally:

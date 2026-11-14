@@ -248,13 +248,20 @@ class BookLibrary:
             :param destination: The link's destination as written.
 
             :returns: ``(canonical location of the document or image, fragment)``, or None when the destination is a
-                      fragment alone, has a scheme or a host, or does not name a document or image in the library.
+                      fragment alone, has a scheme or a host, is not a well formed URL, or does not name a document or
+                      image in the library.
         """
         target = destination.strip()
         if target == "" or target.startswith("#"):
             return None
 
-        split = urllib.parse.urlsplit(target)
+        # A destination that is not a well formed URL, such as "http://[your-host]:8080/" with a placeholder where an
+        # IPv6 address is expected, cannot name anything in the library; it is left alone like any other address.
+        try:
+            split = urllib.parse.urlsplit(target)
+        except ValueError:
+            return None
+
         if split.scheme != "" or split.netloc != "":
             return None
 

@@ -55,6 +55,12 @@ def _open_chart(page, base_url: str, tag: str):
         arg=tag,
         timeout=15000,
     )
+    # The example's script runs as a module after the upgrade and assigns the
+    # data; wait for it so a test's own assignment is not overwritten later.
+    frame.wait_for_function(
+        "() => window.mjSandbox !== undefined && window.mjSandbox.ready === true",
+        timeout=15000,
+    )
     return frame
 
 
@@ -480,13 +486,12 @@ def test_dependency_graph_initial_render(page, base_url):
         """() => {
             const el = document.querySelector('mj-dependency-graph');
             if (el === null || el.shadowRoot === null) { return false; }
-            return el.shadowRoot.querySelectorAll('[part=node],[part=critical-path-node]').length >= 3;
+            return el.shadowRoot.querySelectorAll('[part~=node]').length >= 3;
         }""",
         timeout=10000,
     )
 
-    count = _shadow_count(frame, "mj-dependency-graph", "[part=node]") + \
-            _shadow_count(frame, "mj-dependency-graph", "[part=critical-path-node]")
+    count = _shadow_count(frame, "mj-dependency-graph", "[part~=node]")
     assert count >= 3
 
     return
@@ -511,13 +516,12 @@ def test_dependency_graph_dynamic_update(page, base_url):
         """() => {
             const el = document.querySelector('mj-dependency-graph');
             if (el === null || el.shadowRoot === null) { return false; }
-            return el.shadowRoot.querySelectorAll('[part=node],[part=critical-path-node]').length >= 3;
+            return el.shadowRoot.querySelectorAll('[part~=node]').length >= 3;
         }""",
         timeout=10000,
     )
     count_a = (
-        _shadow_count(frame, "mj-dependency-graph", "[part=node]") +
-        _shadow_count(frame, "mj-dependency-graph", "[part=critical-path-node]")
+        _shadow_count(frame, "mj-dependency-graph", "[part~=node]")
     )
 
     _force_draw(frame, "mj-dependency-graph", _DEP_GRAPH_DATA_B)
@@ -525,13 +529,12 @@ def test_dependency_graph_dynamic_update(page, base_url):
         """() => {
             const el = document.querySelector('mj-dependency-graph');
             if (el === null || el.shadowRoot === null) { return false; }
-            return el.shadowRoot.querySelectorAll('[part=node],[part=critical-path-node]').length >= 5;
+            return el.shadowRoot.querySelectorAll('[part~=node]').length >= 5;
         }""",
         timeout=10000,
     )
     count_b = (
-        _shadow_count(frame, "mj-dependency-graph", "[part=node]") +
-        _shadow_count(frame, "mj-dependency-graph", "[part=critical-path-node]")
+        _shadow_count(frame, "mj-dependency-graph", "[part~=node]")
     )
 
     assert count_b > count_a
@@ -556,7 +559,7 @@ def test_dependency_graph_interactivity(page, base_url):
         """() => {
             const el = document.querySelector('mj-dependency-graph');
             if (el === null || el.shadowRoot === null) { return false; }
-            return el.shadowRoot.querySelectorAll('[part=node],[part=critical-path-node]').length >= 1;
+            return el.shadowRoot.querySelectorAll('[part~=node]').length >= 1;
         }""",
         timeout=10000,
     )
@@ -566,7 +569,7 @@ def test_dependency_graph_interactivity(page, base_url):
     frame.evaluate(
         """() => {
             const el = document.querySelector('mj-dependency-graph');
-            const node = el.shadowRoot.querySelector('[part=node],[part=critical-path-node]');
+            const node = el.shadowRoot.querySelector('[part~=node]');
             if (node !== null) {
                 node.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
             }

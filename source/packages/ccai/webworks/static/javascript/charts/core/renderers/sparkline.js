@@ -4,45 +4,143 @@
  * Sparkline renderer — compact, minimal-chrome inline trend.
  *
  * Registered types:
- *   "sparkline" — line or bar sparkline
+ *   "sparkline" — line or bar sparkline (default block size 48px, no
+ *                 legend; give the host its own size, e.g.
+ *                 style="width:120px;height:30px", for word-sized use)
  *
  * ctx.attrs recognised:
  *   sparkline-variant  "line" | "bar" (default "line")
- *   show-markers       "true" | "false" (default "true") — first/last/min/max dots
- *   show-last-value    "true" | "false" (default "false") — trailing text label
+ *   show-markers       boolean (default true) — first/last/min/max dots
+ *   show-last-value    boolean (default false) — trailing text label
+ *   x-scale            see line.js (line variant)
  *
- * No axes or legends are drawn; the chart fills the entire surface.
+ * No axes or legends are drawn; the chart fills the surface, keeping just
+ * enough margin for the markers and the last-value label. The line variant
+ * places points with the same time / linear / categorical x rules as
+ * line.js; the bar variant draws one bar per value from a zero baseline.
+ * A sparkline shows one series: further series are not drawn (a console
+ * warning says so). Hovering the line shows the nearest point; without
+ * markers the line itself is focusable and the arrow keys step through the
+ * points.
+ *
  * Series data may use:
  *   series[].points  [{x, y}, ...]
  *   series[].values  [...]
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, formatNumber, linePath, extent } from "../svgdraw.js";
-import { linearScale, pointScale } from "../scales.js";
+import { svgEl, formatNumber, linePath } from "../svgdraw.js";
+import { linearScale, bandScale } from "../scales.js";
+import { textWidth, activate } from "./bar.js";
+import { booleanOption } from "../chartoptions.js";
+import { trendSeries, resolveXAxis, sortedPixels, loneIndices } from "./line.js";
+
+const MARKER_RADIUS = 2.5;
+
+/* Data objects already warned about, so a resize does not warn again. */
+const WARNED = new WeakSet();
 
 
-function _getValues(ser, categories) {
+function _warnExtraSeries(model) {
   /*
-   * Extract a flat y-value array from a series.
-   *
-   * :param ser: A single series object.
-   * :param categories: Model categories (used as x labels for values).
-   * :returns: Array of {x, y} where x is a string label.
+   * Tell the author once that only the first series is drawn.
    */
-  const xy = []
-  if (ser.points !== undefined && ser.points !== null && ser.points.length > 0) {
-    for (let p = 0; p < ser.points.length; p = p + 1) {
-      const pt = ser.points[p]
-      xy.push({ x: String(pt.x), y: typeof pt.y === "number" ? pt.y : null })
-    }
-  } else if (ser.values !== undefined && ser.values !== null) {
-    for (let v = 0; v < ser.values.length; v = v + 1) {
-      const cat = categories[v] !== undefined ? String(categories[v]) : String(v)
-      xy.push({ x: cat, y: typeof ser.values[v] === "number" ? ser.values[v] : null })
-    }
+  const source = model.source
+  if (model.series.length > 1 && source !== null && typeof source === "object" && WARNED.has(source) === false) {
+    WARNED.add(source)
+    console.warn(`mj-chart sparkline: only the first series ("${model.series[0].name}") is drawn; ` +
+      `${model.series.length - 1} more were ignored.`)
   }
-  return xy
+  return
+}
+
+
+function _readout(plot, pixels, plotW, plotH, color, ctx, focusable, summary) {
+  /*
+   * A plot-wide overlay that follows the pointer to the nearest point and
+   * shows a marker for it; when `focusable`, it is the chart's tab stop and
+   * Arrow / Home / End keys move between the points.
+   */
+  const valid = pixels.filter((pixel) => pixel.y !== null)
+  if (valid.length === 0) {
+    return
+  }
+
+  const marker = svgEl("circle", {
+    r: MARKER_RADIUS + 1, cx: valid[0].x.toFixed(2), cy: valid[0].y.toFixed(2),
+    fill: color, stroke: "var(--mj-surface, #fff)", "stroke-width": 1,
+    visibility: "hidden", "pointer-events": "none", part: "spark-focus"
+  }, [])
+  const title = svgEl("title", null, summary)
+  const overlay = svgEl("rect", {
+    x: 0, y: 0, width: plotW, height: plotH, fill: "transparent", part: "spark-overlay"
+  }, [title])
+  if (focusable === true) {
+    overlay.setAttribute("tabindex", "0")
+    overlay.setAttribute("role", "img")
+    overlay.setAttribute("aria-label", summary)
+  }
+
+  let current = valid.length - 1
+  const show = (index) => {
+    current = Math.min(Math.max(index, 0), valid.length - 1)
+    const pixel = valid[current]
+    marker.setAttribute("cx", pixel.x.toFixed(2))
+    marker.setAttribute("cy", pixel.y.toFixed(2))
+    marker.setAttribute("visibility", "visible")
+    const text = `${pixel.label}: ${formatNumber(pixel.value)}`
+    title.textContent = text
+    if (focusable === true) {
+      overlay.setAttribute("aria-label", text)
+    }
+    return
+  }
+
+  overlay.addEventListener("pointermove", (event) => {
+    const box = overlay.getBoundingClientRect()
+    const scale = box.width > 0 ? plotW / box.width : 1
+    const localX = (event.clientX - box.left) * scale
+    let nearest = 0
+    for (let index = 1; index < valid.length; index = index + 1) {
+      if (Math.abs(valid[index].x - localX) < Math.abs(valid[nearest].x - localX)) {
+        nearest = index
+      }
+    }
+    show(nearest)
+  })
+  overlay.addEventListener("pointerleave", () => {
+    marker.setAttribute("visibility", "hidden")
+    title.textContent = summary
+  })
+  activate(overlay, () => {
+    const pixel = valid[current]
+    ctx.emit("mj-chart-sparkline-click", { x: pixel.label, y: pixel.value })
+  })
+  if (focusable === true) {
+    overlay.addEventListener("keydown", (event) => {
+      let next = null
+      if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+        next = current + 1
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+        next = current - 1
+      } else if (event.key === "Home") {
+        next = 0
+      } else if (event.key === "End") {
+        next = valid.length - 1
+      }
+      if (next !== null) {
+        event.preventDefault()
+        show(next)
+      }
+    })
+    overlay.addEventListener("blur", () => {
+      marker.setAttribute("visibility", "hidden")
+    })
+  }
+
+  plot.appendChild(overlay)
+  plot.appendChild(marker)
+  return
 }
 
 
@@ -56,189 +154,173 @@ export function render(ctx) {
   const model = ctx.model
   const root = svgEl("g", { part: "plot" }, [])
 
-  const variant = ctx.attrs("sparkline-variant", "line")
-  const showMarkers = ctx.attrs("show-markers", "true") === "true"
-  const showLastValue = ctx.attrs("show-last-value", "false") === "true"
+  const variant = String(ctx.attrs("sparkline-variant", "line")).trim().toLowerCase() === "bar" ? "bar" : "line"
+  const showMarkers = booleanOption(ctx, "show-markers", true)
+  const showLastValue = booleanOption(ctx, "show-last-value", false)
 
   if (model.series.length === 0) {
     return root
   }
+  _warnExtraSeries(model)
 
-  /* Use the first series only — sparklines are single-series by convention. */
-  const ser = model.series[0]
-  const color = ctx.colorFor(ser.name)
-  const xy = _getValues(ser, model.categories)
-  const validXY = xy.filter((pt) => pt.y !== null)
-  if (validXY.length === 0) {
+  /* Sparklines are single-series by convention: the first is drawn. */
+  const list = trendSeries({ ...model, series: [model.series[0]] })
+  const series = list[0]
+  const color = ctx.colorFor(model.series[0].name)
+  const values = series.points.filter((point) => point.y !== null).map((point) => point.y)
+  if (values.length === 0) {
     return root
   }
 
-  /* Small margin: just enough for last-value label if requested. */
-  const labelW = showLastValue === true ? 36 : 2
-  const margin = { top: 2, right: labelW, bottom: 2, left: 2 }
+  const lastValue = values[values.length - 1]
+  const fontSize = Math.max(8, Math.min(11, ctx.height * 0.45))
+  const lastText = formatNumber(lastValue)
+  const edge = Math.ceil(MARKER_RADIUS + 1.5)
+  const margin = { top: edge, right: edge, bottom: edge, left: edge }
+  if (showLastValue === true) {
+    margin.right = Math.ceil(textWidth(lastText, fontSize) + edge + 4)
+  }
   const plotW = Math.max(ctx.width - margin.left - margin.right, 4)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 4)
 
-  const yVals = validXY.map((pt) => pt.y)
-  const yExt = extent(yVals)
-  let yMin = yExt[0]
-  let yMax = yExt[1]
+  let yMin = Math.min(...values)
+  let yMax = Math.max(...values)
+  if (variant === "bar") {
+    yMin = Math.min(yMin, 0)
+    yMax = Math.max(yMax, 0)
+  }
   if (yMin === yMax) {
     yMin = yMin - 1
     yMax = yMax + 1
   }
-
-  const xLabels = xy.map((pt) => pt.x)
-  const xScale = pointScale(xLabels, [0, plotW])
   const yScale = linearScale([yMin, yMax], [plotH, 0])
 
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
+  const plot = svgEl("g", { transform: `translate(${margin.left},${margin.top})` }, [])
   root.appendChild(plot)
 
-  if (variant === "bar") {
-    /* Bar sparkline: one <rect> per point. */
-    const barCount = xLabels.length
-    const barW = Math.max(plotW / barCount - 1, 1)
-    const baseline = yScale(0)
+  let lastY = yScale(lastValue)
 
-    for (let p = 0; p < xy.length; p = p + 1) {
-      const pt = xy[p]
-      if (pt.y === null) {
+  if (variant === "bar") {
+    /* One bar per value from the zero baseline, in data order. */
+    const slots = series.points.map((point, index) => index)
+    const band = bandScale(slots, [0, plotW], 0.2)
+    const baseline = yScale(0)
+    for (let index = 0; index < series.points.length; index = index + 1) {
+      const point = series.points[index]
+      if (point.y === null) {
         continue
       }
-      const px = xScale(pt.x) - barW / 2
-      const py = yScale(pt.y)
-      const bh = Math.abs(py - baseline)
-
-      const barEl = svgEl("rect", {
-        x: px.toFixed(2),
-        y: Math.min(py, baseline).toFixed(2),
-        width: barW.toFixed(2),
-        height: Math.max(bh, 1).toFixed(2),
+      const top = yScale(point.y)
+      const label = point.raw !== null ? String(point.raw) : String(index + 1)
+      const bar = svgEl("rect", {
+        x: band.at(index).toFixed(2),
+        y: Math.min(top, baseline).toFixed(2),
+        width: Math.max(band.bandwidth(), 1).toFixed(2),
+        height: Math.max(Math.abs(top - baseline), 1).toFixed(2),
         fill: color,
         part: "spark-bar",
         tabindex: "0",
         role: "img",
-        "aria-label": `${pt.x}: ${formatNumber(pt.y)}`
-      }, [])
-      barEl.appendChild(svgEl("title", null, `${pt.x}: ${pt.y}`))
-      const handler = (() => {
-        const capturedX = pt.x
-        const capturedY = pt.y
-        return () => {
-          ctx.emit("mj-chart-sparkline-click", { x: capturedX, y: capturedY })
-        }
-      })()
-      barEl.addEventListener("click", handler)
-      barEl.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          handler()
-        }
+        "aria-label": `${label}: ${formatNumber(point.y)}`
+      }, [svgEl("title", null, `${label}: ${formatNumber(point.y)}`)])
+      activate(bar, () => {
+        ctx.emit("mj-chart-sparkline-click", { x: label, y: point.y })
       })
-      plot.appendChild(barEl)
+      plot.appendChild(bar)
     }
+    lastY = yScale(lastValue)
   } else {
-    /* Line sparkline: one polyline + optional markers. */
-    const pixelPoints = []
-    for (let p = 0; p < xy.length; p = p + 1) {
-      const pt = xy[p]
-      if (pt.y === null) {
-        pixelPoints.push(null)
-        continue
-      }
-      pixelPoints.push({ x: xScale(pt.x), y: yScale(pt.y) })
-    }
-
-    const pathData = linePath(pixelPoints)
-    if (pathData !== "") {
+    const xAxis = resolveXAxis(ctx, list, model, [0, plotW], null)
+    const frame = { x: xAxis, y: yScale }
+    const pixels = sortedPixels(series, frame).map((pixel) => ({
+      x: pixel.x, y: pixel.y, value: pixel.value, label: xAxis.labelOf(pixel.point), point: pixel.point
+    }))
+    const data = linePath(pixels.map((pixel) => pixel.y === null ? null : { x: pixel.x, y: pixel.y }))
+    if (data !== "") {
       plot.appendChild(svgEl("path", {
-        d: pathData,
+        d: data,
         fill: "none",
         stroke: color,
         "stroke-width": 1.5,
         "stroke-linejoin": "round",
-        "stroke-linecap": "round"
+        "stroke-linecap": "round",
+        part: "spark-line"
       }, []))
     }
 
+    /* A value between two gaps has no line: give it a dot. */
+    const lone = loneIndices(pixels)
+    for (let index = 0; index < lone.length; index = index + 1) {
+      plot.appendChild(svgEl("circle", {
+        cx: pixels[lone[index]].x.toFixed(2), cy: pixels[lone[index]].y.toFixed(2), r: 1.5,
+        fill: color, part: "spark-dot", "pointer-events": "none"
+      }, []))
+    }
+
+    const valid = pixels.filter((pixel) => pixel.y !== null)
+    const first = valid[0]
+    const last = valid[valid.length - 1]
+    lastY = last.y
+    let minPixel = first
+    let maxPixel = first
+    for (let index = 1; index < valid.length; index = index + 1) {
+      if (valid[index].value < minPixel.value) {
+        minPixel = valid[index]
+      }
+      if (valid[index].value > maxPixel.value) {
+        maxPixel = valid[index]
+      }
+    }
+    const summary = `${model.series[0].name}: first ${formatNumber(first.value)}, last ${formatNumber(last.value)}, ` +
+      `min ${formatNumber(minPixel.value)}, max ${formatNumber(maxPixel.value)}`
+
+    /* The overlay sits under the markers so the markers stay clickable. */
+    _readout(plot, pixels, plotW, plotH, color, ctx, showMarkers === false, summary)
+
     if (showMarkers === true) {
-      /* Find first, last, min, max indices among valid points. */
-      let minIdx = 0
-      let maxIdx = 0
-      let minVal = yVals[0]
-      let maxVal = yVals[0]
-      for (let v = 1; v < yVals.length; v = v + 1) {
-        if (yVals[v] < minVal) {
-          minVal = yVals[v]
-          minIdx = v
-        }
-        if (yVals[v] > maxVal) {
-          maxVal = yVals[v]
-          maxIdx = v
+      const marked = []
+      for (const pixel of [first, last, minPixel, maxPixel]) {
+        if (marked.indexOf(pixel) < 0) {
+          marked.push(pixel)
         }
       }
-
-      const markerIndices = new Set([
-        0,
-        validXY.length - 1,
-        minIdx,
-        maxIdx
-      ])
-
-      for (const idx of markerIndices) {
-        const pt = validXY[idx]
-        if (pt === undefined) {
-          continue
-        }
-        const px = xScale(pt.x)
-        const py = yScale(pt.y)
+      for (let index = 0; index < marked.length; index = index + 1) {
+        const pixel = marked[index]
+        const text = `${pixel.label}: ${formatNumber(pixel.value)}`
         const dot = svgEl("circle", {
-          cx: px.toFixed(2), cy: py.toFixed(2), r: 2.5,
+          cx: pixel.x.toFixed(2), cy: pixel.y.toFixed(2), r: MARKER_RADIUS,
           fill: color,
           stroke: "var(--mj-surface, #fff)",
           "stroke-width": 1,
           part: "spark-marker",
           tabindex: "0",
           role: "img",
-          "aria-label": `${pt.x}: ${formatNumber(pt.y)}`
-        }, [])
-        dot.appendChild(svgEl("title", null, `${pt.x}: ${pt.y}`))
-        const handler = (() => {
-          const capturedX = pt.x
-          const capturedY = pt.y
-          return () => {
-            ctx.emit("mj-chart-sparkline-click", { x: capturedX, y: capturedY })
-          }
-        })()
-        dot.addEventListener("click", handler)
-        dot.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault()
-            handler()
-          }
+          "aria-label": text
+        }, [svgEl("title", null, text)])
+        activate(dot, () => {
+          ctx.emit("mj-chart-sparkline-click", { x: pixel.label, y: pixel.value })
         })
         plot.appendChild(dot)
       }
     }
   }
 
-  /* Optional last-value text label. */
-  if (showLastValue === true && validXY.length > 0) {
-    const lastPt = validXY[validXY.length - 1]
-    const lastY = yScale(lastPt.y)
+  /* Optional last-value label, kept inside the drawing. */
+  if (showLastValue === true) {
+    const half = fontSize / 2
+    const labelY = Math.min(Math.max(lastY, half - margin.top + 1), plotH + margin.bottom - half - 1)
     plot.appendChild(svgEl("text", {
-      x: plotW + 4,
-      y: lastY + 4,
-      "font-size": 10,
-      fill: "var(--mj-text-muted, #6b7280)"
-    }, formatNumber(lastPt.y)))
+      x: plotW + edge + 2,
+      y: labelY,
+      "dominant-baseline": "central",
+      "font-size": fontSize.toFixed(1),
+      fill: "var(--mj-text-muted, #5f6673)",
+      "aria-hidden": "true"
+    }, lastText))
   }
 
   return root
 }
 
 
-registerRenderer("sparkline", render)
+registerRenderer("sparkline", render, { minHeight: 48, legend: "none" })

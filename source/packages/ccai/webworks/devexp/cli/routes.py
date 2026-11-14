@@ -6,16 +6,26 @@
     output formats (table, JSON, CSV), path pattern filtering, verbose
     metadata display, and authentication indicators.
 
-    Route information is obtained from a :class:`RouteRegistry` interface
-    that the application provides. Each route entry contains the path,
-    HTTP methods, handler name, access policy, and optional metadata.
+    Route information is obtained from a :class:`RouteRegistry`. The
+    command builds one from the application named by ``--app`` (or the
+    ``server.app`` configuration key): :class:`WebApplicationRouteRegistry`
+    reads the routes of the application's web application persona. A
+    custom registry instance can also be supplied under the
+    ``route_registry`` configuration key. Each route entry contains the
+    path, HTTP methods, handler name, access policy, and optional metadata.
 """
 
+import argparse
 import fnmatch
 import json
+import sys
 
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
+from ccai.webworks.devexp.apploader import ApplicationLoadError
+from ccai.webworks.devexp.apploader import find_webapp_persona
+from ccai.webworks.devexp.apploader import load_application
+from ccai.webworks.devexp.apploader import resolve_app_target
 from ccai.webworks.devexp.cli.command import CLICommand
 from ccai.webworks.devexp.cli.exitcodes import EXIT_CONFIG_ERROR
 from ccai.webworks.devexp.cli.exitcodes import EXIT_SUCCESS
@@ -128,27 +138,184 @@ class RouteRegistry:
         raise NotImplementedError("Subclasses must implement the get_routes method.")
 
 
+class WebApplicationRouteRegistry(RouteRegistry):
+    """
+        Route registry that reads the routes of a web application persona.
+
+        The routes come from the application's router, which holds every
+        endpoint the application serves: handlers collected into its
+        endpoint registry, routes attached with ``attach_route`` and the
+        endpoints of its blueprints. Before the router exists (the
+        application has not been started) the endpoint registry is used.
+
+        :param webapp: The ``WebApplication`` persona to read routes from.
+    """
+
+    def __init__(self, webapp: Any):
+        """
+            Construct a WebApplicationRouteRegistry.
+
+            :param webapp: The ``WebApplication`` persona to read routes from.
+        """
+        self._webapp = webapp
+        return
+
+    def get_routes(self) -> List[RouteEntry]:
+        """
+            Get the routes of the web application.
+
+            Routes that share a path and handler are merged into one entry
+            listing all their methods, ordered by path.
+
+            :returns: A list of :class:`RouteEntry` instances.
+        """
+        from ccai.webworks.persona.lifecycle import LifecycleError
+
+        pairs = []
+
+        try:
+            router = self._webapp.router
+        except LifecycleError:
+            # The application was not started, so no router exists yet.
+            router = None
+
+        if router is not None:
+            # The router keeps its route table as (path, method, descriptor)
+            # tuples and offers no public accessor for it.
+            for path, method, descriptor in getattr(router, "_routes", []):
+                pairs.append((path, method, descriptor))
+        else:
+            for descriptor in self._webapp.registry.collect():
+                path = self._get_descriptor_path(descriptor)
+                for method in descriptor.methods:
+                    pairs.append((path, method.upper(), descriptor))
+
+        entries: Dict[Any, RouteEntry] = {}
+
+        for path, method, descriptor in pairs:
+            key = (path, id(descriptor))
+
+            if key in entries:
+                if method not in entries[key].methods:
+                    entries[key].methods.append(method)
+            else:
+                entries[key] = self._build_entry(path, method, descriptor)
+
+        routes = sorted(entries.values(), key=lambda entry: (entry.path, entry.handler))
+
+        return routes
+
+    def _get_descriptor_path(self, descriptor: Any) -> str:
+        """
+            Get the URL path an endpoint descriptor is served at.
+
+            :param descriptor: The endpoint descriptor.
+
+            :returns: The URL path string.
+        """
+        if descriptor.path is not None:
+            path = descriptor.path
+        elif descriptor.leaf is not None:
+            path = "/{}".format(descriptor.leaf)
+        else:
+            path = "/"
+
+        return path
+
+    def _build_entry(self, path: str, method: str, descriptor: Any) -> RouteEntry:
+        """
+            Build a route entry from an endpoint descriptor.
+
+            :param path: The path the route is served at.
+            :param method: The first HTTP method of the route.
+            :param descriptor: The endpoint descriptor.
+
+            :returns: The :class:`RouteEntry`.
+        """
+        handler = descriptor.handler
+        handler_name = getattr(handler, "__qualname__", getattr(handler, "__name__", repr(handler)))
+        handler_label = "{}.{}".format(descriptor.module, handler_name)
+
+        access_policy = "public"
+        policy = descriptor.constraints.access_policy
+
+        if policy is not None and policy.require_auth:
+            access_policy = "authenticated"
+
+        metadata: Dict[str, Any] = {}
+
+        if policy is not None and policy.roles:
+            metadata["roles"] = ",".join(sorted(policy.roles))
+
+        if policy is not None and policy.scopes:
+            metadata["scopes"] = ",".join(sorted(policy.scopes))
+
+        if descriptor.version is not None:
+            metadata["version"] = descriptor.version
+
+        if descriptor.tags:
+            metadata["tags"] = ",".join(descriptor.tags)
+
+        if descriptor.doc is not None and descriptor.doc.summary:
+            metadata["summary"] = descriptor.doc.summary
+
+        entry = RouteEntry(
+            path=path,
+            methods=[method],
+            handler=handler_label,
+            access_policy=access_policy,
+            metadata=metadata,
+        )
+
+        return entry
+
+
 # =============================================================================
 # Helper Functions
 # =============================================================================
 
-def resolve_registry(config: Dict[str, Any]) -> Optional[RouteRegistry]:
+def resolve_registry(config: Dict[str, Any], args: Any = None) -> Optional[RouteRegistry]:
     """
-        Resolve the route registry from configuration.
+        Resolve the route registry for the routes command.
 
-        Looks for a ``route_registry`` key in the configuration
-        dictionary. The value must be an instance of :class:`RouteRegistry`.
+        A :class:`RouteRegistry` instance under the ``route_registry``
+        configuration key is used when present. Otherwise the application
+        named by ``--app`` or the ``server.app`` configuration key is
+        imported and its web application persona is wrapped in a
+        :class:`WebApplicationRouteRegistry`.
 
         :param config: Loaded configuration dictionary.
+        :param args: Parsed command-line arguments, or ``None``.
 
-        :returns: The route registry instance or None if not configured.
+        :returns: The route registry instance or None if no registry is
+            configured and no application target is given.
+
+        :raises ApplicationLoadError: If the application target cannot be
+            imported or the application established no persona.
     """
     registry = config.get("route_registry", None)
 
     if registry is not None and isinstance(registry, RouteRegistry):
         return registry
 
-    return None
+    target = resolve_app_target(args, config)
+
+    if target is None:
+        return None
+
+    application = load_application(target)
+    webapp = find_webapp_persona(application)
+
+    if webapp is None:
+        errmsg = (
+            "The application '{}' did not establish a web application persona, "
+            "so its routes cannot be listed.".format(target)
+        )
+        raise ApplicationLoadError(errmsg)
+
+    registry = WebApplicationRouteRegistry(webapp)
+
+    return registry
 
 
 def filter_routes(routes: List[RouteEntry], pattern: str) -> List[RouteEntry]:
@@ -382,11 +549,23 @@ class RoutesCommand(CLICommand):
         """
             Add command-specific arguments to the parser.
 
-            Registers the ``--format``, ``--filter``, and ``--verbose``
-            options.
+            Registers the ``--app``, ``--format``, ``--filter``, and
+            ``--verbose`` options.
+
+            ``--app`` and ``--verbose`` also exist as global options. They
+            have no default here, so a value given before the command name
+            (``webworks --verbose routes``) is not overwritten by this
+            command's default.
 
             :param parser: The argument parser to add arguments to.
         """
+        parser.add_argument(
+            "--app",
+            type=str,
+            default=argparse.SUPPRESS,
+            help="Application import target 'module:attribute', for example 'app:app'."
+        )
+
         parser.add_argument(
             "--format",
             type=str,
@@ -407,7 +586,7 @@ class RoutesCommand(CLICommand):
         parser.add_argument(
             "--verbose",
             action="store_true",
-            default=False,
+            default=argparse.SUPPRESS,
             help="Show additional endpoint metadata."
         )
 
@@ -426,10 +605,17 @@ class RoutesCommand(CLICommand):
 
             :returns: Exit code where 0 indicates success.
         """
-        registry = resolve_registry(config)
+        try:
+            registry = resolve_registry(config, args)
+        except ApplicationLoadError as err:
+            print("Error: {}".format(err), file=sys.stderr)
+            return EXIT_CONFIG_ERROR
 
         if registry is None:
-            print("Error: No route registry configured.")
+            print(
+                "Error: No route registry configured. Name the application with "
+                "--app 'module:attribute' or the 'server.app' configuration key."
+            )
             return EXIT_CONFIG_ERROR
 
         try:

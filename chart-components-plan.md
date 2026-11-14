@@ -1,5 +1,13 @@
 # Chart Components Implementation Plan
 
+> **Status.** The library is built. This plan is kept as its architecture
+> record and is updated where the shipped design differs: `<mj-chart>` draws
+> each chart whole (plot, axes, gridlines, marks, value labels, reference
+> lines) and shows a tooltip for the hovered or focused mark; the separate part
+> elements are `<mj-chart-title>`, `<mj-chart-legend>` and
+> `<mj-chart-data-table>` only. The other planned parts were dropped (§3.3).
+> The controller is specified in `specs/web-components/chart.md`.
+
 ## 1. Purpose & Scope
 
 This plan defines the architecture and delivery approach for a comprehensive
@@ -14,8 +22,9 @@ This plan satisfies these stated requirements:
 
 - Charts receive their data as **JSON**.
 - Charts are drawn with **SVG**.
-- A chart's distinct parts (plot, axes, legend, title, tooltip, …) are
-  **separate web components** wherever it is sensible.
+- A chart's distinct parts are **separate web components** wherever it is
+  sensible: title, legend and data table (the drawing itself — plot, axes,
+  gridlines, marks — is one SVG drawn by the controller; see §3.3).
 - Parts are **coordinated elements** so they can be placed independently
   anywhere in the consumer's HTML.
 - Parts render **vertically or horizontally** wherever orientation is
@@ -54,11 +63,9 @@ pieces of the chart and may be placed anywhere in the document.
 ```
 <mj-chart id="sales" type="bar" src="/data/sales.json" orientation="vertical"></mj-chart>
 
-<mj-chart-title  chart="sales">Quarterly Sales</mj-chart-title>
-<mj-chart-plot   chart="sales"></mj-chart-plot>
-<mj-chart-axis   chart="sales" kind="category" side="bottom"></mj-chart-axis>
-<mj-chart-axis   chart="sales" kind="value"    side="start"></mj-chart-axis>
-<mj-chart-legend chart="sales" orientation="horizontal"></mj-chart-legend>
+<mj-chart-title      chart="sales">Quarterly Sales</mj-chart-title>
+<mj-chart-legend     chart="sales" orientation="horizontal"></mj-chart-legend>
+<mj-chart-data-table chart="sales"></mj-chart-data-table>
 ```
 
 Each part finds its controller by:
@@ -74,12 +81,8 @@ Coordination protocol:
   `controller.registerPart(this)`.
 - The controller keeps a registry of parts and a single **chart model**
   (Section 3.4).
-- When the data, scales, or layout change, the controller calls each part's
-  `applyModel(model)` and emits `mj-chart-model`.
-- Parts that affect scale ranges (notably `<mj-chart-plot>`) report their
-  measured pixel box back to the controller via `controller.reportBox(part,
-  rect)`; the controller recomputes scales and re-broadcasts. This is what
-  keeps independently-placed axes aligned with an independently-placed plot.
+- When the data or the hidden series change, the controller calls each
+  part's `applyModel(model, ...)` after it draws.
 - On `disconnectedCallback`, a part calls `controller.unregisterPart(this)`.
 
 Because parts are ordinary elements extending `MjElement`, they can be docked
@@ -92,11 +95,13 @@ docking/anchoring requirement with no extra code.
 Responsibilities:
 
 - **Ingest data** (Section 3.4) and parse it into the normalized model.
-- **Compute scales** (Section 3.6) from data domains and reported part sizes.
+- **Compute scales** (Section 3.6) from data domains and its drawing box.
 - **Maintain the part registry** and broadcast model updates.
-- **Default rendering**: if no part elements reference it, the controller
-  renders a complete, sensibly-composed chart itself (plot + axes + legend +
-  title) so the simple case is one element. Declaring parts overrides this.
+- **Draw the chart**: the renderer of its `type` draws the whole drawing —
+  plot, axes, gridlines, marks, value labels and reference lines — into one
+  SVG. Title, legend and data table are optional bound parts (§3.3).
+- **Tooltip**: the hovered or keyboard-focused mark shows its label in a
+  tooltip above it (`no-tooltip` turns it off).
 
 Key attributes / properties:
 
@@ -108,35 +113,38 @@ Key attributes / properties:
 | `orientation` | attr | `horizontal` \| `vertical` default for parts. |
 | `theme` | attr | Token theme scope (inherited from `MjElement`). |
 
-Events: `mj-chart-ready`, `mj-chart-model` (model recomputed),
-`mj-chart-error`, plus interaction events relayed from parts
-(`mj-chart-point`, `mj-chart-series-toggle`, `mj-chart-select`).
+Events (as shipped; `specs/web-components/chart.md` §8): `mj-chart-render`,
+`mj-chart-empty`, `mj-chart-error`, `mj-chart-series-toggle` and
+`mj-chart-connect` from the controller, and the interaction events of each
+chart type. Each type keeps its own event names and detail shapes
+(`mj-chart-bar-click`, `mj-chart-slice-click`, `mj-chart-word-click`, ...),
+listed on its chart-type page; there is no common `mj-chart-point` /
+`mj-chart-select` event across types, by decision (WW-1660, WW-1269). An
+earlier draft of this plan proposed `mj-chart-ready`, `mj-chart-model` and
+a common `mj-chart-point`; they were not built.
 
 ### 3.3 Chart part components
 
-The reusable parts — each a web component under `charts/`, each extending
-`MjElement`, each dockable/anchorable:
+The elements of the library — each a web component under `charts/`, each
+extending `MjElement`, each dockable/anchorable:
 
 | Tag | Role | Orientation-aware |
 |-----|------|-------------------|
-| `<mj-chart>` | Controller / coordinator; default composed render. | yes (sets default) |
-| `<mj-chart-plot>` | The SVG plotting surface; draws series marks via the type renderer; reports its box to drive scale ranges. | yes |
-| `<mj-chart-axis>` | One axis (`kind=value\|category\|time`, `side`, `scale`); ticks, labels, axis line. | yes |
-| `<mj-chart-grid>` | Gridlines bound to a scale. | yes |
-| `<mj-chart-legend>` | Series legend; interactive series toggle. | yes (row vs column) |
+| `<mj-chart>` | Controller; draws the whole chart (plot, axes, gridlines, marks, value labels, reference lines) and shows the tooltip of the hovered or focused mark. | yes (sets default) |
 | `<mj-chart-title>` | Title / subtitle text block. | n/a |
-| `<mj-chart-tooltip>` | Hover tooltip; positioned via `overlay.js`. | n/a |
-| `<mj-chart-crosshair>` | Hover crosshair lines. | yes |
-| `<mj-chart-brush>` | Range / region selection control. | yes |
-| `<mj-chart-annotation>` | Reference lines, bands, point markers, text. | yes |
-| `<mj-chart-data-table>` | The accessible data-table alternative of the chart's data (always present in the model; may be visually hidden). | n/a |
-| `<mj-chart-series>` | Declarative per-series configuration (optional alternative to JSON series config). | n/a |
-| `<mj-chart-value-labels>` | Data labels drawn on the marks. | n/a |
+| `<mj-chart-legend>` | Series legend; interactive series toggle. | yes (row vs column) |
+| `<mj-chart-data-table>` | A visible table of the chart's data (the controller always keeps a visually hidden one). | n/a |
 
-Not every chart needs every part. A chart type's catalog entry lists its
-**decomposition** — which parts it uses. Parts that make no sense for a chart
-type (e.g. axes for a pie chart) are simply not declared; the renderer ignores
-them.
+Any chart can bind the three parts.
+
+**Dropped parts.** The first version of this plan also proposed
+`<mj-chart-plot>`, `<mj-chart-axis>`, `<mj-chart-grid>`, `<mj-chart-tooltip>`,
+`<mj-chart-crosshair>`, `<mj-chart-brush>`, `<mj-chart-annotation>`,
+`<mj-chart-series>` and `<mj-chart-value-labels>`. They were not built and
+will not be: the renderers draw axes, gridlines, value labels and reference
+lines inside the one drawing, the tooltip is the controller's, and series
+options come with the JSON data. Crosshair and brush (range selection) are not
+available. The catalog entries no longer list a decomposition into parts.
 
 ### 3.4 JSON data contract
 
@@ -220,21 +228,17 @@ Typical dashboard layout:
 <mj-dock-layout>
   <mj-chart-title  chart="c1" dock="top"></mj-chart-title>
   <mj-chart-legend chart="c1" dock="end" orientation="vertical"></mj-chart-legend>
-  <mj-chart-axis   chart="c1" dock="start" kind="value"></mj-chart-axis>
-  <mj-chart-axis   chart="c1" dock="bottom" kind="category"></mj-chart-axis>
-  <mj-chart-plot   chart="c1" dock="fill"></mj-chart-plot>
+  <mj-chart id="c1" type="bar" dock="fill"></mj-chart>
 </mj-dock-layout>
-<mj-chart id="c1" type="bar" hidden></mj-chart>
 ```
 
 ### 3.8 Accessibility, theming, events
 
-- The controller always builds a **data-table model**; `<mj-chart-data-table>`
-  exposes it as a real `<table>` for assistive technology. Drawing parts mark
-  their `<svg>` `aria-hidden` and reference the table, or carry
-  `role="img"` + a generated summary `aria-label`.
+- The controller always builds a **data-table model** and keeps it as a
+  visually hidden `<table>` after the drawing; `<mj-chart-data-table>` shows it.
+  Focusable marks carry `role="img"` and an `aria-label`.
 - Keyboard: focusable marks/legend items; arrow-key traversal of data points;
-  `Enter`/`Space` to select; tooltip reachable on focus.
+  `Enter`/`Space` to select; the focused mark shows its tooltip.
 - Interaction events are namespaced `mj-chart-*` and bubble from parts through
   the controller.
 - Honors `prefers-reduced-motion` (no entry animation) and `forced-colors`.
@@ -246,19 +250,10 @@ All chart code lives under `charts/`, never `components/`:
 ```
 static/javascript/charts/
   index.js                 barrel: imports + registers all chart components
-  mjchart.js                <mj-chart>  controller
-  mjchartplot.js            <mj-chart-plot>
-  mjchartaxis.js            <mj-chart-axis>
-  mjchartgrid.js            <mj-chart-grid>
+  mjchart.js                <mj-chart>  controller (drawing and tooltip)
   mjchartlegend.js          <mj-chart-legend>
   mjcharttitle.js           <mj-chart-title>
-  mjcharttooltip.js         <mj-chart-tooltip>
-  mjchartcrosshair.js       <mj-chart-crosshair>
-  mjchartbrush.js           <mj-chart-brush>
-  mjchartannotation.js      <mj-chart-annotation>
   mjchartdatatable.js       <mj-chart-data-table>
-  mjchartseries.js          <mj-chart-series>
-  mjchartvaluelabels.js     <mj-chart-value-labels>
   core/
     chartmodel.js           normalized model + table model builder
     chartregistry.js        controller<->part coordination helpers
@@ -271,7 +266,7 @@ static/javascript/charts/
 ```
 
 Component file naming follows the repo convention: file named after the
-class, all lowercase, no underscores (`MjChartAxis` → `mjchartaxis.js`).
+class, all lowercase, no underscores (`MjChartLegend` → `mjchartlegend.js`).
 
 ## 5. Shared chart foundation (build first)
 
@@ -284,7 +279,7 @@ These modules in `charts/core/` are built before any chart and reused by all:
 - **`svgdraw.js`** — SVG primitive builders, tick/label/format utilities,
   the categorical color ramp from tokens.
 - **`chartregistry.js`** — controller/part resolution (`chart` attr + ancestry),
-  registration, model broadcast, box reporting.
+  registration, model broadcast.
 - The **part base** behavior — a `ChartPart` mixin over `MjElement` that does
   controller resolution, registration, and `applyModel` plumbing so every part
   component stays thin.
@@ -293,8 +288,8 @@ These modules in `charts/core/` are built before any chart and reused by all:
 
 The full per-chart catalog is in **`specs/chart-components/`**, one file per
 category. Each entry records: the renderer/`type` key, synonym/variant
-consolidation, purpose, **decomposition** into parts, **JSON shape**, **SVG
-primitives**, **orientation** support, and **phase**.
+consolidation, purpose, **JSON shape**, **SVG primitives**, **orientation**
+support, **events** and **phase**.
 
 Categories:
 
@@ -330,16 +325,15 @@ different mode and must not become separate code:
 
 Each catalog entry marks whether it is a **Primary renderer** or a **variant**
 of one. The result is ~150 catalog names mapping to a much smaller set of
-renderers, all composed from the shared parts in §3.3.
+renderers, each drawn by `<mj-chart>` with the optional parts of §3.3.
 
 ## 7. Implementation phasing
 
 **Phase 0 — Foundation.** Everything in §5, the `<mj-chart>` controller, and
 the part base. A demo harness.
 
-**Phase 1 — Cartesian core parts & common charts.** `<mj-chart-plot>`,
-`<mj-chart-axis>`, `<mj-chart-grid>`, `<mj-chart-legend>`, `<mj-chart-title>`,
-`<mj-chart-tooltip>`, `<mj-chart-data-table>`. Renderers: bar/column (+ group/
+**Phase 1 — Parts & common charts.** `<mj-chart-legend>`, `<mj-chart-title>`,
+`<mj-chart-data-table>`. Renderers: bar/column (+ group/
 stack modes), line/multi-line, area (+ stack modes), step, scatter, sparkline.
 
 **Phase 2 — Part-to-whole, distribution, ranking.** Pie/donut, treemap,
@@ -372,8 +366,7 @@ exists and is tested.
   contains the expected primitives (correct number of `<rect>`/`<path>` etc.)
   and that the data-table model matches.
 - **Coordination tests** — independently-placed parts resolve their controller
-  by `chart` id and by ancestry; the plot's reported box drives axis scales;
-  parts redraw on `mj-chart-model`.
+  by `chart` id and by ancestry and follow every render.
 - **Orientation tests** — horizontal vs vertical produce the swapped mapping.
 - **Docking/anchoring tests** — chart parts inside `<mj-dock-layout>` lay out;
   `anchor` pins parts.
@@ -386,8 +379,9 @@ exists and is tested.
 
 1. Receives data as JSON via `data` / `src` / inline, validated by schema.
 2. Drawn entirely with SVG, styled only from `--mj-*` tokens.
-3. Decomposed into the parts listed in its catalog entry; each part is an
-   independently-placeable coordinated element.
+3. Works with the title, legend and data-table parts, each an
+   independently-placeable coordinated element, and shows the tooltip of the
+   hovered or focused mark.
 4. Renders horizontally and vertically where orientation is meaningful.
 5. Every part supports `dock` and `anchor` (inherited from `MjElement`).
 6. Provides the accessible data-table alternative and keyboard interaction.

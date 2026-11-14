@@ -8,6 +8,7 @@
     **Validates: Requirements 5.5**
 """
 
+import asyncio
 import random
 import string
 
@@ -21,6 +22,30 @@ from ccai.webworks.authentication.core import Principal
 # =============================================================================
 # Test Helpers
 # =============================================================================
+
+
+def _session_id_from_response(response, cookie_name="session_id"):
+    """
+        Read the session id from the Set-Cookie header of a response.
+
+        The session id is deliberately absent from response bodies; the
+        HttpOnly cookie is the only place it is sent.
+    """
+    cookie = response.get("headers", {}).get("Set-Cookie", "")
+    first_part = cookie.split(";", 1)[0]
+    name, _, value = first_part.partition("=")
+    if name.strip() != cookie_name:
+        errmsg = "Expected a {!r} cookie, got {!r}".format(cookie_name, cookie)
+        raise AssertionError(errmsg)
+    return value.strip()
+
+
+def _session_exists(blueprint, session_id):
+    """
+        Check whether the blueprint's session store still holds a session.
+    """
+    session = asyncio.run(blueprint.get_session_store().get_session(session_id))
+    return session is not None
 
 
 class MockJsonRequest:
@@ -198,7 +223,7 @@ def test_property_14_session_invalidation():
             )
             raise AssertionError(errmsg)
 
-        session_id = login_response["body"]["session_id"]
+        session_id = _session_id_from_response(login_response)
 
         # Step 2: Verify session exists in the store
         if use_store:
@@ -211,7 +236,7 @@ def test_property_14_session_invalidation():
                 )
                 raise AssertionError(errmsg)
         else:
-            if session_id not in blueprint._memory_store:
+            if not _session_exists(blueprint, session_id):
                 errmsg = (
                     "Iteration {}: Expected session to exist in memory "
                     "store after login. session_id={!r}".format(
@@ -257,7 +282,7 @@ def test_property_14_session_invalidation():
                 )
                 raise AssertionError(errmsg)
         else:
-            if session_id in blueprint._memory_store:
+            if _session_exists(blueprint, session_id):
                 errmsg = (
                     "Iteration {}: Expected session to be removed from "
                     "memory store after logout. session_id={!r}".format(

@@ -931,3 +931,32 @@ def test_extract_api_key_helper_returns_value_for_non_blank():
         )
         raise AssertionError(errmsg)
     return
+
+
+# =============================================================================
+# Key Hashing
+# =============================================================================
+
+from ccai.webworks.authentication.apikey import hash_api_key
+
+
+def test_hash_api_key_is_stable_and_hides_the_key():
+    """
+        Test that the digest of an API key is deterministic, differs
+        between keys and does not contain the key.
+    """
+    first = hash_api_key("key-one")
+    
+    if first != hash_api_key("key-one"):
+        errmsg = "Expected the same digest for the same key"
+        raise AssertionError(errmsg)
+    
+    if first == hash_api_key("key-two"):
+        errmsg = "Expected different digests for different keys"
+        raise AssertionError(errmsg)
+    
+    if "key-one" in first or len(first) != 64:
+        errmsg = f"Expected a 64 character hex digest, got {first!r}"
+        raise AssertionError(errmsg)
+    
+    return

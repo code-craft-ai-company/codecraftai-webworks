@@ -117,8 +117,8 @@ The existing codebase already contains a `MiddlewarePipeline` in `routing.middle
 
 1. THE framework SHALL integrate with the existing `register_middleware` hook in ComponentRegistrationHooks so that extensions can register middleware via the extensibility system.
 2. WHEN an extension registers middleware via the `register_middleware` hook, THE Middleware_Registry SHALL add the middleware to the global pipeline.
-3. THE `register_middleware` hook SHALL validate that the registered component implements the `process_request` and `process_response` methods as defined in COMPONENT_REQUIRED_METHODS.
-4. THE framework SHALL support extensions specifying middleware priority and position when registering via the hook.
+3. THE `register_middleware` hook SHALL validate that the registered component implements the `process_request` and `process_response` methods as defined in COMPONENT_REQUIRED_METHODS. Such a component is put on the pipeline through one adapter, `ExtensionMiddleware`, which implements the `(request, call_next)` contract: `process_request(request)` returning a response short-circuits the rest of the pipeline; `process_response(request, response)` receives every response the middleware returns and may return a replacement; coroutine methods are awaited and plain methods run on a worker thread in the asynchronous pipeline.
+4. THE framework SHALL support extensions specifying middleware priority and position when registering via the hook, through the component's `name`, `priority` and `position` attributes.
 5. WHEN the application initializes, THE framework SHALL collect all extension-registered middleware and compose them into the global pipeline in priority order.
 6. THE Middleware_Registry SHALL provide a `get_registered_components(hook_name)` method for retrieving all middleware registered via the extensibility system.
 

@@ -16,10 +16,12 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Type, TypeVar
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.constraints import EndpointConstraints
 from ccai.webworks.endpoints.descriptor import (
+    ENDPOINT_BLUEPRINT_NAME_EXTRA,
     ENDPOINT_PARENT_PLACEMENT_EXTRA,
     declare_on_class,
     EndpointDescriptor,
-    mark_handler
+    mark_handler,
+    stamp_blueprint_name
 )
 from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.endpoint import Endpoint
@@ -83,6 +85,13 @@ class Blueprint(Endpoint):
         attach_at or by overriding the register() method to manually attach
         child endpoints.
         
+        Every route declared through a blueprint records the blueprint's
+        class name in ``descriptor.extras["blueprint"]``, so middleware
+        registered with a :class:`MiddlewareRegistry` at
+        ``scope="blueprint"`` under that name runs for its routes. A route
+        of an attached child that is itself a blueprint keeps the child's
+        name; ``attach_at(..., blueprint="name")`` chooses another name.
+        
         Class Attributes:
             base_path: Base URL path for all child endpoints.
             base_leaf: Base URL leaf segment (alternative to base_path).
@@ -102,6 +111,21 @@ class Blueprint(Endpoint):
     
     # Legacy storage for child descriptors registered via attach_at
     _child_descriptors: List[EndpointDescriptor] = []
+
+    @classmethod
+    def _claim_ancestor_descriptors(cls, descriptors: List[EndpointDescriptor], owner: type) -> None:
+        """
+            Record this blueprint's name on descriptors that a handler in
+            its body declared through an ancestor's ``attach_at`` (which
+            recorded the ancestor's name).
+
+            :param descriptors: The descriptors to update in place.
+            :param owner: The ancestor class ``attach_at`` ran against.
+        """
+        for descriptor in descriptors:
+            stamp_blueprint_name(descriptor, cls.__name__, replaces=owner.__name__)
+
+        return
 
     @classmethod
     def _compose_path_for_attach(
@@ -172,9 +196,13 @@ class Blueprint(Endpoint):
         #
         # It bought idempotency that is now free: marked_descriptors() reads
         # the handlers and this class, and returns the same objects each call.
-        all_descriptors = cls.marked_descriptors()
+        #
+        # routable_descriptors() is marked_descriptors() with handlers written
+        # in the class body bound to an instance (or the class), so a handler
+        # declared ``def thing(self, request)`` is callable with the request.
+        all_descriptors = cls.routable_descriptors()
 
-        # Filter to descriptors that were registered by this blueprint class
+        # Every descriptor declared through this class belongs to it
         blueprint_descriptors = cls._collect_blueprint_descriptors(all_descriptors)
 
         # If router is provided, add each descriptor to it
@@ -191,40 +219,25 @@ class Blueprint(Endpoint):
     ) -> List[EndpointDescriptor]:
         """
             Collect descriptors that belong to this blueprint.
-            
-            This method filters the global descriptor list to find those
-            that were registered by this blueprint class.
-            
-            :param all_descriptors: All registered descriptors.
-            
+
+            Every descriptor handed in was declared through this class -- by
+            a handler in its body (or a base class's), by a free function
+            passed to ``cls.attach_at``, or by ``cls.attach_child`` -- so
+            every one belongs to it and is returned.
+
+            This used to filter by path prefix and by module, which was how
+            a blueprint picked its own entries out of a process-global
+            registry. Applied to descriptors that are already this class's
+            own, the filter only lost routes: a handler declared
+            ``absolute=True`` sits outside the base path by design, and a
+            handler defined in another module is still this blueprint's.
+
+            :param all_descriptors: The descriptors declared through this class.
+
             :returns: List of descriptors belonging to this blueprint.
         """
-        blueprint_descriptors = []
-        base = cls._get_base_path()
-        
-        for descriptor in all_descriptors:
-            # A child this blueprint attached under one of its own parent
-            # placements (nested attach_child) lives below that placement,
-            # not below this class's own base, so the base-path check below
-            # would drop it. It was declared on this class by attach_child,
-            # so it belongs to this blueprint.
-            if ENDPOINT_PARENT_PLACEMENT_EXTRA in descriptor.extras:
-                blueprint_descriptors.append(descriptor)
-                continue
-            
-            # Check if descriptor's path starts with our base path
-            desc_path = descriptor.path
-            if desc_path is None and descriptor.leaf is not None:
-                desc_path = f"/{descriptor.leaf}"
-            
-            if desc_path is not None and base is not None:
-                if desc_path.startswith(base):
-                    blueprint_descriptors.append(descriptor)
-            elif base is None:
-                # No base path - include all descriptors from our module
-                if descriptor.module == cls.__module__:
-                    blueprint_descriptors.append(descriptor)
-        
+        blueprint_descriptors = list(all_descriptors)
+
         return blueprint_descriptors
     
     @classmethod
@@ -413,6 +426,7 @@ class Blueprint(Endpoint):
         error_map: Optional[Dict[int, Type]] = None,
         doc: Optional[Doc] = None,
         on_conflict: str = "error",
+        rest_processing: Optional[bool] = None,
         **extras
     ) -> Callable[[F], F]:
         """
@@ -439,6 +453,10 @@ class Blueprint(Endpoint):
             :param error_map: Mapping of status codes to error schemas.
             :param doc: Documentation object with summary/description.
             :param on_conflict: "error" to raise on conflict, "replace" to override.
+            :param rest_processing: False to opt a handler declared with REST
+                                    metadata out of the REST request/response
+                                    processing (see :meth:`Endpoint.attach_at`);
+                                    None takes the class attribute.
             :param extras: Additional kwargs stored in descriptor.extras.
             
             :returns: Decorator that returns the original function unchanged.
@@ -456,8 +474,21 @@ class Blueprint(Endpoint):
             )
         
         # Step 2: Compose path using _compose_path()
-        # This handles base_path/base_leaf composition with child leaf/path
-        computed_path = cls._compose_path(leaf=leaf, path=path)
+        # This handles base_path/base_leaf composition with child leaf/path.
+        # ``absolute=True`` opts a handler out of the blueprint prefix: its
+        # path is used exactly as written.
+        absolute = extras.get("absolute", False) is True
+        if absolute and path is None:
+            raise EndpointRegistrationError(
+                message="'path' must be provided to attach_at() when absolute=True",
+                endpoint=cls,
+                missing_fields=["path"]
+            )
+
+        if absolute:
+            computed_path = path
+        else:
+            computed_path = cls._compose_path(leaf=leaf, path=path)
         
         # Step 3: Build child kwargs dict for constraint merging
         child_kwargs: Dict[str, Any] = {
@@ -472,8 +503,13 @@ class Blueprint(Endpoint):
         # This applies inheritance rules for access_policy, rate_limit, tags, etc.
         merged = cls._merge_constraints(child_kwargs)
         
-        # Step 5: Call parent attach_at with merged values to obtain
-        # the inner decorator that registers the descriptor.
+        # Step 5: Record the blueprint the route belongs to, so blueprint
+        # scoped middleware runs for it, then call parent attach_at with
+        # merged values to obtain the inner decorator that registers the
+        # descriptor.
+        if extras.get(ENDPOINT_BLUEPRINT_NAME_EXTRA) is None:
+            extras[ENDPOINT_BLUEPRINT_NAME_EXTRA] = cls.__name__
+
         inner_decorator = super().attach_at(
             leaf=None,  # We use computed path instead
             path=computed_path,
@@ -487,6 +523,7 @@ class Blueprint(Endpoint):
             error_map=error_map,
             doc=doc,
             on_conflict=on_conflict,
+            rest_processing=rest_processing if rest_processing is not None else cls.rest_processing,
             **extras
         )
 
@@ -503,7 +540,7 @@ class Blueprint(Endpoint):
             inner_decorator=inner_decorator,
             leaf=leaf,
             path=path,
-            absolute=bool(extras.get("absolute", False)),
+            absolute=absolute,
         )
     
     @classmethod
@@ -596,6 +633,16 @@ class Blueprint(Endpoint):
             
             The method preserves child class attributes when overrides are
             not provided, and applies overrides only to specified attributes.
+
+            The descriptor returned is the *placement*: it records where the
+            child sits and what it inherits. The routes ``register()``
+            returns come from the child: every handler the child has
+            declared with ``attach_at`` is re-placed under the placement,
+            keeping its own handler (see
+            :meth:`Endpoint._place_child_handlers`). Declare a child's
+            handlers before attaching it. A child that declares no handlers
+            contributes the placement alone, which answers a request with an
+            error naming the child.
             
             Nested blueprints: attaching a blueprint to a parent returns the
             descriptor that places it (for example ``/api/v1`` for a
@@ -736,17 +783,14 @@ class Blueprint(Endpoint):
         if parent_placement is not None:
             extras_dict[ENDPOINT_PARENT_PLACEMENT_EXTRA] = placement_base
         
-        # Step 10: Create a placeholder handler for the child descriptor
-        # The actual handler will be set when the child is decorated
-        def placeholder_handler() -> None:
-            pass
-        
-        placeholder_handler.__name__ = f"{child_endpoint.__name__}_child"
-        placeholder_handler.__module__ = child_endpoint.__module__
+        # Step 10: The placement descriptor says where the child was placed
+        # and what it inherits. It is not itself a route, so it carries a
+        # stand-in handler that explains that if anything ever calls it.
+        placement_handler = cls._make_placement_handler(child_endpoint)
         
         # Step 11: Create the descriptor
         descriptor = EndpointDescriptor(
-            handler=placeholder_handler,
+            handler=placement_handler,
             module=child_endpoint.__module__,
             leaf=None,  # We use composed path instead
             path=composed_path,
@@ -758,13 +802,30 @@ class Blueprint(Endpoint):
             extras=extras_dict
         )
         
-        # Step 12: mark the handler, and record the descriptor against this
-        # blueprint. The mark alone would be unreachable here -- the handler
-        # is the placeholder built above, which no caller holds a name for --
-        # so the class declaration is what lets `cls.register()` see the
-        # child. Callers wanting it in a registry pass the returned
-        # descriptor to `EndpointRegistry.register`.
-        mark_handler(descriptor.handler, descriptor)
-        declare_on_class(cls, descriptor)
+        # Step 12: re-place the child's own handlers under the placement and
+        # record them against this blueprint, so `cls.register()` routes
+        # requests to the handlers the child actually declared.
+        placed = cls._place_child_handlers(
+            child_endpoint=child_endpoint,
+            placement=descriptor,
+            merge_tags=cls.merge_tags,
+            replace_scopes=cls.replace_scopes,
+            replace_roles=cls.replace_roles
+        )
+
+        # Step 12b: the placed routes belong to this blueprint, unless the
+        # child is a blueprint and recorded its own name.
+        stamp_blueprint_name(descriptor, cls.__name__)
+        for placed_descriptor in placed:
+            stamp_blueprint_name(placed_descriptor, cls.__name__)
+
+        # Step 13: a child that declared no handlers has nothing to re-place.
+        # The placement is then recorded against this blueprint on its own,
+        # as it always was, so `cls.register()` still reports where the
+        # child sits. When handlers were re-placed the placement is left
+        # out: it would claim the same path and method as a real handler.
+        if len(placed) == 0:
+            mark_handler(descriptor.handler, descriptor)
+            declare_on_class(cls, descriptor)
 
         return descriptor

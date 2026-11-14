@@ -835,3 +835,55 @@ def test_property_policy_inheritance_security():
                     raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Merged role requirements and expired contexts
+# =============================================================================
+
+from datetime import datetime, timedelta, timezone
+
+
+def test_engine_requires_a_role_from_each_merged_policy():
+    """
+        The engine enforces every role group of a merged policy.
+    """
+    engine = AuthorizationEngine()
+    merged = AccessPolicy(roles=("admin",)).merge_with(AccessPolicy(roles=("viewer",)))
+
+    viewer = engine.evaluate(merged, SecurityContext(user_id="u1", roles=("viewer",)))
+    both = engine.evaluate(merged, SecurityContext(user_id="u2", roles=("admin", "viewer")))
+
+    assert viewer.allowed is False, "A viewer must not satisfy the inherited admin requirement"
+    assert viewer.reason == "Missing required role", f"Unexpected reason {viewer.reason!r}"
+    assert both.allowed is True, "A subject holding both roles is allowed"
+    return
+
+
+def test_engine_denies_expired_context():
+    """
+        A context whose expires_at has passed is not authorized.
+    """
+    engine = AuthorizationEngine()
+    expired_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    context = SecurityContext(user_id="u1", roles=("admin",), expires_at=expired_at)
+
+    result = engine.evaluate(AccessPolicy(roles=("admin",)), context)
+
+    assert result.allowed is False, "An expired context must be denied"
+    return
+
+
+def test_engine_denies_roles_of_expired_context_without_require_auth():
+    """
+        The roles of an expired context grant nothing, also for a policy
+        that does not set require_auth.
+    """
+    engine = AuthorizationEngine()
+    expired_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    context = SecurityContext(user_id="u1", roles=("admin",), expires_at=expired_at)
+
+    result = engine.evaluate(AccessPolicy(roles=("admin",), require_auth=False), context)
+
+    assert result.allowed is False, "Roles of an expired context must not be honoured"
+    return

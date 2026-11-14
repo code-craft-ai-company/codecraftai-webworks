@@ -607,3 +607,92 @@ def test_property_2_extension_context_access_after_init():
             raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Attaching a manifest
+# =============================================================================
+
+class _BareExtension(Extension):
+    """
+        An extension class that declares no metadata of its own.
+    """
+
+
+def test_manifest_is_none_until_attached():
+    """
+        Test that an extension created without a manifest has none.
+    """
+    extension = _ConcreteExtension()
+
+    if extension.manifest is not None:
+        errmsg = "Expected manifest to be None, got {}".format(extension.manifest)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_attach_manifest_fills_metadata_the_class_left_at_default():
+    """
+        Test that attach_manifest() takes the name, version, description and
+        dependencies from the manifest when the class does not declare them.
+    """
+    from ccai.webworks.extensibility.manifest import ExtensionManifest
+
+    manifest = ExtensionManifest(
+        name="from-manifest",
+        version="2.3.4",
+        entry_point="package.module.Class",
+        description="Described by the manifest",
+        dependencies=["dep-a"],
+        optional_dependencies=["dep-b"],
+    )
+
+    extension = _BareExtension()
+    extension.attach_manifest(manifest)
+
+    found = (extension.name, extension.version, extension.description, extension.dependencies,
+             extension.optional_dependencies)
+    expected = ("from-manifest", "2.3.4", "Described by the manifest", ["dep-a"], ["dep-b"])
+
+    if found != expected:
+        errmsg = "Expected {}, got {}".format(expected, found)
+        raise AssertionError(errmsg)
+
+    if extension.manifest is not manifest:
+        errmsg = "Expected the manifest property to return the attached manifest"
+        raise AssertionError(errmsg)
+
+    if _BareExtension.name != "":
+        errmsg = "Attaching a manifest should not change the class attributes"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_attach_manifest_keeps_metadata_the_class_declares():
+    """
+        Test that attach_manifest() does not replace metadata the class
+        declares itself.
+    """
+    from ccai.webworks.extensibility.manifest import ExtensionManifest
+
+    manifest = ExtensionManifest(
+        name="from-manifest",
+        version="2.3.4",
+        entry_point="package.module.Class",
+    )
+
+    extension = _ConcreteExtension()
+    declared_name = extension.name
+    declared_version = extension.version
+
+    extension.attach_manifest(manifest)
+
+    if extension.name != declared_name or extension.version != declared_version:
+        errmsg = "Expected the declared name and version to be kept, got '{}' and '{}'".format(
+            extension.name, extension.version
+        )
+        raise AssertionError(errmsg)
+
+    return

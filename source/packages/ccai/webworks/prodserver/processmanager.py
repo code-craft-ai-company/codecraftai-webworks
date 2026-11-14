@@ -112,6 +112,13 @@ class ProcessManager:
             If a PID file already exists with a running process, raises
             PidFileError to prevent duplicate instances.
 
+            The file is created, it is never opened if it exists. The
+            server usually writes it as root into a directory other users
+            may be able to write to, so an existing path, or a symbolic
+            link planted at the path, must not decide which file root
+            writes into. A stale PID file is removed first, which removes a
+            link and not the file it points to.
+
             :raises PidFileError: If the PID file exists with a running
                 process or if writing fails.
         """
@@ -122,14 +129,39 @@ class ProcessManager:
         self._check_existing_pid_file(pid_path)
 
         try:
+            self._remove_stale_pid_file(pid_path)
+
+            open_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            # Not every platform has O_NOFOLLOW. O_EXCL already refuses a
+            # path that exists, including a symbolic link.
+            open_flags |= getattr(os, "O_NOFOLLOW", 0)
+
             pid = os.getpid()
-            with open(pid_path, "w") as fh:
+            pid_fd = os.open(pid_path, open_flags, 0o644)
+            with os.fdopen(pid_fd, "w") as fh:
                 fh.write(str(pid))
             self._pid_file_written = True
             _logger.info("PID file written: %s (pid=%d)", pid_path, pid)
         except OSError as err:
             errmsg = f"Failed to write PID file '{pid_path}': {err}"
             raise PidFileError(errmsg) from err
+
+        return
+
+    def _remove_stale_pid_file(self, pid_path: str) -> None:
+        """
+            Remove a PID file that was left behind by a process that is gone.
+
+            The caller has already established that no running process
+            owns the file. Whatever is at the path is removed: for a
+            symbolic link that is the link itself.
+
+            :param pid_path: Path to the PID file.
+
+            :raises OSError: If the path exists and cannot be removed.
+        """
+        if os.path.lexists(pid_path):
+            os.remove(pid_path)
 
         return
 
@@ -373,7 +405,13 @@ class ProcessManager:
 
             Applies umask, group, and user settings in the correct order.
             Group must be set before user to avoid losing permission to
-            change the group.
+            change the group. When a user is configured without a group,
+            the process takes the primary group of that user: it must not
+            keep the group it was started with, which is root's.
+
+            Call this after everything that needs the privileges the
+            server was started with has been done: binding the listening
+            address, loading the TLS key and opening the log files.
 
             :raises PrivilegeError: If privilege operations fail.
         """
@@ -434,7 +472,9 @@ class ProcessManager:
             Change the process user to the configured user.
 
             Also sets supplementary groups and initializes the
-            user's group access list.
+            user's group access list. If no group is configured, the
+            primary group of the process is set to the primary group of
+            the user.
 
             :raises ConfigurationError: If a user is configured on a
                 platform without the POSIX account database.
@@ -455,6 +495,22 @@ class ProcessManager:
 
         try:
             user_info = pwd.getpwnam(user_name)
+        except KeyError:
+            errmsg = f"User '{user_name}' does not exist"
+            raise PrivilegeError(errmsg)
+
+        try:
+            # Without a configured group the process would keep the group
+            # it was started with. Take the primary group of the user,
+            # while there is still the privilege to change it.
+            if self._config.group is None:
+                os.setgid(user_info.pw_gid)
+                _logger.info(
+                    "Process group set to the primary group of '%s' (gid=%d)",
+                    user_name,
+                    user_info.pw_gid,
+                )
+
             # Initialize supplementary groups before dropping to user
             try:
                 os.initgroups(user_name, user_info.pw_gid)
@@ -462,9 +518,6 @@ class ProcessManager:
                 _logger.debug("Cannot set supplementary groups (not root)")
             os.setuid(user_info.pw_uid)
             _logger.info("Process user set to '%s' (uid=%d)", user_name, user_info.pw_uid)
-        except KeyError:
-            errmsg = f"User '{user_name}' does not exist"
-            raise PrivilegeError(errmsg)
         except OSError as err:
             errmsg = f"Failed to set user to '{user_name}': {err}"
             raise PrivilegeError(errmsg) from err

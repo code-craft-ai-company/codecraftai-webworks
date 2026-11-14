@@ -5,7 +5,14 @@
  * regions (polite + assertive) is appended to the document; components route
  * status messages through `announce()` so screen readers are notified without
  * each component shipping its own live region.
+ *
+ * While a modal surface (dialog, drawer, ...) is open everything outside it
+ * is inert and hidden from assistive technology, so the regions live inside
+ * the topmost modal surface then (core/overlay.js moves them there when the
+ * modal opens and back to <body> when it closes).
  */
+
+import { topModalSurface } from "./overlay.js";
 
 let politeRegion = null;
 let assertiveRegion = null;
@@ -28,14 +35,32 @@ function buildRegion(politeness) {
   return region
 }
 
+/*
+ * Make sure both live regions exist and sit where assistive technology can
+ * read them: inside the topmost open modal surface, otherwise in the current
+ * body. A region that was removed (the page replaced document.body, or a
+ * script cleared it) is attached again, because a detached region is silent.
+ */
 function ensureRegions() {
   if (politeRegion === null) {
     politeRegion = buildRegion("polite")
-    document.body.appendChild(politeRegion)
   }
   if (assertiveRegion === null) {
     assertiveRegion = buildRegion("assertive")
-    document.body.appendChild(assertiveRegion)
+  }
+
+  let container = topModalSurface()
+  if (container === null) {
+    container = document.body
+  }
+
+  if (container !== null) {
+    if (politeRegion.isConnected === false || politeRegion.parentNode !== container) {
+      container.appendChild(politeRegion)
+    }
+    if (assertiveRegion.isConnected === false || assertiveRegion.parentNode !== container) {
+      container.appendChild(assertiveRegion)
+    }
   }
   return
 }

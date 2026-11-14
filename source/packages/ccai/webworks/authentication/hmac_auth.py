@@ -18,11 +18,13 @@ __credits__ = []
 import hashlib
 import hmac
 import logging
+import math
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, Union, runtime_checkable
 
 from ccai.webworks.authentication.core import (
     AuthenticationContext,
@@ -36,6 +38,15 @@ from ccai.webworks.authentication.core import (
 # headers and bad timestamps are logged at warning so a clock-skew
 # wave from a misconfigured client doesn't go unnoticed.
 logger = logging.getLogger(__name__)
+
+# A signature is the hexadecimal form of an HMAC-SHA256 or HMAC-SHA512.
+_HEX_SIGNATURE_PATTERN = re.compile(r"^[0-9A-Fa-f]{64,128}$")
+
+# Hash constructions by the algorithm name carried in the header.
+_HMAC_HASH_FUNCTIONS = {
+    "HMAC-SHA256": hashlib.sha256,
+    "HMAC-SHA512": hashlib.sha512,
+}
 
 
 class HMACAlgorithm(Enum):
@@ -142,14 +153,27 @@ class HMACAuthenticator:
             :param key_store: The store for retrieving signing keys.
             :param timestamp_window: Maximum age of requests in seconds.
                                     Defaults to 300 (5 minutes).
-            :param signed_headers: List of headers to include in signature.
-                                  Defaults to ["host", "date"].
+            :param signed_headers: Headers every request must sign. A
+                                  request whose ``SignedHeaders`` leaves
+                                  one of them out is refused; the client
+                                  may sign more. Defaults to
+                                  ["host", "date"]. An empty list
+                                  requires no header.
             :param algorithm: The default HMAC algorithm. Defaults to HMAC-SHA256.
         """
         self._key_store = key_store
         self._timestamp_window = timestamp_window
-        self._signed_headers = signed_headers or ["host", "date"]
+        if signed_headers is None:
+            signed_headers = ["host", "date"]
+        self._signed_headers = [
+            header_name.lower() for header_name in signed_headers
+        ]
         self._algorithm = algorithm
+        
+        # Signatures accepted inside the timestamp window, mapped to the
+        # time after which they can no longer be replayed anyway.
+        self._seen_signatures: Dict[str, float] = {}
+        self._seen_signatures_lock = threading.Lock()
     
     @property
     def scheme(self) -> str:
@@ -159,6 +183,18 @@ class HMACAuthenticator:
             :returns: The string "HMAC".
         """
         return "HMAC"
+    
+    @property
+    def requires_body(self) -> bool:
+        """
+            Whether this authenticator needs the request body.
+            
+            The signature covers a digest of the body, so the middleware
+            buffers the body before authenticating.
+            
+            :returns: Always True.
+        """
+        return True
     
     @property
     def timestamp_window(self) -> float:
@@ -251,6 +287,30 @@ class HMACAuthenticator:
                 error_description=timestamp_error
             )
         
+        # The signature is a hex digest; anything else can never match
+        # (and non-ASCII text cannot be compared in constant time).
+        if _HEX_SIGNATURE_PATTERN.match(credentials.signature) is None:
+            return self._bad_request("Invalid signature format")
+        
+        if credentials.algorithm.upper() not in _HMAC_HASH_FUNCTIONS:
+            return self._bad_request("Unsupported HMAC algorithm")
+        
+        # Every header this server is configured to protect must be in
+        # the set the client signed.
+        missing_headers = [
+            header_name for header_name in self._signed_headers
+            if header_name.lower() not in credentials.signed_headers
+        ]
+        if len(missing_headers) > 0:
+            logger.warning(
+                "HMAC auth: required headers not signed: %s", missing_headers
+            )
+            return AuthenticationResult(
+                status=AuthenticationStatus.FAILURE,
+                error_code="invalid_signature",
+                error_description="Required headers are not signed"
+            )
+        
         # Get secret from key store
         secret = await self._key_store.get_secret(credentials.key_id)
         
@@ -284,6 +344,18 @@ class HMACAuthenticator:
                 status=AuthenticationStatus.FAILURE,
                 error_code="invalid_signature",
                 error_description="Signature verification failed"
+            )
+        
+        # A valid signature is accepted once: a second request carrying
+        # it inside the timestamp window is a replay.
+        if not self._remember_signature(credentials.signature.lower()):
+            logger.warning(
+                "HMAC auth: replayed signature for key %r", credentials.key_id
+            )
+            return AuthenticationResult(
+                status=AuthenticationStatus.FAILURE,
+                error_code="replay_detected",
+                error_description="Request signature has already been used"
             )
         
         # Get principal from key store
@@ -380,25 +452,113 @@ class HMACAuthenticator:
         """
             Extract headers from the request as a dictionary.
             
+            Accepts a plain dict, any mapping-like object that offers
+            ``items()`` (the framework ``Headers`` class) and the ASGI
+            list of ``(name, value)`` byte pairs.
+            
             :param request: The HTTP request object.
             
-            :returns: A dictionary of header names to values.
+            :returns: A dictionary of lower-case header names to values.
         """
-        # Handle dict-like request objects
+        headers = None
         if isinstance(request, dict):
             headers = request.get("headers", {})
-            if isinstance(headers, dict):
-                return {k.lower(): v for k, v in headers.items()}
+        elif hasattr(request, "headers"):
+            headers = request.headers
+        
+        if headers is None:
             return {}
         
-        # Handle request objects with headers attribute
-        if hasattr(request, "headers"):
-            headers = request.headers
-            if isinstance(headers, dict):
-                return {k.lower(): v for k, v in headers.items()}
+        pairs = []
+        if hasattr(headers, "items"):
+            pairs = list(headers.items())
+        elif isinstance(headers, (list, tuple)):
+            pairs = [pair for pair in headers if len(pair) >= 2]
         
-        return {}
-
+        rtnval: Dict[str, str] = {}
+        for pair in pairs:
+            name = pair[0]
+            value = pair[1]
+            if isinstance(name, bytes):
+                name = name.decode("latin-1")
+            if isinstance(value, bytes):
+                value = value.decode("latin-1")
+            rtnval[str(name).lower()] = value
+        
+        return rtnval
+    
+    def _get_request_query_string(self, request: Any) -> str:
+        """
+            Extract the raw query string from the request.
+            
+            :param request: The HTTP request object.
+            
+            :returns: The query string without the leading ``?``.
+        """
+        query_string = None
+        if isinstance(request, dict):
+            query_string = request.get("query_string")
+        else:
+            query_string = getattr(request, "query_string", None)
+        
+        if isinstance(query_string, bytes):
+            query_string = query_string.decode("utf-8", errors="replace")
+        
+        if not isinstance(query_string, str):
+            return ""
+        
+        return query_string
+    
+    def _get_request_body(self, request: Any) -> bytes:
+        """
+            Extract the raw body from the request.
+            
+            :param request: The HTTP request object.
+            
+            :returns: The request body bytes (empty when there is none).
+        """
+        body = None
+        if isinstance(request, dict):
+            body = request.get("body")
+        else:
+            body = getattr(request, "body", None)
+        
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        
+        if not isinstance(body, (bytes, bytearray)):
+            return b""
+        
+        return bytes(body)
+    
+    def _remember_signature(self, signature: str) -> bool:
+        """
+            Record an accepted signature for the timestamp window.
+            
+            :param signature: The verified signature (lower-case hex).
+            
+            :returns: True if the signature was not seen before, False if
+                      it is a replay.
+        """
+        now = time.time()
+        
+        with self._seen_signatures_lock:
+            # Forget signatures whose timestamp can no longer be valid
+            expired = [
+                seen for seen, forget_at in self._seen_signatures.items()
+                if forget_at < now
+            ]
+            for seen in expired:
+                del self._seen_signatures[seen]
+            
+            if signature in self._seen_signatures:
+                return False
+            
+            # A timestamp is accepted from window seconds in the past to
+            # window seconds in the future, so remember it for both.
+            self._seen_signatures[signature] = now + (2 * self._timestamp_window)
+        
+        return True
     
     def _parse_hmac_header(self, auth_header: str) -> HMACCredentials:
         """
@@ -480,6 +640,12 @@ class HMACAuthenticator:
             )
             return (False, "Invalid timestamp format")
         
+        # float() accepts "nan" and "inf"; every comparison against NaN
+        # is false, which would skip the freshness check below.
+        if not math.isfinite(timestamp):
+            logger.warning("HMAC auth: non-finite timestamp %r", timestamp_str)
+            return (False, "Invalid timestamp format")
+        
         current_time = time.time()
         age = abs(current_time - timestamp)
         
@@ -497,13 +663,7 @@ class HMACAuthenticator:
         """
             Build the canonical request string for signature computation.
             
-            The canonical string format is:
-            METHOD\n
-            PATH\n
-            TIMESTAMP\n
-            header1:value1\n
-            header2:value2\n
-            ...
+            See :func:`build_hmac_canonical_string` for the format.
             
             :param request: The HTTP request object.
             :param timestamp: The request timestamp.
@@ -511,23 +671,16 @@ class HMACAuthenticator:
             
             :returns: The canonical request string.
         """
-        method = self._get_request_method(request)
-        path = self._get_request_path(request)
-        headers = self._get_request_headers(request)
-        
-        # Build canonical string
-        parts = [
-            method.upper(),
-            path,
-            timestamp
-        ]
-        
-        # Add signed headers in order
-        for header_name in sorted(signed_headers):
-            header_value = headers.get(header_name.lower(), "")
-            parts.append(f"{header_name.lower()}:{header_value}")
-        
-        return "\n".join(parts)
+        rtnval = build_hmac_canonical_string(
+            method=self._get_request_method(request),
+            path=self._get_request_path(request),
+            timestamp=timestamp,
+            headers=self._get_request_headers(request),
+            signed_headers=signed_headers,
+            query_string=self._get_request_query_string(request),
+            body=self._get_request_body(request)
+        )
+        return rtnval
     
     def _compute_signature(
         self,
@@ -544,19 +697,8 @@ class HMACAuthenticator:
             
             :returns: The computed signature as a hexadecimal string.
         """
-        # Select hash function
-        if algorithm.upper() == "HMAC-SHA512":
-            hash_func = hashlib.sha512
-        else:
-            hash_func = hashlib.sha256
-        
-        signature = hmac.HMAC(
-            secret.encode("utf-8"),
-            canonical_string.encode("utf-8"),
-            hash_func
-        )
-        
-        return signature.hexdigest()
+        rtnval = _sign_canonical_string(secret, canonical_string, algorithm)
+        return rtnval
     
     def _bad_request(self, message: str) -> AuthenticationResult:
         """
@@ -573,6 +715,94 @@ class HMACAuthenticator:
         )
 
 
+def build_hmac_canonical_string(
+    method: str,
+    path: str,
+    timestamp: str,
+    headers: Dict[str, str],
+    signed_headers: List[str],
+    query_string: Union[str, bytes] = "",
+    body: Union[str, bytes] = b""
+) -> str:
+    """
+        Build the canonical request string that is signed.
+        
+        The canonical string format is::
+        
+            METHOD\n
+            PATH\n
+            QUERY-STRING\n
+            TIMESTAMP\n
+            SHA256-HEX-OF-BODY\n
+            header1:value1\n
+            header2:value2\n
+            ...
+        
+        The query string is the raw query string of the request (empty
+        when there is none) and the body digest is the SHA-256 of the
+        raw body bytes, so neither can be changed without invalidating
+        the signature.
+        
+        :param method: The HTTP method.
+        :param path: The request path.
+        :param timestamp: The request timestamp.
+        :param headers: Dictionary of request headers.
+        :param signed_headers: List of headers to include in signature.
+        :param query_string: The raw query string without the leading ``?``.
+        :param body: The raw request body.
+        
+        :returns: The canonical request string.
+    """
+    if isinstance(query_string, bytes):
+        query_string = query_string.decode("utf-8", errors="replace")
+    
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    
+    body_digest = hashlib.sha256(body).hexdigest()
+    
+    parts = [
+        method.upper(),
+        path,
+        query_string,
+        timestamp,
+        body_digest
+    ]
+    
+    # Add signed headers in order
+    normalized_headers = {k.lower(): v for k, v in headers.items()}
+    for header_name in sorted(signed_headers):
+        header_value = normalized_headers.get(header_name.lower(), "")
+        parts.append(f"{header_name.lower()}:{header_value}")
+    
+    return "\n".join(parts)
+
+
+def _sign_canonical_string(secret: str, canonical_string: str, algorithm: str) -> str:
+    """
+        Compute the HMAC of a canonical request string.
+        
+        :param secret: The secret key.
+        :param canonical_string: The canonical request string.
+        :param algorithm: The HMAC algorithm name.
+        
+        :returns: The signature as a hexadecimal string.
+        
+        :raises ValueError: If the algorithm is not supported.
+    """
+    hash_func = _HMAC_HASH_FUNCTIONS.get(algorithm.upper())
+    if hash_func is None:
+        raise ValueError(f"Unsupported HMAC algorithm: {algorithm}")
+    
+    signature = hmac.HMAC(
+        secret.encode("utf-8"),
+        canonical_string.encode("utf-8"),
+        hash_func
+    )
+    
+    return signature.hexdigest()
+
+
 def compute_hmac_signature(
     secret: str,
     method: str,
@@ -580,7 +810,9 @@ def compute_hmac_signature(
     timestamp: str,
     headers: Dict[str, str],
     signed_headers: List[str],
-    algorithm: str = "HMAC-SHA256"
+    algorithm: str = "HMAC-SHA256",
+    query_string: Union[str, bytes] = "",
+    body: Union[str, bytes] = b""
 ) -> str:
     """
         Compute the HMAC signature for a request.
@@ -595,39 +827,23 @@ def compute_hmac_signature(
         :param headers: Dictionary of request headers.
         :param signed_headers: List of headers to include in signature.
         :param algorithm: The HMAC algorithm.
+        :param query_string: The raw query string without the leading ``?``.
+        :param body: The raw request body.
         
         :returns: The computed signature as a hexadecimal string.
     """
-    # Build canonical string
-    parts = [
-        method.upper(),
-        path,
-        timestamp
-    ]
-    
-    # Normalize headers to lowercase keys
-    normalized_headers = {k.lower(): v for k, v in headers.items()}
-    
-    # Add signed headers in order
-    for header_name in sorted(signed_headers):
-        header_value = normalized_headers.get(header_name.lower(), "")
-        parts.append(f"{header_name.lower()}:{header_value}")
-    
-    canonical_string = "\n".join(parts)
-    
-    # Select hash function
-    if algorithm.upper() == "HMAC-SHA512":
-        hash_func = hashlib.sha512
-    else:
-        hash_func = hashlib.sha256
-    
-    signature = hmac.HMAC(
-        secret.encode("utf-8"),
-        canonical_string.encode("utf-8"),
-        hash_func
+    canonical_string = build_hmac_canonical_string(
+        method=method,
+        path=path,
+        timestamp=timestamp,
+        headers=headers,
+        signed_headers=signed_headers,
+        query_string=query_string,
+        body=body
     )
     
-    return signature.hexdigest()
+    rtnval = _sign_canonical_string(secret, canonical_string, algorithm)
+    return rtnval
 
 
 def create_hmac_auth_header(

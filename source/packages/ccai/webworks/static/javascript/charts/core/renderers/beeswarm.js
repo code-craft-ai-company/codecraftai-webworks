@@ -1,314 +1,228 @@
 /*
  * beeswarm.js
  *
- * Beeswarm plot renderer — distributes individual observations as
- * non-overlapping dots along one axis using a greedy collision-avoidance
- * algorithm.  The perpendicular axis carries no semantic meaning.
+ * Beeswarm plot renderer — individual observations as non-overlapping
+ * dots along one value axis; the cross axis carries no meaning. Uses the
+ * same placement routine as the swarm type (diststats.placeSwarm).
  *
  * Registered types:
  *   "beeswarm"
  *
- * ctx.raw shape:
- *   raw.series   [{name, points:[{x?, y?, label?}]}]
- *   raw.radius   dot radius (default 4)
- *   raw.padding  gap between dots (default 1)
+ * Data shape:
+ *   series[]   [{ name, points: [{ x?, y?, label? }] }] -- `x` values for a
+ *              horizontal swarm (picked automatically when the data has
+ *              only x), `y` values for a vertical one; non-finite values
+ *              are missing data
+ *   radius     dot radius in px (default 4; the `radius` attribute wins)
+ *   padding    gap between dots in px (default 1; `padding` attribute wins)
+ *
+ * Relevant ctx.attrs:
+ *   radius, padding   as above
+ *   mode              "beeswarm" (default) | "strip" (no collision avoidance)
+ *   show-median       boolean, default on (show-median="false" hides it) — a dashed median line per
+ *                     series
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber } from "../svgdraw.js";
-import { linearScale, niceTicks } from "../scales.js";
-import { extent } from "../svgdraw.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
+import { linearScale } from "../scales.js";
+import {
+  isFiniteNumber, sortNumbers, quantileSorted, placeSwarm, swarmRadius, axisLayer, drawTicks,
+  tickCount, activateOnKey, focusableMark, fitDomain
+} from "./diststats.js";
+import { booleanOption } from "../chartoptions.js";
+
+const MIN_RADIUS = 1.5;
 
 
-/* ── collision-avoidance placement ───────────────────────────────────── */
-
-function _placeDots(sorted, radius, padding, perpCenter, perpMax) {
+function _numberOption(ctx, name, rawValue, fallback) {
   /*
-   * Greedy beeswarm placement.  Each dot is placed at the nearest
-   * perpendicular offset (starting at perpCenter) that does not
-   * intersect any already-placed dot.
-   *
-   * sorted: [{px (pixel along value axis), seriesName, label, value}]
-   *
-   * :returns: Array of {px, py, ...original fields}.
+   * A positive number from the host attribute, else from the data, else
+   * the fallback.
    */
-  const gap     = radius * 2 + padding
-  const placed  = []
-
-  for (let i = 0; i < sorted.length; i = i + 1) {
-    const dot = sorted[i]
-    const px  = dot.px
-
-    /* Try offsets: 0, ±gap, ±2gap … */
-    let bestPy = perpCenter
-    let found  = false
-    let step   = 0
-
-    while (found === false) {
-      const candidates = step === 0
-        ? [perpCenter]
-        : [perpCenter - step * gap, perpCenter + step * gap]
-
-      for (let ci = 0; ci < candidates.length; ci = ci + 1) {
-        const py  = candidates[ci]
-        const ok  = py - radius >= 0 && py + radius <= perpMax
-        if (ok === false) {
-          continue
-        }
-        let collision = false
-        for (let j = 0; j < placed.length; j = j + 1) {
-          const other = placed[j]
-          const dx    = px - other.px
-          const dy    = py - other.py
-          const dist  = Math.sqrt(dx * dx + dy * dy)
-          if (dist < gap) {
-            collision = true
-            break
-          }
-        }
-        if (collision === false) {
-          bestPy = py
-          found  = true
-          break
-        }
-      }
-
-      step = step + 1
-      if (step > 200) {
-        /* Safety valve: just place overlapping rather than infinite loop */
-        found = true
-      }
-    }
-
-    placed.push({ px: px, py: bestPy, seriesName: dot.seriesName,
-                  label: dot.label, value: dot.value })
+  const fromAttr = parseFloat(ctx.attrs(name, ""))
+  if (isFiniteNumber(fromAttr) === true && fromAttr >= 0) {
+    return fromAttr
   }
-
-  return placed
+  if (isFiniteNumber(rawValue) === true && rawValue >= 0) {
+    return rawValue
+  }
+  return fallback
 }
 
 
-/* ── renderer ─────────────────────────────────────────────────────────── */
+function _axisOf(ctx, series) {
+  /*
+   * True for a horizontal swarm (values on x). An explicit orientation
+   * wins; otherwise the axis the data carries values for.
+   */
+  if (ctx.orientation === "horizontal") {
+    return true
+  }
+  let sawX = false
+  let sawY = false
+  for (let si = 0; si < series.length; si = si + 1) {
+    const points = Array.isArray(series[si].points) === true ? series[si].points : []
+    for (let pi = 0; pi < points.length; pi = pi + 1) {
+      const point = points[pi]
+      if (point === null || typeof point !== "object") {
+        continue
+      }
+      if (isFiniteNumber(point.x) === true) {
+        sawX = true
+      }
+      if (isFiniteNumber(point.y) === true) {
+        sawY = true
+      }
+    }
+  }
+  return sawX === true && sawY === false
+}
+
 
 export function render(ctx) {
   /*
    * Render a beeswarm plot.
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
-  const raw  = ctx.raw
+  const raw = ctx.raw !== null && ctx.raw !== undefined ? ctx.raw : {}
   const root = svgEl("g", { part: "plot" }, [])
-
-  const series = (raw !== null && raw !== undefined && Array.isArray(raw.series))
-    ? raw.series
-    : []
+  const series = Array.isArray(ctx.model.series) === true ? ctx.model.series : []
   if (series.length === 0) {
     return root
   }
 
-  /* Decide value axis from the data. The controller defaults orientation
-   * to "vertical" so a 1-D beeswarm with only `x` values would otherwise
-   * read undefined `y` and render nothing. Pick whichever axis the data
-   * carries values for; an explicit `orientation="horizontal"` still
-   * wins. */
-  let sawX = false
-  let sawY = false
-  for (let s = 0; s < series.length; s = s + 1) {
-    const pts = series[s].points || []
-    for (let p = 0; p < pts.length; p = p + 1) {
-      if (typeof pts[p].x === "number") { sawX = true }
-      if (typeof pts[p].y === "number") { sawY = true }
-    }
-  }
-  let horizontal
-  if (ctx.orientation === "horizontal") {
-    horizontal = true
-  } else if (sawX === true && sawY === false) {
-    horizontal = true
-  } else {
-    horizontal = false
-  }
-  const mode       = ctx.attrs("mode", "beeswarm")
-  const radius     = (raw !== null && raw !== undefined && typeof raw.radius === "number")
-    ? raw.radius
-    : 4
-  const padding    = (raw !== null && raw !== undefined && typeof raw.padding === "number")
-    ? raw.padding
-    : 1
+  const horizontal = _axisOf(ctx, series)
+  const mode = ctx.attrs("mode", "beeswarm")
+  const showMedian = booleanOption(ctx, "show-median", true)
+  const radius = Math.max(_numberOption(ctx, "radius", raw.radius, 4), MIN_RADIUS)
+  const padding = _numberOption(ctx, "padding", raw.padding, 1)
 
-  const margin = { top: 16, right: 16, bottom: 36, left: 52 }
-  const plotW  = Math.max(ctx.width  - margin.left - margin.right,  10)
-  const plotH  = Math.max(ctx.height - margin.top  - margin.bottom, 10)
-
-  /* Collect all values across series for domain */
-  const allValues = []
-  for (let s = 0; s < series.length; s = s + 1) {
-    const pts = series[s].points || []
-    for (let p = 0; p < pts.length; p = p + 1) {
-      const v = horizontal ? pts[p].x : pts[p].y
-      if (typeof v === "number") {
-        allValues.push(v)
+  /* Every dot with a finite value on the value axis. */
+  const dots = []
+  for (let si = 0; si < series.length; si = si + 1) {
+    const points = Array.isArray(series[si].points) === true ? series[si].points : []
+    for (let pi = 0; pi < points.length; pi = pi + 1) {
+      const point = points[pi]
+      if (point === null || typeof point !== "object") {
+        continue
       }
+      const value = horizontal === true ? point.x : point.y
+      if (isFiniteNumber(value) === false) {
+        continue
+      }
+      const label = point.label !== null && point.label !== undefined ? String(point.label) : ""
+      dots.push({ seriesIndex: si, value: value, label: label })
     }
   }
-
-  if (allValues.length === 0) {
+  if (dots.length === 0) {
     return root
   }
 
-  const domainExt = extent(allValues)
-  let   lo        = domainExt[0]
-  let   hi        = domainExt[1]
-  if (lo === hi) {
-    lo = lo - 1
-    hi = hi + 1
+  const margin = { top: 16, right: 16, bottom: 36, left: 52 }
+  const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
+  const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
+  let low = Infinity
+  let high = -Infinity
+  for (let di = 0; di < dots.length; di = di + 1) {
+    low = Math.min(low, dots[di].value)
+    high = Math.max(high, dots[di].value)
   }
+  const valueLength = horizontal === true ? plotW : plotH
+  const valueCount = tickCount(valueLength, horizontal === true ? 70 : 40)
+  const pad = (high - low) * 0.04
+  const domain = fitDomain(low - pad, high + pad, valueCount)
+  const valueScale = horizontal === true
+    ? linearScale(domain, [0, plotW])
+    : linearScale(domain, [plotH, 0])
+  const crossLength = horizontal === true ? plotH : plotW
+  const center = crossLength / 2
 
-  /* Value axis (the one with semantic meaning) */
-  const valueScale = horizontal
-    ? linearScale([lo, hi], [0, plotW])
-    : linearScale([lo, hi], [plotH, 0])
-
-  const perpCenter = horizontal ? plotH / 2 : plotW / 2
-  const perpMax    = horizontal ? plotH : plotW
-
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
+  const plot = svgEl("g", { transform: `translate(${margin.left},${margin.top})` }, [])
   root.appendChild(plot)
-
-  /* Gridlines + tick labels on the value axis */
-  const ticks = niceTicks(lo, hi, 5)
-  for (let t = 0; t < ticks.length; t = t + 1) {
-    const tick  = ticks[t]
-    const pixel = valueScale(tick)
-    if (horizontal === true) {
-      plot.appendChild(svgEl("line", {
-        x1: pixel, y1: 0, x2: pixel, y2: plotH,
-        stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-      }, []))
-      plot.appendChild(svgEl("text", {
-        x: pixel, y: plotH + 16,
-        "text-anchor": "middle",
-        "font-size": 11,
-        fill: "var(--mj-text-muted, #6b7280)"
-      }, formatNumber(tick)))
-    } else {
-      plot.appendChild(svgEl("line", {
-        x1: 0, y1: pixel, x2: plotW, y2: pixel,
-        stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-      }, []))
-      plot.appendChild(svgEl("text", {
-        x: -8, y: pixel + 4,
-        "text-anchor": "end",
-        "font-size": 11,
-        fill: "var(--mj-text-muted, #6b7280)"
-      }, formatNumber(tick)))
-    }
+  const axes = axisLayer(plot)
+  if (horizontal === true) {
+    drawTicks(axes, valueScale, { side: "bottom", extent: plotH, count: valueCount })
+  } else {
+    drawTicks(axes, valueScale, { side: "left", extent: plotW, count: valueCount })
   }
 
-  /* Median / mean line (optional) */
-  if (allValues.length > 0) {
-    const sorted = allValues.slice().sort((a, b) => a - b)
-    const mid    = sorted[Math.floor(sorted.length / 2)]
-    const midPx  = valueScale(mid)
-    if (horizontal === true) {
-      plot.appendChild(svgEl("line", {
-        x1: midPx, y1: 4, x2: midPx, y2: plotH - 4,
-        stroke: "var(--mj-color-neutral-500, #6b7280)",
-        "stroke-width": 1.5,
-        "stroke-dasharray": "4 3"
-      }, []))
-    } else {
-      plot.appendChild(svgEl("line", {
-        x1: 4, y1: midPx, x2: plotW - 4, y2: midPx,
-        stroke: "var(--mj-color-neutral-500, #6b7280)",
-        "stroke-width": 1.5,
-        "stroke-dasharray": "4 3"
-      }, []))
-    }
+  /* Placement. */
+  const positions = dots.map((dot) => valueScale(dot.value))
+  let dotRadius = radius
+  let offsets = null
+  if (mode === "strip") {
+    offsets = positions.map(() => 0)
+  } else {
+    const maxOffset = Math.max(center - radius, 0)
+    dotRadius = swarmRadius(positions, radius, padding, maxOffset, MIN_RADIUS)
+    offsets = placeSwarm(positions, dotRadius * 2 + padding, Math.max(center - dotRadius, 0)).offsets
   }
 
-  /* Collect dots and sort by value for stable placement */
-  const allDots = []
-  for (let s = 0; s < series.length; s = s + 1) {
-    const ser  = series[s]
-    const pts  = ser.points || []
-    const color = ctx.colorFor(ser.name)
-    for (let p = 0; p < pts.length; p = p + 1) {
-      const pt  = pts[p]
-      const val = horizontal ? pt.x : pt.y
-      if (typeof val !== "number") {
+  /* Median per series (the mean of the two middle values for even n). */
+  if (showMedian === true) {
+    for (let si = 0; si < series.length; si = si + 1) {
+      const values = sortNumbers(dots.filter((dot) => dot.seriesIndex === si).map((dot) => dot.value))
+      if (values.length === 0) {
         continue
       }
-      const px = valueScale(val)
-      allDots.push({
-        px: px,
-        seriesName: ser.name,
-        color: color,
-        label: pt.label || ser.name,
-        value: val
-      })
+      const pixel = valueScale(quantileSorted(values, 0.5))
+      const color = ctx.colorFor(series[si].name)
+      axes.appendChild(svgEl("line", {
+        x1: horizontal === true ? pixel : 4, y1: horizontal === true ? 4 : pixel,
+        x2: horizontal === true ? pixel : plotW - 4, y2: horizontal === true ? plotH - 4 : pixel,
+        stroke: color, "stroke-width": 1.5, "stroke-dasharray": "4 3", part: "median-line"
+      }, []))
     }
   }
 
-  allDots.sort((a, b) => a.px - b.px)
-
-  let placed = null
-  if (mode === "strip") {
-    /* No jitter — place all at perpCenter */
-    placed = allDots.map((dot) => ({
-      px: dot.px, py: perpCenter,
-      seriesName: dot.seriesName, color: dot.color,
-      label: dot.label, value: dot.value
-    }))
-  } else {
-    placed = _placeDots(allDots, radius, padding, perpCenter, perpMax)
-    /* Reattach color after placement (placement doesn't carry color) */
-    for (let i = 0; i < placed.length; i = i + 1) {
-      placed[i].color = allDots[i].color
-    }
-  }
-
-  /* Draw dots */
-  for (let i = 0; i < placed.length; i = i + 1) {
-    const dot = placed[i]
-    const cx  = horizontal ? dot.px : dot.py
-    const cy  = horizontal ? dot.py : dot.px
-
+  const marks = svgEl("g", { part: "marks" }, [])
+  plot.appendChild(marks)
+  const rows = []
+  for (let di = 0; di < dots.length; di = di + 1) {
+    const dot = dots[di]
+    const name = series[dot.seriesIndex].name
+    const along = positions[di]
+    const across = center + offsets[di]
     const circle = svgEl("circle", {
-      cx: cx, cy: cy, r: radius,
-      fill: dot.color,
-      "fill-opacity": "0.85"
+      cx: horizontal === true ? along : across,
+      cy: horizontal === true ? across : along,
+      r: dotRadius, fill: ctx.colorFor(name), "fill-opacity": 0.85
     }, [])
     circle.setAttribute("part", "dot")
-    circle.setAttribute("tabindex", "0")
-    circle.setAttribute("role", "img")
-    circle.setAttribute("aria-label",
-      `${dot.seriesName}: ${formatNumber(dot.value)}`)
-    circle.appendChild(svgEl("title", null,
-      `${dot.label} — ${dot.seriesName}: ${formatNumber(dot.value)}`))
-    const capturedDot = dot
-    const handler = () => {
-      ctx.emit("mj-chart-dot-click", {
-        series: capturedDot.seriesName,
-        value: capturedDot.value,
-        label: capturedDot.label
-      })
-    }
-    circle.addEventListener("click", handler)
-    circle.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault()
-        handler()
-      }
+    const labelText = dot.label.length > 0 && dot.label !== name ? `${dot.label} — ` : ""
+    focusableMark(circle, `${labelText}${name}: ${formatNumber(dot.value)}`)
+    activateOnKey(circle, () => {
+      ctx.emit("mj-chart-dot-click", { series: name, value: dot.value, label: dot.label })
     })
-    plot.appendChild(circle)
+    marks.appendChild(circle)
+    rows.push([name, dot.label, dot.value])
   }
 
+  ctx.setTable({ columns: ["Series", "Label", "Value"], rows: rows, caption: "Observations" })
   return root
 }
 
 
-registerRenderer("beeswarm", render)
+function _isEmpty(model) {
+  /*
+   * True when no series point has a finite x or y.
+   */
+  const series = Array.isArray(model.allSeries) === true ? model.allSeries : []
+  for (let si = 0; si < series.length; si = si + 1) {
+    const points = Array.isArray(series[si].points) === true ? series[si].points : []
+    for (let pi = 0; pi < points.length; pi = pi + 1) {
+      const point = points[pi]
+      if (point !== null && typeof point === "object" &&
+          (isFiniteNumber(point.x) === true || isFiniteNumber(point.y) === true)) {
+        return false
+      }
+    }
+  }
+  return true
+}
+
+
+registerRenderer("beeswarm", render, { isEmpty: _isEmpty })

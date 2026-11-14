@@ -4,7 +4,7 @@
 - **Class / file:** `MjBulkActionBar` / `mjbulkactionbar.js`
 - **Category:** Tables, lists & structured data
 - **Primary or Variant:** Primary
-- **Synonyms covered:** Bulk action bar, Row selector, Selection toolbar, Multi-select action bar
+- **Synonyms covered:** Bulk action bar, Selection toolbar, Multi-select action bar
 - **Phase:** P1
 - **Status:** Planned
 

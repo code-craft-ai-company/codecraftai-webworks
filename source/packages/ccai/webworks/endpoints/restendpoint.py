@@ -17,14 +17,20 @@ from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 from ccai.webworks.endpoints.accesspolicy import AccessPolicy
 from ccai.webworks.endpoints.constraints import EndpointConstraints
 from ccai.webworks.endpoints.descriptor import (
+    REST_ERROR_MAP_TYPES_EXTRA,
+    REST_QUERY_PARAMS_EXTRA,
+    REST_REQUEST_SCHEMA_TYPE_EXTRA,
+    REST_RESPONSE_SCHEMA_TYPE_EXTRA,
     declare_on_class,
     EndpointDescriptor,
-    mark_handler
+    mark_handler,
+    record_rest_processing
 )
 from ccai.webworks.endpoints.doc import Doc
 from ccai.webworks.endpoints.endpoint import Endpoint
 from ccai.webworks.endpoints.exceptions import EndpointRegistrationError, SchemaInspectionError
 from ccai.webworks.endpoints.ratelimit import RateLimit
+from ccai.webworks.endpoints.typeinspection import dataclass_to_json_schema, type_to_json_schema
 from ccai.webworks.security.decorators import HANDLER_POLICY_ATTR
 
 
@@ -80,6 +86,8 @@ class RestEndpoint(Endpoint):
         error_map: Optional[Dict[int, Type]] = None,
         doc: Optional[Doc] = None,
         on_conflict: str = "error",
+        query_params: Optional[Dict[str, Type]] = None,
+        rest_processing: Optional[bool] = None,
         **extras
     ) -> Callable[[F], F]:
         """
@@ -102,6 +110,21 @@ class RestEndpoint(Endpoint):
             :param error_map: Mapping of status codes to error schemas.
             :param doc: Documentation object with summary/description.
             :param on_conflict: "error" to raise on conflict, "replace" to override.
+            :param query_params: The query parameters the handler reads, as a
+                                 mapping of parameter name to Python type
+                                 (for example ``{"page": int, "q": str}``).
+                                 They are recorded for documentation; the
+                                 OpenAPI generator emits one optional query
+                                 parameter for each.
+            :param rest_processing: Whether a handler declared with REST
+                                    metadata (a request schema, a response
+                                    schema or an error map, given here or
+                                    inherited from the class) is served
+                                    through the REST request/response
+                                    processing. False for a handler that
+                                    parses the body and shapes the response
+                                    itself; None takes the class attribute
+                                    ``rest_processing`` (True).
             :param extras: Additional kwargs stored in descriptor.extras.
             
             :returns: Decorator that returns the original function unchanged.
@@ -109,6 +132,8 @@ class RestEndpoint(Endpoint):
             :raises EndpointRegistrationError: If mandatory metadata missing.
             :raises SchemaInspectionError: If schema inspection fails.
         """
+        merged_rest_processing = rest_processing if rest_processing is not None else cls.rest_processing
+
         def decorator(func: F) -> F:
             # Validate mandatory metadata
             if leaf is None and path is None:
@@ -157,21 +182,43 @@ class RestEndpoint(Endpoint):
             
             # Build extras dict with any additional kwargs
             extras_dict: Dict[str, Any] = dict(extras)
+
+            # Every endpoint declared through the REST family is a REST
+            # endpoint. Documentation generators select on this, so it is
+            # stamped here rather than only by RestBlueprint; a subclass
+            # that declares another type (the authentication blueprints
+            # use "auth") keeps its own value.
+            if "endpoint_type" not in extras_dict:
+                extras_dict["endpoint_type"] = "rest"
             
-            # Build REST-specific extras with schema inspection
+            # Build REST-specific extras with schema inspection. The
+            # inspected JSON-schema dict is what documentation exports read;
+            # the schema class is kept beside it because validating a
+            # request body and generating an OpenAPI component both need the
+            # class, which cannot be recovered from the dict.
             rest_extras: Dict[str, Any] = {}
             
             if merged_request_schema is not None:
                 rest_extras["request_schema"] = cls._inspect_rest_schema(merged_request_schema)
+                rest_extras[REST_REQUEST_SCHEMA_TYPE_EXTRA] = merged_request_schema
             
             if merged_response_schema is not None:
                 rest_extras["response_schema"] = cls._inspect_rest_schema(merged_response_schema)
+                rest_extras[REST_RESPONSE_SCHEMA_TYPE_EXTRA] = merged_response_schema
             
             if merged_error_map:
                 rest_extras["error_map"] = {
                     code: cls._inspect_rest_schema(schema)
                     for code, schema in merged_error_map.items()
                 }
+                rest_extras[REST_ERROR_MAP_TYPES_EXTRA] = dict(merged_error_map)
+
+            if query_params is not None and len(query_params) > 0:
+                rest_extras[REST_QUERY_PARAMS_EXTRA] = dict(query_params)
+
+            # Whether the route is served through the REST processing (the
+            # default) or opted out of it.
+            record_rest_processing(rest_extras, merged_rest_processing)
             
             if rest_extras:
                 extras_dict["rest"] = rest_extras
@@ -272,97 +319,29 @@ class RestEndpoint(Endpoint):
     def _dataclass_to_json_schema(cls, schema: Type) -> Dict[str, Any]:
         """
             Convert a dataclass to a JSON schema representation.
-            
+
+            Field annotations are resolved first, so postponed annotations
+            (``from __future__ import annotations``), PEP 604 unions and
+            nested dataclasses are described by their real types.
+
             :param schema: The dataclass type to convert.
-            
+
             :returns: Dictionary containing JSON schema information.
         """
-        import dataclasses
-        
-        properties: Dict[str, Any] = {}
-        required: List[str] = []
-        
-        for field_obj in dataclasses.fields(schema):
-            field_name = field_obj.name
-            field_type = field_obj.type
-            properties[field_name] = cls._python_type_to_json_schema(field_type)
-            
-            # Check if field has a default
-            has_default = (
-                field_obj.default is not dataclasses.MISSING or
-                field_obj.default_factory is not dataclasses.MISSING
-            )
-            if not has_default:
-                required.append(field_name)
-        
-        result: Dict[str, Any] = {
-            "type": "object",
-            "title": schema.__name__,
-            "properties": properties,
-        }
-        
-        if required:
-            result["required"] = required
-        
-        return result
+        rtnval = dataclass_to_json_schema(schema, include_title=True)
+        return rtnval
 
     @classmethod
     def _python_type_to_json_schema(cls, field_type: Any) -> Dict[str, Any]:
         """
             Convert a Python type to a JSON schema type.
-            
+
             :param field_type: The Python type to convert.
-            
+
             :returns: Dictionary containing JSON schema type information.
         """
-        import typing
-        
-        # Handle basic types
-        type_mapping = {
-            str: {"type": "string"},
-            int: {"type": "integer"},
-            float: {"type": "number"},
-            bool: {"type": "boolean"},
-            list: {"type": "array"},
-            dict: {"type": "object"},
-            type(None): {"type": "null"},
-        }
-        
-        if field_type in type_mapping:
-            return type_mapping[field_type]
-        
-        # Handle typing module types
-        origin = getattr(field_type, "__origin__", None)
-        
-        if origin is list:
-            args = getattr(field_type, "__args__", ())
-            if args:
-                return {
-                    "type": "array",
-                    "items": cls._python_type_to_json_schema(args[0])
-                }
-            return {"type": "array"}
-        
-        if origin is dict:
-            return {"type": "object"}
-        
-        if origin is typing.Union:
-            args = getattr(field_type, "__args__", ())
-            # Check for Optional (Union with None)
-            non_none_args = [a for a in args if a is not type(None)]
-            if len(non_none_args) == 1 and type(None) in args:
-                # This is Optional[T]
-                inner_schema = cls._python_type_to_json_schema(non_none_args[0])
-                return {"anyOf": [inner_schema, {"type": "null"}]}
-            # General union
-            return {"anyOf": [cls._python_type_to_json_schema(a) for a in args]}
-        
-        # Handle string type annotations
-        if isinstance(field_type, str):
-            return {"type": "string"}
-        
-        # Default to string for unknown types
-        return {"type": "string"}
+        rtnval = type_to_json_schema(field_type)
+        return rtnval
 
     @classmethod
     def read(
@@ -377,6 +356,7 @@ class RestEndpoint(Endpoint):
         error_map: Optional[Dict[int, Type]] = None,
         doc: Optional[Doc] = None,
         on_conflict: str = "error",
+        rest_processing: Optional[bool] = None,
         **extras
     ) -> Callable[[F], F]:
         """
@@ -396,6 +376,8 @@ class RestEndpoint(Endpoint):
             :param error_map: Mapping of status codes to error schemas.
             :param doc: Documentation object.
             :param on_conflict: Conflict handling strategy.
+            :param rest_processing: False to opt the handler out of the REST
+                                    processing (see :meth:`attach_at`).
             :param extras: Additional kwargs.
             
             :returns: Decorator that returns the original function unchanged.
@@ -413,6 +395,7 @@ class RestEndpoint(Endpoint):
             error_map=error_map,
             doc=doc,
             on_conflict=on_conflict,
+            rest_processing=rest_processing,
             **extras
         )
 
@@ -430,6 +413,7 @@ class RestEndpoint(Endpoint):
         error_map: Optional[Dict[int, Type]] = None,
         doc: Optional[Doc] = None,
         on_conflict: str = "error",
+        rest_processing: Optional[bool] = None,
         **extras
     ) -> Callable[[F], F]:
         """
@@ -450,6 +434,8 @@ class RestEndpoint(Endpoint):
             :param error_map: Mapping of status codes to error schemas.
             :param doc: Documentation object.
             :param on_conflict: Conflict handling strategy.
+            :param rest_processing: False to opt the handler out of the REST
+                                    processing (see :meth:`attach_at`).
             :param extras: Additional kwargs.
             
             :returns: Decorator that returns the original function unchanged.
@@ -467,6 +453,7 @@ class RestEndpoint(Endpoint):
             error_map=error_map,
             doc=doc,
             on_conflict=on_conflict,
+            rest_processing=rest_processing,
             **extras
         )
 
@@ -484,6 +471,7 @@ class RestEndpoint(Endpoint):
         error_map: Optional[Dict[int, Type]] = None,
         doc: Optional[Doc] = None,
         on_conflict: str = "error",
+        rest_processing: Optional[bool] = None,
         **extras
     ) -> Callable[[F], F]:
         """
@@ -504,6 +492,8 @@ class RestEndpoint(Endpoint):
             :param error_map: Mapping of status codes to error schemas.
             :param doc: Documentation object.
             :param on_conflict: Conflict handling strategy.
+            :param rest_processing: False to opt the handler out of the REST
+                                    processing (see :meth:`attach_at`).
             :param extras: Additional kwargs.
             
             :returns: Decorator that returns the original function unchanged.
@@ -521,6 +511,7 @@ class RestEndpoint(Endpoint):
             error_map=error_map,
             doc=doc,
             on_conflict=on_conflict,
+            rest_processing=rest_processing,
             **extras
         )
 
@@ -537,6 +528,7 @@ class RestEndpoint(Endpoint):
         error_map: Optional[Dict[int, Type]] = None,
         doc: Optional[Doc] = None,
         on_conflict: str = "error",
+        rest_processing: Optional[bool] = None,
         **extras
     ) -> Callable[[F], F]:
         """
@@ -556,6 +548,8 @@ class RestEndpoint(Endpoint):
             :param error_map: Mapping of status codes to error schemas.
             :param doc: Documentation object.
             :param on_conflict: Conflict handling strategy.
+            :param rest_processing: False to opt the handler out of the REST
+                                    processing (see :meth:`attach_at`).
             :param extras: Additional kwargs.
             
             :returns: Decorator that returns the original function unchanged.
@@ -573,5 +567,6 @@ class RestEndpoint(Endpoint):
             error_map=error_map,
             doc=doc,
             on_conflict=on_conflict,
+            rest_processing=rest_processing,
             **extras
         )

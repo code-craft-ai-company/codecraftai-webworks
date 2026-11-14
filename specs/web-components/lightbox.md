@@ -101,12 +101,28 @@ Use to display a gallery of images or media full-screen when the user selects a 
 - `::part(thumbnail)` — individual thumbnail buttons
 
 **Custom properties:**
-- `--mj-lightbox-bg` — background color (default: `var(--mj-color-black-alpha-90)`)
-- `--mj-lightbox-toolbar-bg` — toolbar background (default: `rgba(0,0,0,0.6)`)
-- `--mj-lightbox-caption-bg` — caption bar background (default: `rgba(0,0,0,0.6)`)
-- `--mj-lightbox-control-color` — icon button color (default: `var(--mj-color-white)`)
-- `--mj-lightbox-z-index` — z-index (default: `var(--mj-z-lightbox)`)
-- `--mj-lightbox-transition-duration` — item change animation duration (default: `var(--mj-duration-enter)`)
+
+The viewer keeps a dark surround in both themes (media reads best on it), so its
+colours are component custom properties, not page tokens; the fallback in the
+CSS is the default.
+
+| Property | Default | Description |
+|---|---|---|
+| `--mj-lightbox-bg` | `rgba(14, 18, 27, 0.95)` | Backdrop / viewer background |
+| `--mj-lightbox-color` | `rgba(255, 255, 255, 0.9)` | Text color of the viewer |
+| `--mj-lightbox-muted-color` | `rgba(255, 255, 255, 0.8)` | Secondary text: the counter and the loading / error status |
+| `--mj-lightbox-toolbar-bg` | `rgba(0, 0, 0, 0.4)` | Toolbar background |
+| `--mj-lightbox-caption-bg` | `rgba(0, 0, 0, 0.5)` | Caption bar background |
+| `--mj-lightbox-control-color` | `#fff` | Icon color of the toolbar and Prev / Next buttons |
+| `--mj-lightbox-control-bg` | `rgba(255, 255, 255, 0.1)` | Toolbar button background |
+| `--mj-lightbox-control-bg-hover` | `rgba(255, 255, 255, 0.25)` | Toolbar button background on hover |
+| `--mj-lightbox-nav-bg` | `rgba(0, 0, 0, 0.5)` | Prev / Next button background |
+| `--mj-lightbox-nav-bg-hover` | `rgba(0, 0, 0, 0.75)` | Prev / Next button background on hover |
+
+The stacking order and the transitions are not component properties: the viewer
+uses the `--mj-layer-modal` layer token and the `--mj-motion-medium` /
+`--mj-motion-ease` motion tokens (transitions are off under
+`prefers-reduced-motion`).
 
 ## 10. States
 

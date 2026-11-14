@@ -692,3 +692,42 @@ def test_property_has_all_scopes_iff_all_in_scopes():
             raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Expiry
+# =============================================================================
+
+def test_expired_context_is_not_authenticated():
+    """
+        A context whose expires_at has passed is not authenticated, even
+        though it has a user_id.
+    """
+    expired_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    context = SecurityContext(user_id="u1", expires_at=expired_at)
+
+    assert context.is_expired is True, "Expected the context to be expired"
+    assert context.is_authenticated is False, "An expired context must not be authenticated"
+    return
+
+
+def test_unexpired_context_is_authenticated():
+    """
+        A context whose expires_at lies in the future is authenticated.
+    """
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    context = SecurityContext(user_id="u1", expires_at=expires_at)
+
+    assert context.is_authenticated is True, "An unexpired context must be authenticated"
+    return
+
+
+def test_is_expired_accepts_naive_expires_at():
+    """
+        A naive expires_at is read as UTC instead of raising on comparison.
+    """
+    naive_past = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=1)
+    context = SecurityContext(user_id="u1", expires_at=naive_past)
+
+    assert context.is_expired is True, "Expected the naive timestamp to be read as UTC"
+    return

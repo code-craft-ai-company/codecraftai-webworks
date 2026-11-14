@@ -335,3 +335,89 @@ def test_shutdown_failed():
 
     _run_async(_run())
     return
+
+
+# =============================================================================
+# Unit Tests for Startup Failures That Are Not Reported by Message
+# =============================================================================
+
+def test_startup_hook_exception_is_a_startup_failure():
+    """
+        Test that an application that reads the startup event and then
+        raises is reported as failed, not as 'lifespan unsupported'.
+    """
+    async def _app_with_failing_hook(scope, receive, send):
+        await receive()
+        raise RuntimeError("database connection refused")
+
+    async def _run():
+        manager = LifespanManager(app=_app_with_failing_hook)
+        await manager.startup()
+
+        if manager.startup_failed is not True:
+            errmsg = "Expected startup_failed to be True, got {}".format(manager.startup_failed)
+            raise AssertionError(errmsg)
+
+        if manager.startup_complete is not False:
+            errmsg = "Expected startup_complete to be False, got {}".format(manager.startup_complete)
+            raise AssertionError(errmsg)
+
+        if "database connection refused" not in (manager.failure_message or ""):
+            errmsg = "Expected the exception text in the failure message, got '{}'".format(
+                manager.failure_message
+            )
+            raise AssertionError(errmsg)
+
+    asyncio.run(_run())
+
+    return
+
+
+def test_app_returning_without_reading_startup_is_unsupported():
+    """
+        Test that an application that returns on the lifespan scope
+        without reading the startup event is treated as not supporting
+        the protocol, and startup proceeds.
+    """
+    async def _app_ignoring_lifespan(scope, receive, send):
+        return
+
+    async def _run():
+        manager = LifespanManager(app=_app_ignoring_lifespan)
+        await manager.startup()
+
+        if manager.startup_complete is not True:
+            errmsg = "Expected startup_complete to be True, got {}".format(manager.startup_complete)
+            raise AssertionError(errmsg)
+
+        if manager.startup_failed is not False:
+            errmsg = "Expected startup_failed to be False, got {}".format(manager.startup_failed)
+            raise AssertionError(errmsg)
+
+    asyncio.run(_run())
+
+    return
+
+
+def test_startup_times_out_when_app_never_answers():
+    """
+        Test that an application that never answers the startup event
+        is reported as failed once the startup timeout has passed.
+    """
+    async def _app_that_hangs(scope, receive, send):
+        await receive()
+        await asyncio.sleep(3600)
+
+    async def _run():
+        manager = LifespanManager(app=_app_that_hangs, startup_timeout=0.1)
+        await asyncio.wait_for(manager.startup(), timeout=5.0)
+
+        if manager.startup_failed is not True:
+            errmsg = "Expected startup_failed to be True after the timeout, got {}".format(
+                manager.startup_failed
+            )
+            raise AssertionError(errmsg)
+
+    asyncio.run(_run())
+
+    return

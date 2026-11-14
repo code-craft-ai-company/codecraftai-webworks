@@ -1,7 +1,8 @@
 # testcomponents functional site suite
 
-Browser tests covering the testcomponents site and the functionality of
-every one of the 139 `mj-*` web components. The suite runs under the
+Browser tests covering the testcomponents site, its sandbox pages, and the
+functionality of every `mj-*` web component (143 at the time of writing; the
+sweeps read the count from the catalog). The suite runs under the
 `testbase` runner; the tree is a testbase root marked by
 `source/testsites/testcomponents/__testroot__.py`.
 
@@ -70,9 +71,9 @@ MJ_TEST_SLOWMO=250 testbase testing run --root ./source/testsites/testcomponents
 
 | Module | Scope |
 |--------|-------|
-| `test_site.py` | Browse page, group index pages, navigation, theme toggle, static assets, 404 handling. |
-| `test_pages.py` | One test per catalogued component and check (`<check>__<group>_<tag>`): each page documents the component and provides the playground. |
-| `test_playground.py` | One test per catalogued component and check: the component registers, renders in the preview iframe, upgrades (shadow root), and the Run/Reset controls work. |
+| `test_site.py` | Landing pages and their filters, group index pages, navigation and previous / next links, header counts, theme toggle, chart-part pages, static assets with ETag / Last-Modified and 304, 404 handling and escaping, the library loading only in the preview. |
+| `test_pages.py` | One test per catalogued component and check (`<check>__<group>_<tag>`): each page documents the component in full (description, how-to, reference tables, one control per attribute) and provides the sandbox (gallery, editors, preview, inspector, Examples tab). |
+| `test_playground.py` | One test per catalogued component and check: the component registers, renders and upgrades in the preview with no uncaught error, and Run / Reset work. Plus one test per sandbox panel: gallery switching and deep links, scripts running after upgrade, controls set attributes live and keep the HTML pane in sync, event log, slot toggles, error panel, theme / direction without Run, preview sizing (content, modal dialog, width presets, drag handle), open in new tab, copy, chart data presets. |
 | `test_chart_library.py` | The `<mj-chart>` library: one test per chart type page, plus a render check over a representative sample. |
 | `test_context_menu.py` | The context menu every component inherits from `MjElement`. |
 | `test_func_<group>.py`, `test_dyn_charts_<group>.py` | Per-group deep functional tests (category `functional`) — real interactions (clicks, typing, keyboard, ARIA state, emitted `mj-*` events) for every component. |
@@ -83,5 +84,9 @@ is reported by name. Small literal tables use `testbase.parametrize`, which
 runs every case and reports each failing case with its arguments.
 
 The preview is an isolated `<iframe>`, so modal components (which inert their
-host document) cannot disable the test harness, and example `<script>` blocks
-execute to populate data-driven components.
+host document) cannot disable the test harness. The library is loaded only
+inside it, and example scripts (inline `<script>` in the HTML pane and the JS
+pane) run after every element is upgraded. A test that needs the example's
+scripts to have run waits for `window.mjSandbox.ready === true` in the frame;
+on the outer page, `#pg-frame[data-ready-run]` equals
+`window.mjSandboxPage.state.run` once the current run is ready.

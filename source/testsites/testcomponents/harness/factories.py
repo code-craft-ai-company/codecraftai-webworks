@@ -21,6 +21,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -224,33 +225,44 @@ def create_site() -> Generator[str, None, None]:
     port = find_free_port()
     site_url = "http://127.0.0.1:{}".format(port)
 
+    # The site logs every request. Its output goes to a file rather than a pipe:
+    # nothing reads a pipe while the tests run, so once the pipe buffer filled
+    # the site blocked on its next log write and every later test timed out.
+    site_log = tempfile.TemporaryFile(prefix="testcomponents-site-", suffix=".log")
+
     process = subprocess.Popen(
         [sys.executable, "-c", SITE_LAUNCH_CODE.format(port=port)],
         cwd=_REPO_ROOT,
         env=site_environment(),
-        stdout=subprocess.PIPE,
+        stdout=site_log,
         stderr=subprocess.STDOUT,
     )
 
-    ready = wait_until_serving(site_url + "/", timeout=SITE_START_TIMEOUT)
-    if ready is False:
-        process.terminate()
-        captured = b""
-        if process.stdout is not None:
-            captured = process.stdout.read()
-        raise RuntimeError(
-            "testcomponents site did not start on {}.\n{}".format(
-                site_url, captured.decode("utf-8", "replace"))
-        )
-
     try:
-        yield site_url
-    finally:
-        process.terminate()
+        ready = wait_until_serving(site_url + "/", timeout=SITE_START_TIMEOUT)
+        if ready is False:
+            process.terminate()
+            try:
+                process.wait(timeout=SITE_STOP_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            site_log.seek(0)
+            captured = site_log.read()
+            raise RuntimeError(
+                "testcomponents site did not start on {}.\n{}".format(
+                    site_url, captured.decode("utf-8", "replace"))
+            )
+
         try:
-            process.wait(timeout=SITE_STOP_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            process.kill()
+            yield site_url
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=SITE_STOP_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                process.kill()
+    finally:
+        site_log.close()
 
     return
 

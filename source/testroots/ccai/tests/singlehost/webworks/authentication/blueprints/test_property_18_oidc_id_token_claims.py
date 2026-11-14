@@ -14,13 +14,19 @@ import time
 
 from urllib.parse import urlparse, parse_qs
 
-from ccai.webworks.authentication.bearer import decode_jwt
+from cryptography.hazmat.primitives.asymmetric import rsa
+
+from ccai.webworks.security import jsonwebtoken
+from ccai.webworks.authentication.core import AuthenticationContext, Principal
 from ccai.webworks.authentication.blueprints.oidc import OIDCBlueprint
 
 
 # =============================================================================
 # Test Helpers
 # =============================================================================
+
+
+RESOURCE_OWNER = Principal(identifier="resource-owner-1")
 
 
 class MockJsonRequest:
@@ -33,6 +39,10 @@ class MockJsonRequest:
                  host="example.com"):
         self._data = data or {}
         self.query_params = query_params or {}
+
+        # The resource owner the authentication middleware established.
+        # The authorization endpoint issues codes on this user's behalf.
+        self.auth = AuthenticationContext(principal=RESOURCE_OWNER, scheme="Test")
         self.scheme = scheme
         self.host = host
 
@@ -53,6 +63,23 @@ def _random_string(min_len=1, max_len=30):
     chars = string.ascii_letters + string.digits
     result = "".join(random.choice(chars) for _ in range(length))
     return result
+
+
+# One RSA key for the whole module: generating a key per blueprint class
+# would dominate the run time. ID tokens are signed with it and verified
+# against the JWKS the blueprint publishes, the way a relying party does.
+TEST_SIGNING_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+def _decode_id_token(blueprint, id_token):
+    """
+        Verify an ID token against the blueprint's published JWKS and
+        return its claims.
+    """
+    jwks = blueprint.jwks_endpoint(MockJsonRequest())["body"]
+    key_set = jsonwebtoken.JsonWebKeySet.import_key_set(jwks)
+    decoded = jsonwebtoken.decode(id_token, key=key_set, algorithms=["RS256"])
+    return dict(decoded.claims)
 
 
 def _create_fresh_blueprint(issuer=None, jwt_secret="test-oidc-secret",
@@ -94,6 +121,7 @@ def _create_fresh_blueprint(issuer=None, jwt_secret="test-oidc-secret",
 
     FreshBlueprint.issuer = issuer
     FreshBlueprint.jwks = None
+    FreshBlueprint.id_token_signing_key = TEST_SIGNING_KEY
     FreshBlueprint.id_token_lifetime = id_token_lifetime
     FreshBlueprint.claim_mappings = None
     FreshBlueprint.supported_scopes = ["openid", "profile", "email"]
@@ -140,10 +168,12 @@ def test_property_18_oidc_id_token_claims():
             redirect_domain
         )
 
+        client_secret = _random_string(10, 20)
+
         clients = {
             client_id: {
                 "client_id": client_id,
-                "client_secret": _random_string(10, 20),
+                "client_secret": client_secret,
                 "redirect_uris": [redirect_uri],
                 "grant_types": ["authorization_code"],
             }
@@ -194,6 +224,7 @@ def test_property_18_oidc_id_token_claims():
             "code": code,
             "redirect_uri": redirect_uri,
             "client_id": client_id,
+            "client_secret": client_secret,
         })
         token_response = blueprint.token(token_request)
         after_time = int(time.time())
@@ -217,12 +248,7 @@ def test_property_18_oidc_id_token_claims():
 
         # Step 4: Decode and verify the id_token claims
         id_token = body["id_token"]
-        claims = decode_jwt(
-            id_token,
-            jwt_secret,
-            algorithms=["HS256"],
-            verify_exp=False
-        )
+        claims = _decode_id_token(blueprint, id_token)
 
         # Verify all required standard claims are present
         required_claims = ["iss", "sub", "aud", "exp", "iat"]
@@ -245,11 +271,22 @@ def test_property_18_oidc_id_token_claims():
             )
             raise AssertionError(errmsg)
 
-        # Verify sub is present and non-empty
-        if not claims["sub"]:
+        # Verify sub identifies the authenticated user, not the client
+        if claims["sub"] != RESOURCE_OWNER.identifier:
             errmsg = (
-                "Iteration {}: Expected non-empty 'sub' claim in "
-                "id_token".format(iteration)
+                "Iteration {}: Expected sub={!r} (the resource owner), "
+                "got {!r}".format(
+                    iteration, RESOURCE_OWNER.identifier, claims["sub"]
+                )
+            )
+            raise AssertionError(errmsg)
+
+        # Verify aud is the client the token was issued to
+        if claims["aud"] != client_id:
+            errmsg = (
+                "Iteration {}: Expected aud={!r} (the client), got {!r}".format(
+                    iteration, client_id, claims["aud"]
+                )
             )
             raise AssertionError(errmsg)
 

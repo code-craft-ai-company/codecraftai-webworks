@@ -151,7 +151,7 @@ def test_generate_endpoint_content_contains_function():
     """
     content = generate_endpoint_content("user-profile")
 
-    expected_def = "def user_profile(request):"
+    expected_def = "def user_profile(request: Request) -> JSONResponse:"
     if expected_def not in content:
         errmsg = "Expected '{}' in generated content.".format(expected_def)
         raise AssertionError(errmsg)
@@ -175,13 +175,17 @@ def test_generate_endpoint_content_contains_docstring():
 
 def test_generate_endpoint_content_contains_return():
     """
-        Test that generate_endpoint_content produces content with
-        a return statement.
+        Test that generate_endpoint_content produces content that
+        returns a framework response.
     """
     content = generate_endpoint_content("health-check")
 
-    if "return rtnval" not in content:
-        errmsg = "Expected 'return rtnval' in generated endpoint content."
+    if "return response" not in content:
+        errmsg = "Expected 'return response' in generated endpoint content."
+        raise AssertionError(errmsg)
+
+    if "JSONResponse(" not in content:
+        errmsg = "Expected the generated endpoint to build a JSONResponse."
         raise AssertionError(errmsg)
 
     return
@@ -198,7 +202,7 @@ def test_generate_blueprint_content_contains_class():
     """
     content = generate_blueprint_content("user-management")
 
-    expected_class = "class UserManagementBlueprint:"
+    expected_class = "class UserManagementBlueprint(RestBlueprint):"
     if expected_class not in content:
         errmsg = "Expected '{}' in generated content.".format(expected_class)
         raise AssertionError(errmsg)
@@ -220,15 +224,19 @@ def test_generate_blueprint_content_contains_url_prefix():
     return
 
 
-def test_generate_blueprint_content_contains_register_method():
+def test_generate_blueprint_content_attaches_an_endpoint():
     """
-        Test that generate_blueprint_content produces content with
-        a register method.
+        Test that generate_blueprint_content produces a blueprint whose
+        endpoint is attached with the framework's decorator.
     """
     content = generate_blueprint_content("user-management")
 
-    if "def register(self, app):" not in content:
-        errmsg = "Expected 'def register(self, app):' in generated content."
+    if "@RestBlueprint.attach_at(" not in content:
+        errmsg = "Expected '@RestBlueprint.attach_at(' in generated content."
+        raise AssertionError(errmsg)
+
+    if 'base_path = "/user-management"' not in content:
+        errmsg = "Expected the blueprint base path in generated content."
         raise AssertionError(errmsg)
 
     return
@@ -468,7 +476,7 @@ def test_endpoint_execute_creates_file():
         with open(expected_path, "r") as fh:
             content = fh.read()
 
-        if "def user_profile(request):" not in content:
+        if "def user_profile(request: Request) -> JSONResponse:" not in content:
             errmsg = "Expected endpoint function in generated file."
             raise AssertionError(errmsg)
     finally:
@@ -644,7 +652,7 @@ def test_blueprint_execute_creates_file():
         with open(expected_path, "r") as fh:
             content = fh.read()
 
-        if "class UserManagementBlueprint:" not in content:
+        if "class UserManagementBlueprint(RestBlueprint):" not in content:
             errmsg = "Expected blueprint class in generated file."
             raise AssertionError(errmsg)
     finally:
@@ -702,5 +710,160 @@ def test_blueprint_execute_returns_error_if_file_exists():
             raise AssertionError(errmsg)
     finally:
         shutil.rmtree(temp_dir)
+
+    return
+
+
+# =============================================================================
+# Unit Tests for Generated Code and Name Validation
+# =============================================================================
+
+def _load_generated_module(module_name, source):
+    """
+        Execute generated source as a module, as importing the file would.
+    """
+    import types
+
+    module = types.ModuleType(module_name)
+    exec(compile(source, module_name + ".py", "exec"), module.__dict__)
+
+    return module
+
+
+def test_generated_endpoint_is_routable():
+    """
+        Test that a generated endpoint is collected by an endpoint
+        registry at the path derived from its name.
+    """
+    from ccai.webworks.endpoints.registry import EndpointRegistry
+
+    module = _load_generated_module("user_profile", generate_endpoint_content("user-profile"))
+
+    registry = EndpointRegistry()
+    collected = registry.collect_from(module)
+
+    if collected != 1:
+        errmsg = "Expected 1 endpoint to be collected, got {}.".format(collected)
+        raise AssertionError(errmsg)
+
+    descriptor = registry.collect()[0]
+
+    if descriptor.path != "/user-profile":
+        errmsg = "Expected path '/user-profile', got '{}'.".format(descriptor.path)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_generated_blueprint_is_routable():
+    """
+        Test that a generated blueprint's endpoint is collected under
+        the blueprint's base path.
+    """
+    from ccai.webworks.endpoints.registry import EndpointRegistry
+
+    module = _load_generated_module("user_management", generate_blueprint_content("user-management"))
+
+    registry = EndpointRegistry()
+    registry.collect_from(module)
+
+    paths = [descriptor.path for descriptor in registry.collect()]
+
+    if paths != ["/user-management/list"]:
+        errmsg = "Expected ['/user-management/list'], got {}.".format(paths)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_generate_endpoint_content_rejects_invalid_names():
+    """
+        Test that names that do not convert to a valid, non-keyword
+        identifier are rejected instead of producing invalid Python.
+    """
+    for bad_name in ["user.profile", "2fa", "class", "../outside", "a/b", ""]:
+        raised = False
+
+        try:
+            generate_endpoint_content(bad_name)
+        except ValueError:
+            raised = True
+
+        if raised is not True:
+            errmsg = "Expected ValueError for the endpoint name '{}'.".format(bad_name)
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_generate_blueprint_content_rejects_invalid_names():
+    """
+        Test that the blueprint generator rejects invalid names.
+    """
+    for bad_name in ["user.management", "9lives", "import"]:
+        raised = False
+
+        try:
+            generate_blueprint_content(bad_name)
+        except ValueError:
+            raised = True
+
+        if raised is not True:
+            errmsg = "Expected ValueError for the blueprint name '{}'.".format(bad_name)
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_endpoint_execute_rejects_name_outside_output_dir():
+    """
+        Test that a name containing a path does not write a file
+        outside the output directory.
+    """
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        output_dir = os.path.join(temp_dir, "out")
+        os.makedirs(output_dir)
+
+        cmd = GenerateEndpointCommand()
+        args = Namespace(name="../escaped", output_dir=output_dir, dry_run=False)
+
+        exit_code = cmd.execute(args, {})
+
+        if exit_code == EXIT_SUCCESS:
+            errmsg = "Expected a non-zero exit code for a name containing a path."
+            raise AssertionError(errmsg)
+
+        if os.path.exists(os.path.join(temp_dir, "escaped.py")):
+            errmsg = "A file was written outside the output directory."
+            raise AssertionError(errmsg)
+
+        if len(os.listdir(output_dir)) != 0:
+            errmsg = "Expected no file to be written for an invalid name."
+            raise AssertionError(errmsg)
+    finally:
+        shutil.rmtree(temp_dir)
+
+    return
+
+
+def test_generate_group_contains_both_generators():
+    """
+        Test that the generate group offers the endpoint and blueprint commands.
+    """
+    from ccai.webworks.devexp.cli.generators import GenerateGroup
+
+    group = GenerateGroup()
+
+    names = sorted(command.name for command in group.commands)
+
+    if group.name != "generate":
+        errmsg = "Expected group name 'generate', got '{}'.".format(group.name)
+        raise AssertionError(errmsg)
+
+    if names != ["blueprint", "endpoint"]:
+        errmsg = "Expected commands ['blueprint', 'endpoint'], got {}.".format(names)
+        raise AssertionError(errmsg)
 
     return

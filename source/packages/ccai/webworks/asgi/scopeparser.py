@@ -176,6 +176,7 @@ class ScopeParser:
             :returns: Dictionary of header names to values.
         """
         headers: Dict[str, str] = {}
+        seen_names: Dict[str, str] = {}
         raw_headers: List[Tuple[bytes, bytes]] = scope.get("headers", [])
         
         for name_bytes, value_bytes in raw_headers:
@@ -192,7 +193,21 @@ class ScopeParser:
             
             # Normalize header name to title case
             normalized_name = name.title()
-            headers[normalized_name] = value
+            
+            # A header may arrive as several fields, HTTP/2 clients commonly
+            # split Cookie that way. The fields are joined, the last one does
+            # not replace the others: Cookie with "; ", everything else with
+            # ", ", which HTTP defines as equal to repeating the field.
+            lower_name = name.lower()
+            if lower_name in seen_names:
+                if lower_name == "cookie":
+                    separator = "; "
+                else:
+                    separator = ", "
+                headers[normalized_name] = headers[normalized_name] + separator + value
+            else:
+                seen_names[lower_name] = normalized_name
+                headers[normalized_name] = value
         
         return headers
     

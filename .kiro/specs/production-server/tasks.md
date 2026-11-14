@@ -20,7 +20,7 @@ This implementation plan creates the Production Server feature providing worker 
     - States: STOPPED, STARTING, RUNNING, SHUTTING_DOWN, RELOADING
     - _Requirements: 2.1, 2.7_
 
-- [x] 2. Implement worker base classes
+- [x] 2. Implement worker base classes (superseded in task 21: removed, the WSGI Worker serves)
   - [x] 2.1 Create abstract `Worker` base class
     - Define run(), handle_request(), shutdown() methods
     - Include worker_id, state, request_count tracking
@@ -45,7 +45,7 @@ This implementation plan creates the Production Server feature providing worker 
 - [x] 3. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [x] 4. Implement worker manager
+- [x] 4. Implement worker manager (superseded in task 21: the WSGI WorkerManager runs the workers)
   - [x] 4.1 Create `WorkerManager` class with worker spawning
     - Implement prefork model (spawn all workers before accepting requests)
     - Support configurable worker count
@@ -73,7 +73,7 @@ This implementation plan creates the Production Server feature providing worker 
     - **Property 2: Worker Restart on Crash**
     - **Validates: Requirements 1.3**
 
-- [x] 5. Implement signal handling
+- [x] 5. Implement signal handling (superseded in task 21: WSGIServer signal handling, SIGINT graceful in ProductionServer)
   - [x] 5.1 Create `SignalHandler` class
     - Register handlers for SIGTERM, SIGINT, SIGHUP
     - _Requirements: 2.1, 2.2, 2.7_
@@ -102,7 +102,7 @@ This implementation plan creates the Production Server feature providing worker 
 - [x] 6. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [x] 7. Implement connection management
+- [x] 7. Implement connection management (superseded in task 21: the WSGI ConnectionManager and HTTPParser)
   - [x] 7.1 Create `ConnectionManager` class
     - Track active connections
     - Enforce max connections limit
@@ -306,6 +306,21 @@ This implementation plan creates the Production Server feature providing worker 
 - [x] 20. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
+- [x] 21. Serve for real on the WSGI server (audit WW-0174, decision 2026-11-12)
+  - [x] 21.1 `ProductionServer` subclasses `wsgi.WSGIServer`; `serve()` blocks and returns an exit code; startup order with the privilege drop after bind and before application code
+    - _Requirements: 1.1-1.4, 2.1-2.6, 9.1-9.8, 12.1-12.8_
+  - [x] 21.2 `ProductionMiddleware` on the request path: request IDs, 431, health, metrics, HTTPS redirect, request time limit, access log, spans, memory-limit recycling; worker lifecycle passed on to the application
+    - _Requirements: 5.x, 6.1-6.6, 7.1-7.4, 7.6-7.8, 8.1-8.7, 10.8, 11.1-11.5, 11.7_
+  - [x] 21.3 `MetricsStore`: metrics of all workers added up, retired workers folded in; `MetricsCollector` with bounded memory (histogram, recent window, endpoint cap) and export/merge
+    - _Requirements: 6.1-6.6_
+  - [x] 21.4 `ServerConfig.to_wsgi_config()`; `async` worker class removed; gevent validated; default body limit 16 MiB; `worker_tmp_dir`; ConfigurationError is the `ccai.errors` one
+    - _Requirements: 3.x, 4.x, 11.3, 11.8_
+  - [x] 21.5 Removed the modules that duplicated the WSGI layer: worker, syncworker, asyncworker, geventworker, workermanager, signalhandler, connectionmanager, shutdowncoordinator, reloadcoordinator (and their tests)
+  - [x] 21.6 `webworks prodserve` command with the options of the requirements and the `prodserver` configuration section
+    - _Requirements: all `--option` criteria_
+  - [x] 21.7 Real-socket tests in child processes (ports 18100-18199): routes, request IDs, health, metrics over two workers, 413/431, 504, graceful shutdown with a request in flight, max-requests recycling, crash replacement, SIGHUP, PID file, access log, HTTPS redirect, TLS
+    - Tests: `prodserver/test_productionserver.py`, `prodserver/test_productionmiddleware.py`, `prodserver/test_metricsstore.py`, `devexp/cli/test_prodserve.py`
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP
@@ -315,3 +330,4 @@ This implementation plan creates the Production Server feature providing worker 
 - Unit tests validate specific examples and edge cases
 - Implementation uses Python with testbase framework per repository conventions
 - Test files should be located at `source/testroots/ccai/tests/singlehost/webworks/prodserver/`
+- The property tests 1-3 (worker configuration, restart on crash, graceful shutdown) tested the removed in-process workers; they are replaced by the real-server tests of task 21.7

@@ -1,264 +1,337 @@
 /*
  * calendarheatmap.js
  *
- * Calendar-heatmap renderer — days-of-year grid coloured by value,
- * laid out in the standard GitHub-style week-column × day-row grid.
+ * Calendar-heatmap renderer — the days of one or more years in a
+ * GitHub-style grid (week columns x weekday rows), coloured by value.
  *
  * Registered types:
  *   "calendar-heatmap"
  *
  * ctx.raw shape:
- *   raw.years        [number]         years to render (default: current year)
- *   raw.data         [{date, value}]  date strings "YYYY-MM-DD"
+ *   raw.years        [number]         years to render; default: every year
+ *                                     from the earliest to the latest date
+ *                                     in the data (the current year when
+ *                                     there is none). "2025" works too.
+ *   raw.data         [{date, value}]  date: "YYYY-MM-DD" (a LOCAL calendar
+ *                                     day), an ISO timestamp, a Date or
+ *                                     epoch ms; values of the same day add up
  *   raw.domain       [min, max]       optional; auto-computed when absent
- *   raw.colorScale   "sequential" | "diverging"
+ *   raw.colorScale   "sequential" | "diverging" (around raw.midpoint, 0)
+ *   raw.weekStart    1 = Monday (default) | 0 = Sunday
+ *
+ * Days without a value are drawn in a muted fill that differs from the page
+ * in both themes, so the calendar grid stays readable; days outside the
+ * year are not drawn. Each year block is labelled with its year, weekday and
+ * month labels follow the library locale, and a colour key ("less ... more"
+ * with the domain ends) is drawn under the grid.
+ *
+ * Orientation: "horizontal" (default; weeks run left to right) or
+ * "vertical" (weeks run top to bottom, weekdays across).
+ *
+ * Interaction: days that have a value are focusable marks; click / Enter
+ * emits `mj-chart-day-click` { date: "YYYY-MM-DD", value }.
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber } from "../svgdraw.js";
-import { linearScale } from "../scales.js";
+import { svgEl, formatNumber, formatDate, parseDate } from "../svgdraw.js";
+import {
+  sequentialFill, divergingFill, divergingPosition, EMPTY_CELL_FILL
+} from "./heatmaptable.js";
 
+const DAY_MS = 24 * 60 * 60 * 1000
+const GUTTER = 30
+const HEADER = 14
+const LEGEND_H = 18
+const BLOCK_GAP = 10
+const MAX_CELL = 22
 
-/* ── colour helpers (mirrors heatmaptable.js) ─────────────────────────── */
-
-const SEQ_LOW  = "var(--mj-color-accent-100, #dbeafe)"
-const SEQ_HIGH = "var(--mj-color-accent-700, #1d4ed8)"
-const DIV_LOW  = "var(--mj-color-danger,  #b91c1c)"
-const DIV_MID  = "var(--mj-surface,       #ffffff)"
-const DIV_HIGH = "var(--mj-color-success, #15803d)"
-
-function _seqFill(t) {
-  const opacity = Math.max(0, Math.min(1, t))
-  return `color-mix(in srgb, ${SEQ_HIGH} ${(opacity * 100).toFixed(1)}%, ${SEQ_LOW})`
-}
-
-function _divFill(t) {
-  if (t <= 0.5) {
-    const opacity = (0.5 - t) * 2
-    return `color-mix(in srgb, ${DIV_LOW} ${(opacity * 100).toFixed(1)}%, ${DIV_MID})`
-  }
-  const opacity = (t - 0.5) * 2
-  return `color-mix(in srgb, ${DIV_HIGH} ${(opacity * 100).toFixed(1)}%, ${DIV_MID})`
-}
-
-
-/* ── date helpers ─────────────────────────────────────────────────────── */
 
 function _dateKey(date) {
   /*
-   * Produce a "YYYY-MM-DD" string from a Date.
+   * "YYYY-MM-DD" of a local calendar day.
    */
-  const y = date.getFullYear()
+  const y = String(date.getFullYear()).padStart(4, "0")
   const m = String(date.getMonth() + 1).padStart(2, "0")
   const d = String(date.getDate()).padStart(2, "0")
   return `${y}-${m}-${d}`
 }
 
 
-function _firstMonday(year) {
+function _readValues(raw) {
   /*
-   * Return the Monday on or before Jan 1 of `year` so the grid starts
-   * at a full week boundary.
+   * Aggregate the data by local day.
+   *
+   * :returns: Map "YYYY-MM-DD" -> value (sum of the day's numeric values).
    */
-  const jan1   = new Date(year, 0, 1)
-  const dow    = jan1.getDay()            // 0=Sun … 6=Sat
-  const offset = dow === 0 ? -6 : 1 - dow // shift back to Monday
-  const monday = new Date(jan1)
-  monday.setDate(jan1.getDate() + offset)
-  return monday
+  const values = new Map()
+  const list = Array.isArray(raw.data) === true ? raw.data : []
+  for (let index = 0; index < list.length; index = index + 1) {
+    const entry = list[index]
+    if (entry === null || typeof entry !== "object") {
+      continue
+    }
+    const date = parseDate(entry.date)
+    const value = typeof entry.value === "number" ? entry.value : Number(entry.value)
+    if (date === null || entry.value === null || Number.isFinite(value) === false) {
+      continue
+    }
+    const key = _dateKey(date)
+    values.set(key, (values.has(key) === true ? values.get(key) : 0) + value)
+  }
+  return values
 }
 
 
-const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun",
-                    "Jul","Aug","Sep","Oct","Nov","Dec"]
-const DOW_ABBR   = ["M","T","W","T","F","S","S"]
+function _readYears(raw, values) {
+  /*
+   * The years to draw, ascending and unique.
+   */
+  let years = []
+  if (Array.isArray(raw.years) === true) {
+    years = raw.years.map((year) => Number(year))
+      .filter((year) => Number.isInteger(year) === true && year > 0 && year < 10000)
+  }
+  if (years.length === 0) {
+    const found = Array.from(values.keys()).map((key) => Number(key.slice(0, 4)))
+    if (found.length > 0) {
+      const first = Math.min(...found)
+      const last = Math.max(...found)
+      for (let year = first; year <= last && years.length < 20; year = year + 1) {
+        years.push(year)
+      }
+    } else {
+      years = [new Date().getFullYear()]
+    }
+  }
+  years = Array.from(new Set(years)).sort((a, b) => a - b)
+  return years
+}
 
-
-/* ── renderer ─────────────────────────────────────────────────────────── */
 
 export function render(ctx) {
   /*
    * Render a calendar heatmap.
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
-  const raw  = ctx.raw
+  const raw = ctx.raw !== null && ctx.raw !== undefined ? ctx.raw : {}
   const root = svgEl("g", { part: "plot" }, [])
 
-  /* Resolve years */
-  let years = null
-  if (raw !== null && raw !== undefined && Array.isArray(raw.years) === true) {
-    years = raw.years
+  const values = _readValues(raw)
+  const years = _readYears(raw, values)
+  const weekStart = raw.weekStart === 0 ? 0 : 1
+  const diverging = raw.colorScale === "diverging" || ctx.attrs("style", null) === "diverging"
+  const midpoint = typeof raw.midpoint === "number" && Number.isFinite(raw.midpoint) === true
+    ? raw.midpoint
+    : 0
+
+  /* Values inside the drawn years. */
+  const shown = []
+  values.forEach((value, key) => {
+    if (years.indexOf(Number(key.slice(0, 4))) >= 0) {
+      shown.push([key, value])
+    }
+  })
+  shown.sort((a, b) => (a[0] < b[0] ? -1 : 1))
+  ctx.setTable({
+    columns: ["Date", "Value"],
+    rows: shown.map((entry) => [formatDate(entry[0], { dateStyle: "medium" }), entry[1]]),
+    caption: ctx.label
+  })
+
+  let domain = null
+  if (Array.isArray(raw.domain) === true && raw.domain.length === 2 &&
+      Number.isFinite(raw.domain[0]) === true && Number.isFinite(raw.domain[1]) === true) {
+    domain = [Math.min(raw.domain[0], raw.domain[1]), Math.max(raw.domain[0], raw.domain[1])]
+  } else if (shown.length > 0) {
+    const numbers = shown.map((entry) => entry[1])
+    domain = [Math.min(...numbers), Math.max(...numbers)]
   } else {
-    years = [new Date().getFullYear()]
+    domain = [0, 1]
   }
-
-  /* Build value lookup */
-  const valueMap = {}
-  if (raw !== null && raw !== undefined && Array.isArray(raw.data) === true) {
-    for (let i = 0; i < raw.data.length; i = i + 1) {
-      const entry = raw.data[i]
-      if (entry !== null && entry !== undefined && entry.date) {
-        valueMap[String(entry.date)] = entry.value
-      }
+  const fillOf = (value) => {
+    if (diverging === true) {
+      return divergingFill(divergingPosition(value, domain, midpoint))
     }
+    const span = domain[1] - domain[0]
+    return sequentialFill(span > 0 ? (value - domain[0]) / span : 1)
   }
 
-  /* Domain */
-  let domainPair = null
-  if (raw !== null && raw !== undefined && Array.isArray(raw.domain) === true) {
-    domainPair = raw.domain
+  /* Weeks per block: the most any drawn year needs (53 or 54). */
+  const offsetOf = (date) => (date.getDay() - weekStart + 7) % 7
+  let weeks = 53
+  for (let index = 0; index < years.length; index = index + 1) {
+    const jan1 = new Date(years[index], 0, 1)
+    const days = Math.round((new Date(years[index] + 1, 0, 1) - jan1) / DAY_MS)
+    weeks = Math.max(weeks, Math.ceil((offsetOf(jan1) + days) / 7))
+  }
+
+  const vertical = ctx.orientation === "vertical"
+  const pad = 4
+  const availableW = Math.max(ctx.width - pad * 2, 20)
+  const availableH = Math.max(ctx.height - pad * 2 - LEGEND_H, 20)
+  const blocks = years.length
+  let cell = 0
+  if (vertical === false) {
+    cell = Math.min(
+      (availableW - GUTTER) / weeks,
+      (availableH - blocks * HEADER - (blocks - 1) * BLOCK_GAP) / (blocks * 7)
+    )
   } else {
-    const vals = Object.values(valueMap).filter((v) => typeof v === "number")
-    if (vals.length === 0) {
-      domainPair = [0, 1]
-    } else {
-      const lo = Math.min(...vals)
-      const hi = Math.max(...vals)
-      domainPair = lo === hi ? [lo - 1, hi + 1] : [lo, hi]
+    cell = Math.min(
+      (availableW - blocks * GUTTER - (blocks - 1) * BLOCK_GAP) / (blocks * 7),
+      (availableH - HEADER) / weeks
+    )
+  }
+  cell = Math.max(Math.min(cell, MAX_CELL), 3)
+  const gap = cell >= 8 ? 1.5 : 0.5
+
+  /* Position of (week, weekday) in block `b`, as the cell's top-left. */
+  const blockW = vertical === true ? GUTTER + 7 * cell : GUTTER + weeks * cell
+  const blockH = vertical === true ? HEADER + weeks * cell : HEADER + 7 * cell
+  /* Centre the blocks (and the key under them) vertically in the box. */
+  const usedH = (vertical === true ? blockH : blocks * blockH + (blocks - 1) * BLOCK_GAP) + LEGEND_H
+  const top = pad + Math.max((ctx.height - pad * 2 - usedH) / 2, 0)
+  const originOf = (b) => (vertical === true
+    ? { x: pad + b * (blockW + BLOCK_GAP), y: top }
+    : { x: pad, y: top + b * (blockH + BLOCK_GAP) })
+  const cellAt = (b, week, weekday) => {
+    const origin = originOf(b)
+    return vertical === true
+      ? { x: origin.x + GUTTER + weekday * cell, y: origin.y + HEADER + week * cell }
+      : { x: origin.x + GUTTER + week * cell, y: origin.y + HEADER + weekday * cell }
+  }
+
+  const decor = svgEl("g", { "aria-hidden": "true" }, [])
+  root.appendChild(decor)
+  const cells = svgEl("g", { part: "days" }, [])
+  root.appendChild(cells)
+  const muted = "var(--mj-text-muted, #5f6673)"
+  const labelSize = Math.max(Math.min(cell * 0.85, 10), 7)
+
+  for (let b = 0; b < years.length; b = b + 1) {
+    const year = years[b]
+    const origin = originOf(b)
+    const jan1 = new Date(year, 0, 1)
+    const firstOffset = offsetOf(jan1)
+
+    /* Year label in the corner of the block. */
+    decor.appendChild(svgEl("text", {
+      x: origin.x, y: origin.y + 10, "font-size": 10, "font-weight": "600",
+      fill: "var(--mj-text, #14181f)", part: "year-label"
+    }, String(year)))
+
+    /* Weekday labels: every other day. */
+    for (let weekday = 0; weekday < 7; weekday = weekday + 2) {
+      const sample = new Date(2024, 0, 7 + weekStart + weekday)
+      const text = formatDate(sample, { weekday: "short" })
+      const spot = cellAt(b, 0, weekday)
+      decor.appendChild(vertical === true
+        ? svgEl("text", {
+          x: spot.x + cell / 2, y: origin.y + HEADER - 3, "text-anchor": "middle",
+          "font-size": labelSize, fill: muted
+        }, text.slice(0, 2))
+        : svgEl("text", {
+          x: origin.x + GUTTER - 3, y: spot.y + cell * 0.75, "text-anchor": "end",
+          "font-size": labelSize, fill: muted
+        }, text))
+    }
+
+    /* Days. */
+    let day = new Date(year, 0, 1)
+    let index = 0
+    while (day.getFullYear() === year && index < 366) {
+      const slot = firstOffset + index
+      const week = Math.floor(slot / 7)
+      const weekday = slot % 7
+      const spot = cellAt(b, week, weekday)
+      const key = _dateKey(day)
+      const value = values.get(key)
+
+      if (day.getDate() === 1) {
+        const monthText = formatDate(day, { month: "short" })
+        decor.appendChild(vertical === true
+          ? svgEl("text", {
+            x: origin.x + GUTTER - 3, y: spot.y + cell * 0.75, "text-anchor": "end",
+            "font-size": labelSize, fill: muted
+          }, monthText)
+          : svgEl("text", {
+            x: spot.x, y: origin.y + HEADER - 3, "font-size": labelSize, fill: muted
+          }, monthText))
+      }
+
+      const hasValue = value !== undefined
+      const label = `${formatDate(day, { dateStyle: "medium" })}: ` +
+        `${hasValue === true ? formatNumber(value) : "no data"}`
+      const rect = svgEl("rect", {
+        x: spot.x.toFixed(2), y: spot.y.toFixed(2),
+        width: Math.max(cell - gap, 1).toFixed(2), height: Math.max(cell - gap, 1).toFixed(2),
+        rx: Math.min(2, cell / 5).toFixed(2),
+        fill: hasValue === true ? fillOf(value) : EMPTY_CELL_FILL,
+        part: hasValue === true ? "day" : "day empty"
+      }, [svgEl("title", null, label)])
+      if (hasValue === true) {
+        rect.setAttribute("tabindex", "0")
+        rect.setAttribute("role", "img")
+        rect.setAttribute("aria-label", label)
+        const capturedKey = key
+        const capturedValue = value
+        const handler = () => {
+          ctx.emit("mj-chart-day-click", { date: capturedKey, value: capturedValue })
+        }
+        rect.addEventListener("click", handler)
+        rect.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault()
+            handler()
+          }
+        })
+      }
+      cells.appendChild(rect)
+
+      index = index + 1
+      day = new Date(year, 0, 1 + index)
     }
   }
 
-  const colorScaleMode = (raw !== null && raw !== undefined && raw.colorScale)
-    ? raw.colorScale
-    : "sequential"
-  const valScale = linearScale(domainPair, [0, 1])
-
-  const horizontal = ctx.orientation !== "vertical"
-
-  /* Layout: one year block stacked vertically */
-  const margin   = { top: 8, right: 8, bottom: 8, left: 8 }
-  const plotW    = Math.max(ctx.width  - margin.left - margin.right,  10)
-  const plotH    = Math.max(ctx.height - margin.top  - margin.bottom, 10)
-
-  /* cell size: fit 53 week-columns + day-of-week labels in plotW */
-  const dowLabelW = 14
-  const cellSize  = Math.max(
-    Math.min(
-      Math.floor((plotW - dowLabelW) / 53),
-      Math.floor((plotH / years.length - 20) / 7)
-    ),
-    4
-  )
-  const yearBlockH = 7 * cellSize + 20   /* 7 rows + month-label row */
-
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
-  root.appendChild(plot)
-
-  for (let yi = 0; yi < years.length; yi = yi + 1) {
-    const year   = years[yi]
-    const blockY = yi * yearBlockH + 14   /* 14px for month labels */
-
-    /* Day-of-week labels */
-    const dowLabels = ["Mon","","Wed","","Fri","","Sun"]
-    for (let d = 0; d < 7; d = d + 1) {
-      if (dowLabels[d] === "") {
-        continue
-      }
-      plot.appendChild(svgEl("text", {
-        x: dowLabelW - 2, y: blockY + d * cellSize + cellSize * 0.75,
-        "text-anchor": "end",
-        "font-size": 9,
-        fill: "var(--mj-text-muted, #6b7280)"
-      }, dowLabels[d]))
-    }
-
-    /* Iterate weeks */
-    const startDate  = _firstMonday(year)
-    const endDate    = new Date(year, 11, 31)
-    let   currentDay = new Date(startDate)
-    let   weekIndex  = 0
-    let   lastMonth  = -1
-
-    while (currentDay <= endDate || currentDay.getFullYear() < year) {
-      const weekX = dowLabelW + weekIndex * cellSize
-
-      /* Month label at week start */
-      const firstDayOfWeek = new Date(currentDay)
-      if (firstDayOfWeek.getFullYear() === year) {
-        const month = firstDayOfWeek.getMonth()
-        if (month !== lastMonth) {
-          plot.appendChild(svgEl("text", {
-            x: weekX, y: blockY - 2,
-            "font-size": 9,
-            fill: "var(--mj-text-muted, #6b7280)"
-          }, MONTH_ABBR[month]))
-          lastMonth = month
-        }
-      }
-
-      /* 7 days in this week column */
-      for (let d = 0; d < 7; d = d + 1) {
-        const dayDate = new Date(currentDay)
-        const dayY    = blockY + d * cellSize
-        const key     = _dateKey(dayDate)
-        const val     = valueMap[key]
-        const inYear  = dayDate.getFullYear() === year
-
-        let fillColor = "var(--mj-surface-raised, #f3f4f6)"
-        if (inYear === true && typeof val === "number") {
-          const t = valScale(val)
-          if (colorScaleMode === "diverging") {
-            fillColor = _divFill(t)
-          } else {
-            fillColor = _seqFill(t)
-          }
-        }
-
-        const cellRect = svgEl("rect", {
-          x: weekX, y: dayY,
-          width: cellSize - 1, height: cellSize - 1,
-          rx: 1,
-          fill: fillColor
-        }, [])
-
-        if (inYear === true) {
-          const displayVal = typeof val === "number" ? formatNumber(val) : "no data"
-          const labelText  = `${key}: ${displayVal}`
-          cellRect.setAttribute("part", "day")
-          cellRect.setAttribute("tabindex", "0")
-          cellRect.setAttribute("role", "img")
-          cellRect.setAttribute("aria-label", labelText)
-          cellRect.appendChild(svgEl("title", null, labelText))
-          const capturedKey = key
-          const capturedVal = val
-          const handler = () => {
-            ctx.emit("mj-chart-day-click", { date: capturedKey, value: capturedVal })
-          }
-          cellRect.addEventListener("click", handler)
-          cellRect.addEventListener("keydown", (event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault()
-              handler()
-            }
-          })
-        } else {
-          cellRect.setAttribute("opacity", "0.2")
-        }
-
-        plot.appendChild(cellRect)
-        currentDay.setDate(currentDay.getDate() + 1)
-      }
-
-      weekIndex = weekIndex + 1
-      if (weekIndex > 53) {
-        break
-      }
-    }
-
-    /* Year label on the left */
-    plot.appendChild(svgEl("text", {
-      x: dowLabelW, y: blockY - 2,
-      "font-size": 9,
-      fill: "var(--mj-text-muted, #6b7280)"
-    }, ""))    /* month labels already cover the top; year label optional */
+  /* Colour key: less [ramp] more, with the domain ends. */
+  const totalW = vertical === true ? blocks * blockW + (blocks - 1) * BLOCK_GAP : blockW
+  const totalH = vertical === true ? blockH : blocks * blockH + (blocks - 1) * BLOCK_GAP
+  const keyY = top + totalH + 6
+  const swatch = Math.max(Math.min(cell, 10), 6)
+  const steps = 5
+  const rampW = steps * (swatch + 2)
+  const highText = formatNumber(domain[1])
+  const lowText = formatNumber(domain[0])
+  const keyRight = Math.min(pad + totalW, ctx.width - pad)
+  const rampX = keyRight - rampW - highText.length * 5.5 - 6
+  const key = svgEl("g", { "aria-hidden": "true", part: "legend" }, [])
+  decor.appendChild(key)
+  key.appendChild(svgEl("text", {
+    x: rampX - 4, y: keyY + swatch - 1, "text-anchor": "end", "font-size": 9, fill: muted
+  }, lowText))
+  for (let s = 0; s < steps; s = s + 1) {
+    const t = s / (steps - 1)
+    const fill = diverging === true
+      ? divergingFill(divergingPosition(domain[0] + (domain[1] - domain[0]) * t, domain, midpoint))
+      : sequentialFill(t)
+    key.appendChild(svgEl("rect", {
+      x: rampX + s * (swatch + 2), y: keyY, width: swatch, height: swatch, rx: 1.5, fill: fill
+    }, []))
   }
+  key.appendChild(svgEl("text", {
+    x: rampX + rampW + 2, y: keyY + swatch - 1, "font-size": 9, fill: muted
+  }, highText))
+  key.appendChild(svgEl("rect", {
+    x: pad + GUTTER, y: keyY, width: swatch, height: swatch, rx: 1.5, fill: EMPTY_CELL_FILL
+  }, []))
+  key.appendChild(svgEl("text", {
+    x: pad + GUTTER + swatch + 4, y: keyY + swatch - 1, "font-size": 9, fill: muted
+  }, "no data"))
 
   return root
 }
 
 
-registerRenderer("calendar-heatmap", render)
+registerRenderer("calendar-heatmap", render, { orientation: "horizontal", legend: "none" })

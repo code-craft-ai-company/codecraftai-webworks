@@ -183,3 +183,49 @@ class ExtensionPointError(ExtensionError):
         self.point_name = point_name
         super().__init__(message)
         return
+
+
+class ExtensionLoadError(ExtensionError):
+    """
+        Raised when an extension named by an import string or an entry
+        point cannot be loaded: it is outside the allowed packages, its
+        module cannot be imported, the name does not refer to an Extension
+        subclass, or the class cannot be instantiated.
+
+        :param message: A human-readable error description.
+        :param reference: The import string or entry point name that was
+                          being loaded.
+    """
+
+    def __init__(self, message: str, reference: str):
+        self.reference = reference
+        super().__init__(message)
+        return
+
+
+class HookExecutionError(ExtensionError):
+    """
+        Raised when a hook callback that the caller cannot continue past
+        raised an exception.
+
+        The request hooks ``before_first_request``, ``before_request`` and
+        ``after_request`` decide what a request does next; when one of their
+        callbacks fails the request can not be served as the extension
+        intended, so the failure ends the request (the dispatcher answers
+        500). The failure has already been reported through the
+        HookManager's error callback when this is raised; the callback's
+        exception is the ``__cause__``.
+
+        :param hook_name: The hook that was being executed.
+        :param extension_name: The extension whose callback failed, or
+                               ``"unknown"`` for a callback registered
+                               without one.
+    """
+
+    def __init__(self, hook_name: str, extension_name: str):
+        self.hook_name = hook_name
+        super().__init__(
+            f"Hook '{hook_name}' callback from extension '{extension_name}' failed",
+            extension_name=extension_name
+        )
+        return

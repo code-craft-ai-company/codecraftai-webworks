@@ -261,25 +261,76 @@ def test_fire_before_request_short_circuits_on_response():
     return
 
 
+def _make_after_request_callback(label: str):
+    """
+        Create an after_request callback that appends its label to the call
+        log passed as the request and keeps the response.
+
+        :param label: The label to append when the callback is invoked.
+
+        :returns: A callable taking (request, response).
+    """
+    def callback(call_log: list, response):
+        call_log.append(label)
+        return None
+    return callback
+
+
 def test_fire_after_request_calls_all_callbacks():
     """
-        Test that fire_after_request calls all registered callbacks.
+        Test that fire_after_request calls all registered callbacks and
+        returns the response when none of them replaces it.
     """
     manager = HookManager()
     lifecycle = RequestLifecycleHooks(hook_manager=manager)
 
     call_log = []
-    manager.register(AFTER_REQUEST, _make_logging_callback("after-a"), extension_name="ext-a")
-    manager.register(AFTER_REQUEST, _make_logging_callback("after-b"), extension_name="ext-b")
+    manager.register(AFTER_REQUEST, _make_after_request_callback("after-a"), extension_name="ext-a")
+    manager.register(AFTER_REQUEST, _make_after_request_callback("after-b"), extension_name="ext-b")
 
-    results = lifecycle.fire_after_request(call_log)
+    response = object()
+    result = lifecycle.fire_after_request(call_log, response)
 
     if len(call_log) != 2:
         errmsg = "Expected 2 calls, got {}".format(len(call_log))
         raise AssertionError(errmsg)
 
-    if len(results) != 2:
-        errmsg = "Expected 2 results, got {}".format(len(results))
+    if result is not response:
+        errmsg = "Expected the response to be kept, got {!r}".format(result)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_fire_after_request_chains_replacement_responses():
+    """
+        Test that a response returned by an after_request callback replaces
+        the response the next callback receives and the one returned.
+    """
+    manager = HookManager()
+    lifecycle = RequestLifecycleHooks(hook_manager=manager)
+
+    seen = []
+
+    def replace(request, response):
+        seen.append(("replace", response))
+        return "replacement"
+
+    def observe(request, response):
+        seen.append(("observe", response))
+        return None
+
+    manager.register(AFTER_REQUEST, replace, priority=HookPriority.HIGH, extension_name="ext-a")
+    manager.register(AFTER_REQUEST, observe, priority=HookPriority.LOW, extension_name="ext-b")
+
+    result = lifecycle.fire_after_request("request", "original")
+
+    if seen != [("replace", "original"), ("observe", "replacement")]:
+        errmsg = "Unexpected callback sequence: {}".format(seen)
+        raise AssertionError(errmsg)
+
+    if result != "replacement":
+        errmsg = "Expected the replacement response, got {!r}".format(result)
         raise AssertionError(errmsg)
 
     return
@@ -335,9 +386,13 @@ def test_fire_hooks_with_no_registrations():
 
     lifecycle.fire_before_first_request(call_log)
     result = lifecycle.fire_before_request(call_log)
-    lifecycle.fire_after_request(call_log)
+    response = lifecycle.fire_after_request(call_log, "response")
     lifecycle.fire_on_request_error(call_log)
     lifecycle.fire_teardown_request(call_log)
+
+    if response != "response":
+        errmsg = "Expected fire_after_request to return the response unchanged, got {!r}".format(response)
+        raise AssertionError(errmsg)
 
     if result is not None:
         errmsg = "Expected None from fire_before_request with no hooks, got {}".format(result)
@@ -387,7 +442,7 @@ def test_property_17_request_lifecycle_hooks_execution():
                 return cb
 
             def make_after_cb(name):
-                def cb(log: list):
+                def cb(log: list, response):
                     log.append(("after_request", name))
                     return None
                 return cb
@@ -413,7 +468,7 @@ def test_property_17_request_lifecycle_hooks_execution():
 
         # Simulate request lifecycle: before -> (processing) -> after -> teardown
         lifecycle.fire_before_request(global_call_log)
-        lifecycle.fire_after_request(global_call_log)
+        lifecycle.fire_after_request(global_call_log, None)
         lifecycle.fire_teardown_request(global_call_log)
 
         # Verify that all before_request calls come before all after_request calls
@@ -561,5 +616,163 @@ def test_property_18_before_request_short_circuit():
                     "got '{}'. Call log: {}"
                 ).format(iteration, expected_ext, log_idx, logged_name, call_log)
                 raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Failure semantics and thread safety
+# =============================================================================
+
+import threading
+
+from ccai.webworks.extensibility.exceptions import HookExecutionError
+
+
+def test_has_callbacks_reports_request_hook_registrations():
+    """
+        Test that has_callbacks is False until a request hook gets a callback.
+    """
+    manager = HookManager()
+    lifecycle = RequestLifecycleHooks(hook_manager=manager)
+
+    manager.register("on_app_ready", lambda context: None, extension_name="ext-a")
+
+    if lifecycle.has_callbacks() is not False:
+        raise AssertionError("Expected no request hook callbacks")
+
+    manager.register(TEARDOWN_REQUEST, lambda request, response, error: None, extension_name="ext-a")
+
+    if lifecycle.has_callbacks() is not True:
+        raise AssertionError("Expected a request hook callback")
+
+    return
+
+
+def test_failing_before_request_raises_hook_execution_error():
+    """
+        Test that a failing before_request callback ends the request.
+    """
+    manager = HookManager()
+    lifecycle = RequestLifecycleHooks(hook_manager=manager)
+
+    def failing(request):
+        raise RuntimeError("before failed")
+
+    manager.register(BEFORE_REQUEST, failing, extension_name="ext-bad")
+
+    caught = None
+    try:
+        lifecycle.fire_before_request("request")
+    except HookExecutionError as err:
+        caught = err
+
+    if caught is None or caught.hook_name != BEFORE_REQUEST:
+        raise AssertionError(f"Expected HookExecutionError for before_request, got {caught!r}")
+
+    return
+
+
+def test_failing_teardown_request_is_only_reported():
+    """
+        Test that a failing teardown_request callback does not stop the others.
+    """
+    manager = HookManager()
+    lifecycle = RequestLifecycleHooks(hook_manager=manager)
+
+    calls = []
+
+    def failing(request, response, error):
+        raise RuntimeError("teardown failed")
+
+    def recording(request, response, error):
+        calls.append("recorded")
+
+    manager.register(TEARDOWN_REQUEST, failing, priority=HookPriority.HIGH, extension_name="ext-bad")
+    manager.register(TEARDOWN_REQUEST, recording, priority=HookPriority.LOW, extension_name="ext-good")
+
+    lifecycle.fire_teardown_request("request", "response", None)
+
+    if calls != ["recorded"]:
+        raise AssertionError(f"Expected the second callback to run, got {calls}")
+
+    return
+
+
+def test_before_first_request_runs_once_across_threads():
+    """
+        Test that concurrent first requests run before_first_request once and
+        none of them returns before it has finished.
+    """
+    manager = HookManager()
+    lifecycle = RequestLifecycleHooks(hook_manager=manager)
+
+    started = threading.Event()
+    release = threading.Event()
+    calls = []
+    finished_before_release = []
+
+    def slow_first(request):
+        calls.append(request)
+        started.set()
+        release.wait(timeout=10)
+
+    manager.register(BEFORE_FIRST_REQUEST, slow_first, extension_name="ext-a")
+
+    def fire(name):
+        lifecycle.fire_before_first_request(name)
+        if release.is_set() is False:
+            finished_before_release.append(name)
+
+    first = threading.Thread(target=fire, args=("first",))
+    first.start()
+    started.wait(timeout=10)
+
+    others = []
+    for index in range(4):
+        thread = threading.Thread(target=fire, args=("other-{}".format(index),))
+        thread.start()
+        others.append(thread)
+
+    release.set()
+
+    first.join(timeout=10)
+    for thread in others:
+        thread.join(timeout=10)
+
+    if calls != ["first"]:
+        raise AssertionError(f"Expected one call, from the first request, got {calls}")
+
+    if len(finished_before_release) != 0:
+        raise AssertionError(f"Expected no request to pass before the hook finished, got {finished_before_release}")
+
+    return
+
+
+def test_failing_before_first_request_still_counts_as_handled():
+    """
+        Test that a failing before_first_request raises once and never runs again.
+    """
+    manager = HookManager()
+    lifecycle = RequestLifecycleHooks(hook_manager=manager)
+
+    calls = []
+
+    def failing(request):
+        calls.append(request)
+        raise RuntimeError("first failed")
+
+    manager.register(BEFORE_FIRST_REQUEST, failing, extension_name="ext-bad")
+
+    caught = None
+    try:
+        lifecycle.fire_before_first_request("first")
+    except HookExecutionError as err:
+        caught = err
+
+    lifecycle.fire_before_first_request("second")
+
+    if caught is None or calls != ["first"] or lifecycle.first_request_handled is not True:
+        raise AssertionError(f"Expected one failing call, got {calls} and {caught!r}")
 
     return

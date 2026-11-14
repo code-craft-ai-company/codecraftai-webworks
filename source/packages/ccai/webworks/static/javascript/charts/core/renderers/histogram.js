@@ -4,454 +4,390 @@
  * Histogram / Density / Frequency-Polygon renderer.
  *
  * Registers: "histogram", "density", "frequency-polygon"
+ * The requested type (ctx.type) picks the drawing:
+ *   histogram          bars (or a KDE curve with smooth="kde", or a polygon
+ *                      with display="polygon")
+ *   density            Gaussian kernel density curves, one per series
+ *   frequency-polygon  a line through the bin midpoints, closed to zero at
+ *                      both ends
  *
- * ctx.raw / ctx.model.series data shapes:
- *   - samples: [n, …]            renderer bins/KDE-smooths internally
- *   - bins: [{x0, x1, count}]   pre-binned; renderer uses as-is
+ * ctx.model.series data shapes:
+ *   - samples: [n, …]            renderer bins / smooths internally; values
+ *                                that are not finite numbers are missing data
+ *   - bins: [{x0, x1, count}]    pre-binned; used as given (the density type
+ *                                draws a curve through the bin densities)
+ * Every samples series is counted into ONE shared set of bin edges computed
+ * from the pooled range, so overlaid and stacked series line up.
  *
  * Relevant ctx.attrs:
- *   bin-count   number of bins for Sturges auto-computation (fallback: auto)
+ *   bin-count   number of bins (default: bin-method)
+ *   bin-width   bin width in data units (wins over bin-count)
+ *   bin-method  "sturges" (default) | "scott" | "fd" (Freedman-Diaconis)
  *   group       "overlay" | "stack" (default "overlay")
- *   normalize   "density" — y-axis is probability density
- *   smooth      "kde" — render as KDE curve (density type forces this)
- *   display     "polygon" — frequency-polygon line through midpoints
- *   bandwidth   KDE bandwidth override (Silverman rule used otherwise)
- *   fill        "area" | "none" for density/polygon modes
+ *   normalize   "density" — bar / polygon heights are count / (n * width),
+ *               so each series' area is 1
+ *   smooth      "kde" — histogram type draws a KDE curve
+ *   display     "polygon" — histogram type draws a frequency polygon
+ *   bandwidth   KDE bandwidth in data units (Silverman's rule otherwise)
+ *   fill        "area" (default) | "none" for density / polygon modes
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, formatNumber, smoothPath, areaPath, linePath, extent } from "../svgdraw.js";
-import { linearScale, niceTicks } from "../scales.js";
+import { svgEl, formatNumber, linePath, areaPath, monotonePath } from "../svgdraw.js";
+import { linearScale, niceDomain, niceTicks } from "../scales.js";
+import {
+  finiteValues, sortNumbers, quantileSorted, silvermanBandwidth, gaussianDensity,
+  linspace, binSeries, isFiniteNumber, hasSeriesSamples, axisLayer,
+  drawTicks, drawAxisTitle, drawBaseline, tickCount, activateOnKey, focusableMark
+} from "./diststats.js";
+
+/* KDE evaluation points per curve. */
+const KDE_POINTS = 161;
+
+/* A KDE curve extends this many bandwidths past the data on each side. */
+const KDE_TAIL_BANDWIDTHS = 3;
 
 
-/* ── helpers ──────────────────────────────────────────────────────────────── */
+/* ── data preparation ────────────────────────────────────────────────────── */
 
-function _sturgesBinCount(n) {
+function _binOptions(ctx) {
   /*
-   * Sturges' rule: k = ceil(log2(n) + 1).
+   * The binning options read from the host attributes.
    */
-  const k = Math.ceil(Math.log2(Math.max(n, 1)) + 1)
-  return Math.max(k, 2)
+  const count = parseInt(ctx.attrs("bin-count", ""), 10)
+  const width = parseFloat(ctx.attrs("bin-width", ""))
+  const options = {
+    count: isFiniteNumber(count) === true && count > 0 ? count : null,
+    width: isFiniteNumber(width) === true && width > 0 ? width : null,
+    method: ctx.attrs("bin-method", "sturges")
+  }
+  return options
 }
 
 
-function _makeBins(samples, binCount) {
+function _binHeight(bin, total, normalized) {
   /*
-   * Partition sorted samples into equal-width bins.
+   * The drawn height of a bin: its count, or count / (n * width).
+   */
+  if (normalized === false) {
+    return bin.count
+  }
+  const width = bin.x1 - bin.x0
+  const height = total > 0 && width > 0 ? bin.count / (total * width) : 0
+  return height
+}
+
+
+function _densityCurve(entry, bandwidthOverride) {
+  /*
+   * The density curve of one series: a KDE of its samples extended three
+   * bandwidths past the data, or (pre-binned input) the bin densities at
+   * the bin midpoints, closed to zero half a bin beyond each end.
    *
-   * :returns: Array of {x0, x1, count}.
+   * :returns: { xs, ys, bandwidth } or null when the series has no data.
    */
-  const sorted = samples.slice().sort((a, b) => a - b)
-  const dataMin = sorted[0]
-  const dataMax = sorted[sorted.length - 1]
-  const binW = dataMax === dataMin ? 1 : (dataMax - dataMin) / binCount
-  const bins = []
-  for (let index = 0; index < binCount; index = index + 1) {
-    const x0 = dataMin + index * binW
-    const x1 = index === binCount - 1 ? dataMax + 1e-9 : dataMin + (index + 1) * binW
-    bins.push({ x0: x0, x1: x1, count: 0 })
+  if (entry.samples !== null && entry.samples.length > 0) {
+    const sorted = sortNumbers(entry.samples)
+    const bandwidth = bandwidthOverride > 0 ? bandwidthOverride : silvermanBandwidth(sorted)
+    const low = sorted[0] - KDE_TAIL_BANDWIDTHS * bandwidth
+    const high = sorted[sorted.length - 1] + KDE_TAIL_BANDWIDTHS * bandwidth
+    const xs = linspace(low, high, KDE_POINTS)
+    const ys = gaussianDensity(sorted, bandwidth, xs)
+    return { xs: xs, ys: ys, bandwidth: bandwidth }
   }
-  for (let si = 0; si < sorted.length; si = si + 1) {
-    const value = sorted[si]
-    let bi = Math.floor((value - dataMin) / binW)
-    if (bi >= binCount) {
-      bi = binCount - 1
+  if (entry.bins.length > 0 && entry.total > 0) {
+    const first = entry.bins[0]
+    const last = entry.bins[entry.bins.length - 1]
+    const xs = [first.x0 - (first.x1 - first.x0) / 2]
+    const ys = [0]
+    for (let bi = 0; bi < entry.bins.length; bi = bi + 1) {
+      const bin = entry.bins[bi]
+      xs.push((bin.x0 + bin.x1) / 2)
+      ys.push(_binHeight(bin, entry.total, true))
     }
-    bins[bi].count = bins[bi].count + 1
+    xs.push(last.x1 + (last.x1 - last.x0) / 2)
+    ys.push(0)
+    return { xs: xs, ys: ys, bandwidth: null }
   }
-  return bins
+  return null
 }
 
 
-function _silvermanBandwidth(samples) {
+function _modeOf(ctx) {
   /*
-   * Silverman's rule-of-thumb KDE bandwidth.
+   * The drawing mode: "bars", "kde" or "polygon".
    */
-  const n = samples.length
-  if (n < 2) {
-    return 1
+  if (ctx.type === "density") {
+    return "kde"
   }
-  let mean = 0
-  for (let i = 0; i < n; i = i + 1) {
-    mean = mean + samples[i]
+  if (ctx.type === "frequency-polygon") {
+    return "polygon"
   }
-  mean = mean / n
-  let variance = 0
-  for (let i = 0; i < n; i = i + 1) {
-    const diff = samples[i] - mean
-    variance = variance + diff * diff
+  if (ctx.attrs("smooth", "") === "kde") {
+    return "kde"
   }
-  const std = Math.sqrt(variance / (n - 1))
-  const sorted = samples.slice().sort((a, b) => a - b)
-  const q1 = sorted[Math.floor(n * 0.25)]
-  const q3 = sorted[Math.floor(n * 0.75)]
-  const iqr = q3 - q1
-  const spread = Math.min(std, iqr / 1.34)
-  const bw = 0.9 * spread * Math.pow(n, -0.2)
-  return bw > 0 ? bw : 1
+  if (ctx.attrs("display", "bar") === "polygon") {
+    return "polygon"
+  }
+  return "bars"
 }
 
 
-function _gaussianKernel(u) {
-  /*
-   * Standard Gaussian kernel: k(u) = exp(-0.5 * u^2) / sqrt(2π).
-   */
-  const value = Math.exp(-0.5 * u * u) / Math.sqrt(2 * Math.PI)
-  return value
-}
+/* ── drawing ─────────────────────────────────────────────────────────────── */
 
-
-function _kdePoints(samples, bandwidth, evalPoints) {
+function _toPixel(binScale, valScale, horizontal, x, height) {
   /*
-   * Evaluate KDE at each point in evalPoints.
-   *
-   * :returns: Array of {x, density}.
+   * A data point (bin position x, height) in pixels for the orientation.
    */
-  const n = samples.length
-  const points = []
-  for (let ei = 0; ei < evalPoints.length; ei = ei + 1) {
-    const x = evalPoints[ei]
-    let sum = 0
-    for (let si = 0; si < n; si = si + 1) {
-      sum = sum + _gaussianKernel((x - samples[si]) / bandwidth)
-    }
-    const density = sum / (n * bandwidth)
-    points.push({ x: x, density: density })
+  if (horizontal === true) {
+    return { x: valScale(height), y: binScale(x) }
   }
-  return points
+  return { x: binScale(x), y: valScale(height) }
 }
 
 
-function _resolveSeries(series, binCountAttr) {
+function _closedArea(points, valScale, horizontal) {
   /*
-   * For each series item, produce a resolved bins array.
-   * Handles both samples-based and pre-binned inputs.
-   *
-   * :returns: Array of { name, bins, color }.
+   * Fill path under a curve, closed against the zero line of the value
+   * axis (x = valScale(0) when horizontal, y = valScale(0) when vertical).
    */
-  const resolved = []
-  for (let si = 0; si < series.length; si = si + 1) {
-    const s = series[si]
-    let bins = null
-    if (Array.isArray(s.bins) === true && s.bins.length > 0) {
-      bins = s.bins
-    } else if (Array.isArray(s.samples) === true && s.samples.length > 0) {
-      const k = binCountAttr > 0 ? binCountAttr : _sturgesBinCount(s.samples.length)
-      bins = _makeBins(s.samples, k)
-    } else {
-      bins = []
-    }
-    resolved.push({ name: s.name, bins: bins, samples: s.samples || null, color: s.color || null })
-  }
-  return resolved
-}
-
-
-/* ── axis / grid helpers ─────────────────────────────────────────────────── */
-
-function _drawValueAxis(plot, valScale, plotW, plotH, horizontal) {
-  /*
-   * Draw gridlines and tick labels for the value (count/density) axis.
-   */
-  const ticks = niceTicks(valScale.domain()[0], valScale.domain()[1], 5)
-  for (let ti = 0; ti < ticks.length; ti = ti + 1) {
-    const tick = ticks[ti]
+  const zero = valScale(0)
+  const lower = points.map((point) => {
     if (horizontal === true) {
-      const x = valScale(tick)
-      plot.appendChild(svgEl("line", {
-        x1: x, y1: 0, x2: x, y2: plotH,
-        stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-      }, []))
-      plot.appendChild(svgEl("text", {
-        x: x, y: plotH + 16, "text-anchor": "middle",
-        "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-      }, formatNumber(tick)))
-    } else {
-      const y = valScale(tick)
-      plot.appendChild(svgEl("line", {
-        x1: 0, y1: y, x2: plotW, y2: y,
-        stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
-      }, []))
-      plot.appendChild(svgEl("text", {
-        x: -8, y: y + 4, "text-anchor": "end",
-        "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-      }, formatNumber(tick)))
+      return { x: zero, y: point.y }
     }
-  }
-  return
+    return { x: point.x, y: zero }
+  })
+  const data = areaPath(points, lower)
+  return data
 }
 
 
-function _drawBinAxis(plot, binMin, binMax, plotW, plotH, horizontal, binScale) {
+function _binLabel(name, bin, normalized, height) {
   /*
-   * Draw a few representative tick labels along the bin (range) axis.
+   * Accessible text of one bin.
    */
-  const ticks = niceTicks(binMin, binMax, 6)
-  for (let ti = 0; ti < ticks.length; ti = ti + 1) {
-    const tick = ticks[ti]
-    const px = binScale(tick)
-    if (horizontal === true) {
-      plot.appendChild(svgEl("text", {
-        x: -8, y: px + 4, "text-anchor": "end",
-        "font-size": 11, fill: "var(--mj-text, #14181f)"
-      }, formatNumber(tick)))
-    } else {
-      plot.appendChild(svgEl("text", {
-        x: px, y: plotH + 18, "text-anchor": "middle",
-        "font-size": 11, fill: "var(--mj-text, #14181f)"
-      }, formatNumber(tick)))
-    }
-  }
-  return
+  const range = `${formatNumber(bin.x0)}–${formatNumber(bin.x1)}`
+  const density = normalized === true ? `, density ${formatNumber(height, { maximumSignificantDigits: 3 })}` : ""
+  const label = `${name}, ${range}: ${formatNumber(bin.count)}${density}`
+  return label
 }
 
 
-/* ── bar-mode render ─────────────────────────────────────────────────────── */
-
-function _renderBars(plot, resolvedSeries, binScale, valScale, zero, ctx, horizontal, stackMode) {
+function _drawBars(marks, resolved, binScale, valScale, ctx, horizontal, stacked, normalized) {
   /*
-   * Draw histogram bars (rect per bin, per series).
+   * Histogram bars: one rect per non-empty bin and series. Overlaid series
+   * are translucent; stacked series sit on the series below them.
    */
-  const allBinKeys = new Set()
-  for (let si = 0; si < resolvedSeries.length; si = si + 1) {
-    const series = resolvedSeries[si]
-    for (let bi = 0; bi < series.bins.length; bi = bi + 1) {
-      allBinKeys.add(series.bins[bi].x0)
-    }
-  }
+  const stackBase = new Map()
+  const overlay = stacked === false && resolved.length > 1
 
-  /* For stack mode, accumulate previous series heights per bin. */
-  const stackBase = {}
-  allBinKeys.forEach((key) => { stackBase[key] = 0 })
+  for (let si = 0; si < resolved.length; si = si + 1) {
+    const entry = resolved[si]
+    const color = ctx.colorFor(entry.name)
+    const group = svgEl("g", { part: "series" }, [])
 
-  for (let si = 0; si < resolvedSeries.length; si = si + 1) {
-    const series = resolvedSeries[si]
-    const color = ctx.colorFor(si)
-    const isOverlay = !stackMode
-    const opacity = isOverlay && resolvedSeries.length > 1 ? 0.65 : 1
+    for (let bi = 0; bi < entry.bins.length; bi = bi + 1) {
+      const bin = entry.bins[bi]
+      const height = _binHeight(bin, entry.total, normalized)
+      const key = `${bin.x0}|${bin.x1}`
+      const base = stacked === true && stackBase.has(key) === true ? stackBase.get(key) : 0
+      if (stacked === true) {
+        stackBase.set(key, base + height)
+      }
+      if (bin.count <= 0) {
+        continue
+      }
 
-    for (let bi = 0; bi < series.bins.length; bi = bi + 1) {
-      const bin = series.bins[bi]
-      const baseCount = stackMode ? stackBase[bin.x0] || 0 : 0
-      const topCount = baseCount + bin.count
-
-      const pxStart = binScale(bin.x0)
-      const pxEnd = binScale(bin.x1)
-      const barW = Math.max(Math.abs(pxEnd - pxStart) - 1, 1)
-
+      const start = binScale(bin.x0)
+      const end = binScale(bin.x1)
+      const thickness = Math.max(Math.abs(end - start) - 1, 1)
+      const from = valScale(base)
+      const to = valScale(base + height)
       let rect = null
       if (horizontal === true) {
-        const x1 = valScale(baseCount)
-        const x2 = valScale(topCount)
-        const w = Math.abs(x2 - x1)
-        const y = Math.min(pxStart, pxEnd)
         rect = svgEl("rect", {
-          x: Math.min(x1, x2), y: y,
-          width: w, height: barW,
-          fill: color, opacity: opacity
+          x: Math.min(from, to), y: Math.min(start, end) + 0.5,
+          width: Math.abs(to - from), height: thickness
         }, [])
       } else {
-        const y1 = valScale(topCount)
-        const y2 = valScale(baseCount)
-        const h = Math.abs(y2 - y1)
-        const x = Math.min(pxStart, pxEnd)
         rect = svgEl("rect", {
-          x: x, y: Math.min(y1, y2),
-          width: barW, height: h,
-          fill: color, opacity: opacity
+          x: Math.min(start, end) + 0.5, y: Math.min(from, to),
+          width: thickness, height: Math.abs(to - from)
         }, [])
       }
-
+      rect.setAttribute("fill", color)
+      if (overlay === true) {
+        rect.setAttribute("fill-opacity", "0.55")
+      }
       rect.setAttribute("part", "bar")
-      rect.setAttribute("tabindex", "0")
-      rect.setAttribute("role", "img")
-      rect.setAttribute("aria-label",
-        `${series.name} [${formatNumber(bin.x0)}–${formatNumber(bin.x1)}]: ${bin.count}`)
-      rect.appendChild(svgEl("title", null,
-        `${series.name} [${formatNumber(bin.x0)}–${formatNumber(bin.x1)}]: ${bin.count}`))
+      focusableMark(rect, _binLabel(entry.name, bin, normalized, height))
       const handlerBin = bin
-      const handlerSeries = series
-      const handler = () => {
+      activateOnKey(rect, () => {
         ctx.emit("mj-chart-bar-click", {
-          series: handlerSeries.name,
-          x0: handlerBin.x0, x1: handlerBin.x1,
-          count: handlerBin.count
+          series: entry.name, x0: handlerBin.x0, x1: handlerBin.x1, count: handlerBin.count
         })
-      }
-      rect.addEventListener("click", handler)
-      rect.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          handler()
-        }
       })
-      plot.appendChild(rect)
-
-      if (stackMode === true) {
-        stackBase[bin.x0] = topCount
-      }
+      group.appendChild(rect)
     }
+    marks.appendChild(group)
   }
   return
 }
 
 
-/* ── KDE / density render ────────────────────────────────────────────────── */
-
-function _renderKDE(plot, resolvedSeries, binMin, binMax, valMax, binScale, valScale, ctx, horizontal, fillMode, bwOverride) {
+function _drawCurves(marks, curves, binScale, valScale, ctx, horizontal, fillMode) {
   /*
-   * Draw smoothed KDE curves (filled area or line only).
+   * Density curves (filled area plus line), one per series.
    */
-  const evalCount = 80
-  const evalPoints = []
-  for (let i = 0; i <= evalCount; i = i + 1) {
-    evalPoints.push(binMin + (binMax - binMin) * (i / evalCount))
-  }
+  for (let ci = 0; ci < curves.length; ci = ci + 1) {
+    const curve = curves[ci]
+    const color = ctx.colorFor(curve.name)
+    const points = curve.xs.map((x, index) => _toPixel(binScale, valScale, horizontal, x, curve.ys[index]))
+    const group = svgEl("g", { part: "series" }, [])
 
-  const baseline = valScale(0)
-
-  for (let si = 0; si < resolvedSeries.length; si = si + 1) {
-    const series = resolvedSeries[si]
-    const samples = series.samples
-    if (samples === null || samples.length === 0) {
-      continue
+    if (fillMode !== "none") {
+      group.appendChild(svgEl("path", {
+        d: _closedArea(points, valScale, horizontal),
+        fill: color, "fill-opacity": 0.25, stroke: "none", part: "density-area"
+      }, []))
     }
-    const color = ctx.colorFor(si)
-    const bw = bwOverride > 0 ? bwOverride : _silvermanBandwidth(samples)
-    const kdeData = _kdePoints(samples, bw, evalPoints)
-
-    const points = kdeData.map((d) => {
-      if (horizontal === true) {
-        return { x: valScale(d.density), y: binScale(d.x) }
+    const line = svgEl("path", {
+      d: curve.preBinned === true ? monotonePath(points) : linePath(points),
+      fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round"
+    }, [])
+    line.setAttribute("part", "density-line")
+    let peakIndex = 0
+    for (let index = 1; index < curve.ys.length; index = index + 1) {
+      if (curve.ys[index] > curve.ys[peakIndex]) {
+        peakIndex = index
       }
-      return { x: binScale(d.x), y: valScale(d.density) }
+    }
+    const bandwidthText = curve.bandwidth !== null
+      ? `, bandwidth ${formatNumber(curve.bandwidth, { maximumSignificantDigits: 3 })}` : ""
+    focusableMark(line, `${curve.name} density curve, peak at ` +
+      `${formatNumber(curve.xs[peakIndex], { maximumSignificantDigits: 4 })}${bandwidthText}`)
+    activateOnKey(line, () => {
+      ctx.emit("mj-chart-density-click", { series: curve.name, bandwidth: curve.bandwidth })
     })
-
-    if (fillMode !== "none") {
-      const pathD = areaPath(points, baseline)
-      if (pathD !== "") {
-        const area = svgEl("path", {
-          d: pathD, fill: color, opacity: 0.3,
-          stroke: "none"
-        }, [])
-        plot.appendChild(area)
-      }
-    }
-
-    const pathD = smoothPath(points)
-    if (pathD !== "") {
-      const line = svgEl("path", {
-        d: pathD, fill: "none",
-        stroke: color, "stroke-width": 2
-      }, [])
-      line.setAttribute("part", "density-line")
-      line.setAttribute("tabindex", "0")
-      line.setAttribute("role", "img")
-      line.setAttribute("aria-label", `${series.name} density curve`)
-      line.appendChild(svgEl("title", null, `${series.name} density`))
-      const handlerSeries = series
-      const clickHandler = () => {
-        ctx.emit("mj-chart-density-click", { series: handlerSeries.name })
-      }
-      line.addEventListener("click", clickHandler)
-      line.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          clickHandler()
-        }
-      })
-      plot.appendChild(line)
-    }
+    group.appendChild(line)
+    marks.appendChild(group)
   }
   return
 }
 
 
-/* ── frequency-polygon render ────────────────────────────────────────────── */
-
-function _renderPolygon(plot, resolvedSeries, binMin, binMax, binScale, valScale, ctx, horizontal, fillMode) {
+function _drawPolygons(marks, resolved, binScale, valScale, ctx, horizontal, fillMode, normalized) {
   /*
-   * Draw frequency-polygon lines through bin midpoints.
+   * Frequency polygons: a line through each bin midpoint, starting and
+   * ending at zero half a bin beyond the outer bins, with a dot per bin.
    */
-  const baseline = valScale(0)
-
-  for (let si = 0; si < resolvedSeries.length; si = si + 1) {
-    const series = resolvedSeries[si]
-    if (series.bins.length === 0) {
+  for (let si = 0; si < resolved.length; si = si + 1) {
+    const entry = resolved[si]
+    if (entry.bins.length === 0) {
       continue
     }
-    const color = ctx.colorFor(si)
+    const color = ctx.colorFor(entry.name)
+    const group = svgEl("g", { part: "series" }, [])
+    const first = entry.bins[0]
+    const last = entry.bins[entry.bins.length - 1]
 
-    /* Anchor points at (x0 of first bin, 0) and (x1 of last bin, 0). */
-    const firstBin = series.bins[0]
-    const lastBin = series.bins[series.bins.length - 1]
-
-    const midPoints = []
-    if (horizontal === true) {
-      midPoints.push({ x: valScale(0), y: binScale(firstBin.x0) })
-      for (let bi = 0; bi < series.bins.length; bi = bi + 1) {
-        const bin = series.bins[bi]
-        const midY = binScale((bin.x0 + bin.x1) / 2)
-        midPoints.push({ x: valScale(bin.count), y: midY })
-      }
-      midPoints.push({ x: valScale(0), y: binScale(lastBin.x1) })
-    } else {
-      midPoints.push({ x: binScale(firstBin.x0), y: baseline })
-      for (let bi = 0; bi < series.bins.length; bi = bi + 1) {
-        const bin = series.bins[bi]
-        const midX = binScale((bin.x0 + bin.x1) / 2)
-        midPoints.push({ x: midX, y: valScale(bin.count) })
-      }
-      midPoints.push({ x: binScale(lastBin.x1), y: baseline })
+    const points = [_toPixel(binScale, valScale, horizontal, first.x0 - (first.x1 - first.x0) / 2, 0)]
+    for (let bi = 0; bi < entry.bins.length; bi = bi + 1) {
+      const bin = entry.bins[bi]
+      points.push(_toPixel(binScale, valScale, horizontal, (bin.x0 + bin.x1) / 2,
+        _binHeight(bin, entry.total, normalized)))
     }
+    points.push(_toPixel(binScale, valScale, horizontal, last.x1 + (last.x1 - last.x0) / 2, 0))
 
     if (fillMode !== "none") {
-      const pathD = areaPath(midPoints.slice(1, -1), baseline)
-      if (pathD !== "") {
-        plot.appendChild(svgEl("path", {
-          d: pathD, fill: color, opacity: 0.3, stroke: "none"
-        }, []))
-      }
+      group.appendChild(svgEl("path", {
+        d: _closedArea(points, valScale, horizontal),
+        fill: color, "fill-opacity": 0.2, stroke: "none", part: "polygon-area"
+      }, []))
     }
+    group.appendChild(svgEl("path", {
+      d: linePath(points), fill: "none", stroke: color, "stroke-width": 2,
+      "stroke-linejoin": "round", part: "polygon-line"
+    }, []))
 
-    const pathD = linePath(midPoints)
-    if (pathD !== "") {
-      const line = svgEl("path", {
-        d: pathD, fill: "none",
-        stroke: color, "stroke-width": 2
-      }, [])
-      line.setAttribute("part", "polygon-line")
-      line.setAttribute("tabindex", "0")
-      line.setAttribute("role", "img")
-      line.setAttribute("aria-label", `${series.name} frequency polygon`)
-      line.appendChild(svgEl("title", null, `${series.name} frequency polygon`))
-      const handlerSeries = series
-      const clickHandler = () => {
-        ctx.emit("mj-chart-polygon-click", { series: handlerSeries.name })
-      }
-      line.addEventListener("click", clickHandler)
-      line.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          clickHandler()
-        }
+    for (let bi = 0; bi < entry.bins.length; bi = bi + 1) {
+      const bin = entry.bins[bi]
+      const height = _binHeight(bin, entry.total, normalized)
+      const point = points[bi + 1]
+      const dot = svgEl("circle", { cx: point.x, cy: point.y, r: 3.5, fill: color }, [])
+      dot.setAttribute("part", "polygon-point")
+      focusableMark(dot, _binLabel(entry.name, bin, normalized, height))
+      const handlerBin = bin
+      activateOnKey(dot, () => {
+        ctx.emit("mj-chart-polygon-click", {
+          series: entry.name, x0: handlerBin.x0, x1: handlerBin.x1, count: handlerBin.count
+        })
       })
-      plot.appendChild(line)
+      group.appendChild(dot)
     }
-
-    /* Midpoint circles. */
-    for (let bi = 0; bi < series.bins.length; bi = bi + 1) {
-      const bin = series.bins[bi]
-      const midRaw = (bin.x0 + bin.x1) / 2
-      const cx = horizontal ? valScale(bin.count) : binScale(midRaw)
-      const cy = horizontal ? binScale(midRaw) : valScale(bin.count)
-      const dot = svgEl("circle", {
-        cx: cx, cy: cy, r: 3, fill: color
-      }, [])
-      plot.appendChild(dot)
-    }
+    marks.appendChild(group)
   }
   return
+}
+
+
+/* ── accessible table ────────────────────────────────────────────────────── */
+
+function _binTable(resolved, normalized, caption) {
+  /*
+   * One row per bin and series: [series, from, to, count (, density)].
+   */
+  const columns = ["Series", "From", "To", "Count"]
+  if (normalized === true) {
+    columns.push("Density")
+  }
+  const rows = []
+  for (let si = 0; si < resolved.length; si = si + 1) {
+    const entry = resolved[si]
+    for (let bi = 0; bi < entry.bins.length; bi = bi + 1) {
+      const bin = entry.bins[bi]
+      const row = [entry.name, bin.x0, bin.x1, bin.count]
+      if (normalized === true) {
+        row.push(_binHeight(bin, entry.total, true))
+      }
+      rows.push(row)
+    }
+  }
+  return { columns: columns, rows: rows, caption: caption }
+}
+
+
+function _densityTable(resolved, curves) {
+  /*
+   * One row per series: observations, quartiles, bandwidth, peak.
+   */
+  const rows = []
+  for (let ci = 0; ci < curves.length; ci = ci + 1) {
+    const curve = curves[ci]
+    const entry = resolved[curve.index]
+    const sorted = entry.samples !== null ? sortNumbers(entry.samples) : []
+    let peakIndex = 0
+    for (let index = 1; index < curve.ys.length; index = index + 1) {
+      if (curve.ys[index] > curve.ys[peakIndex]) {
+        peakIndex = index
+      }
+    }
+    rows.push([
+      entry.name,
+      entry.total,
+      sorted.length > 0 ? sorted[0] : "",
+      sorted.length > 0 ? quantileSorted(sorted, 0.5) : "",
+      sorted.length > 0 ? sorted[sorted.length - 1] : "",
+      curve.bandwidth !== null ? curve.bandwidth : "",
+      curve.xs[peakIndex]
+    ])
+  }
+  return {
+    columns: ["Series", "Observations", "Min", "Median", "Max", "Bandwidth", "Peak at"],
+    rows: rows,
+    caption: "Density estimate per series"
+  }
 }
 
 
@@ -459,137 +395,145 @@ function _renderPolygon(plot, resolvedSeries, binMin, binMax, binScale, valScale
 
 export function render(ctx) {
   /*
-   * Render a histogram, density plot, or frequency polygon.
+   * Render a histogram, density plot or frequency polygon (see header).
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
-  const model = ctx.model
   const horizontal = ctx.orientation === "horizontal"
-  const group = ctx.attrs("group", "overlay")
-  const normalize = ctx.attrs("normalize", "")
-  const smooth = ctx.attrs("smooth", "")
-  const display = ctx.attrs("display", "bar")
-  const fillAttr = ctx.attrs("fill", "area")
-  const bwOverride = parseFloat(ctx.attrs("bandwidth", "0")) || 0
-  const binCountRaw = parseInt(ctx.attrs("bin-count", "0"), 10) || 0
-
-  /* Type key "density" implies KDE, "frequency-polygon" implies polygon. */
-  const isDensity = normalize === "density" || smooth === "kde"
-  const isPolygon = display === "polygon"
+  const mode = _modeOf(ctx)
+  const stacked = mode === "bars" && ctx.attrs("group", "overlay") === "stack"
+  const normalized = mode !== "kde" && ctx.attrs("normalize", "") === "density"
+  const fillMode = ctx.attrs("fill", "area")
+  const bandwidthAttr = parseFloat(ctx.attrs("bandwidth", ""))
+  const bandwidthOverride = isFiniteNumber(bandwidthAttr) === true && bandwidthAttr > 0 ? bandwidthAttr : 0
 
   const root = svgEl("g", { part: "plot" }, [])
-
-  const series = model.series
-  if (series === null || series === undefined || series.length === 0) {
+  const series = Array.isArray(ctx.model.series) === true ? ctx.model.series : []
+  const prepared = binSeries(series, _binOptions(ctx))
+  const resolved = prepared.series.filter((entry) => entry.bins.length > 0)
+  if (resolved.length === 0) {
     return root
   }
 
-  const resolvedSeries = _resolveSeries(series, binCountRaw)
-  const hasData = resolvedSeries.some((s) => s.bins.length > 0)
-  if (hasData === false) {
+  /* Extent of the bin axis and of the value axis. */
+  let binMin = Infinity
+  let binMax = -Infinity
+  let valueMax = 0
+  const curves = []
+  if (mode === "kde") {
+    for (let si = 0; si < resolved.length; si = si + 1) {
+      const curve = _densityCurve(resolved[si], bandwidthOverride)
+      if (curve === null) {
+        continue
+      }
+      curve.name = resolved[si].name
+      curve.index = si
+      curve.preBinned = resolved[si].preBinned
+      curves.push(curve)
+      binMin = Math.min(binMin, curve.xs[0])
+      binMax = Math.max(binMax, curve.xs[curve.xs.length - 1])
+      for (let index = 0; index < curve.ys.length; index = index + 1) {
+        valueMax = Math.max(valueMax, curve.ys[index])
+      }
+    }
+  } else {
+    const stackTotals = new Map()
+    for (let si = 0; si < resolved.length; si = si + 1) {
+      const entry = resolved[si]
+      for (let bi = 0; bi < entry.bins.length; bi = bi + 1) {
+        const bin = entry.bins[bi]
+        const height = _binHeight(bin, entry.total, normalized)
+        let width = bin.x1 - bin.x0
+        if (mode !== "polygon") {
+          width = 0
+        }
+        binMin = Math.min(binMin, bin.x0 - width / 2)
+        binMax = Math.max(binMax, bin.x1 + width / 2)
+        if (stacked === true) {
+          const key = `${bin.x0}|${bin.x1}`
+          const total = (stackTotals.has(key) === true ? stackTotals.get(key) : 0) + height
+          stackTotals.set(key, total)
+          valueMax = Math.max(valueMax, total)
+        } else {
+          valueMax = Math.max(valueMax, height)
+        }
+      }
+    }
+  }
+  if (binMin === Infinity) {
     return root
   }
 
-  /* Global bin extent across all series. */
-  let globalMin = Infinity
-  let globalMax = -Infinity
-  let globalMaxCount = 0
-  for (let si = 0; si < resolvedSeries.length; si = si + 1) {
-    const rs = resolvedSeries[si]
-    for (let bi = 0; bi < rs.bins.length; bi = bi + 1) {
-      const bin = rs.bins[bi]
-      if (bin.x0 < globalMin) { globalMin = bin.x0 }
-      if (bin.x1 > globalMax) { globalMax = bin.x1 }
-      if (bin.count > globalMaxCount) { globalMaxCount = bin.count }
-    }
-  }
-
-  /* For stacked histogram compute total height per bin position. */
-  let stackedMax = 0
-  if (group === "stack") {
-    const totals = {}
-    for (let si = 0; si < resolvedSeries.length; si = si + 1) {
-      for (let bi = 0; bi < resolvedSeries[si].bins.length; bi = bi + 1) {
-        const bin = resolvedSeries[si].bins[bi]
-        totals[bin.x0] = (totals[bin.x0] || 0) + bin.count
-      }
-    }
-    const vals = Object.values(totals)
-    stackedMax = vals.length > 0 ? Math.max(...vals) : globalMaxCount
-  }
-
-  const effectiveMaxCount = group === "stack" ? stackedMax : globalMaxCount
-  const valDomainMax = effectiveMaxCount === 0 ? 1 : effectiveMaxCount
-
-  /* For KDE, compute a density-domain max. */
-  let kdeMax = 0
-  if (isDensity === true) {
-    for (let si = 0; si < resolvedSeries.length; si = si + 1) {
-      const rs = resolvedSeries[si]
-      if (rs.samples !== null && rs.samples.length > 0) {
-        const bw = bwOverride > 0 ? bwOverride : _silvermanBandwidth(rs.samples)
-        const evalPoints = []
-        const steps = 40
-        for (let i = 0; i <= steps; i = i + 1) {
-          evalPoints.push(globalMin + (globalMax - globalMin) * (i / steps))
-        }
-        const pts = _kdePoints(rs.samples, bw, evalPoints)
-        for (let pi = 0; pi < pts.length; pi = pi + 1) {
-          if (pts[pi].density > kdeMax) { kdeMax = pts[pi].density }
-        }
-      }
-    }
-    if (kdeMax === 0) { kdeMax = 1 }
-  }
-
-  const margin = { top: 16, right: 16, bottom: 40, left: 52 }
+  const countAxis = mode !== "kde" && normalized === false
+  const margin = { top: 16, right: 20, bottom: 44, left: 64 }
   const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
+  const valueLength = horizontal === true ? plotW : plotH
+  const binLength = horizontal === true ? plotH : plotW
 
-  const binScale = linearScale([globalMin, globalMax], horizontal ? [0, plotH] : [0, plotW])
-  const valDomainTop = isDensity ? kdeMax * 1.1 : valDomainMax * 1.1
-  const valScale = horizontal
-    ? linearScale([0, valDomainTop], [0, plotW])
-    : linearScale([0, valDomainTop], [plotH, 0])
+  const valueTickCount = tickCount(valueLength, horizontal === true ? 70 : 40)
+  let valueTop = niceDomain(0, valueMax > 0 ? valueMax : 1, valueTickCount)[1]
+  if (countAxis === true) {
+    valueTop = Math.max(Math.ceil(valueTop), 1)
+  }
+  let valueTicks = niceTicks(0, valueTop, valueTickCount)
+  if (valueTicks.length < 3) {
+    valueTicks = niceTicks(0, valueTop, valueTickCount * 2)
+  }
+  if (countAxis === true) {
+    valueTicks = valueTicks.filter((tick) => Number.isInteger(tick) === true)
+  }
 
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
+  const binScale = linearScale([binMin, binMax], [0, binLength])
+  const valScale = horizontal === true
+    ? linearScale([0, valueTop], [0, plotW])
+    : linearScale([0, valueTop], [plotH, 0])
+
+  const plot = svgEl("g", { transform: `translate(${margin.left},${margin.top})` }, [])
   root.appendChild(plot)
+  const axes = axisLayer(plot)
 
-  _drawValueAxis(plot, valScale, plotW, plotH, horizontal)
-  _drawBinAxis(plot, globalMin, globalMax, plotW, plotH, horizontal, binScale)
-
-  const zero = valScale(0)
-
-  if (isDensity === true) {
-    _renderKDE(plot, resolvedSeries, globalMin, globalMax, kdeMax,
-      binScale, valScale, ctx, horizontal, fillAttr, bwOverride)
-  } else if (isPolygon === true) {
-    _renderPolygon(plot, resolvedSeries, globalMin, globalMax,
-      binScale, valScale, ctx, horizontal, fillAttr)
-  } else {
-    _renderBars(plot, resolvedSeries, binScale, valScale, zero, ctx, horizontal, group === "stack")
-  }
-
-  /* Baseline. */
+  const valueFormat = (value) => formatNumber(value, { maximumSignificantDigits: 3 })
+  const binTicks = { count: tickCount(binLength, horizontal === true ? 36 : 70), grid: false }
+  const valueTitle = countAxis === true ? "Count" : "Density"
   if (horizontal === true) {
-    plot.appendChild(svgEl("line", {
-      x1: zero, y1: 0, x2: zero, y2: plotH,
-      stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
-    }, []))
+    drawTicks(axes, valScale, { side: "bottom", extent: plotH, ticks: valueTicks, format: valueFormat })
+    drawTicks(axes, binScale, { side: "left", extent: plotW, count: binTicks.count, grid: false })
+    drawAxisTitle(axes, valueTitle, "bottom", plotW, plotH, 36)
   } else {
-    plot.appendChild(svgEl("line", {
-      x1: 0, y1: zero, x2: plotW, y2: zero,
-      stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
-    }, []))
+    drawTicks(axes, valScale, { side: "left", extent: plotW, ticks: valueTicks, format: valueFormat })
+    drawTicks(axes, binScale, { side: "bottom", extent: plotH, count: binTicks.count, grid: false })
+    drawAxisTitle(axes, valueTitle, "left", plotW, plotH, 50)
   }
 
+  const marks = svgEl("g", { part: "marks" }, [])
+  plot.appendChild(marks)
+
+  if (mode === "kde") {
+    _drawCurves(marks, curves, binScale, valScale, ctx, horizontal, fillMode)
+    ctx.setTable(_densityTable(resolved, curves))
+  } else if (mode === "polygon") {
+    _drawPolygons(marks, resolved, binScale, valScale, ctx, horizontal, fillMode, normalized)
+    ctx.setTable(_binTable(resolved, normalized, "Frequency per bin"))
+  } else {
+    _drawBars(marks, resolved, binScale, valScale, ctx, horizontal, stacked, normalized)
+    ctx.setTable(_binTable(resolved, normalized, "Observations per bin"))
+  }
+
+  /* Zero line of the value axis. */
+  const zero = valScale(0)
+  if (horizontal === true) {
+    drawBaseline(axes, zero, 0, zero, plotH)
+  } else {
+    drawBaseline(axes, 0, zero, plotW, zero)
+  }
   return root
 }
 
 
-registerRenderer("histogram", render)
-registerRenderer("density", render)
-registerRenderer("frequency-polygon", render)
+const OPTIONS = { isEmpty: (model) => hasSeriesSamples(model) === false }
+
+registerRenderer("histogram", render, OPTIONS)
+registerRenderer("density", render, OPTIONS)
+registerRenderer("frequency-polygon", render, OPTIONS)

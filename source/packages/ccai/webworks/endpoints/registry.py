@@ -11,6 +11,7 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 import csv
+import dataclasses
 import inspect
 import io
 import json
@@ -101,6 +102,13 @@ class EndpointRegistry:
     def __init__(self) -> None:
         self._descriptors: List[EndpointDescriptor] = []
         self._path_method_index: Dict[Tuple[str, str], EndpointDescriptor] = {}
+
+        # Every descriptor collect_from() has handed to register(), including
+        # ones later replaced or narrowed. Re-collecting a source must be a
+        # no-op for each of them, and the registered list alone cannot say
+        # so once a descriptor has been replaced. The objects are held (not
+        # just their ids) so an id cannot be reused by a new descriptor.
+        self._collected: List[EndpointDescriptor] = []
         return
 
     def register(
@@ -125,31 +133,41 @@ class EndpointRegistry:
         """
         # Determine the path for indexing
         path = self._get_index_path(descriptor)
-        
-        # Check for conflicts for each method
+
+        keys: List[Tuple[str, str]] = []
         for method in descriptor.methods:
             key = (path, method.upper())
-            
-            if key in self._path_method_index:
-                existing = self._path_method_index[key]
-                
-                if on_conflict == "replace":
-                    # Remove the existing descriptor from the list
-                    self._remove_descriptor_for_key(key)
-                else:
-                    # Raise conflict error
+            if key not in keys:
+                keys.append(key)
+
+        # Check every method before changing anything. A descriptor is
+        # registered for all of its methods or for none of them: stopping at
+        # the second method of three used to leave the first one indexed
+        # against a descriptor that was never added.
+        if on_conflict != "replace":
+            for key in keys:
+                existing = self._path_method_index.get(key)
+                if existing is not None:
                     raise EndpointConflictError(
-                        path=path,
-                        method=method.upper(),
+                        path=key[0],
+                        method=key[1],
                         existing_handler=existing.handler,
                         new_handler=descriptor.handler
                     )
-            
-            # Register the new descriptor for this method
+
+        # Take each contested method away from the descriptor that holds it
+        for key in keys:
+            if key in self._path_method_index:
+                self._release_key(key)
+
+        # Register the new descriptor for each of its methods
+        for key in keys:
             self._path_method_index[key] = descriptor
-        
+
         # Add to the descriptors list
         self._descriptors.append(descriptor)
+
+        return
     
     def _get_index_path(self, descriptor: EndpointDescriptor) -> str:
         """
@@ -166,20 +184,55 @@ class EndpointRegistry:
         else:
             return "/"
     
-    def _remove_descriptor_for_key(self, key: Tuple[str, str]) -> None:
+    def _release_key(self, key: Tuple[str, str]) -> None:
         """
-            Remove a descriptor from the list that matches the given key.
-            
-            :param key: The (path, method) tuple to match.
+            Take one ``(path, method)`` away from the descriptor registered
+            for it, leaving that descriptor's other methods in place.
+
+            When the descriptor serves other methods as well, it is swapped
+            for a copy that lists only the methods it still holds, and the
+            index entries for those methods are pointed at the copy. The
+            original object is not modified: it is the mark on a handler and
+            may be registered in another application's registry. When the
+            released method was its last, the descriptor is removed.
+
+            :param key: The (path, method) tuple to release.
         """
-        path, method = key
-        
-        # Find and remove the descriptor
-        for i, desc in enumerate(self._descriptors):
-            desc_path = self._get_index_path(desc)
-            if desc_path == path and method.upper() in [m.upper() for m in desc.methods]:
-                self._descriptors.pop(i)
+        existing = self._path_method_index.pop(key, None)
+        if existing is None:
+            return
+
+        path, released_method = key
+
+        remaining_methods = [
+            method for method in existing.methods
+            if method.upper() != released_method
+        ]
+
+        position: Optional[int] = None
+        for index, candidate in enumerate(self._descriptors):
+            if candidate is existing:
+                position = index
                 break
+
+        if len(remaining_methods) == 0:
+            if position is not None:
+                self._descriptors.pop(position)
+            return
+
+        narrowed = dataclasses.replace(existing, methods=remaining_methods)
+
+        if position is not None:
+            self._descriptors[position] = narrowed
+        else:
+            self._descriptors.append(narrowed)
+
+        for method in remaining_methods:
+            remaining_key = (path, method.upper())
+            if self._path_method_index.get(remaining_key) is existing:
+                self._path_method_index[remaining_key] = narrowed
+
+        return
     
     def collect(self) -> List[EndpointDescriptor]:
         """
@@ -300,26 +353,90 @@ class EndpointRegistry:
 
             :returns: The number of descriptors newly registered.
         """
-        seen: List[int] = [id(d) for d in self._descriptors]
         found: List[EndpointDescriptor] = []
 
         for source in sources:
             self._gather(source, found)
 
-        count = 0
+        # Leave out what this registry already holds or was already given.
+        pending: List[EndpointDescriptor] = []
         for descriptor in found:
-            if id(descriptor) in seen:
+            if self._was_collected(descriptor) or self._is_pending(descriptor, pending):
                 continue
+            pending.append(descriptor)
+
+        # Register the descriptors that claim their route outright before the
+        # ones declared ``on_conflict="replace"``. An override then replaces
+        # the handler it overrides whichever of the two was found first, so
+        # the outcome does not depend on how the functions are named or on
+        # the order the sources are listed in.
+        ordered: List[Tuple[EndpointDescriptor, str]] = []
+        overrides: List[Tuple[EndpointDescriptor, str]] = []
+        for descriptor in pending:
             policy = on_conflict if on_conflict is not None else descriptor.on_conflict
+            if policy == "replace":
+                overrides.append((descriptor, policy))
+            else:
+                ordered.append((descriptor, policy))
+        ordered.extend(overrides)
+
+        count = 0
+        for descriptor, policy in ordered:
             self.register(descriptor, on_conflict=policy)
-            seen.append(id(descriptor))
+            self._collected.append(descriptor)
             count += 1
 
         return count
 
+    def _was_collected(self, descriptor: EndpointDescriptor) -> bool:
+        """
+            Whether this registry holds ``descriptor`` or was already given
+            it by an earlier :meth:`collect_from`.
+
+            :param descriptor: The descriptor to look for (by identity).
+
+            :returns: True when the descriptor has been seen before.
+        """
+        for candidate in self._descriptors:
+            if candidate is descriptor:
+                return True
+
+        for candidate in self._collected:
+            if candidate is descriptor:
+                return True
+
+        return False
+
+    @staticmethod
+    def _is_pending(descriptor: EndpointDescriptor, pending: List[EndpointDescriptor]) -> bool:
+        """
+            Whether ``descriptor`` is already in the list being collected.
+
+            :param descriptor: The descriptor to look for (by identity).
+            :param pending: The descriptors gathered so far in this call.
+
+            :returns: True when the same descriptor object is in ``pending``.
+        """
+        for candidate in pending:
+            if candidate is descriptor:
+                return True
+
+        return False
+
     def _gather(self, source: Any, found: List[EndpointDescriptor]) -> None:
         """
             Append every descriptor marked on ``source`` to ``found``.
+
+            Members are visited in definition order, not by name: the order
+            handlers are written in is the order they are registered in.
+
+            A class that is itself the source contributes everything declared
+            through it, free functions included (``cls.attach_at(...)`` at
+            module level). A class met while walking a module contributes
+            only the handlers written in its body -- the free functions
+            declared through it are members of their own module and are
+            collected from there, and a module that merely imports ``Endpoint``
+            must not pull in every endpoint declared through that shared base.
 
             :param source: A module, class or callable to inspect.
             :param found: Accumulator, appended to in place.
@@ -329,18 +446,56 @@ class EndpointRegistry:
             found.extend(marks)
             return
 
-        if inspect.ismodule(source) or inspect.isclass(source):
-            for _, member in inspect.getmembers(source):
+        if inspect.isclass(source):
+            found.extend(self._class_descriptors(source, include_declared=True))
+            return
+
+        if inspect.ismodule(source):
+            for member in list(vars(source).values()):
                 member_marks = getattr(member, ENDPOINT_DESCRIPTORS_ATTR, None)
                 if member_marks is not None:
                     found.extend(member_marks)
-                elif inspect.isclass(member) and inspect.ismodule(source):
-                    for _, attr in inspect.getmembers(member):
-                        attr_marks = getattr(attr, ENDPOINT_DESCRIPTORS_ATTR, None)
-                        if attr_marks is not None:
-                            found.extend(attr_marks)
+                elif inspect.isclass(member):
+                    found.extend(self._class_descriptors(member, include_declared=False))
 
         return
+
+    @staticmethod
+    def _class_descriptors(source: Any, include_declared: bool) -> List[EndpointDescriptor]:
+        """
+            The descriptors a class contributes to a collection.
+
+            An endpoint class is asked through
+            :meth:`Endpoint.routable_descriptors`, which walks the class in
+            method-resolution and definition order and binds handlers written
+            as instance methods. Any other class is searched for marked
+            attributes directly.
+
+            :param source: The class to inspect.
+            :param include_declared: Include free functions declared through
+                                     the class, when it is an endpoint class.
+
+            :returns: The descriptors found, in definition order.
+        """
+        routable = getattr(source, "routable_descriptors", None)
+        if routable is not None:
+            rtnval: List[EndpointDescriptor] = list(routable(include_declared=include_declared))
+            return rtnval
+
+        rtnval = []
+        seen: List[int] = []
+        for klass in source.__mro__:
+            for value in list(vars(klass).values()):
+                handler = value
+                if isinstance(handler, (classmethod, staticmethod)):
+                    handler = handler.__func__
+                for descriptor in getattr(handler, ENDPOINT_DESCRIPTORS_ATTR, None) or ():
+                    if id(descriptor) in seen:
+                        continue
+                    seen.append(id(descriptor))
+                    rtnval.append(descriptor)
+
+        return rtnval
 
     def export_security_map(
         self,

@@ -6,7 +6,9 @@
     and graceful error handling per ASGI specification.
 """
 
+import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional, Tuple
 
@@ -20,6 +22,9 @@ from ccai.webworks.asgi.constants import (
 # Type aliases for clarity
 SendCallable = Callable[[Dict[str, Any]], Awaitable[None]]
 ReceiveCallable = Callable[[], Awaitable[Dict[str, Any]]]
+
+# The three line terminators of the event stream format: CRLF, LF and a CR on its own
+SSE_LINE_BREAK_PATTERN = re.compile(r"\r\n|\r|\n")
 
 
 @dataclass
@@ -43,24 +48,34 @@ class SSEEvent:
             Formats the event with proper field prefixes ("data:", "event:",
             "id:", "retry:") and double newline termination per SSE spec.
             
+            A line break ends a field, and an empty line ends the event. The
+            event name and the ID are single line fields, so line breaks are
+            removed from them. Without that, a value with a line break in it
+            would add fields, or whole events, to the stream.
+            
             :returns: Formatted SSE event string.
         """
         lines: List[str] = []
         
         # Add event name if provided
         if self.event is not None:
-            lines.append(f"event: {self.event}")
+            event_name = SSE_LINE_BREAK_PATTERN.sub("", str(self.event))
+            lines.append(f"event: {event_name}")
         
         # Add event ID if provided
         if self.id is not None:
-            lines.append(f"id: {self.id}")
+            event_id = SSE_LINE_BREAK_PATTERN.sub("", str(self.id))
+            lines.append(f"id: {event_id}")
         
         # Add retry interval if provided
         if self.retry is not None:
-            lines.append(f"retry: {self.retry}")
+            retry_interval = int(self.retry)
+            lines.append(f"retry: {retry_interval}")
         
-        # Add data lines - each line of data gets its own "data:" prefix
-        for line in self.data.split("\n"):
+        # Add data lines - each line of data gets its own "data:" prefix.
+        # Every line terminator of the format is split on, a CR on its own
+        # ends a line for the client just like LF does.
+        for line in SSE_LINE_BREAK_PATTERN.split(self.data):
             lines.append(f"data: {line}")
         
         # Add double newline termination
@@ -82,11 +97,12 @@ class SSEHandler:
     # SSE Content-Type header value
     SSE_CONTENT_TYPE: str = "text/event-stream"
     
-    # Default SSE headers as list of byte tuples
+    # Default SSE headers as list of byte tuples. There is no Connection
+    # header: it is a header of the HTTP/1.1 connection, the server manages
+    # it, and HTTP/2 servers refuse a response that carries it.
     SSE_HEADERS: List[Tuple[bytes, bytes]] = [
         (b"content-type", b"text/event-stream"),
         (b"cache-control", b"no-cache"),
-        (b"connection", b"keep-alive"),
     ]
     
     def __init__(
@@ -165,8 +181,8 @@ class SSEHandler:
         """
             Get SSE headers with optional additional headers.
             
-            Returns the standard SSE headers (Content-Type, Cache-Control,
-            Connection) merged with any additional headers provided.
+            Returns the standard SSE headers (Content-Type, Cache-Control)
+            merged with any additional headers provided.
             
             :param additional_headers: Optional additional headers to include.
             
@@ -295,16 +311,16 @@ class SSEHandler:
             Stream SSE events with client disconnection detection.
             
             Streams events from the async generator while monitoring for
-            client disconnection via the receive callable. When the client
-            disconnects, the stream is closed gracefully.
+            client disconnection via the receive callable. The wait for the
+            next event and the wait for the disconnect run side by side, so a
+            stream that is idle is closed as soon as the client is gone and
+            not when the generator happens to produce its next event.
             
             :param send: ASGI send callable.
             :param receive: ASGI receive callable for disconnect detection.
             :param event_source: Async generator yielding SSE events.
             :param headers: Optional additional headers.
         """
-        import asyncio
-        
         # Get SSE headers with any additional headers
         response_headers = self.get_sse_headers(headers)
         
@@ -319,14 +335,15 @@ class SSEHandler:
         # Flag to track if client disconnected
         client_disconnected = False
         
-        async def check_disconnect() -> None:
-            """Monitor for client disconnection."""
+        async def wait_for_disconnect() -> None:
+            """Return when the client has disconnected."""
             nonlocal client_disconnected
             
             try:
-                message = await receive()
-                if message.get("type") == MESSAGE_HTTP_DISCONNECT:
-                    client_disconnected = True
+                while True:
+                    message = await receive()
+                    if message.get("type") == MESSAGE_HTTP_DISCONNECT:
+                        break
             except Exception as recv_exc:
                 # Receive errors here are usually "client gone" — log
                 # at debug so a sustained surge of disconnect-detect
@@ -335,15 +352,35 @@ class SSEHandler:
                     "SSE: receive() raised during disconnect monitoring: %s",
                     recv_exc,
                 )
-                client_disconnected = True
             
+            client_disconnected = True
             return
         
         # Start disconnect monitoring task
-        disconnect_task = asyncio.create_task(check_disconnect())
+        disconnect_task = asyncio.create_task(wait_for_disconnect())
+        
+        event_iterator = event_source.__aiter__()
         
         try:
-            async for event in event_source:
+            while True:
+                next_event_task = asyncio.ensure_future(event_iterator.__anext__())
+                
+                await asyncio.wait(
+                    [next_event_task, disconnect_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                
+                if not next_event_task.done():
+                    # The client went away while the stream was idle
+                    self._logger.debug("Client disconnected, stopping SSE stream")
+                    await self._cancel_task(next_event_task)
+                    break
+                
+                try:
+                    event = next_event_task.result()
+                except StopAsyncIteration:
+                    break
+                
                 # Check if client disconnected
                 if client_disconnected:
                     self._logger.debug("Client disconnected, stopping SSE stream")
@@ -378,12 +415,18 @@ class SSEHandler:
         finally:
             # Cancel disconnect monitoring task
             if not disconnect_task.done():
-                disconnect_task.cancel()
+                await self._cancel_task(disconnect_task)
+            
+            # Close the generator so it releases what it holds
+            close_source = getattr(event_source, "aclose", None)
+            if callable(close_source):
                 try:
-                    await disconnect_task
-                except asyncio.CancelledError:
-                    # Expected: we just cancelled the disconnect monitor; awaiting it only reaps the task.
-                    pass
+                    await close_source()
+                except Exception as close_exc:
+                    self._logger.debug(
+                        "SSE: closing the event source raised: %s",
+                        close_exc,
+                    )
             
             # Send final empty body with more_body=False to close stream
             if not client_disconnected:
@@ -395,9 +438,35 @@ class SSEHandler:
                 
                 try:
                     await send(final_message)
-                except Exception:
-                    # Connection may already be closed
-                    pass
+                except Exception as send_exc:
+                    self._logger.debug(
+                        "SSE: final-body send failed (connection likely closed): %s",
+                        send_exc,
+                    )
+        
+        return
+    
+    async def _cancel_task(self, task: "asyncio.Future[Any]") -> None:
+        """
+            Cancel a task and wait until it has ended.
+            
+            :param task: The task to cancel.
+        """
+        task.cancel()
+        
+        try:
+            await task
+        except asyncio.CancelledError:
+            # Expected: the task was just cancelled, awaiting it only reaps the task.
+            pass
+        except StopAsyncIteration:
+            # The generator ended at the moment it was cancelled, which is an end all the same.
+            pass
+        except Exception as task_exc:
+            self._logger.debug(
+                "SSE: task raised while being cancelled: %s",
+                task_exc,
+            )
         
         return
     

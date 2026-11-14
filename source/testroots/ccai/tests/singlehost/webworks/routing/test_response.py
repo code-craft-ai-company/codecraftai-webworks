@@ -5,6 +5,7 @@
     HTTP responses with status codes, headers, and body content.
 """
 
+import asyncio
 import json
 
 from ccai.webworks.routing.response import (
@@ -739,6 +740,105 @@ def test_streaming_response_body_property():
     return
 
 
+def test_streaming_response_iter_content_does_not_collect_the_stream():
+    """
+        Test StreamingResponse.iter_content() hands out chunks as they are
+        produced instead of reading the whole stream first.
+    """
+    produced = []
+
+    def generate():
+        for chunk in (b"a", b"b", b"c"):
+            produced.append(chunk)
+            yield chunk
+
+    response = StreamingResponse(generate())
+
+    first = next(response.iter_content())
+
+    if first != b"a" or produced != [b"a"]:
+        errmsg = f"Expected only the first chunk to be produced, got {produced}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_streaming_response_body_is_kept_after_collection():
+    """
+        Test that the body collected by StreamingResponse.body is returned
+        again, and by iter_content(), once the iterator is exhausted.
+    """
+    response = StreamingResponse(iter([b"x", b"y"]))
+
+    first = response.body
+    second = response.body
+    chunks = list(response.iter_content())
+
+    if first != b"xy" or second != b"xy" or chunks != [b"xy"]:
+        errmsg = f"Expected the collected body each time, got {first!r}, {second!r}, {chunks!r}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_streaming_response_iter_content_returns_async_content_as_is():
+    """
+        Test StreamingResponse.iter_content() returns async content as an
+        async iterator instead of failing in iter().
+    """
+    async def generate():
+        yield b"one"
+        yield b"two"
+
+    response = StreamingResponse(generate())
+
+    content = response.iter_content()
+
+    if not hasattr(content, "__aiter__"):
+        errmsg = f"Expected an async iterator, got {type(content)}"
+        raise AssertionError(errmsg)
+
+    async def collect():
+        rtnval = []
+        async for chunk in content:
+            rtnval.append(chunk)
+        return rtnval
+
+    chunks = asyncio.run(collect())
+
+    if chunks != [b"one", b"two"] or response.is_async is not True:
+        errmsg = f"Expected [b'one', b'two'] from async content, got {chunks}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_streaming_response_body_of_async_content_raises_type_error():
+    """
+        Test StreamingResponse.body refuses async content with a TypeError
+        that names iter_content().
+    """
+    async def generate():
+        yield b"one"
+
+    content = generate()
+    response = StreamingResponse(content)
+
+    caught = None
+    try:
+        response.body
+    except TypeError as err:
+        caught = err
+
+    asyncio.run(content.aclose())
+
+    if caught is None or "iter_content" not in str(caught):
+        errmsg = f"Expected a TypeError naming iter_content, got {caught!r}"
+        raise AssertionError(errmsg)
+
+    return
+
+
 def test_streaming_response_to_wsgi():
     """
         Test StreamingResponse.to_wsgi() returns iterator.
@@ -1282,4 +1382,188 @@ def test_response_to_asgi_carries_raw_set_cookies():
         )
         raise AssertionError(errmsg)
 
+    return
+
+
+# ============================================================================
+# Header validation, cookie defaults and bodiless responses
+# ============================================================================
+
+def test_set_header_rejects_cr_lf_in_value():
+    """
+        A header value containing CR or LF is refused when it is set.
+    """
+    response = Response()
+
+    for value in ["a\r\nSet-Cookie: x=1", "a\nb", "a\rb", "a\x00b"]:
+        raised = False
+        try:
+            response.set_header("X-Test", value)
+        except ValueError:
+            raised = True
+        assert raised, f"Expected ValueError for value {value!r}"
+    return
+
+
+def test_set_header_rejects_cr_lf_in_name():
+    """
+        A header name containing CR or LF is refused.
+    """
+    response = Response()
+
+    raised = False
+    try:
+        response.set_header("X-Test\r\nInjected", "v")
+    except ValueError:
+        raised = True
+
+    assert raised, "Expected ValueError for a header name with CR/LF"
+    return
+
+
+def test_constructor_rejects_cr_lf_in_headers():
+    """
+        Headers passed to the constructor are validated.
+    """
+    raised = False
+    try:
+        Response(200, {"X-Test": "a\r\nb"})
+    except ValueError:
+        raised = True
+
+    assert raised, "Expected ValueError for a constructor header with CR/LF"
+    return
+
+
+def test_headers_mapping_rejects_cr_lf_on_item_assignment():
+    """
+        Assigning through response.headers is validated like set_header.
+    """
+    response = Response()
+
+    raised = False
+    try:
+        response.headers["X-Test"] = "a\r\nb"
+    except ValueError:
+        raised = True
+
+    assert raised, "Expected ValueError for item assignment with CR/LF"
+    return
+
+
+def test_redirect_response_rejects_cr_lf_in_url():
+    """
+        A redirect target that would split the response is refused.
+    """
+    raised = False
+    try:
+        RedirectResponse("/next\r\nSet-Cookie: session=evil")
+    except ValueError:
+        raised = True
+
+    assert raised, "Expected ValueError for a redirect URL with CR/LF"
+    return
+
+
+def test_set_cookie_defaults_to_httponly_and_samesite_lax():
+    """
+        A cookie set without flags is HttpOnly and SameSite=Lax.
+    """
+    response = Response()
+    response.set_cookie("session", "abc")
+
+    cookie_headers = [value for name, value in response._get_all_headers() if name == "Set-Cookie"]
+
+    assert len(cookie_headers) == 1, f"Expected one Set-Cookie header, got {cookie_headers}"
+    assert "HttpOnly" in cookie_headers[0], f"Expected HttpOnly, got {cookie_headers[0]}"
+    assert "SameSite=Lax" in cookie_headers[0], f"Expected SameSite=Lax, got {cookie_headers[0]}"
+    return
+
+
+def test_set_cookie_flags_can_be_turned_off():
+    """
+        httponly=False and samesite=None omit the attributes.
+    """
+    response = Response()
+    response.set_cookie("theme", "dark", httponly=False, samesite=None)
+
+    cookie_header = [value for name, value in response._get_all_headers() if name == "Set-Cookie"][0]
+
+    assert "HttpOnly" not in cookie_header, f"Unexpected HttpOnly in {cookie_header}"
+    assert "SameSite" not in cookie_header, f"Unexpected SameSite in {cookie_header}"
+    return
+
+
+def test_set_cookie_marks_host_prefixed_cookie_secure():
+    """
+        A __Host- cookie is always Secure, because browsers discard it otherwise.
+    """
+    response = Response()
+    response.set_cookie("__Host-session", "abc")
+
+    cookie_header = [value for name, value in response._get_all_headers() if name == "Set-Cookie"][0]
+
+    assert "Secure" in cookie_header, f"Expected Secure, got {cookie_header}"
+    return
+
+
+def test_set_cookie_rejects_cr_lf_in_attributes():
+    """
+        Cookie attributes are written verbatim, so CR/LF in them is refused.
+    """
+    response = Response()
+
+    raised = False
+    try:
+        response.set_cookie("a", "b", path="/\r\nSet-Cookie: evil=1")
+    except ValueError:
+        raised = True
+
+    assert raised, "Expected ValueError for a cookie path with CR/LF"
+    return
+
+
+def test_delete_cookie_accepts_the_attributes_the_cookie_was_set_with():
+    """
+        delete_cookie can reproduce Secure and SameSite, so a Secure cookie
+        can be cleared.
+    """
+    response = Response()
+    response.delete_cookie("session", secure=True, samesite="Strict")
+
+    cookie_header = [value for name, value in response._get_all_headers() if name == "Set-Cookie"][0]
+
+    assert "Secure" in cookie_header, f"Expected Secure, got {cookie_header}"
+    assert "SameSite=Strict" in cookie_header, f"Expected SameSite=Strict, got {cookie_header}"
+    assert "Max-Age=0" in cookie_header, f"Expected Max-Age=0, got {cookie_header}"
+    return
+
+
+def test_without_body_keeps_status_headers_and_cookies():
+    """
+        without_body returns the response a HEAD request receives.
+    """
+    response = JSONResponse({"a": 1}, status_code=201)
+    response.set_cookie("session", "abc")
+
+    headless = response.without_body()
+
+    assert headless.status_code == 201, f"Expected 201, got {headless.status_code}"
+    assert headless.body == b"", f"Expected an empty body, got {headless.body!r}"
+    assert headless.headers.get("Content-Type") == response.headers.get("Content-Type")
+    cookie_headers = [value for name, value in headless._get_all_headers() if name == "Set-Cookie"]
+    assert len(cookie_headers) == 1, f"Expected the cookie to be kept, got {cookie_headers}"
+    return
+
+
+def test_streaming_response_to_asgi_carries_its_content():
+    """
+        to_asgi of a streaming response emits the streamed content, not an
+        empty body.
+    """
+    response = StreamingResponse(iter([b"chunk1", b"chunk2"]))
+
+    events = response.to_asgi()
+
+    assert events["body"]["body"] == b"chunk1chunk2", f"Unexpected body {events['body']['body']!r}"
     return

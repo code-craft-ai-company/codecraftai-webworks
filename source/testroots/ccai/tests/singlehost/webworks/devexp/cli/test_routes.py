@@ -1047,9 +1047,12 @@ def test_routes_command_filter_default_is_none():
     return
 
 
-def test_routes_command_verbose_default_is_false():
+def test_routes_command_verbose_has_no_default():
     """
-        Test that the --verbose argument defaults to False.
+        Test that --verbose sets nothing when it is not given.
+
+        A default on the subcommand would overwrite a global --verbose
+        given before the command name, so the attribute must be absent.
     """
     cmd = RoutesCommand()
     parser = ArgumentParser()
@@ -1058,8 +1061,8 @@ def test_routes_command_verbose_default_is_false():
 
     parsed = parser.parse_args([])
 
-    if parsed.verbose is not False:
-        errmsg = "Expected default verbose False."
+    if hasattr(parsed, "verbose"):
+        errmsg = "Expected no 'verbose' attribute when --verbose is not given."
         raise AssertionError(errmsg)
 
     return
@@ -1269,6 +1272,126 @@ def test_supported_formats_contains_csv():
     """
     if "csv" not in SUPPORTED_FORMATS:
         errmsg = "Expected 'csv' in SUPPORTED_FORMATS."
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Unit Tests for WebApplicationRouteRegistry
+# =============================================================================
+
+class _FakeWebApplication:
+    """
+        Stands in for the web application persona: a router and a registry.
+    """
+
+    def __init__(self, router, registry):
+        self.router = router
+        self.registry = registry
+
+
+def _build_webapp_with_routes():
+    """
+        Build a fake persona whose router holds two real endpoints.
+    """
+    from ccai.webworks.endpoints.endpoint import Endpoint
+    from ccai.webworks.endpoints.registry import EndpointRegistry
+    from ccai.webworks.routing.router import Router
+
+    @Endpoint.attach_at(path="/alpha", methods=["GET", "POST"])
+    def alpha_handler(request):
+        return None
+
+    @Endpoint.attach_at(path="/beta", methods=["GET"])
+    def beta_handler(request):
+        return None
+
+    registry = EndpointRegistry()
+    registry.collect_from(alpha_handler, beta_handler)
+
+    router = Router()
+    router.load_from_registry(registry)
+
+    webapp = _FakeWebApplication(router, registry)
+
+    return webapp
+
+
+def test_webapp_route_registry_lists_router_routes():
+    """
+        Test that the adapter lists the routes of the application's router,
+        one entry per endpoint with all of its methods.
+    """
+    from ccai.webworks.devexp.cli.routes import WebApplicationRouteRegistry
+
+    registry = WebApplicationRouteRegistry(_build_webapp_with_routes())
+
+    routes = registry.get_routes()
+    summary = [(route.path, sorted(route.methods)) for route in routes]
+
+    if summary != [("/alpha", ["GET", "POST"]), ("/beta", ["GET"])]:
+        errmsg = "Unexpected routes: {}".format(summary)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_webapp_route_registry_names_the_handler():
+    """
+        Test that a route entry names the module and function of its handler.
+    """
+    from ccai.webworks.devexp.cli.routes import WebApplicationRouteRegistry
+
+    registry = WebApplicationRouteRegistry(_build_webapp_with_routes())
+
+    route = registry.get_routes()[0]
+
+    if not route.handler.endswith("alpha_handler"):
+        errmsg = "Expected the handler name to end with 'alpha_handler', got '{}'".format(route.handler)
+        raise AssertionError(errmsg)
+
+    if route.access_policy != "public":
+        errmsg = "Expected access policy 'public', got '{}'".format(route.access_policy)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_resolve_registry_reports_unimportable_app_target():
+    """
+        Test that resolve_registry raises when the application target
+        cannot be imported, instead of reporting 'not configured'.
+    """
+    from ccai.webworks.devexp.apploader import ApplicationLoadError
+
+    args = Namespace(app="no_such_module_for_routes_test:app")
+
+    raised = False
+    try:
+        resolve_registry({}, args)
+    except ApplicationLoadError:
+        raised = True
+
+    if raised is not True:
+        errmsg = "Expected ApplicationLoadError for an unimportable application target."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_routes_execute_returns_config_error_for_unimportable_app():
+    """
+        Test that the routes command exits with EXIT_CONFIG_ERROR when the
+        application target cannot be imported.
+    """
+    cmd = RoutesCommand()
+    args = Namespace(app="no_such_module_for_routes_test:app", output_format="table", path_filter=None)
+
+    exit_code = cmd.execute(args, {})
+
+    if exit_code != EXIT_CONFIG_ERROR:
+        errmsg = "Expected EXIT_CONFIG_ERROR, got {}".format(exit_code)
         raise AssertionError(errmsg)
 
     return

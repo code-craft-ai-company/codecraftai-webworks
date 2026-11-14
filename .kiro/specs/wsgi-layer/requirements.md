@@ -10,6 +10,8 @@ WSGI (PEP 3333) is the standard Python interface between web servers and web app
 
 A key goal of this implementation is to minimize external dependencies by providing a complete, self-contained WSGI stack that can serve applications without requiring third-party server packages.
 
+A WebApplication is built as an ASGI application (`asgi_app`). It is served over WSGI by `WebApplication.wsgi_app`, an ASGI_Bridge that runs the application's own ASGI pipeline, so a route behaves the same under WSGI and ASGI and authentication, sessions, CSRF and limits are implemented once (decision of 2026-11-12, audit finding WW-0175; Requirement 16). `WSGIApplication` remains the lower-level adapter for code that handles framework Requests synchronously itself.
+
 ## Glossary
 
 - **WSGI_Application**: A callable object that accepts two arguments (environ, start_response) and returns an iterable yielding response body chunks.
@@ -25,6 +27,8 @@ A key goal of this implementation is to minimize external dependencies by provid
 - **Environ_Key**: A key in the WSGI environ dictionary following CGI or WSGI naming conventions.
 - **Content_Length**: The HTTP header indicating the size of the response body in bytes.
 - **Chunked_Transfer**: A transfer encoding where the response body is sent in chunks without a predetermined Content-Length.
+- **ASGI_Bridge**: `ccai.webworks.wsgi.asgibridge.ASGIBridge`, a WSGI_Application that serves an ASGI application by running it on one event loop per process.
+- **Worker_Lifecycle_Methods**: The optional `on_worker_start(worker)` and `on_worker_exit(worker)` methods of an application object, which the built-in server calls in each worker process.
 
 ## Requirements
 
@@ -116,11 +120,14 @@ A key goal of this implementation is to minimize external dependencies by provid
 
 #### Acceptance Criteria
 
-1. THE system SHALL provide a `get_wsgi_application()` function returning the WSGI callable for external servers.
+1. THE system SHALL provide a `get_wsgi_application()` function returning the WSGI callable for external servers, so that `gunicorn 'ccai.webworks.wsgi.application:get_wsgi_application()'` serves the application.
 2. THE WSGI_Application SHALL remain compatible with Gunicorn, uWSGI, mod_wsgi, and Waitress.
-3. THE system SHALL support the `application` module-level variable convention for external WSGI servers.
-4. THE system SHALL provide application factory pattern support for external WSGI servers.
+3. THE system SHALL support the `application` module-level variable convention for external WSGI servers; reading `ccai.webworks.wsgi.application.application` SHALL give the callable `get_wsgi_application()` returns.
+4. THE system SHALL provide application factory pattern support for external WSGI servers (`create_wsgi_application()` for a WSGIApplication around a handler).
 5. WHEN the application factory is used, THE system SHALL create a new application instance per call.
+6. `get_wsgi_application()` SHALL find the application once, in this order: the application set with `set_wsgi_application()`; the import target (`module:attribute`) in the `WEBWORKS_SERVER_APP` environment variable, the variable the `webworks` command line reads for `server.app`; the established web application persona.
+7. WHEN the target names a WebApplication, or the ASGI application of the established persona (the `app` a site module exports), THE system SHALL serve the persona's `wsgi_app`; any other ASGI application SHALL be served through an ASGI_Bridge of its own and any other callable as a WSGI application.
+8. WHEN there is no application to serve, or the target cannot be imported, THE system SHALL raise `ConfigurationError` (fail early) instead of serving an application that answers 404.
 
 ### Requirement 6: Synchronous Request Handling
 
@@ -128,8 +135,8 @@ A key goal of this implementation is to minimize external dependencies by provid
 
 #### Acceptance Criteria
 
-1. THE WSGI_Application SHALL process requests synchronously in the calling thread.
-2. THE WSGI_Application SHALL block until the response is fully generated.
+1. THE WSGI_Application SHALL process requests synchronously from the point of view of the calling thread: the thread the server called the application on blocks until the response is produced. Under the ASGI_Bridge the handlers run where they run under ASGI (coroutine handlers on the process's event loop, other handlers on its worker threads), and the calling thread does the request's socket I/O.
+2. THE WSGI_Application SHALL block until the response is fully generated (or, for a streaming response, hand each chunk to the server as it is produced).
 3. THE WSGI_Application SHALL support blocking I/O operations within request handlers.
 4. THE WSGI_Application SHALL support database queries and external API calls within handlers.
 5. THE WSGI_Application SHALL NOT require async/await syntax for request handlers.
@@ -237,10 +244,15 @@ A key goal of this implementation is to minimize external dependencies by provid
 2. THE WSGI_Server SHALL distribute incoming connections across worker processes.
 3. THE WSGI_Server SHALL monitor worker process health and restart failed workers.
 4. THE WSGI_Server SHALL support graceful worker restart without dropping connections.
-5. WHEN a worker process exceeds memory limits, THE WSGI_Server SHALL restart that worker.
-6. THE WSGI_Server SHALL support worker process timeout for hung requests.
+5. WHEN a worker process exceeds memory limits, THE WSGI_Server SHALL restart that worker. (The production server measures the memory after each request and stops the worker gracefully; the WSGI_Server replaces it.)
+6. THE WSGI_Server SHALL support worker process timeout for hung requests. (A WebApplication served through the ASGI_Bridge is given the request timeout under `webworks.request_timeout` and answered 504; killing a worker whose thread hangs in a plain WSGI application is not implemented.)
 7. THE WSGI_Server SHALL propagate signals to worker processes for coordinated shutdown.
-8. THE WSGI_Server SHALL support pre-fork and lazy-fork worker initialization modes.
+8. THE WSGI_Server SHALL support pre-fork and lazy-fork worker initialization modes. (The production server loads the application in the master with `preload`, or in each worker from a factory.)
+9. THE Worker SHALL call the application's Worker_Lifecycle_Methods when it defines them: `on_worker_start(worker)` before the worker accepts connections, `on_worker_exit(worker)` after it stopped serving.
+10. WHEN `on_worker_start` raises, THE Worker SHALL raise `WorkerBootError`, the worker process SHALL end with `WORKER_BOOT_ERROR_EXIT_CODE` (3), and THE WSGI_Server SHALL stop instead of starting replacements that would fail the same way (`boot_failed`).
+11. WHEN `max_requests` is configured, a worker SHALL stop gracefully after serving `max_requests` plus a random `0..max_requests_jitter` requests, answer its last request with `Connection: close`, and be replaced.
+12. THE WorkerManager SHALL replace all workers without dropping connections (`replace_workers()`: new workers first, then the old ones are stopped gracefully) and SHALL report every ended worker (pid, worker id, exit code) to an optional exit callback.
+13. DURING a graceful shutdown, a connection the worker accepted but has not served yet SHALL be served (and then closed); a worker that is stopping SHALL NOT accept new connections.
 
 ### Requirement 14: Socket and Connection Management
 
@@ -250,7 +262,8 @@ A key goal of this implementation is to minimize external dependencies by provid
 
 1. THE Socket_Listener SHALL bind to IPv4 and IPv6 addresses.
 2. THE Socket_Listener SHALL support Unix domain sockets.
-3. THE Socket_Listener SHALL configure socket options (SO_REUSEADDR, SO_REUSEPORT).
+3. THE Socket_Listener SHALL configure SO_REUSEADDR. It SHALL NOT set SO_REUSEPORT: the workers share one listening socket, and a second server started on the same address SHALL fail to bind instead of silently taking part of the connections.
+9. THE Socket_Listener SHALL accept a TLS context built elsewhere (`set_ssl_context`), so a layer above it decides the TLS policy.
 4. THE WSGI_Server SHALL handle connection timeouts gracefully.
 5. THE WSGI_Server SHALL limit maximum concurrent connections per worker.
 6. THE WSGI_Server SHALL support SSL/TLS connections with configurable certificates.
@@ -276,8 +289,30 @@ A key goal of this implementation is to minimize external dependencies by provid
    - maximum header size
    - backlog size
    - SSL certificate and key paths
+   - worker class (`sync`, its alias `thread`, or `gevent` when the gevent package is installed)
+   - worker recycling (`max_requests`, `max_requests_jitter`)
 5. THE WSGI_Server SHALL validate configuration and report errors clearly.
 6. THE WSGI_Server SHALL provide sensible defaults for all configuration options.
 
 </content>
 </invoke>
+
+### Requirement 16: Serving a WebApplication over WSGI
+
+**User Story:** As a developer, I want to serve my WebApplication with any WSGI server, so that it behaves exactly as it does under an ASGI server.
+
+#### Acceptance Criteria
+
+1. THE WebApplication SHALL expose `wsgi_app`, a PEP 3333 callable (an ASGI_Bridge around `asgi_app`), available from the `INFRASTRUCTURE_READY` phase and the same object on every call.
+2. A request served through `wsgi_app` SHALL go through the application's ASGI pipeline: routing, middleware, the authentication middleware when configured, sessions and CSRF middleware wrapped around the ASGI application, the `server.max_request_body_size` limit, the error handling and the lifespan startup and shutdown handlers. The same request SHALL get the same answer through `asgi_app` and `wsgi_app`.
+3. THE ASGI_Bridge SHALL run one event loop per process, on a thread of its own, and SHALL resolve the ASGI application when it starts in a process, so authentication configured after `wsgi_app` was read is served.
+4. THE ASGI_Bridge SHALL feed `wsgi.input` to `receive()` in chunks, one each time the application asks, reading no further than the Content-Length (or to the end of a terminated input), so the application's body limit stops the reading as soon as it is passed.
+5. THE ASGI_Bridge SHALL hand each body chunk of `send()` to the server as it arrives, and `send()` SHALL return only once the server has taken the chunk.
+6. THE lifespan startup SHALL run once per process, before the first request is served or when the server starts a worker (`on_worker_start`); the lifespan shutdown SHALL run when the server stops the worker (`on_worker_exit`), when `shutdown()` is called, or when the process exits. A process forked after the bridge started SHALL run a lifespan of its own.
+7. WHEN the lifespan startup failed, THE ASGI_Bridge SHALL answer every request with 503; after `shutdown()` it SHALL answer 503 as well.
+8. WHEN the application has not started its response within the request timeout (the bridge's, or `environ['webworks.request_timeout']`), THE ASGI_Bridge SHALL cancel it and answer 504.
+9. A HEAD response SHALL keep its headers and carry no body; repeated header fields (Set-Cookie) SHALL all reach the server; hop-by-hop headers SHALL be left to the server.
+10. WHEN the application raises before it starts a response, THE ASGI_Bridge SHALL answer 500; WHEN it ends a started response early, the body iterator SHALL raise `IncompleteResponse` so the server closes the connection.
+11. WHEN the client disconnects (the server closes the body early), `send()` SHALL raise `ClientDisconnected` and `receive()` SHALL report `http.disconnect`; WHEN reading the request body fails, the application SHALL see `http.disconnect` and the read error SHALL be raised to the server.
+12. `ConfigurationError`, `SemanticError` and other exceptions that are not `Exception`s, raised by the application, SHALL propagate and not be turned into a 500 or a failed startup.
+13. WebSocket routes SHALL be served over ASGI only; WSGI cannot carry them.

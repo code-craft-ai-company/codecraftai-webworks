@@ -1,9 +1,15 @@
 # Package publish pipeline.
 #
 # Runs when the version in pyproject.toml changes on main, and on demand
-# via workflow_dispatch. Builds the wheel + sdist with poetry, checks
-# them with ``twine check --strict`` (the README must render the way
-# PyPI renders it), and uploads them to:
+# via workflow_dispatch. A release is uploaded only after the Merge Gate
+# has passed for the same commit: job ``gate`` calls merge_gate.yml and
+# job ``publish`` needs it. A published version cannot be replaced, so a
+# version bump on a failing commit must never reach the package index.
+#
+# Job ``publish`` builds the wheel + sdist with poetry, checks them with
+# ``twine check --strict`` (the README must render the way PyPI renders
+# it), inspects the wheel for the static assets and the console script,
+# and uploads them to:
 #
 # 1. The Code Craft AI package repository at
 #    https://artifacts.code-craft.ai/repository/legacy (job ``publish``).
@@ -56,10 +62,13 @@ on:
         default: false
 
 jobs:
-  publish:
+  version:
+    # Decides whether there is anything to publish, so the gate and the
+    # build only run for a version change (or a forced run).
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.version.outputs.changed }}
+      current: ${{ steps.version.outputs.current }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -108,8 +117,31 @@ jobs:
             echo "Version ${previous:-<none>} -> ${current}; publishing."
           fi
 
+  gate:
+    # The full Merge Gate (single-host suite on every OS, wheel build and
+    # smoke test, browser suite) for the commit that is about to be
+    # published.
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    uses: ./.github/workflows/merge_gate.yml
+    secrets: inherit
+
+  publish:
+    # Skipped unless the version changed AND the gate passed.
+    needs: [version, gate]
+    if: needs.version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ needs.version.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Verify publishing secret is visible to this repo
-        if: steps.version.outputs.changed == 'true' && inputs.skip_artifacts != true
+        if: inputs.skip_artifacts != true
         env:
           PUBLISH_TOKEN: ${{ secrets.CCAI_ORG_ARTIFACT_PUBLISHING }}
         run: |
@@ -120,13 +152,11 @@ jobs:
           echo "publishing secret is visible"
 
       - name: Install build tools
-        if: steps.version.outputs.changed == 'true'
         run: |
           pipx install poetry
           pipx install twine
 
       - name: Pin internal dependencies for the published artifact
-        if: steps.version.outputs.changed == 'true'
         run: |
           # Source keeps 'branch = "main"' so day-to-day development tracks
           # the tip of each sibling. A published wheel cannot: a git URL
@@ -167,17 +197,61 @@ jobs:
           PY
 
       - name: Build wheel + sdist
-        if: steps.version.outputs.changed == 'true'
         run: |
           poetry build
           ls -l dist/
 
       - name: Check the distributions
-        if: steps.version.outputs.changed == 'true'
         run: twine check --strict dist/*
 
+      - name: Inspect the wheel
+        # The gate inspected and smoke-tested a wheel built from this commit;
+        # this checks the artifact that is actually uploaded.
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+          import zipfile
+
+          wheels = glob.glob("dist/*.whl")
+          if len(wheels) != 1:
+              sys.exit("Expected exactly one wheel in dist/, found: {}".format(wheels))
+
+          archive = zipfile.ZipFile(wheels[0])
+          names = archive.namelist()
+
+          problems = []
+
+          for prefix in (
+              "ccai/webworks/static/javascript/",
+              "ccai/webworks/static/styles/",
+              "ccai/webworks/openapi/static/",
+              "ccai/webworks/books/static/",
+          ):
+              count = len([name for name in names if name.startswith(prefix)])
+              print("{:45s} {} files".format(prefix, count))
+              if count == 0:
+                  problems.append("no files under {}".format(prefix))
+
+          entry_points = [name for name in names if name.endswith(".dist-info/entry_points.txt")]
+          if len(entry_points) != 1:
+              problems.append("the wheel declares no entry points")
+          elif "webworks=ccai.webworks.devexp.cli.webworkscli:main" not in archive.read(entry_points[0]).decode("utf-8").replace(" ", ""):
+              problems.append("the 'webworks' console script is not declared")
+
+          metadata = [name for name in names if name.endswith(".dist-info/METADATA")]
+          if len(metadata) == 1 and "git+" in archive.read(metadata[0]).decode("utf-8"):
+              problems.append("the wheel metadata still points at a git repository")
+
+          if len(problems) > 0:
+              for problem in problems:
+                  print("::error::{}".format(problem))
+              sys.exit(1)
+
+          print("Wheel contents look complete: {} files.".format(len(names)))
+          PY
+
       - name: Keep the distributions for the PyPI job
-        if: steps.version.outputs.changed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: dist
@@ -185,14 +259,14 @@ jobs:
           if-no-files-found: error
 
       - name: Publish to artifacts.code-craft.ai
-        if: steps.version.outputs.changed == 'true' && inputs.skip_artifacts != true
+        if: inputs.skip_artifacts != true
         env:
           TWINE_USERNAME: publisher
           TWINE_PASSWORD: ${{ secrets.CCAI_ORG_ARTIFACT_PUBLISHING }}
           TWINE_REPOSITORY_URL: https://artifacts.code-craft.ai/repository/legacy
         run: |
           twine upload --non-interactive --disable-progress-bar dist/*
-          echo "Published ${{ github.repository }} ${{ steps.version.outputs.current }}"
+          echo "Published ${{ github.repository }} ${{ needs.version.outputs.current }}"
 
   pypi:
     needs: publish

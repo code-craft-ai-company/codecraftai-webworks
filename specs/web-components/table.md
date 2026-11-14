@@ -65,7 +65,7 @@ Responsive strategy is set via `responsive`:
 ## 6. Properties
 | Property | Type | Description |
 |----------|------|-------------|
-| `columns` | `ColumnDef[]` | Array of `{ key, label, width?, priority? }` objects; drives `<thead>` and `<col>` generation. |
+| `columns` | `ColumnDef[]` | Array of `{ key, label, labelHidden?, width?, priority? }` objects; drives `<thead>` and `<col>` generation. `labelHidden: true` renders the label visually hidden, so a selection or action column with no visible heading still has a named header. |
 | `rows` | `Record<string, unknown>[]` | Array of row data objects keyed by `ColumnDef.key`. Setting replaces `<tbody>` content. |
 
 ## 7. Slots
@@ -79,7 +79,7 @@ Responsive strategy is set via `responsive`:
 ## 8. Events
 | Event | `detail` | Bubbles | Cancelable | Description |
 |-------|----------|---------|------------|-------------|
-| `mj-table-overflow` | `{ overflowing: boolean }` | true | false | Fired when the table's scroll overflow state changes (on resize). |
+| `mj-table-overflow` | `{ overflowing: boolean }` | true | false | Fired when the table's scroll overflow state changes (on resize, or rows that make a `sticky-header` wrapper scroll vertically). |
 
 ## 9. CSS parts & custom properties
 **Parts:** `table`, `caption`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td`, `scroll-wrapper`.
@@ -115,7 +115,7 @@ No row interactions are wired; pointer cursor is default.
 ## 12. Keyboard interaction
 | Key | Action |
 |-----|--------|
-| `Tab` | Moves focus into/through the scroll wrapper (when overflow) so keyboard users can scroll. |
+| `Tab` | Moves focus into/through the scroll wrapper (when it overflows horizontally, or vertically under `sticky-header`) so keyboard users can scroll. |
 | `Arrow Left / Right` | Scrolls the overflow wrapper horizontally when the wrapper is focused. |
 
 ## 13. Accessibility

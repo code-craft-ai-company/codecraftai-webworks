@@ -13,6 +13,7 @@ import string
 
 from urllib.parse import urlparse, parse_qs
 
+from ccai.webworks.authentication.core import AuthenticationContext, Principal
 from ccai.webworks.authentication.blueprints.oauth2 import (
     OAuth2Blueprint,
 )
@@ -21,6 +22,9 @@ from ccai.webworks.authentication.blueprints.oauth2 import (
 # =============================================================================
 # Test Helpers
 # =============================================================================
+
+
+RESOURCE_OWNER = Principal(identifier="resource-owner-1")
 
 
 class MockJsonRequest:
@@ -32,6 +36,10 @@ class MockJsonRequest:
     def __init__(self, data=None, query_params=None):
         self._data = data or {}
         self.query_params = query_params or {}
+
+        # The resource owner the authentication middleware established.
+        # The authorization endpoint issues codes on this user's behalf.
+        self.auth = AuthenticationContext(principal=RESOURCE_OWNER, scheme="Test")
 
     def json(self):
         return self._data
@@ -148,7 +156,7 @@ def test_property_17_oauth2_error_redirect():
             }
         }
 
-        # --- Part A: Unknown client should produce error redirect ---
+        # --- Part A: Unknown client is answered directly, without a redirect ---
         blueprint_a = _create_fresh_blueprint(clients=clients)
 
         unknown_client = _random_string(5, 15) + "_unknown"
@@ -161,41 +169,28 @@ def test_property_17_oauth2_error_redirect():
         })
         auth_response_a = blueprint_a.authorize(auth_request_a)
 
-        if auth_response_a["status"] != 302:
+        # The redirect_uri of an unknown client has not been validated,
+        # so the error is answered directly instead of by redirecting.
+        if auth_response_a["status"] != 400:
             errmsg = (
-                "Iteration {} Part A: Expected 302 redirect for unknown "
-                "client, got {}".format(iteration, auth_response_a["status"])
+                "Iteration {} Part A: Expected 400 for unknown client, "
+                "got {}".format(iteration, auth_response_a["status"])
             )
             raise AssertionError(errmsg)
 
-        location_a = auth_response_a["headers"]["Location"]
-        params_a = _parse_redirect_params(location_a)
-
-        if "error" not in params_a:
+        if "Location" in auth_response_a.get("headers", {}):
             errmsg = (
-                "Iteration {} Part A: Expected 'error' parameter in "
-                "redirect URL for unknown client, got params={!r}".format(
-                    iteration, params_a
+                "Iteration {} Part A: Expected no redirect to the "
+                "unvalidated redirect_uri of an unknown client".format(
+                    iteration
                 )
             )
             raise AssertionError(errmsg)
 
-        if "error_description" not in params_a:
+        if "error" not in auth_response_a["body"]:
             errmsg = (
-                "Iteration {} Part A: Expected 'error_description' "
-                "parameter in redirect URL, got params={!r}".format(
-                    iteration, params_a
-                )
-            )
-            raise AssertionError(errmsg)
-
-        # State should be preserved in error redirect
-        if params_a.get("state") != state:
-            errmsg = (
-                "Iteration {} Part A: Expected state={!r} in error "
-                "redirect, got {!r}".format(
-                    iteration, state, params_a.get("state")
-                )
+                "Iteration {} Part A: Expected 'error' in the response "
+                "body, got {!r}".format(iteration, auth_response_a["body"])
             )
             raise AssertionError(errmsg)
 

@@ -427,3 +427,26 @@ def test_endpoint_conflict_error_detail_defaults_to_none():
         raise AssertionError(errmsg)
 
     return
+
+
+def test_blueprint_already_registered_error_names_the_class_of_an_instance():
+    """
+        A configured blueprint is registered as an instance, which has no
+        ``__name__``; the error names its class instead of failing while
+        building its own message.
+    """
+
+    class ConfiguredBlueprint:
+        pass
+
+    instance = ConfiguredBlueprint()
+
+    err = BlueprintAlreadyRegisteredError(blueprint_cls=instance)
+
+    if "ConfiguredBlueprint" not in str(err):
+        raise AssertionError(f"Expected the instance's class name in the message, got: {err}")
+
+    if err.blueprint_cls is not instance:
+        raise AssertionError("Expected the instance to be stored on the error")
+
+    return

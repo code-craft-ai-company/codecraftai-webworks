@@ -539,6 +539,15 @@ class ContextProcessorRegistry:
         return
     
     @property
+    def processors(self) -> List[Callable[[Dict[str, Any]], Dict[str, Any]]]:
+        """
+            Return the registered context processors in registration order.
+            
+            :returns: A copy of the list of registered processors.
+        """
+        return list(self._processors)
+    
+    @property
     def count(self) -> int:
         """
             Return the number of registered context processors.

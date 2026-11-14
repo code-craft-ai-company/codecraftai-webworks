@@ -519,7 +519,7 @@ def test_parse_json_body():
         Test that JSON bodies are parsed when Content-Type is application/json.
     """
     inspector = RequestInspector()
-    json_data = {"key": "value", "count": 42}
+    json_data = {"name": "value", "count": 42}
     body = json.dumps(json_data).encode("utf-8")
     request = _make_request(
         method="POST",
@@ -537,8 +537,8 @@ def test_parse_json_body():
         errmsg = "Expected parsed JSON body, got None"
         raise AssertionError(errmsg)
 
-    if info.parsed_body["key"] != "value":
-        errmsg = "Expected parsed_body['key']='value', got '{}'".format(info.parsed_body["key"])
+    if info.parsed_body["name"] != "value":
+        errmsg = "Expected parsed_body['name']='value', got '{}'".format(info.parsed_body["name"])
         raise AssertionError(errmsg)
 
     if info.parsed_body["count"] != 42:
@@ -800,12 +800,12 @@ def test_debug_endpoint_returns_json_response():
     """
         Test that the debug endpoint returns a valid JSON response.
     """
-    inspector = RequestInspector()
+    inspector = RequestInspector(debug=True)
 
     inspector.capture(_make_request(method="GET", path="/api/test"))
     inspector.capture(_make_request(method="POST", path="/api/data"))
 
-    response = inspector.handle_debug_endpoint()
+    response = inspector.handle_debug_endpoint(secret=inspector.secret)
 
     if response["status_code"] != 200:
         errmsg = "Expected status 200, got {}".format(response["status_code"])
@@ -837,12 +837,12 @@ def test_debug_endpoint_with_limit():
     """
         Test that the debug endpoint respects the limit parameter.
     """
-    inspector = RequestInspector()
+    inspector = RequestInspector(debug=True)
 
     for idx in range(10):
         inspector.capture(_make_request(method="GET", path="/item/{}".format(idx)))
 
-    response = inspector.handle_debug_endpoint(limit=3)
+    response = inspector.handle_debug_endpoint(limit=3, secret=inspector.secret)
     body = json.loads(response["body"])
 
     if body["total"] != 10:
@@ -860,13 +860,13 @@ def test_debug_endpoint_with_path_filter():
     """
         Test that the debug endpoint respects the path_filter parameter.
     """
-    inspector = RequestInspector()
+    inspector = RequestInspector(debug=True)
 
     inspector.capture(_make_request(method="GET", path="/api/users"))
     inspector.capture(_make_request(method="GET", path="/static/file.js"))
     inspector.capture(_make_request(method="POST", path="/api/items"))
 
-    response = inspector.handle_debug_endpoint(path_filter="/api/.*")
+    response = inspector.handle_debug_endpoint(path_filter="/api/.*", secret=inspector.secret)
     body = json.loads(response["body"])
 
     if body["returned"] != 2:
@@ -881,12 +881,12 @@ def test_debug_endpoint_stores_recent_requests():
         Test that the debug endpoint provides access to stored recent
         requests in memory for review.
     """
-    inspector = RequestInspector(max_requests=5)
+    inspector = RequestInspector(max_requests=5, debug=True)
 
     for idx in range(8):
         inspector.capture(_make_request(method="GET", path="/req/{}".format(idx)))
 
-    response = inspector.handle_debug_endpoint()
+    response = inspector.handle_debug_endpoint(secret=inspector.secret)
     body = json.loads(response["body"])
 
     if body["total"] != 5:
@@ -1027,5 +1027,161 @@ def test_property_6_request_inspector_size_limits():
                         "match original length {}"
                     ).format(iteration, actual_body_len, body_len)
                     raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Credential Redaction and Endpoint Access Tests
+# =============================================================================
+
+def test_capture_masks_credential_headers():
+    """
+        Test that Authorization and Cookie header values are never stored.
+    """
+    inspector = RequestInspector()
+
+    inspector.capture(_make_request(
+        method="GET",
+        path="/account",
+        headers={
+            "Authorization": "Bearer abc.def.ghi",
+            "Cookie": "session=s3cr3t",
+            "Accept": "text/html",
+        },
+    ))
+
+    stored = inspector.get_requests()[0].headers
+
+    if "abc.def.ghi" in stored["Authorization"] or "s3cr3t" in stored["Cookie"]:
+        errmsg = "Credential header values were stored: {}".format(stored)
+        raise AssertionError(errmsg)
+
+    if stored["Accept"] != "text/html":
+        errmsg = "Expected ordinary headers to be kept, got {}".format(stored)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_capture_masks_password_in_form_body():
+    """
+        Test that a password submitted in a form is masked in both the
+        stored body and the parsed body.
+    """
+    inspector = RequestInspector()
+
+    inspector.capture(_make_request(
+        method="POST",
+        path="/login",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        body=b"username=alice&password=hunter2",
+    ))
+
+    info = inspector.get_requests()[0]
+
+    if b"hunter2" in info.body:
+        errmsg = "The password was stored in the body: {!r}".format(info.body)
+        raise AssertionError(errmsg)
+
+    if "hunter2" in json.dumps(info.parsed_body):
+        errmsg = "The password was stored in the parsed body: {}".format(info.parsed_body)
+        raise AssertionError(errmsg)
+
+    if b"alice" not in info.body:
+        errmsg = "Expected non-credential fields to be kept: {!r}".format(info.body)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_capture_masks_token_in_json_body_and_query():
+    """
+        Test that token fields are masked in a JSON body and in the
+        query parameters.
+    """
+    inspector = RequestInspector()
+
+    inspector.capture(_make_request(
+        method="POST",
+        path="/api/session",
+        query_params={"api_key": "k-123", "page": "2"},
+        headers={"Content-Type": "application/json"},
+        body=json.dumps({"refresh_token": "r-456", "device": "phone"}).encode("utf-8"),
+    ))
+
+    serialized = json.dumps(inspector.get_requests()[0].to_dict())
+
+    if "k-123" in serialized or "r-456" in serialized:
+        errmsg = "A credential was stored: {}".format(serialized)
+        raise AssertionError(errmsg)
+
+    if "phone" not in serialized or '"page": "2"' not in serialized:
+        errmsg = "Expected non-credential values to be kept: {}".format(serialized)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_debug_endpoint_is_closed_outside_debug_mode():
+    """
+        Test that the debug endpoint answers 404 and returns no requests
+        when the inspector was not created in debug mode.
+    """
+    inspector = RequestInspector()
+    inspector.capture(_make_request(method="GET", path="/private"))
+
+    response = inspector.handle_debug_endpoint(secret=inspector.secret)
+
+    if response["status_code"] != 404:
+        errmsg = "Expected status 404 outside debug mode, got {}".format(response["status_code"])
+        raise AssertionError(errmsg)
+
+    if "/private" in response["body"]:
+        errmsg = "Captured requests were returned outside debug mode."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_debug_endpoint_requires_the_secret():
+    """
+        Test that the debug endpoint answers 403 without the secret or
+        with a wrong one.
+    """
+    inspector = RequestInspector(debug=True)
+    inspector.capture(_make_request(method="GET", path="/private"))
+
+    for presented in [None, "", "wrong-secret"]:
+        response = inspector.handle_debug_endpoint(secret=presented)
+
+        if response["status_code"] != 403:
+            errmsg = "Expected status 403 for secret {!r}, got {}".format(
+                presented, response["status_code"]
+            )
+            raise AssertionError(errmsg)
+
+        if "/private" in response["body"]:
+            errmsg = "Captured requests were returned without the secret."
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_inspector_generates_a_secret():
+    """
+        Test that an inspector always has a secret, and that two
+        inspectors do not share one.
+    """
+    first = RequestInspector(debug=True)
+    second = RequestInspector(debug=True)
+
+    if len(first.secret) < 16:
+        errmsg = "Expected a generated secret of useful length, got {!r}".format(first.secret)
+        raise AssertionError(errmsg)
+
+    if first.secret == second.secret:
+        errmsg = "Expected each inspector to generate its own secret."
+        raise AssertionError(errmsg)
 
     return

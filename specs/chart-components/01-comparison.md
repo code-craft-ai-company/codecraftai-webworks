@@ -1,9 +1,11 @@
 # Comparison Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Charts in this category compare discrete categories or entities against one
 another, either for a single measure or across multiple measures.
@@ -16,16 +18,6 @@ another, either for a single measure or across multiple measures.
 - **Controller:** `<mj-chart type="bar" orientation="horizontal">`
 - **Purpose:** Compare discrete categories by a single quantitative measure,
   drawn with horizontal bars so category labels read naturally left-to-right.
-- **Decomposition:**
-  - `mj-chart-plot` — bar marks
-  - `mj-chart-axis` ×2 — `kind="category" side="start"` and `kind="value" side="bottom"`
-  - `mj-chart-grid` — vertical gridlines on the value axis
-  - `mj-chart-legend` — visible when `group` mode is set; hidden for single-series
-  - `mj-chart-title`
-  - `mj-chart-tooltip`
-  - `mj-chart-value-labels` — optional end-of-bar labels
-  - `mj-chart-annotation` — optional reference lines / targets
-  - `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -46,6 +38,7 @@ another, either for a single measure or across multiple measures.
   - `group="cluster"` → Grouped bar / Grouped column
   - `group="stack"` → Stacked bar / Stacked column
   - `group="stack100"` → 100% stacked bar / 100% stacked column
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each bar).
 - **Phase:** P1
 - **Notes:** Uses `band` scale for categories and `linear` scale for values.
   Negative values are supported (bars extend left/down from the zero baseline).
@@ -60,8 +53,6 @@ another, either for a single measure or across multiple measures.
 - **Controller:** `<mj-chart type="bar" orientation="vertical">`
 - **Purpose:** Compare discrete categories by a single quantitative measure,
   drawn with vertical bars — the conventional upright form.
-- **Decomposition:** Same parts as Bar chart with axes swapped:
-  `kind="category" side="bottom"` and `kind="value" side="start"`.
 - **JSON shape:** Identical to Bar chart; `orientation` in `meta` or on the
   controller attribute drives the axis swap.
 - **SVG primitives:** `<rect>`, `<text>`, `<line>`, `<g>`.
@@ -69,6 +60,7 @@ another, either for a single measure or across multiple measures.
   to render as Bar.
 - **Variants / modes:** All `group` modes apply identically — `cluster`, `stack`,
   `stack100`.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each column).
 - **Phase:** P1
 - **Notes:** No separate renderer file — `bar.js` reads `orientation` from the
   model and rotates its drawing logic. Default orientation when `orientation` is
@@ -82,8 +74,6 @@ another, either for a single measure or across multiple measures.
 - **Controller:** `<mj-chart type="bar" group="cluster" orientation="horizontal|vertical">`
 - **Purpose:** Compare multiple series (groups) side-by-side within each
   category to reveal cross-series differences at each category.
-- **Decomposition:** Same as Bar chart. `mj-chart-legend` is always visible
-  (one entry per series). `mj-chart-value-labels` optional.
 - **JSON shape:**
   ```json
   {
@@ -100,6 +90,7 @@ another, either for a single measure or across multiple measures.
 - **Orientation:** `horizontal` or `vertical`.
 - **Variants / modes:** This is the `cluster` mode of the `bar` renderer.
   Switching `group` changes mode without a renderer change.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each bar).
 - **Phase:** P1
 - **Notes:** Within each category band, bars are sub-divided using a nested
   `band` scale (`bandwidth / seriesCount`). Color comes from the categorical
@@ -113,8 +104,6 @@ another, either for a single measure or across multiple measures.
 - **Controller:** `<mj-chart type="bar" group="stack" orientation="horizontal|vertical">`
 - **Purpose:** Show category totals while revealing each series' contribution
   to that total; good for part-to-whole within a comparison context.
-- **Decomposition:** Same as Bar chart; `mj-chart-legend` always visible;
-  `mj-chart-value-labels` optional (segment labels).
 - **JSON shape:** Identical multi-series envelope to Grouped bar chart. The
   renderer stacks `values` in series order.
 - **SVG primitives:** `<rect>` (segments stacked end-to-end per category),
@@ -122,6 +111,7 @@ another, either for a single measure or across multiple measures.
 - **Orientation:** `horizontal` or `vertical`.
 - **Variants / modes:** `group="stack"` mode of `bar`. Switch to `stack100`
   for proportional stacking.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each segment).
 - **Phase:** P1
 - **Notes:** Renderer computes cumulative baselines per category using the D3
   stack algorithm pattern (implemented in `svgdraw.js`, no D3 dependency). Only
@@ -136,13 +126,12 @@ another, either for a single measure or across multiple measures.
 - **Controller:** `<mj-chart type="bar" group="stack100" orientation="horizontal|vertical">`
 - **Purpose:** Compare the proportional composition across categories when
   absolute totals are less important than relative share.
-- **Decomposition:** Same as Stacked bar. Value axis labeled as percentages
-  (0–100%). `mj-chart-value-labels` shows percentage values in segments.
 - **JSON shape:** Same multi-series envelope; the renderer normalizes raw
   values to 0–100 per category internally.
 - **SVG primitives:** `<rect>`, `<text>`, `<line>`, `<g>`.
 - **Orientation:** `horizontal` or `vertical`.
 - **Variants / modes:** `group="stack100"` mode of `bar`.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each segment; `value` is the data value, not the percentage drawn).
 - **Phase:** P1
 - **Notes:** Value scale is always `linear` 0–100 regardless of raw data range.
   Segments narrower than ~14px suppress their value label to avoid overlap.
@@ -155,16 +144,6 @@ another, either for a single measure or across multiple measures.
 - **Controller:** `<mj-chart type="lollipop" orientation="horizontal|vertical">`
 - **Purpose:** A cleaner, lower-ink alternative to bar charts; emphasizes the
   data point position rather than the filled bar area.
-- **Decomposition:**
-  - `mj-chart-plot` — stems and dot heads
-  - `mj-chart-axis` ×2 — category axis and value axis
-  - `mj-chart-grid` — gridlines on value axis
-  - `mj-chart-legend` — when multiple series present
-  - `mj-chart-title`
-  - `mj-chart-tooltip`
-  - `mj-chart-value-labels` — optional labels beside dots
-  - `mj-chart-annotation` — reference lines
-  - `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -181,6 +160,7 @@ another, either for a single measure or across multiple measures.
 - **Orientation:** `horizontal` or `vertical`.
 - **Variants / modes:** Multiple series render side-by-side lollipops within a
   category band (cluster mode, controlled by `group="cluster"`). No stack mode.
+- **Events:** `mj-chart-lollipop-click` `{ series, category, value }` (each dot head; the stem is not interactive).
 - **Phase:** P2
 - **Notes:** Uses `band` scale for categories and `linear` scale for values.
   Stems use `stroke-width` from `--mj-chart-stem-width` token. Dot size
@@ -196,15 +176,6 @@ another, either for a single measure or across multiple measures.
 - **Purpose:** Compare values across categories with maximum data-ink ratio;
   especially effective when categories must be read precisely with minimal
   visual clutter.
-- **Decomposition:**
-  - `mj-chart-plot` — dot marks and optional connector lines
-  - `mj-chart-axis` ×2 — category axis and value axis
-  - `mj-chart-grid` — light gridlines on value axis
-  - `mj-chart-legend` — when multiple series present
-  - `mj-chart-title`
-  - `mj-chart-tooltip`
-  - `mj-chart-annotation`
-  - `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -224,6 +195,7 @@ another, either for a single measure or across multiple measures.
 - **Variants / modes:**
   - Single series: classic Cleveland dot plot.
   - Two series with `showConnectors: true`: Dumbbell chart (see Dumbbell entry).
+- **Events:** `mj-chart-dotplot-click` `{ series, category, value }` (each dot).
 - **Phase:** P2
 - **Notes:** Uses `point` scale (not `band`) for categories — dots align to
   category midpoints without a bandwidth gap. Multiple series dots for the same
@@ -239,13 +211,6 @@ another, either for a single measure or across multiple measures.
 - **Purpose:** Compare a primary performance measure against one or more
   qualitative ranges (Poor/Satisfactory/Good) and a target marker; a compact,
   information-dense KPI alternative to gauges.
-- **Decomposition:**
-  - `mj-chart-plot` — range bands, performance bar, and target tick
-  - `mj-chart-axis` — value axis only (`kind="value"`)
-  - `mj-chart-title` — category label (often used as chart label)
-  - `mj-chart-tooltip`
-  - `mj-chart-annotation` — additional reference lines
-  - `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -269,6 +234,7 @@ another, either for a single measure or across multiple measures.
 - **Orientation:** `horizontal` (canonical — wide bar) or `vertical` (tall bar).
 - **Variants / modes:** None. Multiple bullets stack as independent rows/columns
   sharing the same value scale.
+- **Events:** `mj-chart-bullet-click` `{ name, value, target }` (the measure bar of each bullet).
 - **Phase:** P2
 - **Notes:** Range bands use progressively lighter fills from `--mj-chart-range-*`
   tokens. Performance bar is drawn narrower (≈40% of band width) and centered.
@@ -284,7 +250,6 @@ another, either for a single measure or across multiple measures.
 - **Controller:** `<mj-chart type="dotplot" show-connectors="true">`
 - **Purpose:** Highlight the magnitude and direction of change between exactly
   two values (e.g. before/after, start/end) per category.
-- **Decomposition:** Same as Dot plot.
 - **JSON shape:** Identical to Dot plot with exactly two series. `showConnectors`
   may be set in `meta` or via the `show-connectors` controller attribute.
   ```json
@@ -303,6 +268,7 @@ another, either for a single measure or across multiple measures.
 - **Variants / modes:** This is the `showConnectors=true` mode of `dotplot`.
   Semantically best with exactly two series; the renderer draws connectors for
   all adjacent series pairs if more than two are present.
+- **Events:** `mj-chart-dotplot-click` `{ series, category, value }` (each dot; the connectors are not interactive).
 - **Phase:** P2
 - **Notes:** Connector line styled with `--mj-chart-connector-stroke` and
   `--mj-chart-connector-stroke-width`. Arrow heads on connectors are optional
@@ -317,16 +283,6 @@ another, either for a single measure or across multiple measures.
 - **Purpose:** Show the direction and magnitude of change for multiple entities
   between exactly two time points or states; best for ranked comparisons across
   two conditions.
-- **Decomposition:**
-  - `mj-chart-plot` — slope lines and endpoint dots
-  - `mj-chart-axis` ×2 — one `kind="category"` axis per column (left and right),
-    each with `kind="value"` — implemented as two independent value axes sharing
-    the same `linear` scale
-  - `mj-chart-legend`
-  - `mj-chart-title`
-  - `mj-chart-tooltip`
-  - `mj-chart-value-labels` — inline labels at endpoints
-  - `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -346,6 +302,7 @@ another, either for a single measure or across multiple measures.
   `<g>`.
 - **Orientation:** `n/a` — the chart is always rendered left-column to right-column.
 - **Variants / modes:** None. For three or more time points, use a Line chart.
+- **Events:** `mj-chart-slope-click` `{ series, leftValue, rightValue }` (each slope line).
 - **Phase:** P2
 - **Notes:** Both columns share a single `linear` value scale, so slopes are
   visually accurate. Endpoint labels are right-aligned on the left column and
@@ -361,14 +318,6 @@ another, either for a single measure or across multiple measures.
 - **Controller:** `<mj-chart type="radar">`
 - **Purpose:** Compare multiple entities (series) across several quantitative
   dimensions simultaneously; surfaces multivariate profiles at a glance.
-- **Decomposition:**
-  - `mj-chart-plot` — radial axes, polygon/area fills, dot markers
-  - `mj-chart-grid` — concentric ring gridlines (circular or polygonal)
-  - `mj-chart-legend`
-  - `mj-chart-title`
-  - `mj-chart-tooltip`
-  - `mj-chart-annotation` — reference rings
-  - `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -393,6 +342,7 @@ another, either for a single measure or across multiple measures.
   - `fill="false"`: outline only (line-only radar).
   - `grid-shape="circle"` vs `grid-shape="polygon"`: ring gridlines rendered as
     `<circle>` or `<polygon>`.
+- **Events:** `mj-chart-radar-click` `{ series }` (a series' area or outline); `mj-chart-radar-dot-click` `{ series, category, value }` (each vertex dot).
 - **Phase:** P4
 - **Notes:** Each spoke maps a `linear` scale from 0 (or `domainMin`) to
   `domainMax`. Spoke angles are evenly distributed: `2π / N` radians apart
@@ -410,16 +360,6 @@ another, either for a single measure or across multiple measures.
 - **Purpose:** Compare many numeric dimensions for multiple entities or
   observations simultaneously; useful for finding clusters, outliers, and
   cross-dimension correlations in high-dimensional data.
-- **Decomposition:**
-  - `mj-chart-plot` — vertical axes and polylines per series/observation
-  - `mj-chart-axis` — one per dimension, each independently scaled and labeled
-    (the renderer manages these internally; external `mj-chart-axis` parts are
-    not used for parallel coordinates)
-  - `mj-chart-brush` — per-axis range brush for interactive filtering
-  - `mj-chart-legend`
-  - `mj-chart-title`
-  - `mj-chart-tooltip`
-  - `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -445,8 +385,8 @@ another, either for a single measure or across multiple measures.
   dimension; the renderer builds an independent `linear` scale for each.
 - **SVG primitives:** `<line>` (vertical axis lines), `<path>` (polyline per
   observation, using straight segments — `M x0,y0 L x1,y1 L x2,y2 …`),
-  `<text>` (dimension labels, axis tick labels), `<rect>` (brush selection
-  overlay), `<g>`.
+  `<text>` (dimension labels, axis tick labels), `<rect>` (plot clip; the
+  `color-by` gradient key), `<g>`.
 - **Orientation:** `n/a` — axes are always vertical; the layout is fixed
   left-to-right.
 - **Variants / modes:**
@@ -454,14 +394,15 @@ another, either for a single measure or across multiple measures.
     smoother look (same `<path>` element, `C` commands instead of `L`).
   - `color-by="dimension-name"`: line color encodes the value on a named
     dimension using a sequential scale instead of a series categorical color.
+- **Events:** `mj-chart-parallel-click` `{ series, observation }` (each observation line; `observation` is its row of values). Above 200 observations the lines are not focusable and emit nothing.
 - **Phase:** P4
 - **Notes:** Each dimension has its own independent `linear` scale with the
   same pixel range (plot height). Dimension columns are evenly spaced
-  horizontally. Brushing on an axis (`mj-chart-brush`) hides observations
-  outside the selected range on that axis; multiple brushes AND together.
+  horizontally. There is no brushing: observations cannot be filtered by a
+  range on an axis.
   With large datasets (> ~500 observations) lines are drawn at low opacity
   (`--mj-chart-parallel-opacity: 0.4`) to reveal density. Accessibility: the
-  data table provides the full matrix; brushed state is reflected in the table.
+  data table provides the full matrix.
 
 ---
 

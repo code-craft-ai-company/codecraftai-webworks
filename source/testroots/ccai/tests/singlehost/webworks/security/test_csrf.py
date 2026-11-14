@@ -981,3 +981,314 @@ def test_context_processor_returns_empty_when_session_id_missing():
         raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Token comparison, duplicate session cookies, exemptions and method coverage
+# =============================================================================
+
+import re
+
+from ccai.webworks.security.csrf import CSRFSessionError
+
+
+def _make_csrf_middleware(app, **options):
+    """
+        Build a CSRFMiddleware with the standard manager and cookie resolver.
+    """
+    manager = CSRFTokenManager(secret_key=SECRET_KEY)
+    resolver = cookie_session_id_resolver(cookie_name="session_id")
+    middleware = CSRFMiddleware(
+        app=app,
+        token_manager=manager,
+        session_id_resolver=resolver,
+        **options
+    )
+    return middleware, manager
+
+
+def _status_of(send):
+    """
+        Return the status of the response captured by a MockSend, or None.
+    """
+    if len(send.messages) == 0:
+        return None
+    return send.messages[0].get("status")
+
+
+def test_validate_returns_false_for_non_ascii_token():
+    """
+        A token with non-ASCII characters is a mismatch, not an error.
+    """
+    manager = CSRFTokenManager(secret_key=SECRET_KEY)
+
+    assert manager.validate("session-1", "\xff") is False
+    assert manager.validate("session-1", "éè") is False
+    return
+
+
+def test_middleware_rejects_non_ascii_header_token_with_403():
+    """
+        A non-ASCII X-CSRF-Token header is answered 403 csrf_token_invalid.
+    """
+    app = MockASGIApp()
+    middleware, _manager = _make_csrf_middleware(app)
+
+    scope = create_http_scope(
+        method="POST",
+        headers=[(b"cookie", b"session_id=abc"), (b"x-csrf-token", b"\xff\xfe")]
+    )
+    send = MockSend()
+    run_async(middleware(scope, MockReceive(), send))
+
+    assert app.was_called is False, "The wrapped app must not be called"
+    assert _status_of(send) == 403, f"Expected 403, got {_status_of(send)}"
+    return
+
+
+def test_resolver_raises_for_conflicting_duplicate_session_cookies():
+    """
+        Two session cookies with different values do not identify a session.
+    """
+    resolver = cookie_session_id_resolver(cookie_name="session_id")
+    scope = create_http_scope(headers=[(b"cookie", b"session_id=attacker; session_id=victim")])
+
+    raised = False
+    try:
+        resolver(scope)
+    except CSRFSessionError:
+        raised = True
+
+    assert raised, "Expected CSRFSessionError for conflicting session cookies"
+    return
+
+
+def test_resolver_accepts_duplicate_session_cookies_with_same_value():
+    """
+        The same cookie sent twice with one value is unambiguous.
+    """
+    resolver = cookie_session_id_resolver(cookie_name="session_id")
+    scope = create_http_scope(headers=[(b"cookie", b"session_id=abc; session_id=abc")])
+
+    assert resolver(scope) == "abc"
+    return
+
+
+def test_resolver_reads_session_cookie_after_malformed_cookie():
+    """
+        The resolver uses the tolerant cookie parser the Request uses.
+    """
+    resolver = cookie_session_id_resolver(cookie_name="session_id")
+    scope = create_http_scope(headers=[(b"cookie", b'prefs={"x":1}; session_id=abc')])
+
+    assert resolver(scope) == "abc"
+    return
+
+
+def test_middleware_rejects_duplicate_session_cookie_attack():
+    """
+        A request carrying the attacker's and the victim's session cookie,
+        with the token of the attacker's session, is refused.
+    """
+    app = MockASGIApp()
+    middleware, manager = _make_csrf_middleware(app)
+
+    attacker_token = manager.generate("attacker")
+    scope = create_http_scope(
+        method="POST",
+        headers=[
+            (b"cookie", b"session_id=attacker; session_id=victim"),
+            (b"x-csrf-token", attacker_token.encode("ascii")),
+        ]
+    )
+    send = MockSend()
+    run_async(middleware(scope, MockReceive(), send))
+
+    assert app.was_called is False, "The wrapped app must not be called"
+    assert _status_of(send) == 403, f"Expected 403, got {_status_of(send)}"
+    assert _decode_json_body(send.messages).get("error") == "csrf_ambiguous_session"
+    return
+
+
+def test_middleware_rejects_ambiguous_session_even_without_required_session():
+    """
+        require_session=False does not let an ambiguous session through.
+    """
+    app = MockASGIApp()
+    middleware, _manager = _make_csrf_middleware(app, require_session=False)
+
+    scope = create_http_scope(
+        method="POST",
+        headers=[(b"cookie", b"session_id=attacker; session_id=victim")]
+    )
+    send = MockSend()
+    run_async(middleware(scope, MockReceive(), send))
+
+    assert app.was_called is False, "The wrapped app must not be called"
+    assert _status_of(send) == 403, f"Expected 403, got {_status_of(send)}"
+    return
+
+
+def test_middleware_exempts_paths_below_a_prefix():
+    """
+        A parameterised path below an exempt prefix bypasses validation.
+    """
+    app = MockASGIApp()
+    middleware, _manager = _make_csrf_middleware(app, exempt_prefixes=["/api/"])
+
+    scope = create_http_scope(method="PUT", path="/api/items/42")
+    run_async(middleware(scope, MockReceive(), MockSend()))
+
+    assert app.was_called is True, "A path below the exempt prefix should pass"
+    return
+
+
+def test_middleware_does_not_exempt_prefix_path_with_dot_segments():
+    """
+        A path that starts with an exempt prefix but climbs out of it with
+        '..' is not exempt.
+    """
+    app = MockASGIApp()
+    middleware, _manager = _make_csrf_middleware(app, exempt_prefixes=["/api/"])
+
+    scope = create_http_scope(method="POST", path="/api/../admin/delete")
+    send = MockSend()
+    run_async(middleware(scope, MockReceive(), send))
+
+    assert app.was_called is False, "A path with '..' must not be exempt"
+    assert _status_of(send) == 403, f"Expected 403, got {_status_of(send)}"
+    return
+
+
+def test_middleware_exempts_paths_matching_a_glob_pattern():
+    """
+        A glob pattern exempts the paths it matches.
+    """
+    app = MockASGIApp()
+    middleware, _manager = _make_csrf_middleware(app, exempt_patterns=["/hooks/*/notify"])
+
+    scope = create_http_scope(method="POST", path="/hooks/github/notify")
+    run_async(middleware(scope, MockReceive(), MockSend()))
+
+    assert app.was_called is True, "A path matching the pattern should pass"
+    return
+
+
+def test_middleware_exempts_paths_matching_a_compiled_pattern():
+    """
+        A compiled regular expression exempts the paths it matches.
+    """
+    app = MockASGIApp()
+    middleware, _manager = _make_csrf_middleware(app, exempt_patterns=[re.compile(r"^/webhooks/\d+$")])
+
+    scope = create_http_scope(method="POST", path="/webhooks/17")
+    run_async(middleware(scope, MockReceive(), MockSend()))
+
+    assert app.was_called is True, "A path matching the pattern should pass"
+    return
+
+
+def test_middleware_exempts_requests_accepted_by_predicate():
+    """
+        The exempt predicate decides per request.
+    """
+    def has_bearer_token(scope):
+        for name, value in scope.get("headers", []):
+            if name == b"authorization" and value.startswith(b"Bearer "):
+                return True
+        return False
+
+    app = MockASGIApp()
+    middleware, _manager = _make_csrf_middleware(app, exempt_predicate=has_bearer_token)
+
+    scope = create_http_scope(method="POST", headers=[(b"authorization", b"Bearer abc")])
+    run_async(middleware(scope, MockReceive(), MockSend()))
+
+    assert app.was_called is True, "The predicate should exempt the request"
+    return
+
+
+def test_middleware_passes_sessionless_request_when_session_not_required():
+    """
+        With require_session=False a request without the session cookie is
+        passed through: there is no session a forged request could act in.
+    """
+    app = MockASGIApp()
+    middleware, _manager = _make_csrf_middleware(app, require_session=False)
+
+    scope = create_http_scope(method="PUT", path="/api/items/42")
+    run_async(middleware(scope, MockReceive(), MockSend()))
+
+    assert app.was_called is True, "A session-less request should pass"
+    return
+
+
+def test_middleware_still_validates_session_request_when_session_not_required():
+    """
+        require_session=False does not relax validation for a request that
+        carries a session cookie.
+    """
+    app = MockASGIApp()
+    middleware, _manager = _make_csrf_middleware(app, require_session=False)
+
+    scope = create_http_scope(method="POST", headers=[(b"cookie", b"session_id=abc")])
+    send = MockSend()
+    run_async(middleware(scope, MockReceive(), send))
+
+    assert app.was_called is False, "A session request without a token must be refused"
+    assert _status_of(send) == 403, f"Expected 403, got {_status_of(send)}"
+    return
+
+
+def test_middleware_validates_custom_method():
+    """
+        A method outside the safe set is validated even if it is not one of
+        POST, PUT, PATCH and DELETE.
+    """
+    app = MockASGIApp()
+    middleware, _manager = _make_csrf_middleware(app)
+
+    scope = create_http_scope(method="PURGE", headers=[(b"cookie", b"session_id=abc")])
+    send = MockSend()
+    run_async(middleware(scope, MockReceive(), send))
+
+    assert app.was_called is False, "A custom verb without a token must be refused"
+    assert _status_of(send) == 403, f"Expected 403, got {_status_of(send)}"
+    return
+
+
+def test_middleware_reads_token_from_multipart_form():
+    """
+        The token of a multipart/form-data body (a file-upload form) is read
+        from its csrf_token part and the body is replayed downstream.
+    """
+    app = CapturingASGIApp()
+    middleware, manager = _make_csrf_middleware(app)
+
+    token = manager.generate("abc")
+    boundary = "csrfboundary"
+    body = (
+        "--{b}\r\n"
+        'Content-Disposition: form-data; name="csrf_token"\r\n\r\n'
+        "{t}\r\n"
+        "--{b}\r\n"
+        'Content-Disposition: form-data; name="upload"; filename="a.txt"\r\n'
+        "Content-Type: text/plain\r\n\r\n"
+        "file-content\r\n"
+        "--{b}--\r\n"
+    ).format(b=boundary, t=token).encode("utf-8")
+
+    scope = create_http_scope(
+        method="POST",
+        headers=[
+            (b"cookie", b"session_id=abc"),
+            (b"content-type", "multipart/form-data; boundary={}".format(boundary).encode("ascii")),
+            (b"content-length", str(len(body)).encode("ascii")),
+        ]
+    )
+    send = MockSend()
+    run_async(middleware(scope, FormBodyReceive(body), send))
+
+    assert app.was_called is True, f"The multipart token should validate, got status {_status_of(send)}"
+    assert app.captured_body == body, "The body must be replayed to the wrapped app"
+    return

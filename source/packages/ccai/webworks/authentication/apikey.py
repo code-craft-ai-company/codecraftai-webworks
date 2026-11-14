@@ -15,6 +15,7 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 
+import hashlib
 from enum import Enum
 from typing import Any, Dict, Optional, Protocol, Set, runtime_checkable
 
@@ -24,6 +25,23 @@ from ccai.webworks.authentication.core import (
     AuthenticationStatus,
     Principal
 )
+
+
+def hash_api_key(api_key: str) -> str:
+    """
+        Compute the digest under which an API key is stored and looked up.
+        
+        Stores keep this digest, never the key itself, so a leaked key
+        table cannot be used to authenticate. API keys are long random
+        values, so an unsalted SHA-256 is sufficient: there is no
+        dictionary to attack.
+        
+        :param api_key: The raw API key value.
+        
+        :returns: The hexadecimal SHA-256 digest of the key.
+    """
+    rtnval = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+    return rtnval
 
 
 class APIKeyLocation(Enum):

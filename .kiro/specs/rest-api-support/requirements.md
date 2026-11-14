@@ -63,7 +63,7 @@ The feature enables developers to define REST resources with consistent CRUD ope
 4. THE system SHALL support dict schemas for untyped JSON payloads.
 5. WHEN deserialization fails due to malformed JSON, THE system SHALL raise a ValidationError with details about the parsing failure.
 6. WHEN deserialization fails due to type mismatches, THE system SHALL raise a ValidationError with field-level error details.
-7. THE deserialized object SHALL be passed to the handler as a parameter (e.g., `def create(self, payload: UserCreate)`).
+7. THE deserialized object SHALL be passed to the handler: `ResourceEndpoint` CRUD methods receive it as a parameter (e.g., `def create(self, payload: UserCreate)`); a handler declared with `attach_at` / `attach_route` receives the request and reads the validated payload with `get_rest_payload(request)`.
 
 ### Requirement 4: Response Serialization
 
@@ -124,6 +124,8 @@ The feature enables developers to define REST resources with consistent CRUD ope
 8. WHEN an unhandled exception occurs, THE system SHALL return a 500 Internal Server Error with error code `internal_error`.
 9. THE 500 response SHALL NOT expose internal error details in production mode.
 
+Note: on a route served through the REST processing, criteria 5 to 7 apply to the exceptions the handler raises. A 401 or 403 decided by the dispatcher's access policy check, and a 405 for a method the path is not registered for, are decided before the handler is reached and are answered with the dispatcher's `HTTPError` body (`detail`, `status_code`).
+
 ### Requirement 8: Error Mapping
 
 **User Story:** As an API developer, I want to map domain exceptions to HTTP errors, so that my business logic exceptions are automatically converted to appropriate REST responses.
@@ -133,7 +135,7 @@ The feature enables developers to define REST resources with consistent CRUD ope
 1. THE system SHALL support an `error_map` attribute on endpoints mapping exception types to HTTP status codes and error codes.
 2. WHEN an exception in the error_map is raised, THE system SHALL return the mapped status code with the mapped error code.
 3. THE error_map SHALL support custom message templates with exception attribute interpolation.
-4. THE system SHALL provide default mappings for common exceptions: `ValueError` to 400, `KeyError` to 404, `PermissionError` to 403.
+4. THE system SHALL map only its own exceptions by default: `ValidationError` to 400, and its HTTP exceptions (`NotFound`, `BadRequest`, `Unauthorized`, `Forbidden` and the rest) to the status and detail they carry. Built-in exceptions such as `ValueError`, `KeyError` and `PermissionError` SHALL NOT be mapped by default: raised by accident under a handler they are server errors and SHALL be answered as unhandled exceptions (Requirement 7.8, 7.9), never with their text. THE system SHALL provide the former mappings (`ValueError` to 400, `KeyError` to 404, `PermissionError` to 403) as an opt-in set, `BUILTIN_EXCEPTION_MAPPINGS`, that an application turns on for all routes (`ErrorHandler(builtin_mappings=True)`, `register_builtin_mappings()`, `create_rest_middleware(builtin_mappings=True)`) or names as an endpoint's `error_map`.
 5. WHEN an exception is not in the error_map, THE system SHALL fall back to the global error handler.
 6. THE error_map SHALL be inheritable from parent endpoints with child maps extending or overriding parent mappings.
 
@@ -190,3 +192,19 @@ The feature enables developers to define REST resources with consistent CRUD ope
 
 </content>
 </invoke>
+
+### Requirement 13: REST Processing of Declared Routes
+
+**User Story:** As an API developer, I want every route I declare with a request schema, a response schema or an error map to be served through the REST processing, so that validation, negotiation, serialization and the error model apply without wiring code.
+
+#### Acceptance Criteria
+
+1. WHEN a route declares REST metadata (`request_schema`, `response_schema` or `error_map`) through `Endpoint.attach_at`, `RestEndpoint.attach_at` and its CRUD helpers, `Blueprint.attach_at`, `RestBlueprint.attach_at` or `WebApplication.attach_route`, THE web application SHALL serve it through the REST processing (requirements 3 to 9): 406/415 content negotiation, deserialization and validation of the body (400 with field errors), the validated payload available through `get_rest_payload(request)`, serialization of the result with the status and `Location` the REST conventions select, and `RESTError` bodies for errors.
+2. THE REST processing SHALL be applied per route by wrapping the route's handler (`RESTMiddleware.wrap_handler`) once, when the route is added to the application's router; it SHALL NOT be a pipeline middleware, so the middleware contract of other routes is unchanged.
+3. THE declared descriptor SHALL NOT be modified; the route SHALL be served from a copy whose handler is the wrapper, attached to the wrapper as its `descriptor`.
+4. A handler that is a coroutine function SHALL get a coroutine wrapper and keep working.
+5. THE registration APIs SHALL accept `rest_processing=False` for a handler that parses the body and shapes the response itself; its schemas SHALL still document the route in OpenAPI. Endpoint classes SHALL provide a `rest_processing` class attribute (True) as the default.
+6. THE authentication blueprints SHALL opt out (`SecurityBlueprint.rest_processing = False`), so their wire behaviour is unchanged.
+7. Routes without REST metadata SHALL be served unchanged, and routes whose handler already runs the REST processing (`ResourceEndpoint`, `CollectionEndpoint`) SHALL NOT be wrapped a second time.
+8. A route served through the REST processing SHALL be marked `extras["rest"]["managed"] = True` and an opted-out route `extras["rest"]["processing"] = False`, so documentation describes the status codes and error bodies the route really returns.
+9. Client errors (4xx) answered by the REST processing SHALL be logged at debug level; server errors (5xx) SHALL be logged with their traceback.

@@ -165,4 +165,33 @@ var results = {
     reachable: Model.reachableComponents(DOCUMENT.components, [{ $ref: "#/components/responses/Ok" }, { $ref: "#/components/schemas/Missing" }, { $ref: "#/paths/~1projects" }])
 };
 
+/*
+ * A document whose path words and component names are also the names of members every plain object inherits (``constructor``, ``toString``,
+ * ``hasOwnProperty``). The model keeps these in maps, and a map made from a plain object answers for such a name before anything is put in it.
+ */
+var PROTOTYPE_DOCUMENT = {
+    openapi: "3.1.0",
+    info: { title: "Prototype names", version: "1" },
+    paths: {
+        "/constructor": { get: { summary: "Read the constructor", responses: { "200": { description: "ok" } } } },
+        "/toString/{id}": { get: { summary: "Read a toString", responses: { "200": { description: "ok" } } } },
+        "/hasOwnProperty/valueOf": { post: { summary: "Create a valueOf", responses: { "201": { description: "created" } } } }
+    },
+    components: { schemas: { Real: { type: "object" } } }
+};
+
+var prototypeOperations = Model.buildOperations(PROTOTYPE_DOCUMENT);
+var prototypeByKey = Model.operationsByKey(prototypeOperations);
+var prototypeTree = Model.buildTree(prototypeOperations);
+
+results.prototypeNames = {
+    topLevel: names(prototypeTree),
+    count: prototypeTree.count,
+    inheritedNamesAreNotKeys: ["constructor", "toString", "hasOwnProperty", "valueOf", "__proto__"].filter(function (name) {
+        return prototypeByKey[name] !== undefined;
+    }),
+    realKeyIsFound: prototypeByKey["GET /constructor"] !== undefined,
+    reachable: Model.reachableComponents(PROTOTYPE_DOCUMENT.components, [{ $ref: "#/components/schemas/constructor" }, { $ref: "#/components/schemas/Real" }])
+};
+
 process.stdout.write(JSON.stringify(results));

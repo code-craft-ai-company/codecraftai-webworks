@@ -15,8 +15,8 @@ __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
 
-import copy
 import logging
+import threading
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,7 +35,7 @@ from ccai.webworks.configuration.exceptions import (
     ConfigurationValidationError,
     ConfigurationFrozenError
 )
-from ccai.webworks.configuration.schema import ConfigSchema
+from ccai.webworks.configuration.schema import ConfigSchema, coerce_value
 from ccai.webworks.configuration.sources import (
     ConfigSource,
     ConfigLoader,
@@ -64,6 +64,21 @@ class ConfigRegistry:
         - Validating configuration against schema
         - Notifying callbacks on configuration changes
         - Freezing configuration to prevent modifications
+        
+        A value whose key has a schema definition is stored coerced to the
+        type the schema declares, so ``get()``, attribute access and item
+        access return ``False`` for ``APP_DEBUG=false`` and ``8080`` for a
+        port read from a file as ``"8080"``. The value of a key the schema
+        marks as sensitive is stored wrapped in a :class:`SecretValue`,
+        whichever source supplied it.
+        
+        The values are replaced as a whole. A load reads every source and
+        validates the result before the live values are swapped for the
+        new ones, so a source that fails (a half-written file) or a result
+        that fails validation leaves the values that were live untouched,
+        and a reader on another thread sees either all of the old values or
+        all of the new ones. Loads and modifications are serialized by a
+        lock; reads take no lock.
         
         Example usage::
         
@@ -132,6 +147,11 @@ class ConfigRegistry:
         self._lazy = lazy
         self._lazy_pending = False
         self._lazy_validate = True
+        
+        # Serializes loads and modifications. self._values is never changed
+        # in place: a new dictionary is built and assigned, so readers need
+        # no lock and always see one complete set of values.
+        self._lock = threading.RLock()
         
         # Initialize loaders from FORMAT_LOADERS
         for fmt, loader_class in FORMAT_LOADERS.items():
@@ -205,8 +225,13 @@ class ConfigRegistry:
             enabled or values are already loaded, this is a no-op.
         """
         if self._lazy_pending:
-            self._lazy_pending = False
-            self._do_load(validate=self._lazy_validate)
+            with self._lock:
+                if self._lazy_pending:
+                    self._do_load(validate=self._lazy_validate)
+                    # Cleared only once the load has succeeded, so a load
+                    # that fails is reported again on the next access
+                    # instead of leaving an empty configuration behind.
+                    self._lazy_pending = False
 
     
     def register_source(self, source: ConfigSource) -> None:
@@ -287,6 +312,90 @@ class ConfigRegistry:
         self._do_load(validate=validate)
         return self
     
+    def reload(self, validate: bool = True) -> List[ConfigChangeEvent]:
+        """
+            Load the configuration again after a source has changed.
+            
+            This is what a :class:`ConfigWatcher` calls when a watched file
+            changes. It differs from :meth:`load` in three ways:
+            
+            - A frozen registry is not reloaded.
+            - The new values replace the live ones only when every source
+              loaded and (with ``validate``) the result passed validation;
+              otherwise the exception is raised and the values that were
+              live stay in effect.
+            - A :class:`ConfigChangeEvent` is sent to the callbacks
+              registered with :meth:`on_change` for every key whose value
+              changed, appeared or disappeared.
+            
+            :param validate: Whether to validate against schema (default: True).
+            
+            :returns: The change events that were sent, one per changed key.
+            
+            :raises ConfigurationFrozenError: If configuration is frozen.
+            :raises ConfigurationValidationError: If validation fails.
+            :raises ConfigurationError: If loading fails.
+        """
+        if self._frozen:
+            raise ConfigurationFrozenError("reload")
+        
+        with self._lock:
+            old_values = self._values
+            self._do_load(validate=validate)
+            self._lazy_pending = False
+            new_values = self._values
+        
+        events = self._build_change_events(old_values, new_values)
+        for event in events:
+            self._notify_callbacks(event)
+        
+        return events
+    
+    def _build_change_events(
+        self,
+        old_values: Dict[str, ConfigValue],
+        new_values: Dict[str, ConfigValue]
+    ) -> List[ConfigChangeEvent]:
+        """
+            Describe the difference between two sets of values as change events.
+            
+            :param old_values: The values before a reload.
+            :param new_values: The values after it.
+            
+            :returns: One event for each key whose value differs, was added
+                      (old value None) or was removed (new value None).
+        """
+        events: List[ConfigChangeEvent] = []
+        timestamp = datetime.now(timezone.utc)
+        
+        for key, new_config_value in new_values.items():
+            old_value = None
+            if key in old_values:
+                old_value = old_values[key].value
+            
+            if key not in old_values or old_value != new_config_value.value:
+                event = ConfigChangeEvent(
+                    key=key,
+                    old_value=old_value,
+                    new_value=new_config_value.value,
+                    source=new_config_value.source,
+                    timestamp=timestamp
+                )
+                events.append(event)
+        
+        for key, old_config_value in old_values.items():
+            if key not in new_values:
+                event = ConfigChangeEvent(
+                    key=key,
+                    old_value=old_config_value.value,
+                    new_value=None,
+                    source=old_config_value.source,
+                    timestamp=timestamp
+                )
+                events.append(event)
+        
+        return events
+    
     def _do_load(self, validate: bool = True) -> None:
         """
             Perform the actual loading of configuration from all sources.
@@ -295,13 +404,43 @@ class ConfigRegistry:
             to support lazy loading. It loads values from all registered sources,
             merges them according to precedence, and optionally validates.
             
+            The new values are built in a dictionary of their own and take
+            the place of the live values only after every source has loaded
+            and validation has passed. When a source raises or validation
+            fails, the live values are left exactly as they were.
+            
             :param validate: Whether to validate against schema.
             
             :raises ConfigurationValidationError: If validation fails.
             :raises ConfigurationError: If loading fails.
         """
-        # Clear existing values (but keep overrides)
-        self._values.clear()
+        with self._lock:
+            new_values = self._load_values()
+            
+            # Validate if schema is provided and validation is requested
+            if validate and self._schema is not None:
+                self._validate(new_values)
+            
+            # Swap the complete new set in (overrides are part of it)
+            self._values = new_values
+            self._loaded = True
+        
+        return
+    
+    def _load_values(self) -> Dict[str, ConfigValue]:
+        """
+            Read every source and merge the values according to precedence.
+            
+            Nothing on the registry is changed; the merged values are returned
+            for the caller to validate and put in place.
+            
+            :returns: The merged values by key.
+            
+            :raises ConfigurationError: If a source fails to load.
+        """
+        schema_keys: List[str] = []
+        if self._schema is not None:
+            schema_keys = list(self._schema.get_all_definitions().keys())
         
         # Collect all values from sources, organized by source type
         source_values: Dict[ConfigSourceType, Dict[str, Any]] = {}
@@ -322,6 +461,10 @@ class ConfigRegistry:
             if source_type in self._sources:
                 merged: Dict[str, Any] = {}
                 for source in self._sources[source_type]:
+                    # Lets a source that derives key names (environment
+                    # variables) match them to the keys the schema defines.
+                    if isinstance(source, ConfigSource):
+                        source.use_known_keys(schema_keys)
                     loaded = source.load()
                     merged.update(loaded)
                 source_values[source_type] = merged
@@ -344,24 +487,63 @@ class ConfigRegistry:
             merged_values[key] = (value, ConfigSourceType.OVERRIDE, source_detail)
         
         # Create ConfigValue instances
+        new_values: Dict[str, ConfigValue] = {}
         for key, (value, source_type, source_detail) in merged_values.items():
-            is_sensitive = self._is_sensitive_key(key)
-            is_override = source_type == ConfigSourceType.OVERRIDE
+            new_values[key] = self._make_config_value(key, value, source_type, source_detail)
+        
+        return new_values
+    
+    def _make_config_value(
+        self,
+        key: str,
+        value: Any,
+        source_type: ConfigSourceType,
+        source_detail: str
+    ) -> ConfigValue:
+        """
+            Build the ConfigValue stored for a key.
             
-            self._values[key] = ConfigValue(
-                key=key,
-                value=value,
-                source=source_type,
-                source_detail=source_detail,
-                is_override=is_override,
-                is_sensitive=is_sensitive
-            )
+            When the schema defines the key, the value is coerced to the
+            declared type, so every way of reading it returns the typed
+            value. A value that cannot be coerced is stored as it is;
+            validation reports it. When the schema marks the key as
+            sensitive, the value is wrapped in a :class:`SecretValue`
+            whichever source it came from.
+            
+            :param key: The configuration key.
+            :param value: The value as the source supplied it.
+            :param source_type: The type of the source the value came from.
+            :param source_detail: Detailed source info.
+            
+            :returns: The ConfigValue to store.
+        """
+        definition = None
+        if self._schema is not None:
+            definition = self._schema.get_definition(key)
         
-        # Validate if schema is provided and validation is requested
-        if validate and self._schema is not None:
-            self._validate()
+        is_sensitive = False
+        if definition is not None:
+            is_sensitive = definition.sensitive
+            
+            if not isinstance(value, SecretValue):
+                try:
+                    value = coerce_value(value, definition.type)
+                except (ValueError, TypeError):
+                    # Left as supplied; validation reports the type error.
+                    pass
         
-        self._loaded = True
+        if is_sensitive and value is not None and not isinstance(value, SecretValue):
+            value = SecretValue(value=value, key=key)
+        
+        config_value = ConfigValue(
+            key=key,
+            value=value,
+            source=source_type,
+            source_detail=source_detail,
+            is_override=source_type == ConfigSourceType.OVERRIDE,
+            is_sensitive=is_sensitive
+        )
+        return config_value
     
     def _get_schema_defaults(self) -> Dict[str, Any]:
         """
@@ -393,7 +575,7 @@ class ConfigRegistry:
         if source_type == ConfigSourceType.ENVIRONMENT:
             return f"ENV:{key.upper().replace('.', '_')}"
         elif source_type == ConfigSourceType.FILE:
-            return f"FILE:config"
+            return "FILE:config"
         elif source_type == ConfigSourceType.SECRETS:
             return f"SECRETS:{key}"
         elif source_type == ConfigSourceType.DEFAULT:
@@ -420,9 +602,11 @@ class ConfigRegistry:
         
         return definition.sensitive
     
-    def _validate(self) -> None:
+    def _validate(self, values: Optional[Dict[str, ConfigValue]] = None) -> None:
         """
             Validate configuration against the schema.
+            
+            :param values: The values to validate. Defaults to the live values.
             
             :raises ConfigurationValidationError: If validation fails.
         """
@@ -430,21 +614,30 @@ class ConfigRegistry:
             return
         
         # Convert ConfigValue dict to plain values dict
-        values_dict = self._build_nested_dict()
+        values_dict = self._build_nested_dict(values)
         
         errors = self._schema.validate(values_dict)
         if errors:
             raise ConfigurationValidationError(errors)
     
-    def _build_nested_dict(self) -> Dict[str, Any]:
+    def _build_nested_dict(self, values: Optional[Dict[str, ConfigValue]] = None) -> Dict[str, Any]:
         """
             Build a nested dictionary from flat ConfigValue entries.
             
+            A :class:`SecretValue` is passed on as it is. The schema unwraps
+            it to validate it and, knowing that it is a secret, keeps its
+            content out of the validation errors.
+            
+            :param values: The values to convert. Defaults to the live values.
+            
             :returns: Nested dictionary of configuration values.
         """
+        if values is None:
+            values = self._values
+        
         result: Dict[str, Any] = {}
         
-        for key, config_value in self._values.items():
+        for key, config_value in values.items():
             parts = key.split(".")
             current = result
             
@@ -456,12 +649,7 @@ class ConfigRegistry:
                     current[part] = {"": current[part]}
                 current = current[part]
             
-            # Get the actual value (unwrap SecretValue if needed for validation)
-            value = config_value.value
-            if isinstance(value, SecretValue):
-                value = value.get_secret_value()
-            
-            current[parts[-1]] = value
+            current[parts[-1]] = config_value.value
         
         return result
 
@@ -480,8 +668,9 @@ class ConfigRegistry:
         
         self._ensure_loaded()
         
-        if key in self._values:
-            return self._values[key].value
+        values = self._values
+        if key in values:
+            return values[key].value
         
         return default
     
@@ -524,7 +713,8 @@ class ConfigRegistry:
         
         self._ensure_loaded()
         
-        return [(k, v.value) for k, v in self._values.items()]
+        values = self._values
+        return [(k, v.value) for k, v in values.items()]
     
     def override(self, key: str, value: Any) -> None:
         """
@@ -541,31 +731,37 @@ class ConfigRegistry:
         if self._frozen:
             raise ConfigurationFrozenError(key)
         
-        # Get old value for change notification
-        old_value = None
-        if key in self._values:
-            old_value = self._values[key].value
-        elif key in self._overrides:
-            old_value = self._overrides[key]
-        
-        # Store the override
-        self._overrides[key] = value
-        
-        # Update the values dict if already loaded
-        if self._loaded:
-            is_sensitive = self._is_sensitive_key(key)
-            self._values[key] = ConfigValue(
-                key=key,
-                value=value,
-                source=ConfigSourceType.OVERRIDE,
-                source_detail="OVERRIDE:programmatic",
-                is_override=True,
-                is_sensitive=is_sensitive
+        with self._lock:
+            # Get old value for change notification
+            old_value = None
+            if key in self._values:
+                old_value = self._values[key].value
+            elif key in self._overrides:
+                old_value = self._overrides[key]
+            
+            # Store the override
+            self._overrides[key] = value
+            
+            # The value as it is stored: coerced to the schema type and
+            # wrapped when the key is sensitive, like a loaded value.
+            config_value = self._make_config_value(
+                key,
+                value,
+                ConfigSourceType.OVERRIDE,
+                "OVERRIDE:programmatic"
             )
+            new_value = config_value.value
+            
+            # Update the values if already loaded. A new dictionary is put
+            # in place rather than changing the live one under a reader.
+            if self._loaded:
+                new_values = dict(self._values)
+                new_values[key] = config_value
+                self._values = new_values
         
         # Fire change notification
-        if old_value != value:
-            self._fire_change_event(key, old_value, value, ConfigSourceType.OVERRIDE)
+        if old_value != new_value:
+            self._fire_change_event(key, old_value, new_value, ConfigSourceType.OVERRIDE)
     
     def clear_override(self, key: str) -> None:
         """
@@ -663,8 +859,18 @@ class ConfigRegistry:
             source=source,
             timestamp=datetime.now(timezone.utc)
         )
+        self._notify_callbacks(event)
+        return
+    
+    def _notify_callbacks(self, event: ConfigChangeEvent) -> None:
+        """
+            Send a change event to all registered callbacks.
+            
+            :param event: The change event.
+        """
+        key = event.key
         
-        for callback in self._callbacks:
+        for callback in list(self._callbacks):
             try:
                 callback(event)
             except Exception:
@@ -708,34 +914,43 @@ class ConfigRegistry:
             
             :raises ConfigurationValidationError: If validation fails.
         """
-        # Save current state
-        old_overrides = copy.deepcopy(self._overrides)
-        old_values = copy.deepcopy(self._values)
-        
-        try:
-            # Apply all updates
-            for key, value in values.items():
-                self._overrides[key] = value
+        with self._lock:
+            # Save current state. The values dictionary is never changed in
+            # place, so keeping the reference keeps the old values.
+            old_overrides = dict(self._overrides)
+            old_values = self._values
             
-            # Reload and validate
-            self.load(validate=True)
-            
-            # Fire change events for successful updates
-            for key, value in values.items():
-                old_value = None
-                if key in old_values:
-                    old_value = old_values[key].value
-                elif key in old_overrides:
-                    old_value = old_overrides[key]
+            try:
+                # Apply all updates
+                for key, value in values.items():
+                    self._overrides[key] = value
                 
-                if old_value != value:
-                    self._fire_change_event(key, old_value, value, ConfigSourceType.OVERRIDE)
-                    
-        except (ConfigurationValidationError, ConfigurationError):
-            # Rollback on failure
-            self._overrides = old_overrides
-            self._values = old_values
-            raise
+                # Reload and validate
+                self.load(validate=True)
+                self._ensure_loaded()
+                
+            except (ConfigurationValidationError, ConfigurationError):
+                # Rollback on failure
+                self._overrides = old_overrides
+                self._values = old_values
+                raise
+            
+            new_values = self._values
+        
+        # Fire change events for successful updates
+        for key, value in values.items():
+            old_value = None
+            if key in old_values:
+                old_value = old_values[key].value
+            elif key in old_overrides:
+                old_value = old_overrides[key]
+            
+            new_value = value
+            if key in new_values:
+                new_value = new_values[key].value
+            
+            if old_value != new_value:
+                self._fire_change_event(key, old_value, new_value, ConfigSourceType.OVERRIDE)
     
     # =========================================================================
     # Export Functionality
@@ -1199,12 +1414,17 @@ class ConfigRegistry:
         
         return "\n".join(lines)
     
-    def export_diff(self) -> Dict[str, tuple]:
+    def export_diff(self, mask_secrets: bool = True) -> Dict[str, tuple]:
         """
             Export diff between current configuration and defaults.
             
             This method returns a dictionary containing only the keys whose
-            current values differ from their schema defaults.
+            current values differ from their schema defaults. The value and
+            the default of a sensitive key (one the schema marks as
+            sensitive, or whose value is a :class:`SecretValue`) are shown
+            masked unless ``mask_secrets`` is False.
+            
+            :param mask_secrets: Whether to mask sensitive values (default: True).
             
             :returns: Dictionary mapping keys to (current_value, default_value) tuples.
             
@@ -1218,27 +1438,47 @@ class ConfigRegistry:
         if not self._loaded:
             self.load()
         
+        self._ensure_loaded()
+        
+        values = self._values
+        
         diff: Dict[str, tuple] = {}
         all_definitions = self._schema.get_all_definitions()
         
         for key, definition in all_definitions.items():
             default_value = definition.default
-            current_value = self.get(key, None)
+            current_value = None
+            if key in values:
+                current_value = values[key].value
+            
+            is_sensitive = definition.sensitive
             
             # Handle SecretValue wrapper
             if isinstance(current_value, SecretValue):
+                is_sensitive = True
                 current_value = current_value.get_secret_value()
             
             # Compare values
             if current_value != default_value:
+                if is_sensitive and mask_secrets:
+                    if current_value is not None:
+                        current_value = SecretValue.MASKED_VALUE
+                    if default_value is not None:
+                        default_value = SecretValue.MASKED_VALUE
+                
                 diff[key] = (current_value, default_value)
         
         # Also include keys that are in values but not in schema
-        for key in self._values.keys():
+        for key, config_value in values.items():
             if key not in all_definitions and key not in diff:
-                current_value = self._values[key].value
+                current_value = config_value.value
                 if isinstance(current_value, SecretValue):
-                    current_value = current_value.get_secret_value()
+                    if mask_secrets:
+                        current_value = SecretValue.MASKED_VALUE
+                    else:
+                        current_value = current_value.get_secret_value()
+                elif config_value.is_sensitive and mask_secrets:
+                    current_value = SecretValue.MASKED_VALUE
                 diff[key] = (current_value, None)
         
         return diff

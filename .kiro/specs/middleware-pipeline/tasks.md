@@ -261,7 +261,7 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 13. Integrate with Dispatcher and extensibility system
-  - [ ] 13.1 Update `Dispatcher` to accept optional `MiddlewareRegistry`
+  - [x] 13.1 Update `Dispatcher` to accept optional `MiddlewareRegistry`
     - Add `MiddlewareRegistry` parameter to `Dispatcher.__init__`
     - Before pipeline execution, compose effective pipeline from registry using matched route's blueprint and path
     - Create `MiddlewareContext` and attach to `request.middleware_context` before pipeline execution
@@ -269,12 +269,12 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
     - File: `source/packages/ccai/webworks/routing/dispatcher.py`
     - _Requirements: 4.4, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6_
 
-  - [ ] 13.2 Bridge extensibility system `register_middleware` hook to `MiddlewareRegistry`
+  - [x] 13.2 Bridge extensibility system `register_middleware` hook to `MiddlewareRegistry`
     - When extension registers middleware via `fire_register_middleware`, add to global pipeline in registry
     - Continue validating `process_request` and `process_response` methods per `COMPONENT_REQUIRED_METHODS`
     - Support extensions specifying priority and position via attributes on registered component
     - Implement `get_registered_components(hook_name)` to retrieve extension-registered middleware
-    - File: `source/packages/ccai/webworks/routing/middlewareregistry.py`
+    - Built as a forwarder of `ComponentRegistrationHooks` plus the `ExtensionMiddleware` adapter in `source/packages/ccai/webworks/extensibility/extensionmiddleware.py`; `WebApplication` owns the `MiddlewareRegistry` and passes it to its `Dispatcher`
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6_
 
   - [ ] 13.3 Integrate middleware pipeline with ASGI application layer
@@ -289,7 +289,8 @@ This implementation plan builds the middleware pipeline feature bottom-up, start
     - File: `source/packages/ccai/webworks/wsgi/` (relevant files)
     - _Requirements: 6.4, 6.6_
 
-  - [ ] 13.5 Write integration tests for dispatcher and extensibility wiring
+  - [x] 13.5 Write integration tests for dispatcher and extensibility wiring
+    - Built: `routing/test_dispatcher.py` (registry composition), `extensibility/test_extensionmiddleware.py` and `extensibility/test_webapplication_extensions.py` (extension middleware on the real request path)
     - Test that dispatcher composes pipeline from registry for matched routes
     - Test that middleware context is attached to request during execution
     - Test that extension-registered middleware appears in global pipeline

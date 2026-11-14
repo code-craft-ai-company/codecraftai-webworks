@@ -1,9 +1,11 @@
 # Ranking Charts
 
 > Catalog of ranking chart types for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Most ranking charts are the `bar`, `line`, or `scatter` renderers operated in
 a sorted mode. They are documented as variants of their primary renderer and
@@ -18,7 +20,6 @@ renderers.
 - **Renderer / `type`:** `bar` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="bar" sort="desc" orientation="horizontal" ...>`
 - **Purpose:** Rank a set of categories by a single quantitative measure so the viewer can immediately identify the highest, lowest, and relative positions.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`, `mj-chart-annotation`
 - **JSON shape:** Standard common envelope. Sorting is specified in the controller attribute (`sort="asc|desc|none"`), not in JSON, so the same dataset can be re-ordered without mutation.
   ```json
   {
@@ -36,6 +37,7 @@ renderers.
   - `sort="none"` reverts to an unordered comparison bar chart.
   - `group="cluster"` + `sort` → sorted grouped bar.
   - See `01-comparison.md` for the `bar` primary renderer.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each bar).
 - **Phase:** P1 (`sort` attribute added alongside the base `bar` renderer; no new renderer file).
 - **Notes:** `chartmodel.js` re-indexes categories and values together when `sort` is set, preserving series alignment. Rank numbers can be drawn as a leading `<text>` element in the bar or on the category axis label via a `meta.show-rank: true` flag.
 
@@ -46,7 +48,6 @@ renderers.
 - **Renderer / `type`:** `pareto` — **Primary renderer**
 - **Controller:** `<mj-chart type="pareto" ...>`
 - **Purpose:** Rank categories by descending frequency or cost and overlay a cumulative percentage line to identify the "vital few" contributors (the 80/20 rule).
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category, left value for bars, right value for cumulative % line), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -61,8 +62,9 @@ renderers.
 - **SVG primitives:** `<rect>` (sorted frequency bars), `<path>` (cumulative % polyline via `svgdraw.line()`), `<circle>` (data points on the cumulative line), `<text>` (axis labels, optional 80% reference annotation), `<line>` (reference line at 80%), `<g>`
 - **Orientation:** `vertical` only — Pareto convention requires bars descending left-to-right.
 - **Variants / modes:** None. Pareto is a distinct renderer because it requires a dual value axis (absolute counts left, cumulative % right) and mandatory sort, which cannot be expressed cleanly as `bar` attributes.
+- **Events:** `mj-chart-bar-click` `{ category, value, cumulativePct }` (each bar); `mj-chart-dot-click` `{ category, cumulativePct }` (each point of the cumulative line — pointer only, the points are not focusable).
 - **Phase:** P2
-- **Notes:** Left value axis: `linear` scale over `[0, grand total]`. Right value axis: `linear` scale fixed `[0, 100]` (percentage). The cumulative line is drawn by the same renderer file; no second series needs to be supplied in JSON. A reference annotation at 80% on the right axis is drawn automatically via the `mj-chart-annotation` protocol; it can be suppressed with `meta.pareto-line: false`.
+- **Notes:** Left value axis: `linear` scale over `[0, grand total]`. Right value axis: `linear` scale fixed `[0, 100]` (percentage). The cumulative line is drawn by the same renderer file; no second series needs to be supplied in JSON. The renderer draws a dashed reference line at 80% on the right axis, labelled "80%", itself; it can be suppressed with `meta.pareto-line: false`.
 
 ---
 
@@ -71,7 +73,6 @@ renderers.
 - **Renderer / `type`:** `bump` — **Primary renderer**
 - **Controller:** `<mj-chart type="bump" ...>`
 - **Purpose:** Show how entities change rank position across a sequence of time periods or ordered categories; emphasizes crossings and relative movement rather than absolute values.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time/ordinal X, rank Y — inverted so rank 1 is at top), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -90,6 +91,7 @@ renderers.
 - **SVG primitives:** `<path>` (smoothed S-curve connecting rank positions via `svgdraw.curve()`), `<circle>` (rank dots at each period), `<text>` (entity name labels at start and/or end of line), `<g>` (per-series group)
 - **Orientation:** `n/a` — bump charts are always horizontal (time/ordinal left-to-right, rank top-to-bottom). The rank Y axis is necessarily inverted.
 - **Variants / modes:** `meta.show-values: true` replaces rank integers with raw values on the Y axis (value bump chart). This is a display mode, not a separate renderer.
+- **Events:** `mj-chart-bump-click` `{ series, x, rank }` (each dot; `rank` is the plotted y value).
 - **Phase:** P5
 - **Notes:** A new primary renderer because the inverted ordinal rank axis and the S-curve interpolation between discrete rank positions cannot be expressed as a `line` renderer variant without special-casing that would pollute `line.js`. Color is assigned per series via `ordinal-color`. Interactive hover highlights the hovered series and dims others.
 
@@ -100,7 +102,6 @@ renderers.
 - **Renderer / `type`:** `lollipop` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="lollipop" sort="desc" ...>`
 - **Purpose:** Rank categories with a cleaner, less visually heavy alternative to a full bar; the stick makes small differences more legible and reduces ink-to-data ratio.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`
 - **JSON shape:** Identical to sorted bar chart — standard common envelope with `sort` controlled by the attribute.
   ```json
   {
@@ -114,6 +115,7 @@ renderers.
 - **SVG primitives:** `<line>` (the stick from axis baseline to dot), `<circle>` (the dot at the data value), `<text>` (axis labels, optional value labels), `<g>`
 - **Orientation:** `horizontal` | `vertical`
 - **Variants / modes:** `sort="none"` degrades to an unranked lollipop comparison chart.
+- **Events:** `mj-chart-lollipop-click` `{ series, category, value }` (each dot head; drawn by `lollipop.js`).
 - **Phase:** P2
 - **Notes:** Implemented in `bar.js` under a `style="lollipop"` branch: the renderer emits `<line>` + `<circle>` instead of `<rect>`. Dot radius comes from the `--mj-chart-dot-radius` design token. Sorting is handled the same way as for sorted bar (category re-indexing in `chartmodel.js`).
 
@@ -124,7 +126,6 @@ renderers.
 - **Renderer / `type`:** `dotplot` — **Variant of `scatter`**
 - **Controller:** `<mj-chart type="dotplot" sort="desc" ...>`
 - **Purpose:** Provide a compact ordered comparison of a single quantitative measure across many categories, especially effective when bar height would waste space on a sparse dataset.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`
 - **JSON shape:**
   ```json
   {
@@ -142,6 +143,7 @@ renderers.
   - Two-series input → dumbbell chart (dot pair connected by a `<line>`).
   - `sort="none"` → unranked Cleveland dot plot.
   - See `04-relationship.md` for the `scatter` primary renderer.
+- **Events:** `mj-chart-dotplot-click` `{ series, category, value }` (each dot).
 - **Phase:** P2
 - **Notes:** Differs from a lollipop in that there is no baseline stick to zero; dots are placed directly at their value on the value axis. Implemented as a thin mode in `scatter.js` where the category axis uses a `band` scale (as in bar charts) rather than a continuous `linear` or `time` scale.
 
@@ -152,7 +154,6 @@ renderers.
 - **Renderer / `type`:** `slope` — **Variant of `line`**
 - **Controller:** `<mj-chart type="slope" ...>`
 - **Purpose:** Highlight rank or value change between exactly two periods for multiple entities; named lines make individual trajectories easy to trace.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (two-point ordinal X, value Y), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-legend`
 - **JSON shape:**
   ```json
   {
@@ -169,8 +170,9 @@ renderers.
 - **SVG primitives:** `<line>` (one slope line per series, straight — no curve interpolation), `<circle>` (endpoints), `<text>` (entity name labels at left and right endpoints, value annotations), `<g>`
 - **Orientation:** `n/a` — left column is always "before", right column is always "after"; rotation is not meaningful.
 - **Variants / modes:** For more than two time periods, use `type="line"` (see `02-trend.md`). For rank positions specifically, use `type="bump"`.
+- **Events:** `mj-chart-slope-click` `{ series, leftValue, rightValue }` (each slope line).
 - **Phase:** P5
-- **Notes:** Implemented in `line.js` under a `style="slope"` branch: the renderer enforces the two-period constraint, draws straight `<line>` segments (no `svgdraw.curve()`), and places inline text labels at endpoints rather than relying on `mj-chart-axis`. Label collision detection offsets overlapping right-side labels vertically.
+- **Notes:** Implemented in `line.js` under a `style="slope"` branch: the renderer enforces the two-period constraint, draws straight `<line>` segments (no `svgdraw.curve()`), and places inline "name value" labels at the endpoints; there are no value-axis tick labels, only light gridlines and the two column lines. Label collision detection offsets overlapping right-side labels vertically.
 
 ---
 
@@ -179,7 +181,6 @@ renderers.
 - **Renderer / `type`:** `bar` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="bar" style="leaderboard" sort="desc" ...>`
 - **Purpose:** Present ranked data in a tabular format where a proportional bar inside each row provides visual magnitude at a glance, combining the precision of a table with the quick scanning of a bar chart.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`
 - **JSON shape:**
   ```json
   {
@@ -197,5 +198,6 @@ renderers.
 - **SVG primitives:** `<rect>` (proportional inline bar), `<text>` (rank number, label, numeric value, column headers), `<line>` (optional row separator), `<g>` (per-row group)
 - **Orientation:** `vertical` (rows top-to-bottom) only; the bar within each row is always horizontal.
 - **Variants / modes:** `sort="asc"` reverses rank order. `style="leaderboard"` on a multi-series `bar` controller adds secondary text columns. Degrades to a plain sorted bar if `meta.columns` is absent.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each bar; the `bar` renderer adds no table-specific event).
 - **Phase:** P5
 - **Notes:** The leaderboard layout is a table-like arrangement of SVG rows, not an HTML `<table>`. The `mj-chart-data-table` part always provides the accessible HTML table equivalent. The proportional bar width uses a `linear` scale over `[0, max-value]`. Row height is derived from the `--mj-chart-row-height` token.

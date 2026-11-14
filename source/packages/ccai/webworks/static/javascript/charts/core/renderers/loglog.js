@@ -8,15 +8,20 @@
  *   "semi-log"  - one axis logarithmic, one linear (exponential relationships)
  *
  * The `scale-x` and `scale-y` controller attributes select the per-axis scale:
- *   "log"    → logScale from scales.js
- *   "linear" → linearScale from scales.js (default)
+ *   "log"    → logScale from scales.js, over whole decades
+ *   "linear" → linearScale from scales.js, over a nice domain
+ * log-log defaults both axes to log; semi-log defaults to a linear x and a
+ * log y, and when only one attribute is set the other axis is the opposite
+ * kind. Points that a log axis cannot show (<= 0) are gaps in the line and
+ * are reported once per render with an mj-chart-error event
+ * { message, severity: "warning", dropped }.
  *
  * Renderer contract: render(ctx) -> SVGElement  (a <g> within [0..width]x[0..height])
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber, linePath } from "../svgdraw.js";
-import { linearScale, logScale, niceTicks } from "../scales.js";
+import { svgEl, formatNumber, linePath } from "../svgdraw.js";
+import { linearScale, logScale, niceDomain } from "../scales.js";
 
 
 /* ── axis tick label formatter ────────────────────────────────── */
@@ -54,32 +59,51 @@ function _tickLabel(value, isLog) {
   if (Math.abs(exp - rounded) < 0.01) {
     return "10" + _superscript(rounded)
   }
-  return formatNumber(value)
+  return formatNumber(value, { maximumSignificantDigits: 3 })
 }
 
 
 /* ── domain from series ───────────────────────────────────────── */
 
+function _isNumber(value) {
+  /*
+   * True for a finite number.
+   */
+  const numeric = typeof value === "number" && Number.isFinite(value) === true
+  return numeric
+}
+
+
+function _pointsOf(series) {
+  /*
+   * The point list of a normalized series ([] when it has none).
+   */
+  const points = Array.isArray(series.points) === true ? series.points : []
+  return points
+}
+
+
 function _seriesExtent(series, key, excludeNonPositive) {
   /*
-   * Find [min, max] of `key` across all series points.
-   * When excludeNonPositive is true, values ≤ 0 are skipped (required for log).
+   * Find [min, max] of `key` across all series points, or null when no
+   * point has a usable value. When excludeNonPositive is true, values <= 0
+   * are skipped (they cannot be shown on a log axis).
    */
   let lo = Infinity
   let hi = -Infinity
   for (let s = 0; s < series.length; s = s + 1) {
-    const pts = series[s].points
-    if (pts === null || pts === undefined) { continue }
+    const pts = _pointsOf(series[s])
     for (let p = 0; p < pts.length; p = p + 1) {
-      const v = pts[p][key]
-      if (typeof v !== "number") { continue }
+      const v = pts[p] !== null && pts[p] !== undefined ? pts[p][key] : null
+      if (_isNumber(v) === false) { continue }
       if (excludeNonPositive === true && v <= 0) { continue }
-      if (v < lo) { lo = v }
-      if (v > hi) { hi = v }
+      lo = Math.min(lo, v)
+      hi = Math.max(hi, v)
     }
   }
-  if (lo === Infinity) { return [1, 10] }
-  if (lo === hi) { return [lo * 0.5, hi * 2] }
+  if (lo === Infinity) {
+    return null
+  }
   return [lo, hi]
 }
 
@@ -88,31 +112,68 @@ function _seriesExtent(series, key, excludeNonPositive) {
 
 function _buildScale(kind, domain, range) {
   /*
-   * Build a linear or log scale.
+   * Build a log scale over whole decades, or a linear scale over a nice
+   * domain.
    */
   if (kind === "log") {
-    const safeMin = domain[0] > 0 ? domain[0] : 1e-9
-    const safeMax = domain[1] > 0 ? domain[1] : 1
-    return logScale([safeMin, safeMax], range)
+    const ext = domain !== null ? domain : [1, 10]
+    let low = Math.pow(10, Math.floor(Math.log10(ext[0]) + 1e-9))
+    let high = Math.pow(10, Math.ceil(Math.log10(ext[1]) - 1e-9))
+    if (high <= low) {
+      low = low / 10
+      high = high * 10
+    }
+    return logScale([low, high], range)
   }
-  const lo = domain[0]
-  const hi = domain[1]
-  const pad = (hi - lo) * 0.05
-  return linearScale([lo - pad, hi + pad], range)
+  const ext = domain !== null ? domain : [0, 1]
+  return linearScale(niceDomain(ext[0], ext[1], 6), range)
 }
 
 
 /* ── axes ─────────────────────────────────────────────────────── */
 
 function _drawAxes(plot, plotW, plotH, xScale, yScale, scaleX, scaleY, meta) {
+  /*
+   * Gridlines (with 2..9 minor lines on narrow log axes), tick labels and
+   * axis titles, hidden from assistive technology.
+   */
+  const axes = svgEl("g", { "aria-hidden": "true", part: "axes" }, [])
+
+  const minorLines = (scale, vertical) => {
+    const domain = scale.domain()
+    const decades = Math.round(Math.log10(domain[1] / domain[0]))
+    if (decades > 3) {
+      return
+    }
+    for (let d = 0; d < decades; d = d + 1) {
+      const base = domain[0] * Math.pow(10, d)
+      for (let m = 2; m <= 9; m = m + 1) {
+        const pos = scale(base * m)
+        const ends = vertical === true
+          ? { x1: pos, y1: 0, x2: pos, y2: plotH }
+          : { x1: 0, y1: pos, x2: plotW, y2: pos }
+        axes.appendChild(svgEl("line", {
+          ...ends, stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 0.5
+        }, []))
+      }
+    }
+    return
+  }
+  if (scaleX === "log") {
+    minorLines(xScale, true)
+  }
+  if (scaleY === "log") {
+    minorLines(yScale, false)
+  }
+
   const xTicks = xScale.ticks(6)
   for (let i = 0; i < xTicks.length; i = i + 1) {
     const px = xScale(xTicks[i])
-    plot.appendChild(svgEl("line", {
+    axes.appendChild(svgEl("line", {
       x1: px, y1: 0, x2: px, y2: plotH,
       stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
     }, []))
-    plot.appendChild(svgEl("text", {
+    axes.appendChild(svgEl("text", {
       x: px, y: plotH + 14, "text-anchor": "middle",
       "font-size": 10, fill: "var(--mj-text-muted, #6b7280)"
     }, _tickLabel(xTicks[i], scaleX === "log")))
@@ -121,36 +182,75 @@ function _drawAxes(plot, plotW, plotH, xScale, yScale, scaleX, scaleY, meta) {
   const yTicks = yScale.ticks(6)
   for (let i = 0; i < yTicks.length; i = i + 1) {
     const py = yScale(yTicks[i])
-    plot.appendChild(svgEl("line", {
+    axes.appendChild(svgEl("line", {
       x1: 0, y1: py, x2: plotW, y2: py,
       stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
     }, []))
-    plot.appendChild(svgEl("text", {
+    axes.appendChild(svgEl("text", {
       x: -6, y: py + 4, "text-anchor": "end",
       "font-size": 10, fill: "var(--mj-text-muted, #6b7280)"
     }, _tickLabel(yTicks[i], scaleY === "log")))
   }
 
-  if (meta !== null && meta !== undefined) {
-    if (meta.xLabel) {
-      plot.appendChild(svgEl("text", {
-        x: plotW / 2, y: plotH + 32, "text-anchor": "middle",
-        "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-      }, escapeHtml(meta.xLabel)))
-    }
-    if (meta.yLabel) {
-      plot.appendChild(svgEl("text", {
-        transform: `rotate(-90) translate(${-plotH / 2}, -40)`,
-        "text-anchor": "middle",
-        "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-      }, escapeHtml(meta.yLabel)))
-    }
+  if (typeof meta.xLabel === "string" && meta.xLabel.length > 0) {
+    axes.appendChild(svgEl("text", {
+      x: plotW / 2, y: plotH + 32, "text-anchor": "middle",
+      "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
+    }, meta.xLabel))
   }
+  if (typeof meta.yLabel === "string" && meta.yLabel.length > 0) {
+    axes.appendChild(svgEl("text", {
+      transform: `rotate(-90) translate(${-plotH / 2}, -46)`,
+      "text-anchor": "middle",
+      "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
+    }, meta.yLabel))
+  }
+
+  /* Axis baselines */
+  axes.appendChild(svgEl("line", {
+    x1: 0, y1: 0, x2: 0, y2: plotH,
+    stroke: "var(--mj-border-strong, #878e9c)", "stroke-width": 1.25
+  }, []))
+  axes.appendChild(svgEl("line", {
+    x1: 0, y1: plotH, x2: plotW, y2: plotH,
+    stroke: "var(--mj-border-strong, #878e9c)", "stroke-width": 1.25
+  }, []))
+  plot.appendChild(axes)
   return
 }
 
 
 /* ── main renderer ────────────────────────────────────────────── */
+
+function _axisKinds(ctx) {
+  /*
+   * The scale kind ("log" | "linear") of each axis. log-log defaults both
+   * axes to log. semi-log defaults to a linear x and a log y; when only one
+   * axis is set, the other axis gets the opposite kind.
+   */
+  const given = (name) => {
+    const value = ctx.attrs(name, null)
+    return value === "log" || value === "linear" ? value : null
+  }
+  const opposite = (kind) => (kind === "log" ? "linear" : "log")
+  let scaleX = given("scale-x")
+  let scaleY = given("scale-y")
+  if (ctx.type === "semi-log") {
+    if (scaleX === null && scaleY === null) {
+      scaleX = "linear"
+      scaleY = "log"
+    } else if (scaleX === null) {
+      scaleX = opposite(scaleY)
+    } else if (scaleY === null) {
+      scaleY = opposite(scaleX)
+    }
+  } else {
+    scaleX = scaleX !== null ? scaleX : "log"
+    scaleY = scaleY !== null ? scaleY : "log"
+  }
+  return { x: scaleX, y: scaleY }
+}
+
 
 export function render(ctx) {
   /*
@@ -159,80 +259,57 @@ export function render(ctx) {
    * :param ctx: The renderer context.
    * :returns: An <g> SVGElement.
    */
-  const raw = ctx.raw
   const root = svgEl("g", { part: "plot" }, [])
-
-  if (raw === null || raw === undefined) {
-    return root
-  }
-
-  const series = (raw.series !== null && raw.series !== undefined) ? raw.series : []
+  const series = ctx.model.series
+  const meta = ctx.model.meta
   if (series.length === 0) {
     return root
   }
 
-  /* Determine which axes are logarithmic */
-  const chartType = ctx.attrs("type", "log-log")
-  let scaleX = ctx.attrs("scale-x", "auto")
-  let scaleY = ctx.attrs("scale-y", "auto")
+  const kinds = _axisKinds(ctx)
+  const scaleX = kinds.x
+  const scaleY = kinds.y
 
-  if (scaleX === "auto") {
-    scaleX = "log"  /* both axes log for log-log */
-  }
-  if (scaleY === "auto") {
-    scaleY = chartType === "semi-log" ? "log" : "log"
-  }
-  /* For semi-log, caller typically sets scale-x="log" scale-y="linear" or vice-versa.
-   * Fall back to (log, linear) if type is semi-log and no explicit attrs. */
-  if (chartType === "semi-log" && ctx.attrs("scale-x", null) === null &&
-      ctx.attrs("scale-y", null) === null) {
-    scaleX = "linear"
-    scaleY = "log"
-  }
-
-  const margin = { top: 16, right: 16, bottom: 46, left: 62 }
+  const margin = { top: 16, right: 16, bottom: 46, left: 66 }
   const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
 
-  const xExtent = _seriesExtent(series, "x", scaleX === "log")
-  const yExtent = _seriesExtent(series, "y", scaleY === "log")
-
-  const xScale = _buildScale(scaleX, xExtent, [0, plotW])
-  const yScale = _buildScale(scaleY, yExtent, [plotH, 0])
+  const xScale = _buildScale(scaleX, _seriesExtent(series, "x", scaleX === "log"), [0, plotW])
+  const yScale = _buildScale(scaleY, _seriesExtent(series, "y", scaleY === "log"), [plotH, 0])
 
   const plot = svgEl("g", {
     transform: `translate(${margin.left},${margin.top})`
   }, [])
   root.appendChild(plot)
-
-  const meta = (raw.meta !== null && raw.meta !== undefined) ? raw.meta : null
   _drawAxes(plot, plotW, plotH, xScale, yScale, scaleX, scaleY, meta)
 
-  /* Series */
+  let dropped = 0
+
   for (let s = 0; s < series.length; s = s + 1) {
     const ser = series[s]
-    const pts = ser.points
-    if (pts === null || pts === undefined || pts.length === 0) { continue }
+    const pts = _pointsOf(ser)
+    if (pts.length === 0) { continue }
     const color = ctx.colorFor(ser.name)
+    const group = svgEl("g", { part: "series", "data-series": ser.name }, [])
 
-    /* Filter invalid (non-positive on log axes) */
-    const validPts = pts.filter((p) => {
-      const xOk = scaleX !== "log" || (typeof p.x === "number" && p.x > 0)
-      const yOk = scaleY !== "log" || (typeof p.y === "number" && p.y > 0)
-      return xOk && yOk && typeof p.x === "number" && typeof p.y === "number"
+    /*
+     * A point that cannot be drawn (null, or <= 0 on a log axis) is a gap:
+     * the line breaks there instead of bridging its neighbours.
+     */
+    const pixPts = pts.map((p) => {
+      if (p === null || p === undefined || _isNumber(p.x) === false || _isNumber(p.y) === false) {
+        return null
+      }
+      if ((scaleX === "log" && p.x <= 0) || (scaleY === "log" && p.y <= 0)) {
+        dropped = dropped + 1
+        return null
+      }
+      return { x: xScale(p.x), y: yScale(p.y) }
     })
 
-    if (validPts.length === 0) { continue }
-
-    const pixPts = validPts.map((p) => ({
-      x: xScale(p.x),
-      y: yScale(p.y)
-    }))
-
-    /* Line */
     const pathData = linePath(pixPts)
     if (pathData !== "") {
-      plot.appendChild(svgEl("path", {
+      group.appendChild(svgEl("path", {
         d: pathData,
         fill: "none",
         stroke: color,
@@ -241,13 +318,13 @@ export function render(ctx) {
       }, []))
     }
 
-    /* Point markers */
-    for (let p = 0; p < validPts.length; p = p + 1) {
-      const pt = validPts[p]
+    for (let p = 0; p < pts.length; p = p + 1) {
       const px2 = pixPts[p]
-      const label = escapeHtml(
-        ser.name + " x=" + formatNumber(pt.x) + " y=" + formatNumber(pt.y)
-      )
+      if (px2 === null) {
+        continue
+      }
+      const pt = pts[p]
+      const label = `${ser.name}: x ${formatNumber(pt.x)}, y ${formatNumber(pt.y)}`
       const dot = svgEl("circle", {
         cx: px2.x.toFixed(1), cy: px2.y.toFixed(1), r: 4,
         fill: color,
@@ -257,8 +334,7 @@ export function render(ctx) {
         tabindex: "0",
         role: "img",
         "aria-label": label
-      }, [])
-      dot.appendChild(svgEl("title", null, label))
+      }, [svgEl("title", null, label)])
       const detail = { series: ser.name, x: pt.x, y: pt.y }
       const handler = () => { ctx.emit("mj-chart-loglog-click", detail) }
       dot.addEventListener("click", handler)
@@ -268,20 +344,19 @@ export function render(ctx) {
           handler()
         }
       })
-      plot.appendChild(dot)
+      group.appendChild(dot)
     }
+    plot.appendChild(group)
   }
 
-  /* Axis baselines */
-  plot.appendChild(svgEl("line", {
-    x1: 0, y1: 0, x2: 0, y2: plotH,
-    stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
-  }, []))
-  plot.appendChild(svgEl("line", {
-    x1: 0, y1: plotH, x2: plotW, y2: plotH,
-    stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
-  }, []))
-
+  if (dropped > 0) {
+    /* The spec's warning: points a log axis cannot show were left out. */
+    ctx.emit("mj-chart-error", {
+      message: `${dropped} point(s) with a value <= 0 cannot be shown on a log axis and were not drawn`,
+      severity: "warning",
+      dropped: dropped
+    })
+  }
   return root
 }
 

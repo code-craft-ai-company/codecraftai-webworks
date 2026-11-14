@@ -8,9 +8,12 @@
 
 import os
 import socket as socket_module
+import ssl
+import subprocess
 import tempfile
 import threading
-from typing import Optional
+import time
+from typing import List, Optional, Tuple
 
 from ccai.errors.exceptions import SkipError
 from ccai.webworks.wsgi.socketlistener import SocketListener
@@ -688,5 +691,316 @@ def test_setup_ssl_without_config_does_nothing():
             raise AssertionError(errmsg)
     finally:
         listener.close()
+    
+    return
+
+
+# =============================================================================
+# Tests for TLS handshake placement and attaching an existing socket
+# =============================================================================
+
+def create_test_certificate(tmpdir: str) -> Tuple[str, str]:
+    """
+        Create a self-signed certificate and key with the openssl command.
+        
+        :param tmpdir: Directory to create the files in.
+        
+        :returns: Tuple of (certfile_path, keyfile_path).
+    """
+    certfile = os.path.join(tmpdir, "cert.pem")
+    keyfile = os.path.join(tmpdir, "key.pem")
+    
+    try:
+        subprocess.run(
+            [
+                "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                "-keyout", keyfile, "-out", certfile,
+                "-days", "1", "-nodes", "-subj", "/CN=localhost",
+            ],
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as openssl_err:
+        raise SkipError(f"The openssl command is needed to create a test certificate: {openssl_err}")
+    
+    return (certfile, keyfile)
+
+
+def create_tls_listener(tmpdir: str) -> SocketListener:
+    """
+        Create a bound listener with TLS set up on an ephemeral port.
+    """
+    certfile, keyfile = create_test_certificate(tmpdir)
+    config = ServerConfig(host="127.0.0.1", port=0, ssl_certfile=certfile, ssl_keyfile=keyfile)
+    listener = SocketListener(config)
+    listener.bind()
+    listener.setup_ssl()
+    return listener
+
+
+def test_accept_returns_without_waiting_for_tls_handshake():
+    """
+        Test that accept does not wait for a TLS client that sends nothing.
+    """
+    accepted: List[object] = []
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        listener = create_tls_listener(tmpdir)
+        port = listener.socket.getsockname()[1]
+        
+        def accept_one() -> None:
+            client_sock, _ = listener.accept()
+            accepted.append(client_sock)
+            return
+        
+        try:
+            accept_thread = threading.Thread(target=accept_one)
+            accept_thread.daemon = True
+            accept_thread.start()
+            
+            # Connect and stay silent, the handshake never starts
+            silent = socket_module.create_connection(("127.0.0.1", port))
+            try:
+                accept_thread.join(timeout=5.0)
+                returned = not accept_thread.is_alive()
+            finally:
+                silent.close()
+        finally:
+            for client_sock in accepted:
+                client_sock.close()
+            listener.close()
+    
+    if not returned:
+        errmsg = "Expected accept to return although the client did not start the TLS handshake"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_perform_handshake_gives_up_on_silent_client():
+    """
+        Test that the handshake with a client that sends nothing ends at the timeout.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        listener = create_tls_listener(tmpdir)
+        port = listener.socket.getsockname()[1]
+        
+        silent = socket_module.create_connection(("127.0.0.1", port))
+        client_sock = None
+        
+        try:
+            client_sock, _ = listener.accept()
+            
+            started = time.time()
+            raised = False
+            try:
+                listener.perform_handshake(client_sock, timeout=0.5)
+            except OSError:
+                # socket.timeout is an OSError
+                raised = True
+            elapsed = time.time() - started
+        finally:
+            silent.close()
+            if client_sock is not None:
+                client_sock.close()
+            listener.close()
+    
+    if not raised:
+        errmsg = "Expected the handshake with a silent client to fail"
+        raise AssertionError(errmsg)
+    
+    if elapsed > 5.0:
+        errmsg = f"Expected the handshake to be given up at the timeout, it took {elapsed:.1f}s"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_perform_handshake_completes_with_tls_client():
+    """
+        Test that the deferred handshake succeeds with a client that does its part.
+    """
+    client_errors: List[Exception] = []
+    server_finished = threading.Event()
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        listener = create_tls_listener(tmpdir)
+        port = listener.socket.getsockname()[1]
+        
+        def tls_client() -> None:
+            try:
+                client_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                client_context.check_hostname = False
+                client_context.verify_mode = ssl.CERT_NONE
+                raw_sock = socket_module.create_connection(("127.0.0.1", port), timeout=5.0)
+                tls_sock = client_context.wrap_socket(raw_sock)
+                # The client is done before the server: under TLS 1.3 the
+                # server still sends its session tickets. Closing now would
+                # abort that write on Windows.
+                server_finished.wait(timeout=5.0)
+                tls_sock.close()
+            except Exception as client_err:
+                client_errors.append(client_err)
+            return
+        
+        client_thread = threading.Thread(target=tls_client)
+        client_thread.start()
+        client_sock = None
+        
+        try:
+            client_sock, _ = listener.accept()
+            try:
+                listener.perform_handshake(client_sock, timeout=5.0)
+            finally:
+                server_finished.set()
+            negotiated = client_sock.version()
+        finally:
+            client_thread.join(timeout=5.0)
+            if client_sock is not None:
+                client_sock.close()
+            listener.close()
+    
+    if negotiated is None:
+        errmsg = "Expected a TLS version to be negotiated by the deferred handshake"
+        raise AssertionError(errmsg)
+    
+    if len(client_errors) != 0:
+        errmsg = f"Expected the TLS client to connect, got {client_errors}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_perform_handshake_ignores_plain_socket():
+    """
+        Test that perform_handshake does nothing for a connection without TLS.
+    """
+    config = ServerConfig(host="127.0.0.1", port=0)
+    listener = SocketListener(config)
+    listener.bind()
+    port = listener.socket.getsockname()[1]
+    
+    client = socket_module.create_connection(("127.0.0.1", port))
+    
+    try:
+        client_sock, _ = listener.accept()
+        try:
+            # Should not raise
+            listener.perform_handshake(client_sock, timeout=1.0)
+        finally:
+            client_sock.close()
+    finally:
+        client.close()
+        listener.close()
+    
+    return
+
+
+def test_attach_uses_the_given_listening_socket():
+    """
+        Test that an attached socket is used for accepting and is not bound again.
+    """
+    bound = socket_module.socket(socket_module.AF_INET, socket_module.SOCK_STREAM)
+    bound.bind(("127.0.0.1", 0))
+    bound.listen(5)
+    port = bound.getsockname()[1]
+    
+    config = ServerConfig(host="127.0.0.1", port=port)
+    listener = SocketListener(config)
+    listener.attach(bound)
+    
+    client = socket_module.create_connection(("127.0.0.1", port))
+    
+    try:
+        client_sock, _ = listener.accept()
+        client_sock.close()
+        
+        if listener.socket is not bound:
+            errmsg = "Expected the listener to use the attached socket"
+            raise AssertionError(errmsg)
+        
+        if listener.bound_address != f"127.0.0.1:{port}":
+            errmsg = f"Expected bound_address '127.0.0.1:{port}', got {listener.bound_address!r}"
+            raise AssertionError(errmsg)
+    finally:
+        client.close()
+        listener.close()
+    
+    return
+
+
+def test_close_after_attach_keeps_unix_socket_file():
+    """
+        Test that closing an attached listener leaves the socket file of its owner.
+    """
+    if not hasattr(socket_module, "AF_UNIX"):
+        raise SkipError("Unix domain sockets are not supported on this platform")
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        socket_path = os.path.join(tmpdir, "server.sock")
+        
+        owner = SocketListener(ServerConfig(unix_socket=socket_path))
+        owner.bind()
+        
+        try:
+            attached = SocketListener(ServerConfig(unix_socket=socket_path))
+            attached.attach(owner.socket.dup())
+            attached.close()
+            
+            still_there = os.path.exists(socket_path)
+        finally:
+            owner.close()
+    
+    if not still_there:
+        errmsg = "Expected the socket file to stay when an attached listener is closed"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_second_listener_on_the_same_address_fails_to_bind():
+    """
+        A second server started on an address in use fails, it does not share it.
+    """
+    import sys
+    
+    if sys.platform == "win32":
+        raise SkipError("On Windows SO_REUSEADDR lets a second socket bind an address in use.")
+    
+    port = find_available_port()
+    first = SocketListener(ServerConfig(host="127.0.0.1", port=port))
+    second = SocketListener(ServerConfig(host="127.0.0.1", port=port))
+    
+    try:
+        first.bind()
+        try:
+            second.bind()
+        except BindError:
+            return
+        finally:
+            second.close()
+    finally:
+        first.close()
+    
+    errmsg = "Expected the second listener to fail with BindError"
+    raise AssertionError(errmsg)
+
+
+def test_set_ssl_context_installs_a_context_built_elsewhere():
+    """
+        set_ssl_context makes the listener a TLS listener with that context.
+    """
+    listener = SocketListener(ServerConfig(host="127.0.0.1", port=0))
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    
+    try:
+        listener.set_ssl_context(context)
+        enabled = listener.ssl_enabled
+    finally:
+        listener.close()
+    
+    if enabled is not True:
+        errmsg = "Expected the listener to use TLS after set_ssl_context"
+        raise AssertionError(errmsg)
     
     return

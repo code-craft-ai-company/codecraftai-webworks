@@ -7,7 +7,6 @@
     handling, and development mode with auto-reload.
 """
 
-import hashlib
 import logging
 import os
 import signal
@@ -36,7 +35,15 @@ class WSGIServer:
         and development mode with auto-reload on code changes.
         
         The server follows the WSGI specification (PEP 3333) and can serve any
-        compliant WSGI application.
+        compliant WSGI application, including a WebApplication through its
+        'wsgi_app'.
+        
+        A subclass adds behaviour at fixed points of serve_forever() by
+        overriding the hook methods: _setup_ssl() installs TLS on the bound
+        listener, _after_bind() runs once the address is bound and before any
+        worker exists (the production server drops privileges there),
+        _create_worker_manager() builds the worker manager, and _after_spawn()
+        runs once the workers have been started.
     """
     
     def __init__(
@@ -67,6 +74,15 @@ class WSGIServer:
         self._shutdown_requested = False
         self._shutdown_graceful = True
         
+        # Stopping the workers is done once, by whichever thread gets to it
+        # first: the thread that called shutdown() or the main loop after a
+        # signal asked for the shutdown.
+        self._shutdown_lock = threading.Lock()
+        self._workers_stopped = False
+        
+        # Set when a worker could not start serving
+        self._boot_failed = False
+        
         # Signal handling
         self._original_sigterm: Optional[signal.Handlers] = None
         self._original_sigint: Optional[signal.Handlers] = None
@@ -74,7 +90,7 @@ class WSGIServer:
         
         # Development mode - file watching
         self._reload_thread: Optional[threading.Thread] = None
-        self._watched_files: Dict[str, str] = {}  # path -> hash
+        self._watched_files: Dict[str, str] = {}  # path -> signature
         self._reload_requested = False
         
         # Request logging
@@ -119,6 +135,16 @@ class WSGIServer:
             :returns: WorkerManager instance or None if not started.
         """
         return self._worker_manager
+    
+    @property
+    def boot_failed(self) -> bool:
+        """
+            Check whether the server stopped because a worker failed to boot.
+            
+            :returns: True if serve_forever() ended because a worker could not
+                start serving.
+        """
+        return self._boot_failed
     
     @property
     def request_count(self) -> int:
@@ -175,22 +201,23 @@ class WSGIServer:
             self._listener.bind()
             
             # Setup SSL if configured
-            if self._config.ssl_certfile is not None:
-                self._listener.setup_ssl()
+            self._setup_ssl()
+            
+            # Everything that needs the bound address and comes before any
+            # worker exists
+            self._after_bind()
             
             # Setup signal handlers
             self._setup_signals()
             
             # Create worker manager
-            self._worker_manager = WorkerManager(
-                self._app,
-                self._listener,
-                self._config
-            )
+            self._worker_manager = self._create_worker_manager()
             
             # Mark server as running
             self._running = True
             self._shutdown_requested = False
+            self._workers_stopped = False
+            self._boot_failed = False
             self._start_time = time.time()
             
             # Start development mode file watcher if enabled
@@ -207,15 +234,60 @@ class WSGIServer:
                 self._config.threads
             )
             
+            self._after_spawn()
+            
             # Enter main monitoring loop
             self._main_loop()
             
+            # A signal only asks for the shutdown, it is carried out here,
+            # on the main thread and outside of the signal handler.
+            self._stop_workers()
+            
         except Exception as exc:
-            _logger.error("Server startup failed: %s", str(exc))
+            _logger.error("Server failed: %s", str(exc))
             raise
         finally:
             self._cleanup()
         
+        return
+    
+    def _setup_ssl(self) -> None:
+        """
+            Install TLS on the bound listener when it is configured.
+            
+            Override to install a TLS context built elsewhere.
+        """
+        if self._config.ssl_certfile is not None:
+            self._listener.setup_ssl()
+        return
+    
+    def _after_bind(self) -> None:
+        """
+            Hook run once the listener is bound and before any worker exists.
+            
+            The base server does nothing here. Raising stops the server.
+        """
+        return
+    
+    def _create_worker_manager(self) -> WorkerManager:
+        """
+            Build the worker manager of the server.
+            
+            :returns: The WorkerManager that runs the workers.
+        """
+        rtnval = WorkerManager(
+            self._app,
+            self._listener,
+            self._config
+        )
+        return rtnval
+    
+    def _after_spawn(self) -> None:
+        """
+            Hook run once the workers have been started.
+            
+            The base server does nothing here.
+        """
         return
     
     def _main_loop(self) -> None:
@@ -229,6 +301,15 @@ class WSGIServer:
                 # Monitor workers
                 if self._worker_manager is not None:
                     self._worker_manager.monitor()
+                    
+                    if self._worker_manager.boot_failed:
+                        # A worker could not start serving, a replacement
+                        # would fail the same way
+                        _logger.error("A worker failed to boot, stopping the server")
+                        self._boot_failed = True
+                        self._shutdown_graceful = True
+                        self._shutdown_requested = True
+                        break
                 
                 # Check for reload request in development mode
                 if self._reload_requested is True:
@@ -275,15 +356,32 @@ class WSGIServer:
         
         _logger.info("Server shutdown requested (graceful=%s)", graceful)
         
-        self._shutdown_requested = True
         self._shutdown_graceful = graceful
+        self._shutdown_requested = True
         
-        # Stop reload watcher if running
-        self._stop_reload_watcher()
+        self._stop_workers()
         
-        # Shutdown worker manager
-        if self._worker_manager is not None:
-            self._worker_manager.shutdown(graceful=graceful)
+        return
+    
+    def _stop_workers(self) -> None:
+        """
+            Stop the reload watcher and shut the worker manager down.
+            
+            The work is done once. A second caller waits until the first one
+            has finished and then returns.
+        """
+        with self._shutdown_lock:
+            if self._workers_stopped is True:
+                return
+            
+            self._workers_stopped = True
+            
+            # Stop reload watcher if running
+            self._stop_reload_watcher()
+            
+            # Shutdown worker manager
+            if self._worker_manager is not None:
+                self._worker_manager.shutdown(graceful=self._shutdown_graceful)
         
         return
     
@@ -368,22 +466,28 @@ class WSGIServer:
         """
             Handle SIGTERM signal for graceful shutdown.
             
+            The handler interrupts the main thread wherever it is, so it only
+            records the request. The main loop sees the request and carries
+            the shutdown out.
+            
             :param signum: Signal number.
             :param frame: Current stack frame.
         """
-        _logger.info("Received SIGTERM, initiating graceful shutdown")
-        self.shutdown(graceful=True)
+        self._shutdown_graceful = True
+        self._shutdown_requested = True
         return
     
     def _handle_sigint(self, signum: int, frame: Any) -> None:
         """
             Handle SIGINT signal for immediate shutdown.
             
+            Only records the request, see the SIGTERM handler.
+            
             :param signum: Signal number.
             :param frame: Current stack frame.
         """
-        _logger.info("Received SIGINT, initiating immediate shutdown")
-        self.shutdown(graceful=False)
+        self._shutdown_graceful = False
+        self._shutdown_requested = True
         return
     
     def _handle_sighup(self, signum: int, frame: Any) -> None:
@@ -393,7 +497,6 @@ class WSGIServer:
             :param signum: Signal number.
             :param frame: Current stack frame.
         """
-        _logger.info("Received SIGHUP, requesting reload")
         self._reload_requested = True
         return
 
@@ -485,8 +588,8 @@ class WSGIServer:
         if self._reload_thread is not None:
             return
         
-        # Initialize watched files with current hashes
-        self._watched_files = self._get_python_file_hashes()
+        # Initialize watched files with their current signatures
+        self._watched_files = self._get_python_file_signatures()
         
         # Start watcher thread
         self._reload_thread = threading.Thread(
@@ -523,8 +626,8 @@ class WSGIServer:
         """
         while not self._shutdown_requested:
             try:
-                # Get current file hashes
-                current_hashes = self._get_python_file_hashes()
+                # Get current file signatures
+                current_hashes = self._get_python_file_signatures()
                 
                 # Check for changes
                 if self._files_changed(current_hashes):
@@ -541,11 +644,11 @@ class WSGIServer:
         
         return
     
-    def _get_python_file_hashes(self) -> Dict[str, str]:
+    def _get_python_file_signatures(self) -> Dict[str, str]:
         """
-            Get hashes of all Python files in the current directory tree.
+            Get signatures of all Python files in the current directory tree.
             
-            :returns: Dictionary mapping file paths to their MD5 hashes.
+            :returns: Dictionary mapping file paths to their signatures.
         """
         hashes: Dict[str, str] = {}
         
@@ -568,7 +671,7 @@ class WSGIServer:
                     if filename.endswith(".py"):
                         filepath = os.path.join(root, filename)
                         try:
-                            file_hash = self._hash_file(filepath)
+                            file_hash = self._file_signature(filepath)
                             hashes[filepath] = file_hash
                         except (IOError, OSError):
                             # Skip files that can't be read
@@ -599,24 +702,20 @@ class WSGIServer:
         
         return watch_dirs
     
-    def _hash_file(self, filepath: str) -> str:
+    def _file_signature(self, filepath: str) -> str:
         """
-            Calculate MD5 hash of a file.
+            Get a signature of a file that changes when the file is saved.
+            
+            The signature is built from the modification time and the size,
+            which the file system already knows. The content of the file is
+            not read, the watcher runs once a second over every source file.
             
             :param filepath: Path to the file.
             
-            :returns: Hex digest of the file's MD5 hash.
+            :returns: Signature string of the file.
         """
-        hasher = hashlib.md5()
-        
-        with open(filepath, "rb") as file_obj:
-            while True:
-                chunk = file_obj.read(8192)
-                if len(chunk) == 0:
-                    break
-                hasher.update(chunk)
-        
-        rtnval = hasher.hexdigest()
+        file_stat = os.stat(filepath)
+        rtnval = f"{file_stat.st_mtime_ns}:{file_stat.st_size}"
         return rtnval
     
     def _files_changed(self, current_hashes: Dict[str, str]) -> bool:
@@ -645,19 +744,45 @@ class WSGIServer:
         """
             Handle a reload request.
             
-            Restarts all worker processes to pick up code changes.
+            Stops the workers and starts the server process again from the
+            beginning. New workers forked from this process would run the
+            modules it imported at startup, so changed code would never be
+            loaded. Only a fresh process imports the code again.
         """
-        _logger.info("Reloading workers due to code changes")
+        _logger.info("Reloading: restarting the server process to load the changed code")
         
         self._reload_requested = False
         
         if self._worker_manager is not None:
-            # Signal workers to gracefully shutdown
+            # Let the workers finish what they are doing
             self._worker_manager.shutdown(graceful=True)
-            
-            # Respawn workers
-            self._worker_manager.spawn()
         
+        try:
+            self._restart_process()
+        except OSError as exec_err:
+            # The process could not be replaced. Serving the code that is
+            # loaded is better than not serving at all.
+            _logger.error(
+                "Reload failed, the server process could not be restarted: %s",
+                str(exec_err)
+            )
+            if self._worker_manager is not None:
+                self._worker_manager.spawn()
+        
+        return
+    
+    def _restart_process(self) -> None:
+        """
+            Replace the server process with a new run of the same command line.
+            
+            Does not return when it succeeds. The listening socket is closed by
+            the operating system when the process is replaced and is bound again
+            by the new process.
+            
+            :raises: OSError if the process could not be replaced.
+        """
+        arguments = list(sys.orig_argv)
+        os.execv(sys.executable, arguments)
         return
 
     def get_stats(self) -> Dict[str, Any]:

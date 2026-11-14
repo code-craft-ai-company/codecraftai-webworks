@@ -839,6 +839,11 @@ class OAuth2Authenticator:
                 error_description="Client authentication failed"
             )
         
+        # A client is only granted scopes it is registered for
+        scope, scope_error = self._resolve_granted_scope(client_info, scope)
+        if scope_error is not None:
+            return None, scope_error
+        
         # Generate token (no refresh token for client credentials)
         token = self._generate_token(
             client_id=client_id,
@@ -904,6 +909,11 @@ class OAuth2Authenticator:
             )
         
         user_id = user_info.get("id") or user_info.get("sub") or username
+        
+        # A client is only granted scopes it is registered for
+        scope, scope_error = self._resolve_granted_scope(client_info, scope)
+        if scope_error is not None:
+            return None, scope_error
         
         # Generate token with refresh token
         token = self._generate_token(
@@ -1055,6 +1065,52 @@ class OAuth2Authenticator:
         
         return token
     
+    def _resolve_granted_scope(
+        self,
+        client_info: Dict[str, Any],
+        requested_scope: Optional[Set[str]]
+    ) -> tuple[Optional[Set[str]], Optional[OAuth2Error]]:
+        """
+            Validate the scopes a client requests against its registration.
+            
+            The scopes a client may be granted are read from the
+            ``scopes`` (or ``scope`` / ``allowed_scopes``) entry of the
+            client record returned by the client store, as a list, a set
+            or a space-separated string. A request for any scope outside
+            that set is refused, and so is any scope request by a client
+            whose record registers no scopes.
+            
+            :param client_info: The client record from the client store.
+            :param requested_scope: The scopes the caller asked for.
+            
+            :returns: Tuple of (granted scope, None) or
+                     (None, OAuth2Error) when the request is refused.
+        """
+        if not requested_scope:
+            return None, None
+        
+        registered = None
+        if isinstance(client_info, dict):
+            for key in ("scopes", "scope", "allowed_scopes"):
+                if client_info.get(key) is not None:
+                    registered = client_info.get(key)
+                    break
+        
+        allowed_scope: Set[str] = set()
+        if isinstance(registered, str):
+            allowed_scope = set(registered.split())
+        elif isinstance(registered, (list, set, tuple, frozenset)):
+            allowed_scope = set(registered)
+        
+        granted_scope = set(requested_scope)
+        if not granted_scope.issubset(allowed_scope):
+            return None, OAuth2Error(
+                error="invalid_scope",
+                error_description="Requested scope is not allowed for this client"
+            )
+        
+        return granted_scope, None
+    
     def _generate_token(
         self,
         client_id: str,
@@ -1105,13 +1161,15 @@ class OAuth2Authenticator:
         roles = set(token_data.get("roles", []))
         permissions = set(token_data.get("permissions", []))
         
-        # Handle scope as roles if no explicit roles
-        if not roles and "scope" in token_data:
+        # Granted scopes are permissions (what AccessPolicy.scopes is
+        # checked against). They never become roles: a scope named
+        # "admin" must not satisfy a role requirement.
+        if "scope" in token_data:
             scope = token_data["scope"]
             if isinstance(scope, str):
-                roles = set(scope.split())
-            elif isinstance(scope, (list, set)):
-                roles = set(scope)
+                permissions.update(scope.split())
+            elif isinstance(scope, (list, set, tuple, frozenset)):
+                permissions.update(scope)
         
         principal = Principal(
             identifier=identifier,

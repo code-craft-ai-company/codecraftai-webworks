@@ -1762,7 +1762,7 @@ def test_secret_value_with_special_characters():
     secret = SecretValue(value=special_value, key="special.pass")
     
     if secret.get_secret_value() != special_value:
-        errmsg = f"Expected special characters to be preserved"
+        errmsg = "Expected special characters to be preserved"
         raise AssertionError(errmsg)
     
     return
@@ -1776,7 +1776,7 @@ def test_secret_value_with_unicode():
     secret = SecretValue(value=unicode_value, key="unicode.pass")
     
     if secret.get_secret_value() != unicode_value:
-        errmsg = f"Expected unicode value to be preserved"
+        errmsg = "Expected unicode value to be preserved"
         raise AssertionError(errmsg)
     
     return
@@ -1790,7 +1790,7 @@ def test_secret_value_with_newlines():
     secret = SecretValue(value=multiline_value, key="multiline.secret")
     
     if secret.get_secret_value() != multiline_value:
-        errmsg = f"Expected multiline value to be preserved"
+        errmsg = "Expected multiline value to be preserved"
         raise AssertionError(errmsg)
     
     return

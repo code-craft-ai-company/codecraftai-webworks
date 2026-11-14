@@ -500,3 +500,87 @@ def test_to_security_row_no_constraints():
         raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# REST processing declaration helpers
+# =============================================================================
+
+from ccai.webworks.endpoints.descriptor import (
+    REST_MANAGED_EXTRA,
+    REST_PROCESSING_EXTRA,
+    declares_rest_processing,
+    record_rest_processing,
+)
+
+
+def test_record_rest_processing_marks_a_route_declaring_metadata_managed():
+    """
+        Test that a route declaring a schema is recorded as REST managed.
+    """
+    rest_extras = {"request_schema": {"type": "object"}}
+
+    record_rest_processing(rest_extras, True)
+
+    if rest_extras.get(REST_MANAGED_EXTRA) is not True:
+        raise AssertionError(f"Expected the route to be marked managed, got {rest_extras}")
+
+    if REST_PROCESSING_EXTRA in rest_extras:
+        raise AssertionError(f"Expected no opt-out marker, got {rest_extras}")
+
+    return
+
+
+def test_record_rest_processing_records_an_opt_out():
+    """
+        Test that rest_processing=False is recorded as an opt-out, not as managed.
+    """
+    rest_extras = {"response_schema": {"type": "object"}}
+
+    record_rest_processing(rest_extras, False)
+
+    if rest_extras.get(REST_PROCESSING_EXTRA) is not False:
+        raise AssertionError(f"Expected the opt-out to be recorded, got {rest_extras}")
+
+    if REST_MANAGED_EXTRA in rest_extras:
+        raise AssertionError(f"Expected an opted-out route not to be managed, got {rest_extras}")
+
+    return
+
+
+def test_record_rest_processing_leaves_extras_without_metadata_alone():
+    """
+        Test that query parameters or an empty error map are not REST metadata.
+    """
+    rest_extras = {"query_params": {"page": int}, "error_map": {}}
+
+    record_rest_processing(rest_extras, True)
+
+    if rest_extras != {"query_params": {"page": int}, "error_map": {}}:
+        raise AssertionError(f"Expected the extras to be unchanged, got {rest_extras}")
+
+    return
+
+
+def test_declares_rest_processing_follows_metadata_and_opt_out():
+    """
+        Test that declares_rest_processing is True only for a route with REST
+        metadata that did not opt out.
+    """
+    declared = EndpointDescriptor(handler=sample_handler, module="m", extras={"rest": {"error_map": {404: dict}}})
+    opted_out = EndpointDescriptor(
+        handler=sample_handler, module="m",
+        extras={"rest": {"request_schema": dict, REST_PROCESSING_EXTRA: False}}
+    )
+    plain = EndpointDescriptor(handler=sample_handler, module="m", extras={"endpoint_type": "rest"})
+
+    if declares_rest_processing(declared) is not True:
+        raise AssertionError("Expected a route with an error map to be processed")
+
+    if declares_rest_processing(opted_out) is not False:
+        raise AssertionError("Expected an opted-out route not to be processed")
+
+    if declares_rest_processing(plain) is not False:
+        raise AssertionError("Expected a route without REST extras not to be processed")
+
+    return

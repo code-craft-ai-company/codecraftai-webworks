@@ -52,26 +52,30 @@ linear CI flows.
 |---|---|---|
 | State machine | `diagram-type="state"` (default) | No swimlanes; nodes are states |
 | Swimlane | `diagram-type="swimlane"` | Nodes grouped into actor swim-lanes |
-| Horizontal swimlanes | `swimlane-direction="horizontal"` (default) | Actors stacked top to bottom |
-| Vertical swimlanes | `swimlane-direction="vertical"` | Actors arranged left to right |
-| Read-only | `readonly` (boolean, default) | No editing; current-state can be set |
+| Read-only | `readonly` (boolean, default) | **Not implemented.** No editing; current-state can be set |
+
+Swimlanes are always horizontal bands (actors stacked top to bottom, flow in
+the inline direction); the former `swimlane-direction` and `layout`
+attributes were removed and are not observed. The layout is built in:
+states are placed in columns by flow level from the start states (edges that
+loop back are ignored for levels and drawn as return arcs); in swimlane mode
+the actor only picks the lane, and states without a known actor go to an
+"Unassigned" lane.
 
 ## 5. Attributes
 
 | Attribute | Type | Default | Reflects | Description |
 |-----------|------|---------|----------|-------------|
-| `src` | string | `""` | yes | URL for the data-source adapter |
-| `adapter` | string | `"static"` | yes | Adapter key: `"static"`, `"jira"`, `"github"` |
+| `src` | string | `""` | no | URL of a JSON document with the workflow data, fetched when no `data` property has been assigned; an inline `<script type="application/json">` child works the same way. A failure shows the error state and fires `mj-error` |
+| `adapter` | string | `"static"` | yes | **Not implemented** (not observed by the component). Adapter key: `"static"`, `"jira"`, `"github"` |
 | `diagram-type` | `"state"` \| `"swimlane"` | `"state"` | yes | Structural layout |
-| `swimlane-direction` | `"horizontal"` \| `"vertical"` | `"horizontal"` | yes | Swimlane orientation |
 | `current-state` | string | `""` | yes | ID of the currently active state node |
-| `readonly` | boolean | `false` | yes | Disables editing actions |
-| `layout` | `"dagre"` \| `"elk"` | `"dagre"` | yes | Layout algorithm |
+| `readonly` | boolean | `false` | yes | **Not implemented** (not observed by the component). Disables editing actions |
 | `show-labels` | boolean | `true` | yes | Show transition edge labels |
-| `locale` | string | `""` | yes | BCP 47 locale for any numeric labels |
-| `label-loading` | string | `"Loading diagram…"` | yes | Loading message |
-| `label-empty` | string | `"No workflow data."` | yes | Empty message |
-| `label-error` | string | `"Failed to load diagram."` | yes | Error message |
+| `locale` | string | `""` | yes | **Not implemented** (not observed by the component). BCP 47 locale for any numeric labels |
+| `label-loading` | string | `"Loading diagram…"` | yes | **Not implemented** (not observed by the component). Loading message |
+| `label-empty` | string | `"No workflow data."` | yes | **Not implemented** (not observed by the component). Empty message (use the `empty` slot) |
+| `label-error` | string | `"Failed to load diagram."` | yes | **Not implemented** (not observed by the component). Error message |
 
 ## 6. Properties
 
@@ -97,12 +101,12 @@ linear CI flows.
 | Event | `detail` | Bubbles | Cancelable | Description |
 |-------|----------|---------|------------|-------------|
 | `mj-node-select` | `{ node: StateNode }` | yes | no | State node activated |
-| `mj-node-deselect` | `{}` | yes | no | Selection cleared |
+| `mj-node-deselect` | `{}` | yes | no | The detail panel of a selected state node was closed (Close or Escape); not fired when a transition panel closes |
 | `mj-transition-select` | `{ transition: Transition }` | yes | no | Transition edge activated |
-| `mj-state-change` | `{ from: string, to: string }` | yes | no | `current-state` attribute changed |
-| `mj-zoom-change` | `{ zoom: number }` | yes | no | Zoom changed |
-| `mj-data-load` | `{ states: number, transitions: number, actors: number }` | yes | no | Data loaded |
-| `mj-error` | `{ message: string, cause: unknown }` | yes | no | Adapter error |
+| `mj-state-change` | `{ from: string, to: string }` | yes | no | The `current-state` attribute changed after the first render while data is present (the initial attribute value does not fire it); `from` is the previously shown state id (`""` when none). The new current state is also announced politely |
+| `mj-zoom-change` | `{ zoom: number }` | yes | no | **Not implemented.** Zoom changed |
+| `mj-data-load` | `{ states: number, transitions: number, actors: number }` | yes | no | After data is assigned (property, `src` or inline JSON) and drawn |
+| `mj-error` | `{ message: string }` | yes | no | The `src` fetch failed or the inline JSON could not be parsed |
 
 ## 9. CSS parts & custom properties
 
@@ -142,9 +146,8 @@ linear CI flows.
 
 ## 11. Behavior & interactions
 
-On load the adapter returns `WorkflowData`. The rendering adapter lays out nodes
-using the `layout` algorithm, respecting swimlane boundaries when
-`diagram-type="swimlane"`. Start and end node shapes are rendered by the adapter
+The component lays out the states itself (see §4), respecting swimlane
+boundaries when `diagram-type="swimlane"`. Start and end node shapes are rendered by the adapter
 based on `StateNode.type` values (`"start"`, `"end"`, `"decision"`, `"state"`).
 Setting the `current-state` attribute highlights the corresponding node and fires
 `mj-state-change` if the value differs from the previous. Transition edge labels
@@ -167,8 +170,9 @@ transition detail panel.
 
 ## 13. Accessibility
 
-- Root: `role="img"` with `aria-label` = "Workflow diagram: {n} states,
-  {m} transitions{, {k} actors}".
+- Root wrapper: `role="group"` with `aria-label` = "Workflow diagram: {n} states,
+  {m} transitions{, {k} actors}"; the `<svg>` is a labelled `role="group"` whose
+  states and transitions are `role="button"` marks with one roving tab stop.
 - State nodes: `role="button"` with `aria-label` = "{name}, type: {type},
   {current state|not current}"; `aria-current="step"` when active.
 - Transition edges: `role="button"` with `aria-label` = "Transition from {from}
@@ -221,8 +225,7 @@ the diagram without layout shift.
 - **Adapter failure** — error slot shown; stale data retained.
 - **Long transition labels** — truncated to 40 chars on edge; full label in
   detail panel.
-- **Very large diagrams (>100 nodes)** — minimap recommended; warning emitted
-  if `show-minimap` is false.
+- **Very large diagrams (>100 nodes)** — the diagram scrolls; there is no minimap.
 
 ## 19. Acceptance criteria
 

@@ -6,6 +6,10 @@
     limits, SSL/TLS, process management, logging, health checks, metrics,
     and tracing options. It also provides the ServerState enum for server
     lifecycle states and exit code constants.
+
+    The production server runs on the built-in WSGI server: to_wsgi_config()
+    gives the ccai.webworks.wsgi ServerConfig that binds, parses and runs the
+    workers with these settings.
 """
 
 import os
@@ -14,6 +18,9 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 from ccai.webworks.prodserver.exceptions import ConfigurationError
+from ccai.webworks.wsgi.constants import DEFAULT_MAX_REQUEST_BODY_SIZE
+from ccai.webworks.wsgi.serverconfig import ServerConfig as WSGIServerConfig
+from ccai.webworks.wsgi.serverconfig import is_gevent_available
 
 
 # Server exit codes
@@ -25,8 +32,13 @@ EXIT_APP_LOAD_ERROR = 4
 EXIT_PID_FILE_ERROR = 5
 
 
-# Valid worker classes
-VALID_WORKER_CLASSES = {"sync", "async", "gevent"}
+# Valid worker classes. Both serve WSGI applications, and a WebApplication
+# through its wsgi_app; its async handlers run on the event loop of the ASGI
+# bridge in every worker, so there is no separate async worker class.
+VALID_WORKER_CLASSES = {"sync", "gevent"}
+
+# Header field count the parser accepts when limit_request_fields is 0 (unlimited)
+UNLIMITED_REQUEST_FIELDS = 32768
 
 # Valid log levels
 VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -82,8 +94,11 @@ class ServerConfig:
     limit_request_line: int = 4094
     limit_request_fields: int = 100
     limit_request_field_size: int = 8190
-    limit_request_body: int = 0  # 0 = unlimited
-    limit_memory: Optional[int] = None
+    # The body is read into memory before the application is called, so the
+    # default is a limit. 0 = unlimited.
+    limit_request_body: int = DEFAULT_MAX_REQUEST_BODY_SIZE
+    limit_memory: Optional[int] = None  # bytes of resident memory per worker
+    worker_tmp_dir: Optional[str] = None  # parent of the workers' shared temp directory
 
     # SSL/TLS
     ssl_certfile: Optional[str] = None
@@ -173,6 +188,18 @@ class ServerConfig:
             errors.append(
                 f"Worker class must be one of {VALID_WORKER_CLASSES}, got '{self.worker_class}'"
             )
+        elif self.worker_class == "gevent" and not is_gevent_available():
+            errors.append(
+                "Worker class 'gevent' needs the gevent package, which is not installed. "
+                "Install the 'gevent' extra: pip install 'codecraftai-webworks[gevent]'"
+            )
+
+        # Validate worker recycling
+        if self.max_requests is not None and self.max_requests < 0:
+            errors.append(f"Max requests must be non-negative, got {self.max_requests}")
+
+        if self.max_requests_jitter < 0:
+            errors.append(f"Max requests jitter must be non-negative, got {self.max_requests_jitter}")
 
         # Validate timeouts
         if self.timeout < 0:
@@ -187,6 +214,9 @@ class ServerConfig:
 
         if self.keep_alive < 0:
             errors.append(f"Keep-alive must be non-negative, got {self.keep_alive}")
+
+        if self.max_connections is not None and self.max_connections < 1:
+            errors.append(f"Max connections must be at least 1, got {self.max_connections}")
 
         # Validate limits
         if self.limit_request_line < 0:
@@ -208,6 +238,20 @@ class ServerConfig:
             errors.append(
                 f"Limit request body must be non-negative, got {self.limit_request_body}"
             )
+
+        if self.limit_memory is not None and self.limit_memory < 1:
+            errors.append(f"Limit memory must be a positive number of bytes, got {self.limit_memory}")
+
+        # The production endpoints are matched against the request path
+        for option_name, path_value in (
+            ("health_check_path", self.health_check_path),
+            ("metrics_path", self.metrics_path),
+        ):
+            if not isinstance(path_value, str) or not path_value.startswith("/"):
+                errors.append(f"{option_name} must be a path starting with '/', got {path_value!r}")
+
+        if not isinstance(self.trace_header, str) or self.trace_header.strip() == "":
+            errors.append(f"Trace header must be a header name, got {self.trace_header!r}")
 
         # Validate SSL configuration
         if self.ssl_certfile is not None or self.ssl_keyfile is not None:
@@ -260,6 +304,7 @@ class ServerConfig:
             "limit_request_field_size": self.limit_request_field_size,
             "limit_request_body": self.limit_request_body,
             "limit_memory": self.limit_memory,
+            "worker_tmp_dir": self.worker_tmp_dir,
             "ssl_certfile": self.ssl_certfile,
             "ssl_keyfile": self.ssl_keyfile,
             "ssl_ca_certs": self.ssl_ca_certs,
@@ -284,5 +329,76 @@ class ServerConfig:
             "trace_header": self.trace_header,
             "enable_tracing": self.enable_tracing,
         }
+
+        return rtnval
+
+    def to_wsgi_config(self) -> WSGIServerConfig:
+        """
+            Build the configuration of the built-in WSGI server that runs
+            the production server.
+
+            The WSGI server binds the address, parses HTTP and runs the
+            pre-forked workers with these settings:
+
+            - workers, threads, worker class, max-requests recycling, timeouts
+              and backlog are passed on,
+            - limit_request_line, limit_request_fields and limit_request_body
+              are enforced by its HTTP parser (414/431/413 before the
+              application is called); limit_request_field_size bounds each
+              header field in the production middleware and, times the field
+              count, the whole header section in the parser,
+            - its own access log is turned off, the production layer writes
+              the structured access log.
+
+            :returns: The WSGI server configuration.
+        """
+        if self.max_connections is not None:
+            max_connections = self.max_connections
+        else:
+            max_connections = WSGIServerConfig.max_connections
+
+        if self.max_requests is not None:
+            max_requests = self.max_requests
+        else:
+            max_requests = 0
+
+        # 0 means unlimited for every limit; the parser needs a count of
+        # header fields, so "unlimited" fields is its largest sensible count.
+        if self.limit_request_fields > 0:
+            max_headers = self.limit_request_fields
+        else:
+            max_headers = UNLIMITED_REQUEST_FIELDS
+
+        if self.limit_request_fields > 0 and self.limit_request_field_size > 0:
+            max_header_size = self.limit_request_fields * (self.limit_request_field_size + 2)
+        else:
+            max_header_size = 0
+
+        rtnval = WSGIServerConfig(
+            host=self.host,
+            port=self.port,
+            backlog=self.backlog,
+            workers=self.resolve_workers(),
+            threads=self.threads,
+            worker_class=self.worker_class,
+            max_requests=max_requests,
+            max_requests_jitter=self.max_requests_jitter,
+            timeout=self.timeout,
+            keepalive=self.keep_alive,
+            graceful_timeout=self.graceful_timeout,
+            max_request_size=self.limit_request_body,
+            max_request_line=self.limit_request_line,
+            max_header_size=max_header_size,
+            max_headers=max_headers,
+            max_connections=max_connections,
+            ssl_certfile=self.ssl_certfile,
+            ssl_keyfile=self.ssl_keyfile,
+            ssl_ca_certs=self.ssl_ca_certs,
+            reload=False,
+            debug=False,
+            access_log=False,
+            error_log=True,
+            log_level=self.log_level.lower(),
+        )
 
         return rtnval

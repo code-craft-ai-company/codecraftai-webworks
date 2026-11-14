@@ -1165,3 +1165,720 @@ def test_establish_webapp_persona_with_application_cls_creates_subclass():
         reset_webapp_persona()
 
     return
+
+
+# =============================================================================
+# Helpers for the lifecycle guard tests
+# =============================================================================
+
+def _patch_config_registry(get_values=None):
+    """
+        Patches ManagedConfigRegistry with a mock whose ``get`` returns the
+        given values by key (None for any other key).
+
+        :param get_values: Optional mapping of configuration key to value.
+
+        :returns: The activated patch, for the caller to deactivate.
+    """
+    values = get_values if get_values is not None else {}
+
+    mock_registry_instance = Mock()
+    mock_registry_instance.configure(recursive=True)
+    mock_registry_instance.mock_context().mock_method(
+        "get", side_effect=lambda key, default=None: values.get(key, default)
+    )
+
+    patch = create_module_patch(webapp_module, "ManagedConfigRegistry")
+    mock_cls = patch.activate()
+    mock_cls.configure(return_value=mock_registry_instance)
+
+    return patch
+
+
+def _expect_lifecycle_error(operation, current_phase):
+    """
+        Runs *operation* and checks that it raises LifecycleError reporting
+        *current_phase*.
+
+        :param operation: Callable taking no arguments.
+        :param current_phase: The phase the error must report.
+    """
+    caught_error = None
+
+    try:
+        operation()
+    except LifecycleError as err:
+        caught_error = err
+
+    if caught_error is None:
+        raise AssertionError("Expected LifecycleError, nothing was raised")
+
+    if caught_error.current_phase != current_phase:
+        errmsg = (
+            f"Expected the error to report phase '{current_phase.value}', "
+            f"got '{caught_error.current_phase.value}'"
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# setup_database: ensure_database_ready result
+# =============================================================================
+
+def test_setup_database_raises_when_database_is_not_ready():
+    """
+        Test that ``setup_database`` raises SemanticError and does not
+        advance the phase when ``ensure_database_ready`` returns False.
+    """
+
+    class NotReadyApplication(WebApplication):
+        def ensure_database_ready(self) -> bool:
+            return False
+
+    patch = _patch_config_registry()
+
+    try:
+        reset_webapp_persona()
+        app = establish_webapp_persona(
+            name="testapp",
+            logger_name="testapp",
+            log_basename="testapp",
+            application_cls=NotReadyApplication,
+        )
+
+        app.setup_configuration()
+        app.setup_credentials()
+        app.setup_data_profiles()
+
+        caught_error = None
+        try:
+            app.setup_database()
+        except SemanticError as err:
+            caught_error = err
+
+        if caught_error is None or "ensure_database_ready" not in str(caught_error):
+            errmsg = f"Expected a SemanticError naming ensure_database_ready, got {caught_error!r}"
+            raise AssertionError(errmsg)
+
+        if app.current_phase != LifecyclePhase.DATA_PROFILES_LOADED:
+            errmsg = f"Expected phase DATA_PROFILES_LOADED, got '{app.current_phase.value}'"
+            raise AssertionError(errmsg)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+# =============================================================================
+# credentials / data_profiles placeholders
+# =============================================================================
+
+def test_credentials_property_raises_while_no_manager_is_integrated():
+    """
+        Test that ``credentials`` raises a descriptive SemanticError (not
+        None) after the placeholder ``setup_credentials`` has run.
+    """
+    patch = _patch_config_registry()
+
+    try:
+        app = _create_app()
+        app.setup_configuration()
+        app.setup_credentials()
+
+        caught_error = None
+        try:
+            _ = app.credentials
+        except SemanticError as err:
+            caught_error = err
+
+        if caught_error is None or isinstance(caught_error, LifecycleError):
+            errmsg = f"Expected a placeholder SemanticError, got {caught_error!r}"
+            raise AssertionError(errmsg)
+
+        if "credential" not in str(caught_error):
+            errmsg = f"Expected the error to name the credential manager, got '{caught_error}'"
+            raise AssertionError(errmsg)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_data_profiles_property_raises_while_no_manager_is_integrated():
+    """
+        Test that ``data_profiles`` raises a descriptive SemanticError (not
+        None) after the placeholder ``setup_data_profiles`` has run.
+    """
+    patch = _patch_config_registry()
+
+    try:
+        app = _create_app()
+        app.setup_configuration()
+        app.setup_credentials()
+        app.setup_data_profiles()
+
+        caught_error = None
+        try:
+            _ = app.data_profiles
+        except SemanticError as err:
+            caught_error = err
+
+        if caught_error is None or isinstance(caught_error, LifecycleError):
+            errmsg = f"Expected a placeholder SemanticError, got {caught_error!r}"
+            raise AssertionError(errmsg)
+
+        if "data profile" not in str(caught_error):
+            errmsg = f"Expected the error to name the data profile manager, got '{caught_error}'"
+            raise AssertionError(errmsg)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_credentials_property_returns_a_manager_set_by_a_subclass():
+    """
+        Test that a subclass that provides a credential manager in
+        ``setup_credentials`` gets it back from ``credentials``.
+    """
+    manager = object()
+
+    class CredentialedApplication(WebApplication):
+        def setup_credentials(self) -> None:
+            super().setup_credentials()
+            self._credential_manager = manager
+            return
+
+    patch = _patch_config_registry()
+
+    try:
+        reset_webapp_persona()
+        app = establish_webapp_persona(
+            name="testapp",
+            logger_name="testapp",
+            log_basename="testapp",
+            application_cls=CredentialedApplication,
+        )
+        app.setup_configuration()
+        app.setup_credentials()
+
+        if app.credentials is not manager:
+            raise AssertionError("Expected the subclass's credential manager")
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+# =============================================================================
+# Lifecycle guards: exact predecessor phases and a terminal SHUTDOWN
+# =============================================================================
+
+def test_setup_configuration_after_startup_does_not_regress_the_phase():
+    """
+        Test that calling ``setup_configuration`` on a started application
+        raises LifecycleError and leaves the phase at READY.
+    """
+    patch = _patch_config_registry()
+
+    try:
+        app = _create_app()
+        app.startup()
+
+        _expect_lifecycle_error(app.setup_configuration, LifecyclePhase.READY)
+
+        if app.current_phase != LifecyclePhase.READY:
+            errmsg = f"Expected phase READY, got '{app.current_phase.value}'"
+            raise AssertionError(errmsg)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_setup_step_requires_exactly_its_predecessor_phase():
+    """
+        Test that a setup step repeated after its own phase raises
+        LifecycleError instead of running again.
+    """
+    patch = _patch_config_registry()
+
+    try:
+        app = _create_app()
+        app.setup_configuration()
+        app.setup_credentials()
+        app.setup_data_profiles()
+
+        _expect_lifecycle_error(app.setup_credentials, LifecyclePhase.DATA_PROFILES_LOADED)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_subsystem_properties_raise_lifecycle_error_after_shutdown():
+    """
+        Test that router, dispatcher, asgi_app and config raise
+        LifecycleError after ``shutdown()`` instead of returning None.
+    """
+    patch = _patch_config_registry()
+
+    try:
+        app = _create_app()
+        app.startup()
+        app.shutdown()
+
+        for property_name in ("router", "dispatcher", "asgi_app", "config", "auth_system"):
+            _expect_lifecycle_error(lambda: getattr(app, property_name), LifecyclePhase.SHUTDOWN)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_register_authenticator_raises_lifecycle_error_after_shutdown():
+    """
+        Test that ``register_authenticator`` raises LifecycleError after
+        ``shutdown()`` rather than an AttributeError on the released system.
+    """
+    patch = _patch_config_registry()
+
+    try:
+        app = _create_app()
+        app.startup()
+        app.shutdown()
+
+        _expect_lifecycle_error(lambda: app.register_authenticator(object()), LifecyclePhase.SHUTDOWN)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_startup_after_shutdown_raises_lifecycle_error():
+    """
+        Test that ``startup()`` on a shut down application raises
+        LifecycleError and the phase stays SHUTDOWN.
+    """
+    patch = _patch_config_registry()
+
+    try:
+        app = _create_app()
+        app.startup()
+        app.shutdown()
+
+        _expect_lifecycle_error(app.startup, LifecyclePhase.SHUTDOWN)
+
+        if app.current_phase != LifecyclePhase.SHUTDOWN:
+            errmsg = f"Expected phase SHUTDOWN, got '{app.current_phase.value}'"
+            raise AssertionError(errmsg)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_attach_route_after_shutdown_raises_lifecycle_error():
+    """
+        Test that ``attach_route`` and ``attach_blueprint_to_route`` raise
+        LifecycleError after ``shutdown()``.
+    """
+    patch = _patch_config_registry()
+
+    try:
+        app = _create_app()
+        app.startup()
+        app.shutdown()
+
+        def handler(request):
+            return {}
+
+        class LateBlueprint:
+            @classmethod
+            def register(cls, router=None):
+                return []
+
+        _expect_lifecycle_error(lambda: app.attach_route("/late")(handler), LifecyclePhase.SHUTDOWN)
+        _expect_lifecycle_error(lambda: app.attach_blueprint_to_route(LateBlueprint), LifecyclePhase.SHUTDOWN)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_shutdown_twice_keeps_the_application_shut_down():
+    """
+        Test that a second ``shutdown()`` does nothing.
+    """
+    patch = _patch_config_registry()
+
+    try:
+        app = _create_app()
+        app.startup()
+        app.shutdown()
+        app.shutdown()
+
+        if app.current_phase != LifecyclePhase.SHUTDOWN:
+            errmsg = f"Expected phase SHUTDOWN, got '{app.current_phase.value}'"
+            raise AssertionError(errmsg)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_failed_setup_infrastructure_keeps_queued_routes():
+    """
+        Test that when a queued blueprint fails to register, the queued
+        routes and blueprints are kept and the phase does not advance.
+    """
+    patch = _patch_config_registry()
+
+    try:
+        app = _create_app()
+
+        @app.attach_route("/kept")
+        def kept(request):
+            return {}
+
+        class FailingBlueprint:
+            @classmethod
+            def register(cls, router=None):
+                raise RuntimeError("blueprint failed")
+
+        app.attach_blueprint_to_route(FailingBlueprint)
+
+        app.setup_configuration()
+        app.setup_credentials()
+        app.setup_data_profiles()
+        app.setup_database()
+        app.setup_authentication()
+
+        caught_error = None
+        try:
+            app.setup_infrastructure()
+        except RuntimeError as err:
+            caught_error = err
+
+        if caught_error is None:
+            raise AssertionError("Expected the blueprint's RuntimeError")
+
+        if app.current_phase != LifecyclePhase.AUTHENTICATION_READY:
+            errmsg = f"Expected phase AUTHENTICATION_READY, got '{app.current_phase.value}'"
+            raise AssertionError(errmsg)
+
+        if len(app._pending_routes) != 1 or len(app._pending_blueprints) != 1:
+            errmsg = (
+                f"Expected the queues to be kept, got {len(app._pending_routes)} routes and "
+                f"{len(app._pending_blueprints)} blueprints"
+            )
+            raise AssertionError(errmsg)
+
+        if app._router is not None:
+            raise AssertionError("Expected no router to be published by the failed attempt")
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+# =============================================================================
+# Request body limit from the configuration
+# =============================================================================
+
+def test_setup_infrastructure_uses_the_configured_request_body_limit():
+    """
+        Test that the body limit configured under
+        MAX_REQUEST_BODY_SIZE_CONFIG_KEY reaches the ASGI body reader.
+    """
+    patch = _patch_config_registry({webapp_module.MAX_REQUEST_BODY_SIZE_CONFIG_KEY: 1024})
+
+    try:
+        app = _create_app()
+        app.startup()
+
+        max_size = app.asgi_app.http_handler.body_reader.max_size
+        if max_size != 1024:
+            errmsg = f"Expected the configured limit 1024, got {max_size}"
+            raise AssertionError(errmsg)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_setup_infrastructure_keeps_the_default_body_limit_when_unconfigured():
+    """
+        Test that without a configured limit the ASGI default applies.
+    """
+    from ccai.webworks.asgi.constants import DEFAULT_MAX_REQUEST_BODY_SIZE
+
+    patch = _patch_config_registry()
+
+    try:
+        app = _create_app()
+        app.startup()
+
+        max_size = app.asgi_app.http_handler.body_reader.max_size
+        if max_size != DEFAULT_MAX_REQUEST_BODY_SIZE:
+            errmsg = f"Expected the default limit {DEFAULT_MAX_REQUEST_BODY_SIZE}, got {max_size}"
+            raise AssertionError(errmsg)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_setup_infrastructure_accepts_a_body_limit_given_as_decimal_text():
+    """
+        Test that a body limit given as a string of decimal digits, the form
+        the environment configuration source yields, is used as an integer.
+    """
+    patch = _patch_config_registry({webapp_module.MAX_REQUEST_BODY_SIZE_CONFIG_KEY: " 65536 "})
+
+    try:
+        app = _create_app()
+        app.startup()
+
+        max_size = app.asgi_app.http_handler.body_reader.max_size
+        if max_size != 65536:
+            errmsg = f"Expected the configured limit 65536, got {max_size!r}"
+            raise AssertionError(errmsg)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+def test_setup_infrastructure_rejects_a_signed_body_limit_text():
+    """
+        Test that decimal text with a sign or digit separators is not taken
+        as a body limit, even though int() would accept it.
+    """
+    for configured in ("+5", "5_0", "-1"):
+        patch = _patch_config_registry({webapp_module.MAX_REQUEST_BODY_SIZE_CONFIG_KEY: configured})
+
+        try:
+            app = _create_app()
+
+            caught_error = None
+            try:
+                app.startup()
+            except SemanticError as err:
+                caught_error = err
+
+            if caught_error is None:
+                errmsg = f"Expected a SemanticError for the body limit {configured!r}"
+                raise AssertionError(errmsg)
+
+        finally:
+            patch.deactivate()
+            reset_webapp_persona()
+
+    return
+
+
+def test_setup_infrastructure_rejects_an_invalid_body_limit():
+    """
+        Test that a configured body limit that is not a non-negative
+        integer raises SemanticError.
+    """
+    patch = _patch_config_registry({webapp_module.MAX_REQUEST_BODY_SIZE_CONFIG_KEY: "16MB"})
+
+    try:
+        app = _create_app()
+
+        caught_error = None
+        try:
+            app.startup()
+        except SemanticError as err:
+            caught_error = err
+
+        if caught_error is None or webapp_module.MAX_REQUEST_BODY_SIZE_CONFIG_KEY not in str(caught_error):
+            errmsg = f"Expected a SemanticError naming the configuration key, got {caught_error!r}"
+            raise AssertionError(errmsg)
+
+    finally:
+        patch.deactivate()
+        reset_webapp_persona()
+
+    return
+
+
+# =============================================================================
+# establish_webapp_persona: failures leave no persona behind
+# =============================================================================
+
+def test_failed_construction_does_not_block_a_later_establish():
+    """
+        Test that an application class that raises in its constructor
+        leaves no persona established, so a later call succeeds.
+    """
+
+    class BrokenApplication(WebApplication):
+        def __init__(self, **kwargs):
+            raise RuntimeError("constructor failed")
+
+    try:
+        reset_webapp_persona()
+
+        caught_error = None
+        try:
+            establish_webapp_persona(
+                name="brokenapp",
+                logger_name="brokenapp",
+                log_basename="brokenapp",
+                application_cls=BrokenApplication,
+            )
+        except RuntimeError as err:
+            caught_error = err
+
+        if caught_error is None:
+            raise AssertionError("Expected the constructor's RuntimeError")
+
+        if webapp_module.WEBAPP_PERSONA_ESTABLISHED:
+            raise AssertionError("Expected the persona not to count as established")
+
+        app = establish_webapp_persona(
+            name="testapp",
+            logger_name="testapp",
+            log_basename="testapp",
+        )
+
+        if app.name != "testapp":
+            errmsg = f"Expected the retried persona 'testapp', got '{app.name}'"
+            raise AssertionError(errmsg)
+
+    finally:
+        reset_webapp_persona()
+
+    return
+
+
+def test_singleton_check_failure_does_not_block_a_later_establish():
+    """
+        Test that the SemanticError for an already set
+        THISAPPLICATION_SINGLETON does not mark the persona established.
+    """
+    import ccai.thisapp.wellknown as thisapp_wellknown
+
+    try:
+        reset_webapp_persona()
+        thisapp_wellknown.THISAPPLICATION_SINGLETON = object()
+
+        caught_error = None
+        try:
+            establish_webapp_persona(name="testapp", logger_name="testapp", log_basename="testapp")
+        except SemanticError as err:
+            caught_error = err
+
+        thisapp_wellknown.THISAPPLICATION_SINGLETON = None
+
+        if caught_error is None:
+            raise AssertionError("Expected a SemanticError for the set singleton")
+
+        app = establish_webapp_persona(name="testapp", logger_name="testapp", log_basename="testapp")
+
+        if app is None:
+            raise AssertionError("Expected the retry to establish the persona")
+
+    finally:
+        thisapp_wellknown.THISAPPLICATION_SINGLETON = None
+        reset_webapp_persona()
+
+    return
+
+
+def test_concurrent_establish_creates_exactly_one_persona():
+    """
+        Test that threads racing to establish the persona produce one
+        application; the others get PersonaAlreadyEstablishedError.
+    """
+    import threading
+    import time
+
+    from ccai.webworks.webapplication import PersonaAlreadyEstablishedError
+
+    constructed = []
+
+    class SlowApplication(WebApplication):
+        def __init__(self, **kwargs):
+            # Widen the window between the checks and the wiring.
+            time.sleep(0.05)
+            super().__init__(**kwargs)
+            constructed.append(self)
+            return
+
+    outcomes = []
+    outcomes_lock = threading.Lock()
+    barrier = threading.Barrier(4)
+
+    def establish():
+        barrier.wait()
+        try:
+            establish_webapp_persona(
+                name="raceapp",
+                logger_name="raceapp",
+                log_basename="raceapp",
+                application_cls=SlowApplication,
+            )
+            outcome = "established"
+        except PersonaAlreadyEstablishedError:
+            outcome = "refused"
+        with outcomes_lock:
+            outcomes.append(outcome)
+        return
+
+    try:
+        reset_webapp_persona()
+
+        threads = [threading.Thread(target=establish) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        if sorted(outcomes) != ["established", "refused", "refused", "refused"]:
+            errmsg = f"Expected one established persona and three refusals, got {outcomes}"
+            raise AssertionError(errmsg)
+
+        if len(constructed) != 1:
+            errmsg = f"Expected one application to be constructed, got {len(constructed)}"
+            raise AssertionError(errmsg)
+
+    finally:
+        reset_webapp_persona()
+
+    return

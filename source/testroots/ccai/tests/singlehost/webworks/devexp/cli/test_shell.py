@@ -912,3 +912,88 @@ def test_default_common_imports_contains_sys():
     assert "sys" in DEFAULT_COMMON_IMPORTS, "Expected 'sys' in default imports"
 
     return
+
+
+# =============================================================================
+# Unit Tests for WebApplicationShell
+# =============================================================================
+
+def test_webapplication_shell_preloads_app_and_persona():
+    """
+        Test that the shell namespace built from an imported application
+        holds the application and its persona objects.
+    """
+    from ccai.webworks.devexp.cli.shell import WebApplicationShell
+
+    class _FakePersona:
+        registry = "the-registry"
+        router = "the-router"
+
+    application = object()
+    persona = _FakePersona()
+
+    namespace = build_shell_namespace(WebApplicationShell(application, persona), {})
+
+    if namespace.get("app") is not application:
+        errmsg = "Expected 'app' to be the imported application."
+        raise AssertionError(errmsg)
+
+    if namespace.get("webapp") is not persona:
+        errmsg = "Expected 'webapp' to be the application persona."
+        raise AssertionError(errmsg)
+
+    if namespace.get("router") != "the-router" or namespace.get("registry") != "the-registry":
+        errmsg = "Expected 'router' and 'registry' from the persona in the namespace."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_webapplication_shell_without_persona_preloads_only_app():
+    """
+        Test that an application without a persona still provides 'app'.
+    """
+    from ccai.webworks.devexp.cli.shell import WebApplicationShell
+
+    application = object()
+
+    namespace = build_shell_namespace(WebApplicationShell(application, None), {})
+
+    if namespace.get("app") is not application:
+        errmsg = "Expected 'app' to be the imported application."
+        raise AssertionError(errmsg)
+
+    if "webapp" in namespace:
+        errmsg = "Did not expect 'webapp' without a persona."
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_shell_execute_returns_error_for_unimportable_app():
+    """
+        Test that the shell command reports an application target that
+        cannot be imported and does not start a shell.
+    """
+    cmd = ShellCommand()
+
+    launched = []
+    cmd._standard_launcher = lambda namespace, banner: launched.append(namespace)
+    cmd._ipython_checker = lambda: False
+
+    args = Namespace(
+        app="no_such_module_for_shell_test:app",
+        startup_file=None, no_banner=True, no_ipython=True,
+    )
+
+    exit_code = cmd.execute(args, {})
+
+    if exit_code != EXIT_ERROR:
+        errmsg = "Expected EXIT_ERROR, got {}".format(exit_code)
+        raise AssertionError(errmsg)
+
+    if len(launched) != 0:
+        errmsg = "Did not expect the shell to start when the application cannot be loaded."
+        raise AssertionError(errmsg)
+
+    return

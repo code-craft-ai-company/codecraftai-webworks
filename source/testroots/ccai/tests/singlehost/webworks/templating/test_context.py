@@ -2812,3 +2812,44 @@ def test_property_context_variable_access():
             pass
 
     return
+
+
+# =============================================================================
+# ContextProcessorRegistry.processors
+# =============================================================================
+
+def test_processor_registry_processors_returns_registration_order():
+    """
+        Test that processors lists the processors in registration order.
+    """
+    registry = ContextProcessorRegistry()
+    
+    def first(context):
+        return {"a": 1}
+    
+    def second(context):
+        return {"b": 2}
+    
+    registry.register(first)
+    registry.register(second)
+    
+    if registry.processors != [first, second]:
+        raise AssertionError(f"Expected [first, second], got {registry.processors}")
+    
+    return
+
+
+def test_processor_registry_processors_returns_copy():
+    """
+        Test that changing the returned list does not change the registry.
+    """
+    registry = ContextProcessorRegistry()
+    registry.register(lambda context: {})
+    
+    processors = registry.processors
+    processors.clear()
+    
+    if registry.count != 1:
+        raise AssertionError(f"Expected the registry to keep 1 processor, got {registry.count}")
+    
+    return

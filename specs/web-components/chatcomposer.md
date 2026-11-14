@@ -20,7 +20,9 @@
 Use as the primary input in a chat or messaging interface. Do not use in place of a comment form — use `<mj-comments>` + `<mj-mention-input>`. Do not use for a simple text field — use `<mj-text-field>` or `<mj-textarea>`.
 
 ## 3. Anatomy
-- **composer root** — `<div role="form" aria-label="Message composer">`.
+- **composer root** — `<div role="form" aria-label="{label}">` when the page sets `label`; otherwise a plain
+  container (a form is a landmark that must be named, and several composers with the default name would repeat
+  it). The textarea always has the name.
 - **reply preview** — collapsible strip showing the message being replied to, with a cancel button.
 - **mention input** — `<mj-mention-input multiline="true">` as the main text entry.
 - **attachment bar** — horizontal list of queued attachment thumbnails or file chips, each with a remove button.
@@ -52,7 +54,7 @@ Use as the primary input in a chat or messaging interface. Do not use in place o
 | `loading` | boolean | `false` | Yes | Shows send button spinner; disables input while sending |
 | `accept` | string | `""` | Yes | File types accepted by the attachment picker |
 | `max-attachment-size` | number | `0` | Yes | Per-file size limit in bytes for attachments |
-| `label` | string | `"Message composer"` | Yes | Accessible name for the form region |
+| `label` | string | `"Message composer"` | Yes | Accessible name of the textarea; when set, also of the form landmark |
 
 ## 6. Properties
 | Property | Type | Description |
@@ -118,7 +120,7 @@ On `send-key` trigger (Enter or Ctrl+Enter) with non-empty content, `mj-send` fi
 | `Delete` / `Backspace` on attachment | Removes the focused attachment |
 
 ## 13. Accessibility
-Root carries `role="form"` with `aria-label`. The mention input is the primary interactive element; it has its own ARIA attributes. The send button has `aria-label="Send message"` (localizable). When disabled (empty content), `aria-disabled="true"` and `title="Type a message to send"`. The attachment bar is `<ul aria-label="Attachments">` with each item as `<li>`. Each attachment remove button is `aria-label="Remove attachment {filename}"`. The reply preview has `role="note"` with `aria-label="Replying to: {preview text}"`. The loading state sets `aria-busy="true"` on the form and `aria-label="Sending…"` on the send button.
+Root carries `role="form"` with `aria-label` when `label` is set, and no role otherwise. The mention input is the primary interactive element; it has its own ARIA attributes. The send button has `aria-label="Send message"` (localizable). When disabled (empty content), `aria-disabled="true"` and `title="Type a message to send"`. The attachment bar is `<ul aria-label="Attachments">` with each item as `<li>`. Each attachment remove button is `aria-label="Remove attachment {filename}"`. The reply preview has `role="note"` with `aria-label="Replying to: {preview text}"`. The loading state sets `aria-busy="true"` on the root and `aria-label="Sending…"` on the send button.
 
 ## 14. Form participation
 Not form-associated in the traditional sense (no ElementInternals value submission). The component manages its own message lifecycle via events. If wrapped in a `<form>`, the consumer should handle `mj-send` and prevent default form submission.

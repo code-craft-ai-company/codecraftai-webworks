@@ -30,6 +30,8 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ccai.webworks.devexp.cli.command import CLICommand
 from ccai.webworks.devexp.cli.group import CLIGroup
+from ccai.webworks.openapi.generator import dump_yaml
+from ccai.webworks.openapi.validation import SpecificationValidationError
 
 if TYPE_CHECKING:
     from argparse import ArgumentParser, Namespace
@@ -125,10 +127,21 @@ class GenerateCommand(CLICommand):
             print(output_text)
             return 0
 
-        # Write to file
+        # Write to file. The text written is the specification as filtered
+        # above -- the same one printed for stdout -- not a fresh, unfiltered
+        # export from the generator.
+        if output_format == "json":
+            output_text = json.dumps(spec, indent=2, sort_keys=True)
+        else:
+            output_text = _dump_yaml(spec)
+            if output_text is None:
+                print("Error: PyYAML is required for YAML output.", file=sys.stderr)
+                return 1
+
         try:
-            generator.export(args.output, format=output_format)
-        except (ValueError, OSError) as exc:
+            with open(args.output, "w", encoding="utf-8") as output_file:
+                output_file.write(output_text)
+        except OSError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
 
@@ -184,7 +197,14 @@ class ValidateCommand(CLICommand):
             print("Error: No OpenAPI generator configured.", file=sys.stderr)
             return 1
 
-        issues = generator.validate(strict=args.strict)
+        # validate() raises when it finds errors (in strict mode a warning
+        # counts as one) and carries the issues on the exception. They are
+        # what the user ran the command to see, so they are printed rather
+        # than left to surface as a traceback.
+        try:
+            issues = generator.validate(strict=args.strict)
+        except SpecificationValidationError as exc:
+            issues = exc.issues
 
         if len(issues) == 0:
             print("OpenAPI specification is valid.")
@@ -373,9 +393,8 @@ def _dump_yaml(spec: Dict[str, Any]) -> Optional[str]:
         :returns: A YAML string or None if PyYAML is not available.
     """
     try:
-        import yaml
+        yaml_str = dump_yaml(spec)
     except ImportError:
         return None
 
-    yaml_str = yaml.dump(spec, default_flow_style=False, sort_keys=True)
     return yaml_str

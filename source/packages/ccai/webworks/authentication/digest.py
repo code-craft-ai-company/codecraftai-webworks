@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, Optional, Protocol, runtime_checkable
+from urllib.parse import urlsplit
 
 from ccai.webworks.authentication.core import (
     AuthenticationContext,
@@ -32,12 +33,20 @@ from ccai.webworks.authentication.core import (
     AuthenticationStatus,
     Principal
 )
+from ccai.webworks.authentication.errors import (
+    AuthenticationError,
+    LoginThrottle,
+    get_client_key
+)
 
 
 # Module-level logger for the Digest authenticator. Malformed headers
 # and replay-protection failures are logged at warning so the
 # operator can spot abuse.
 logger = logging.getLogger(__name__)
+
+# A digest response is the hexadecimal form of an MD5 or SHA-256 hash.
+_HEX_DIGEST_PATTERN = re.compile(r"^[0-9A-Fa-f]{32,128}$")
 
 
 class DigestAlgorithm(Enum):
@@ -215,6 +224,22 @@ class NonceStore:
             return self._nonces[nonce].count
         return 0
     
+    def record_count(self, nonce: str, count: int) -> int:
+        """
+            Record the nonce count a client used, keeping the highest seen.
+            
+            :param nonce: The nonce the count belongs to.
+            :param count: The nonce count the client sent.
+            
+            :returns: The highest count recorded for the nonce, or 0 if
+                      the nonce is not known.
+        """
+        if nonce in self._nonces:
+            if count > self._nonces[nonce].count:
+                self._nonces[nonce].count = count
+            return self._nonces[nonce].count
+        return 0
+    
     def get_count(self, nonce: str) -> int:
         """
             Get the current count for a nonce.
@@ -301,7 +326,8 @@ class DigestAuthenticator:
         algorithm: DigestAlgorithm = DigestAlgorithm.MD5,
         nonce_max_age: float = 300.0,
         opaque: Optional[str] = None,
-        qop: str = "auth"
+        qop: str = "auth",
+        login_throttle: Optional[LoginThrottle] = None
     ):
         """
             Initialize the DigestAuthenticator.
@@ -311,7 +337,12 @@ class DigestAuthenticator:
             :param algorithm: The hash algorithm. Defaults to MD5.
             :param nonce_max_age: Maximum nonce age in seconds. Defaults to 300.
             :param opaque: Optional opaque value for challenges.
-            :param qop: Quality of protection. Defaults to "auth".
+            :param qop: Quality of protection. Defaults to "auth". The
+                        client must use exactly this value; an empty
+                        string selects the legacy mode without qop, in
+                        which every nonce is accepted only once.
+            :param login_throttle: Optional :class:`LoginThrottle` applied
+                                   to every credential check.
         """
         self._identity_provider = identity_provider
         self._realm = realm
@@ -319,6 +350,7 @@ class DigestAuthenticator:
         self._nonce_store = NonceStore(max_age_seconds=nonce_max_age)
         self._opaque = opaque or secrets.token_hex(16)
         self._qop = qop
+        self._login_throttle = login_throttle
     
     @property
     def scheme(self) -> str:
@@ -427,66 +459,107 @@ class DigestAuthenticator:
                 # Unknown nonce
                 return self._challenge_response()
         
+        # The algorithm and quality of protection are chosen by the
+        # server. A header that names anything else is refused instead
+        # of being verified with whatever the client picked.
+        if credentials.algorithm.upper() != self._algorithm.value.upper():
+            logger.warning(
+                "Digest auth: algorithm %r does not match configured %r",
+                credentials.algorithm,
+                self._algorithm.value,
+            )
+            return self._invalid_credentials()
+        
+        expected_qop = self._qop or None
+        if (credentials.qop or None) != expected_qop:
+            logger.warning(
+                "Digest auth: qop %r does not match configured %r",
+                credentials.qop,
+                self._qop,
+            )
+            return self._invalid_credentials()
+        
+        if expected_qop is not None:
+            if not credentials.nc or not credentials.cnonce:
+                return self._bad_request("Missing nonce count or client nonce")
+        
+        # The signed uri must be the target of this request, otherwise a
+        # captured header could be replayed against another URL.
+        request_target = self._get_request_target(request)
+        if not self._uri_matches_target(credentials.uri, request_target):
+            logger.warning(
+                "Digest auth: uri %r does not match request target %r",
+                credentials.uri,
+                request_target,
+            )
+            return self._invalid_credentials()
+        
+        # The response is a hex digest; anything else can never match
+        # (and non-ASCII text cannot be compared in constant time).
+        if _HEX_DIGEST_PATTERN.match(credentials.response) is None:
+            return self._invalid_credentials()
+        
+        # Refuse the attempt while the client or the account is throttled
+        client_key = get_client_key(request)
+        if self._login_throttle is not None:
+            throttle_error = self._login_throttle.check(
+                client_key, credentials.username
+            )
+            if throttle_error is not None:
+                return self._throttled(
+                    throttle_error, client_key, credentials.username
+                )
+        
         # Get HA1 from identity provider
         ha1 = await self._identity_provider.get_ha1(
             credentials.username,
             credentials.realm,
-            credentials.algorithm
+            self._algorithm.value
         )
         
-        if ha1 is None:
-            return AuthenticationResult(
-                status=AuthenticationStatus.FAILURE,
-                error_code="invalid_credentials",
-                error_description="Invalid username"
+        is_authentic = False
+        if ha1 is not None:
+            # Get request method and URI
+            method = self._get_request_method(request)
+            uri = credentials.uri
+            
+            # Compute expected response
+            expected_response = self._compute_response(
+                ha1=ha1,
+                nonce=credentials.nonce,
+                nc=credentials.nc,
+                cnonce=credentials.cnonce,
+                qop=credentials.qop,
+                method=method,
+                uri=uri,
+                algorithm=self._algorithm.value
+            )
+            
+            # Compare responses with a constant-time comparison so an
+            # attacker can't infer the correct hash byte-by-byte from
+            # response-time variations. RFC 7616 response values are
+            # lowercase hex, but normalize defensively in case a
+            # client capitalizes them.
+            client_response = credentials.response.lower()
+            server_response = expected_response.lower()
+            is_authentic = hmac.compare_digest(client_response, server_response)
+        
+        if self._login_throttle is not None:
+            self._login_throttle.record(
+                client_key, credentials.username, success=is_authentic
             )
         
-        # Get request method and URI
-        method = self._get_request_method(request)
-        uri = credentials.uri
+        if not is_authentic:
+            # One message for an unknown user and a wrong password, so
+            # the response does not reveal which usernames exist.
+            return self._invalid_credentials()
         
-        # Compute expected response
-        expected_response = self._compute_response(
-            ha1=ha1,
-            nonce=credentials.nonce,
-            nc=credentials.nc,
-            cnonce=credentials.cnonce,
-            qop=credentials.qop,
-            method=method,
-            uri=uri,
-            algorithm=credentials.algorithm
-        )
-        
-        # Compare responses with a constant-time comparison so an
-        # attacker can't infer the correct hash byte-by-byte from
-        # response-time variations. RFC 7616 response values are
-        # lowercase hex, but normalize defensively in case a
-        # client capitalizes them.
-        client_response = credentials.response.lower()
-        server_response = expected_response.lower()
-        if not hmac.compare_digest(client_response, server_response):
-            return AuthenticationResult(
-                status=AuthenticationStatus.FAILURE,
-                error_code="invalid_credentials",
-                error_description="Invalid response hash"
-            )
-        
-        # Validate nonce count if qop is used
-        if credentials.qop and credentials.nc:
+        # Replay protection
+        if expected_qop is not None:
+            # The nonce count must be higher than every count already
+            # seen for this nonce.
             try:
                 client_nc = int(credentials.nc, 16)
-                server_nc = self._nonce_store.get_count(credentials.nonce)
-                
-                if client_nc <= server_nc:
-                    # Replay attack detected
-                    return AuthenticationResult(
-                        status=AuthenticationStatus.FAILURE,
-                        error_code="replay_detected",
-                        error_description="Nonce count too low"
-                    )
-                
-                # Update server count
-                self._nonce_store.increment_count(credentials.nonce)
             except ValueError as exc:
                 logger.warning(
                     "Digest auth: invalid nonce-count %r: %s",
@@ -494,6 +567,24 @@ class DigestAuthenticator:
                     exc,
                 )
                 return self._bad_request("Invalid nonce count format")
+            
+            server_nc = self._nonce_store.get_count(credentials.nonce)
+            if client_nc <= server_nc:
+                # Replay attack detected
+                return AuthenticationResult(
+                    status=AuthenticationStatus.FAILURE,
+                    error_code="replay_detected",
+                    error_description="Nonce count too low"
+                )
+            
+            # Remember the highest count the client has used
+            self._nonce_store.record_count(credentials.nonce, client_nc)
+        else:
+            # Without qop there is no nonce count, so a nonce is good
+            # for exactly one request.
+            if self._nonce_store.get_count(credentials.nonce) > 0:
+                return self._challenge_response(stale=True)
+            self._nonce_store.record_count(credentials.nonce, 1)
         
         # Get principal from identity provider
         principal = await self._identity_provider.get_principal(
@@ -516,7 +607,7 @@ class DigestAuthenticator:
                 scheme=self.scheme,
                 attributes={
                     "realm": credentials.realm,
-                    "algorithm": credentials.algorithm,
+                    "algorithm": self._algorithm.value,
                     "qop": credentials.qop
                 }
             )
@@ -568,6 +659,67 @@ class DigestAuthenticator:
             return request.method
         
         return "GET"
+    
+    def _get_request_target(self, request: Any) -> Optional[str]:
+        """
+            Extract the request target (path plus query string).
+            
+            :param request: The HTTP request object.
+            
+            :returns: The request target, or None when the request does
+                      not expose its path.
+        """
+        path = None
+        query_string = None
+        
+        if isinstance(request, dict):
+            path = request.get("path")
+            query_string = request.get("query_string")
+        else:
+            path = getattr(request, "path", None)
+            query_string = getattr(request, "query_string", None)
+        
+        if not isinstance(path, str) or len(path) == 0:
+            return None
+        
+        if isinstance(query_string, bytes):
+            query_string = query_string.decode("utf-8", errors="replace")
+        
+        rtnval = path
+        if isinstance(query_string, str) and len(query_string) > 0:
+            rtnval = "{}?{}".format(path, query_string)
+        
+        return rtnval
+    
+    def _uri_matches_target(self, uri: str, request_target: Optional[str]) -> bool:
+        """
+            Check that the ``uri`` a client signed is the request target.
+            
+            The client may send the target in origin form
+            (``/path?query``) or as an absolute URI; both are compared
+            by path and query string.
+            
+            :param uri: The ``uri`` parameter of the Authorization header.
+            :param request_target: The target of the request being
+                                   authenticated, or None if unknown.
+            
+            :returns: True if they name the same target. False when the
+                      request target is unknown.
+        """
+        if request_target is None:
+            return False
+        
+        signed_target = uri
+        if "://" in uri:
+            parts = urlsplit(uri)
+            signed_target = parts.path or "/"
+            if parts.query:
+                signed_target = "{}?{}".format(signed_target, parts.query)
+        
+        rtnval = hmac.compare_digest(
+            signed_target.encode("utf-8"), request_target.encode("utf-8")
+        )
+        return rtnval
     
     def _parse_digest_header(self, auth_header: str) -> DigestCredentials:
         """
@@ -692,6 +844,64 @@ class DigestAuthenticator:
         else:
             return hashlib.md5
     
+    def get_challenge(self, stale: bool = False) -> str:
+        """
+            Issue a fresh nonce and return the challenge that carries it.
+            
+            The authentication system calls this for requests without
+            credentials, which is how a Digest client obtains its first
+            nonce.
+            
+            :param stale: If True, indicates the nonce is stale.
+            
+            :returns: The ``WWW-Authenticate`` header value.
+        """
+        result = self._challenge_response(stale=stale)
+        return result.challenge
+    
+    def _invalid_credentials(self) -> AuthenticationResult:
+        """
+            Create the response for credentials that do not verify.
+            
+            :returns: An AuthenticationResult with FAILURE status and one
+                      generic message for every cause.
+        """
+        return AuthenticationResult(
+            status=AuthenticationStatus.FAILURE,
+            error_code="invalid_credentials",
+            error_description="Invalid credentials"
+        )
+    
+    def _throttled(
+        self,
+        error: AuthenticationError,
+        client_key: Optional[str],
+        username: str
+    ) -> AuthenticationResult:
+        """
+            Create the response for an attempt refused by the login throttle.
+            
+            :param error: The throttling error from :class:`LoginThrottle`.
+            :param client_key: The client key used for rate limiting.
+            :param username: The account named by the attempt.
+            
+            :returns: An AuthenticationResult with FAILURE status carrying
+                      the throttling error code and a ``Retry-After`` header.
+        """
+        logger.warning("Digest auth: attempt refused: %s", error.error_code)
+        
+        response_headers = {}
+        retry_after = self._login_throttle.get_retry_after(client_key, username)
+        if retry_after is not None:
+            response_headers["Retry-After"] = str(retry_after)
+        
+        return AuthenticationResult(
+            status=AuthenticationStatus.FAILURE,
+            error_code=error.error_code,
+            error_description=error.safe_message,
+            response_headers=response_headers
+        )
+    
     def _challenge_response(self, stale: bool = False) -> AuthenticationResult:
         """
             Create a challenge response for unauthenticated requests.
@@ -706,10 +916,11 @@ class DigestAuthenticator:
         parts = [
             f'realm="{self._realm}"',
             f'nonce="{nonce}"',
-            f'algorithm={self._algorithm.value}',
-            f'qop="{self._qop}"',
-            f'opaque="{self._opaque}"'
+            f'algorithm={self._algorithm.value}'
         ]
+        if self._qop:
+            parts.append(f'qop="{self._qop}"')
+        parts.append(f'opaque="{self._opaque}"')
         
         if stale:
             parts.append("stale=true")

@@ -1113,3 +1113,234 @@ def test_bearer_authenticator_accepts_both_validation_methods():
         errmsg = "Constructor returned None"
         raise AssertionError(errmsg)
     return
+
+
+# =============================================================================
+# Token Validation Hardening
+# =============================================================================
+
+from ccai.webworks.authentication.bearer import (
+    InMemoryTokenRevocationList,
+    get_token_revocation_id,
+)
+
+
+def test_decode_jwt_rejects_header_that_is_not_utf8():
+    """
+        Test that a header segment that is not UTF-8 raises JWTDecodeError
+        rather than UnicodeDecodeError.
+    """
+    try:
+        decode_jwt("gA.gA.gA", "secret", algorithms=["HS256"])
+    except JWTDecodeError:
+        return
+    
+    errmsg = "Expected JWTDecodeError for a non-UTF-8 header"
+    raise AssertionError(errmsg)
+
+
+def test_decode_jwt_rejects_header_that_is_not_an_object():
+    """
+        Test that a header segment that decodes to a JSON scalar raises
+        JWTDecodeError rather than AttributeError.
+    """
+    try:
+        decode_jwt("MQ.MQ.MQ", "secret", algorithms=["HS256"])
+    except JWTDecodeError:
+        return
+    
+    errmsg = "Expected JWTDecodeError for a header that is not a JSON object"
+    raise AssertionError(errmsg)
+
+
+def test_bearer_authenticator_malformed_token_fails_instead_of_raising():
+    """
+        Test that a malformed bearer token is answered with FAILURE
+        (a 401) instead of an unhandled exception (a 500).
+    """
+    authenticator = BearerAuthenticator(jwt_secret="secret")
+    
+    for token in ("gA.gA.gA", "MQ.MQ.MQ"):
+        request = MockRequest(headers={"Authorization": f"Bearer {token}"})
+        result = run_async(authenticator.authenticate(request))
+        
+        if result.status != AuthenticationStatus.FAILURE:
+            errmsg = f"Expected FAILURE for token {token!r}, got {result.status}"
+            raise AssertionError(errmsg)
+        
+        if result.error_code != "invalid_token":
+            errmsg = f"Expected invalid_token for token {token!r}, got {result.error_code}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+def test_decode_jwt_requires_exp_claim():
+    """
+        Test that a token without an exp claim is rejected: it would
+        otherwise be valid forever.
+    """
+    token = encode_jwt({"sub": "user"}, "secret")
+    
+    try:
+        decode_jwt(token, "secret", algorithms=["HS256"])
+    except JWTInvalidClaimsError:
+        return
+    
+    errmsg = "Expected JWTInvalidClaimsError for a token without exp"
+    raise AssertionError(errmsg)
+
+
+def test_decode_jwt_rejects_token_before_nbf():
+    """
+        Test that a token is rejected before its not-before time.
+    """
+    now = int(time.time())
+    token = encode_jwt({"sub": "user", "exp": now + 600, "nbf": now + 300}, "secret")
+    
+    try:
+        decode_jwt(token, "secret", algorithms=["HS256"])
+    except JWTInvalidClaimsError:
+        return
+    
+    errmsg = "Expected JWTInvalidClaimsError for a token that is not yet valid"
+    raise AssertionError(errmsg)
+
+
+def test_decode_jwt_accepts_nbf_within_leeway():
+    """
+        Test that the configured leeway tolerates a not-before time
+        slightly in the future (clock skew).
+    """
+    now = int(time.time())
+    token = encode_jwt({"sub": "user", "exp": now + 600, "nbf": now + 5}, "secret")
+    
+    claims = decode_jwt(token, "secret", algorithms=["HS256"], leeway=30)
+    
+    if claims.get("sub") != "user":
+        errmsg = f"Expected the claims to be returned, got {claims}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_bearer_authenticator_rejects_refresh_token():
+    """
+        Test that a refresh token, although signed with the same secret,
+        is not accepted as an access token.
+    """
+    token = encode_jwt(
+        {"sub": "user", "exp": int(time.time()) + 600, "token_type": "refresh"},
+        "secret"
+    )
+    authenticator = BearerAuthenticator(jwt_secret="secret")
+    
+    request = MockRequest(headers={"Authorization": f"Bearer {token}"})
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.status != AuthenticationStatus.FAILURE:
+        errmsg = f"Expected FAILURE for a refresh token, got {result.status}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_bearer_authenticator_accepts_access_token_type():
+    """
+        Test that a token whose token_type claim is "access" is accepted.
+    """
+    token = encode_jwt(
+        {"sub": "user", "exp": int(time.time()) + 600, "token_type": "access"},
+        "secret"
+    )
+    authenticator = BearerAuthenticator(jwt_secret="secret")
+    
+    request = MockRequest(headers={"Authorization": f"Bearer {token}"})
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.status != AuthenticationStatus.SUCCESS:
+        errmsg = f"Expected SUCCESS for an access token, got {result.status}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_bearer_authenticator_rejects_revoked_token():
+    """
+        Test that a token on the revocation list is rejected although its
+        signature and expiry are valid.
+    """
+    claims = {"sub": "user", "exp": int(time.time()) + 600, "jti": "token-1"}
+    token = encode_jwt(claims, "secret")
+    
+    revocation_list = InMemoryTokenRevocationList()
+    authenticator = BearerAuthenticator(
+        jwt_secret="secret", revocation_list=revocation_list
+    )
+    request = MockRequest(headers={"Authorization": f"Bearer {token}"})
+    
+    before = run_async(authenticator.authenticate(request))
+    if before.status != AuthenticationStatus.SUCCESS:
+        errmsg = f"Expected SUCCESS before revocation, got {before.status}"
+        raise AssertionError(errmsg)
+    
+    revocation_list.revoke(get_token_revocation_id(token, claims), claims["exp"])
+    
+    after = run_async(authenticator.authenticate(request))
+    if after.status != AuthenticationStatus.FAILURE:
+        errmsg = f"Expected FAILURE after revocation, got {after.status}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_revocation_list_makes_room_by_forgetting_expired_entries():
+    """
+        Test that a full revocation list forgets entries for tokens that
+        have expired and keeps the ones that are still live.
+    """
+    revocation_list = InMemoryTokenRevocationList(max_entries=2)
+    now = time.time()
+    
+    revocation_list.revoke("expired", now - 10)
+    revocation_list.revoke("live", now + 600)
+    revocation_list.revoke("new", now + 600)
+    
+    if revocation_list.is_revoked("expired"):
+        errmsg = "Expected the expired entry to be forgotten"
+        raise AssertionError(errmsg)
+    
+    if not revocation_list.is_revoked("live") or not revocation_list.is_revoked("new"):
+        errmsg = "Expected live revocations to be kept"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_token_revocation_id_falls_back_to_token_digest():
+    """
+        Test that a token without a jti claim can still be named for
+        revocation.
+    """
+    first = get_token_revocation_id("token-a", {})
+    second = get_token_revocation_id("token-b", {})
+    
+    if first == second or not first.startswith("sha256:"):
+        errmsg = f"Expected distinct digest identifiers, got {first!r} and {second!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_bearer_authenticator_get_challenge_names_realm():
+    """
+        Test that the Bearer authenticator can supply a challenge for
+        requests without credentials.
+    """
+    authenticator = BearerAuthenticator(jwt_secret="secret", realm="API")
+    
+    if authenticator.get_challenge() != 'Bearer realm="API"':
+        errmsg = f"Unexpected challenge {authenticator.get_challenge()!r}"
+        raise AssertionError(errmsg)
+    
+    return

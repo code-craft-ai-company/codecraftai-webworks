@@ -5,11 +5,17 @@
  *
  * Exposes `aria-expanded` and `aria-controls` so assistive technology understands
  * the relationship between the trigger and the controlled panel. Fires a cancelable
- * `mj-change` event before the state changes; fires `mj-expanded` after. An optional
- * decorative chevron rotates 180° to indicate expanded/collapsed state.
+ * `mj-change` event before the state changes; once the change is committed it
+ * fires the native-style `change` event and `mj-expanded`. A decorative chevron
+ * (shown unless chevron="false") rotates 180° to indicate the state.
+ *
+ * The element named by `controls` (an id in the button's own tree, or a CSS
+ * selector) is shown and hidden with the button: its `hidden` property follows
+ * `expanded`. Set the `manual` attribute to keep the panel under the control of
+ * the page or of a wrapper such as an accordion.
  */
 
-import { MjElement, nextId } from "../core/mjelement.js";
+import { MjElement } from "../core/mjelement.js";
 
 const STYLES = `
 :host {
@@ -19,6 +25,7 @@ const STYLES = `
 :host([block]) { display: block; }
 
 .btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -66,8 +73,13 @@ const STYLES = `
 :host([size="sm"]) .btn { min-height: var(--mj-control-height-sm); padding: 0 var(--mj-space-3); font-size: var(--mj-font-size-sm); }
 :host([size="lg"]) .btn { min-height: var(--mj-control-height-lg); padding: 0 var(--mj-space-5); font-size: var(--mj-font-size-lg); }
 
-/* Icon-only */
+/* Icon-only: the label stays in the accessibility tree but is not shown. */
 :host([icon-only]) .btn { padding: 0; aspect-ratio: 1; justify-content: center; }
+:host([icon-only]) .label {
+  position: absolute;
+  width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
 
 /* Disabled */
 :host([disabled]) .btn { opacity: 0.55; cursor: not-allowed; }
@@ -80,7 +92,6 @@ const STYLES = `
   height: var(--mj-disclosure-button-chevron-size, 1em);
   transition: transform var(--mj-disclosure-button-chevron-transition, var(--mj-motion-medium)) var(--mj-motion-ease);
 }
-:host(:not([chevron])) .chevron,
 :host([chevron="false"]) .chevron { display: none; }
 .btn[aria-expanded="true"] .chevron { transform: rotate(180deg); }
 
@@ -97,11 +108,20 @@ const CHEVRON_SVG = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" 
 export class MjDisclosureButton extends MjElement {
   static tagName = "mj-disclosure-button";
   static styles = STYLES;
-  static watched = ["expanded", "controls", "variant", "size", "disabled", "chevron", "icon-only", "label", "block"];
+  static watched = [
+    "expanded", "controls", "variant", "size", "disabled", "chevron", "icon-only", "label", "block", "manual"
+  ];
 
   constructor() {
     super()
     this._button = null
+
+    /* Pending retry for a panel that is parsed or inserted after the button. */
+    this._panelRetryTimer = null
+
+    /* True once the corresponding console warning was logged. */
+    this._warnedMissingName = false
+    this._warnedMissingPanel = false
   }
 
   render() {
@@ -125,55 +145,113 @@ export class MjDisclosureButton extends MjElement {
   }
 
   onAttributeChanged(name, oldValue, newValue) {
-    if (this._button !== null) {
-      this._syncAccessibility()
-      if (name === "controls") {
-        this._wireControls()
-      }
+    if (this._button === undefined || this._button === null) {
+      return
+    }
+
+    this._syncAccessibility()
+    if (name === "controls" || name === "expanded" || name === "manual") {
+      this._wireControls()
     }
     return
   }
 
   onConnected() {
     this._wireControls()
+
+    /*
+     * The panel usually follows the button in the markup, so it does not
+     * exist yet while the parser connects the button. Wire it once more when
+     * the document has been parsed, or on the next task for script-built
+     * trees.
+     */
+    if (this._resolvePanel() === null && this.getAttribute("controls") !== null) {
+      if (document.readyState === "loading") {
+        this.listen(document, "DOMContentLoaded", this._wireControls.bind(this))
+      }
+      this._panelRetryTimer = window.setTimeout(() => {
+        this._panelRetryTimer = null
+        this._wireControls()
+      }, 0)
+      this.onTeardown(() => {
+        if (this._panelRetryTimer !== null) {
+          window.clearTimeout(this._panelRetryTimer)
+          this._panelRetryTimer = null
+        }
+      })
+    }
     return
   }
 
+  /* `expanded="false"` (for example from a server template) is collapsed. */
+  _isExpanded() {
+    const value = this.getAttribute("expanded")
+    const expanded = value !== null && value !== "false"
+    return expanded
+  }
+
+  /*
+   * Find the controlled panel. `controls` is an id looked up in the tree the
+   * button lives in (the document or an enclosing shadow root); when no
+   * element has that id it is tried as a CSS selector. Resolved on every
+   * call so a panel added later is found.
+   */
+  _resolvePanel() {
+    let panel = null
+
+    const controls = this.getAttribute("controls")
+    if (controls !== null && controls.length > 0) {
+      const root = this.getRootNode()
+
+      if (typeof root.getElementById === "function") {
+        panel = root.getElementById(controls)
+      }
+
+      if (panel === null && typeof root.querySelector === "function") {
+        try {
+          panel = root.querySelector(controls)
+        } catch (error) {
+          /* Not a valid selector (for example an id such as "1panel"). */
+          panel = null
+        }
+      }
+    }
+
+    return panel
+  }
+
+  /*
+   * Expose the button/panel relationship and keep the panel's visibility in
+   * step with `expanded`.
+   */
   _wireControls() {
-    if (this._button === null) {
+    if (this._button === undefined || this._button === null) {
       return
     }
 
-    const controlsId = this.getAttribute("controls")
-    if (controlsId === null || controlsId.length === 0) {
-      this._button.removeAttribute("aria-controls")
-      return
+    const panel = this._resolvePanel()
+
+    /*
+     * The button is in this component's shadow root and the panel is outside
+     * it, so an aria-controls id could never resolve. The element itself is
+     * assigned instead.
+     */
+    if ("ariaControlsElements" in this._button) {
+      this._button.ariaControlsElements = panel !== null ? [panel] : null
     }
 
-    let panelEl = document.getElementById(controlsId)
-    if (panelEl === null) {
-      panelEl = document.querySelector(controlsId)
+    if (panel !== null && this.hasAttribute("manual") === false) {
+      const hidden = this._isExpanded() === false
+      if (panel.hidden !== hidden) {
+        panel.hidden = hidden
+      }
     }
-
-    if (panelEl === null) {
-      console.warn(`<mj-disclosure-button>: controls="${controlsId}" does not resolve to a document element.`)
-      this._button.removeAttribute("aria-controls")
-      return
-    }
-
-    if (panelEl.id === null || panelEl.id.length === 0) {
-      const generatedId = nextId("mj-panel")
-      panelEl.id = generatedId
-      console.info(`<mj-disclosure-button>: assigned id "${generatedId}" to the controlled panel.`)
-    }
-
-    this._button.setAttribute("aria-controls", panelEl.id)
     return
   }
 
   _syncAccessibility() {
     const disabled = this.hasAttribute("disabled")
-    const expanded = this.hasAttribute("expanded")
+    const expanded = this._isExpanded()
     const iconOnly = this.hasAttribute("icon-only")
 
     this._button.disabled = disabled
@@ -184,8 +262,16 @@ export class MjDisclosureButton extends MjElement {
       if (accessibleName !== null && accessibleName.length > 0) {
         this._button.setAttribute("aria-label", accessibleName)
       } else {
-        console.warn("<mj-disclosure-button>: icon-only is set but no label attribute is provided.")
-        this._button.setAttribute("aria-label", "")
+        /*
+         * The slotted label text is visually hidden but still names the
+         * button; only a button with neither is reported, once.
+         */
+        this._button.removeAttribute("aria-label")
+        const slottedText = this.textContent !== null ? this.textContent.trim() : ""
+        if (slottedText === "" && this._warnedMissingName === false) {
+          this._warnedMissingName = true
+          console.warn("<mj-disclosure-button>: icon-only is set but no label attribute is provided.")
+        }
       }
     } else {
       this._button.removeAttribute("aria-label")
@@ -202,12 +288,32 @@ export class MjDisclosureButton extends MjElement {
     }
 
     const nextExpanded = !this.expanded
-    const proceed = this.emit("mj-change", { expanded: nextExpanded, originalEvent: event }, { cancelable: true })
+
+    /*
+     * `mj-change` is the cancelable request. It is dispatched directly, not
+     * through emit(), because emit() would fire the native-style `change`
+     * right away -- before the state changes and even for a vetoed toggle.
+     */
+    const request = new CustomEvent("mj-change", {
+      detail: { expanded: nextExpanded, originalEvent: event },
+      bubbles: true,
+      cancelable: true,
+      composed: true
+    })
+    const proceed = this.dispatchEvent(request)
     if (proceed === false) {
       return
     }
 
+    const controls = this.getAttribute("controls")
+    const unresolved = controls !== null && controls.length > 0 && this._resolvePanel() === null
+    if (unresolved === true && this._warnedMissingPanel === false) {
+      this._warnedMissingPanel = true
+      console.warn("<mj-disclosure-button>: the `controls` attribute does not resolve to an element.", this)
+    }
+
     this.expanded = nextExpanded
+    this.dispatchEvent(new Event("change", { bubbles: true, composed: true }))
     this.emit("mj-expanded", { expanded: nextExpanded })
     return
   }
@@ -215,12 +321,12 @@ export class MjDisclosureButton extends MjElement {
   /* ----- scriptable API ----- */
 
   get expanded() {
-    const value = this.hasAttribute("expanded")
+    const value = this._isExpanded()
     return value
   }
 
   set expanded(value) {
-    this.reflectBoolean("expanded", value === true)
+    this.reflectBoolean("expanded", Boolean(value))
     return
   }
 
@@ -238,12 +344,9 @@ export class MjDisclosureButton extends MjElement {
     return
   }
 
+  /* The controlled panel element, or null when `controls` does not resolve. */
   get panelEl() {
-    const controlsId = this.getAttribute("controls")
-    if (controlsId === null || controlsId.length === 0) {
-      return null
-    }
-    const found = document.getElementById(controlsId)
+    const found = this._resolvePanel()
     return found
   }
 
@@ -253,12 +356,27 @@ export class MjDisclosureButton extends MjElement {
   }
 
   set disabled(value) {
-    this.reflectBoolean("disabled", value === true)
+    this.reflectBoolean("disabled", Boolean(value))
     return
   }
 
-  focus() {
-    this._button.focus()
+  /*
+   * Toggles the disclosure as a user click would (mj-change, change, mj-
+   * expanded). HTMLElement.click() would only dispatch a click at the host,
+   * which never reaches the inner button. Disabled / busy states are
+   * honoured by the inner handler.
+   */
+  click() {
+    if (this._button !== undefined && this._button !== null) {
+      this._button.click()
+    }
+    return
+  }
+
+  focus(options) {
+    if (this._button !== undefined && this._button !== null) {
+      this._button.focus(options)
+    }
     return
   }
 }

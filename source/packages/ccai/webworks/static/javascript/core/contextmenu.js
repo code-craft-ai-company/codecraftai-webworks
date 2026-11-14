@@ -3,8 +3,10 @@
  *
  * A lightweight, accessible popup context-menu used by the MjElement base
  * class so every mj-* component can carry a right-click / Shift+F10 context
- * menu. The menu is a plain light-DOM element appended to <body>; it is not a
- * custom element, so the base class has no dependency on any component.
+ * menu. The menu is a plain element, not a custom element, so the base class
+ * has no dependency on any component. It is appended to <body> -- or, while
+ * a modal surface (dialog, drawer...) is open, inside that surface, because
+ * everything outside a modal is inert -- and shown in the top layer.
  *
  *   openContextMenu(items, x, y, { onSelect, label })
  *   closeContextMenu()
@@ -13,11 +15,17 @@
  * context menu is open at a time.
  */
 
+import { deepActiveElement } from "./focustrap.js";
+import { positionAtPoint, removeFromTopLayer, topModalSurface } from "./overlay.js";
+import { t } from "./intl.js";
+
 const MENU_STYLE_ID = "mj-context-menu-styles";
 
 const MENU_CSS = `
 .mj-ctx-menu {
   position: fixed; margin: 0; min-width: 11rem; max-width: 22rem;
+  overflow-y: auto;
+  box-sizing: border-box;
   padding: var(--mj-space-1, 0.25rem);
   z-index: var(--mj-layer-popover, 1200);
   background: var(--mj-surface-raised, var(--mj-surface, #ffffff));
@@ -51,14 +59,40 @@ const MENU_CSS = `
 }
 `;
 
+/* Characters typed within this window extend the type-ahead search. */
+const TYPE_AHEAD_RESET_MS = 600;
+
 /* The single currently-open menu, or null. */
 let activeMenu = null;
 
+/*
+ * True from the moment a menu opens until the current task ends. One
+ * `contextmenu` event travels through every nested component that carries a
+ * menu; only the innermost one -- the first to ask -- may open its menu.
+ */
+let openedInThisTask = false;
 
-function ensureStyles() {
+/* Stylesheet adopted by shadow roots that host a menu. */
+let menuSheet = null;
+
+
+function ensureStyles(root) {
   /*
-   * Inject the shared menu stylesheet into the document head once.
+   * Make the menu stylesheet available in `root`: once in the document head
+   * for a menu appended to <body>, or adopted by the shadow root of the
+   * modal surface the menu is appended to.
    */
+  if (root instanceof ShadowRoot) {
+    if (menuSheet === null) {
+      menuSheet = new CSSStyleSheet()
+      menuSheet.replaceSync(MENU_CSS)
+    }
+    if (root.adoptedStyleSheets.includes(menuSheet) === false) {
+      root.adoptedStyleSheets = [...root.adoptedStyleSheets, menuSheet]
+    }
+    return
+  }
+
   const existing = document.getElementById(MENU_STYLE_ID)
   if (existing !== null) {
     return
@@ -93,8 +127,17 @@ export function openContextMenu(items, anchorX, anchorY, options) {
    *
    * Returns an object with a `close()` method.
    */
+  const handle = { close: closeContextMenu }
+
+  if (openedInThisTask === true && activeMenu !== null) {
+    /*
+     * The same event already opened the menu of a component nested inside
+     * the caller. The inner menu stays; the outer request is dropped.
+     */
+    return handle
+  }
+
   closeContextMenu()
-  ensureStyles()
 
   const opts = options || {}
   let onSelect = function () { return }
@@ -104,12 +147,20 @@ export function openContextMenu(items, anchorX, anchorY, options) {
 
   const itemList = Array.isArray(items) ? items : []
 
+  /* Captured before the menu takes focus, down through shadow roots. */
+  const previousFocus = deepActiveElement()
+
   const menu = document.createElement("div")
   menu.className = "mj-ctx-menu"
   menu.setAttribute("role", "menu")
-  if (opts.label !== undefined && opts.label !== null) {
-    menu.setAttribute("aria-label", opts.label)
+  menu.setAttribute("tabindex", "-1")
+
+  /* Accessible name used when the caller supplies no `label`. */
+  let menuLabel = t("mj.contextMenu.popupLabel")
+  if (opts.label !== undefined && opts.label !== null && String(opts.label).length > 0) {
+    menuLabel = String(opts.label)
   }
+  menu.setAttribute("aria-label", menuLabel)
 
   const itemEls = []
 
@@ -144,36 +195,29 @@ export function openContextMenu(items, anchorX, anchorY, options) {
 
     itemEl._mjItem = item
     itemEl._mjDisabled = disabled
+    itemEl._mjLabel = label.trim().toLowerCase()
     menu.appendChild(itemEl)
     itemEls.push(itemEl)
   }
 
-  document.body.appendChild(menu)
+  /*
+   * Inside the topmost modal surface when one is open: content outside a
+   * modal is inert, so a menu on <body> could be neither seen nor used.
+   */
+  const modalSurface = topModalSurface()
+  const container = modalSurface !== null ? modalSurface : document.body
+  ensureStyles(container.getRootNode())
+  container.appendChild(menu)
 
-  /* Position with viewport clamping so the menu is always fully visible. */
-  const rect = menu.getBoundingClientRect()
-  let posX = anchorX
-  let posY = anchorY
-  const margin = 4
-
-  if (posX + rect.width > window.innerWidth) {
-    posX = window.innerWidth - rect.width - margin
-  }
-  if (posY + rect.height > window.innerHeight) {
-    posY = window.innerHeight - rect.height - margin
-  }
-  if (posX < margin) {
-    posX = margin
-  }
-  if (posY < margin) {
-    posY = margin
-  }
-  menu.style.left = `${posX}px`
-  menu.style.top = `${posY}px`
+  /*
+   * In the top layer, at the pointer, kept fully inside the viewport; a menu
+   * taller than the viewport scrolls.
+   */
+  positionAtPoint(menu, anchorX, anchorY, { padding: 4, constrain: true })
 
   let activeIndex = -1
 
-  const setActive = (nextIndex) => {
+  const setActive = (nextIndex, moveFocus) => {
     if (activeIndex >= 0 && activeIndex < itemEls.length) {
       itemEls[activeIndex].classList.remove("mj-ctx-active")
     }
@@ -181,24 +225,41 @@ export function openContextMenu(items, anchorX, anchorY, options) {
     if (activeIndex >= 0 && activeIndex < itemEls.length) {
       const activeEl = itemEls[activeIndex]
       activeEl.classList.add("mj-ctx-active")
-      activeEl.focus()
+      if (moveFocus !== false) {
+        activeEl.focus()
+      }
     }
     return
   }
 
-  const moveActive = (delta) => {
+  /*
+   * The first enabled item found walking `delta` steps at a time from
+   * `fromIndex` (exclusive), wrapping around; -1 when every item is disabled.
+   */
+  const findEnabled = (fromIndex, delta) => {
     const count = itemEls.length
-    if (count === 0) {
-      return
-    }
-    let candidate = activeIndex
+    let found = -1
+    let candidate = fromIndex
+
     for (let step = 0; step < count; step = step + 1) {
       candidate = (candidate + delta + count) % count
       if (itemEls[candidate]._mjDisabled === false) {
+        found = candidate
         break
       }
     }
-    setActive(candidate)
+
+    return found
+  }
+
+  const moveActive = (delta) => {
+    if (itemEls.length === 0) {
+      return
+    }
+    const next = findEnabled(activeIndex, delta)
+    if (next >= 0) {
+      setActive(next)
+    }
     return
   }
 
@@ -220,6 +281,46 @@ export function openContextMenu(items, anchorX, anchorY, options) {
     return
   }
 
+  /* The item under the pointer is the active one, as in a native menu. */
+  const onPointerMove = (event) => {
+    const itemEl = event.target.closest(".mj-ctx-item")
+    if (itemEl === null || menu.contains(itemEl) === false) {
+      return
+    }
+    const hovered = itemEls.indexOf(itemEl)
+    if (hovered >= 0 && hovered !== activeIndex && itemEl._mjDisabled === false) {
+      setActive(hovered)
+    }
+    return
+  }
+
+  let typeAheadText = ""
+  let typeAheadTimer = null
+
+  const typeAhead = (character) => {
+    if (typeAheadTimer !== null) {
+      window.clearTimeout(typeAheadTimer)
+    }
+    typeAheadText = typeAheadText + character.toLowerCase()
+    typeAheadTimer = window.setTimeout(() => {
+      typeAheadText = ""
+      typeAheadTimer = null
+    }, TYPE_AHEAD_RESET_MS)
+
+    /* A repeated single letter cycles through the items starting with it. */
+    const count = itemEls.length
+    const start = typeAheadText.length === 1 ? activeIndex + 1 : Math.max(activeIndex, 0)
+    for (let step = 0; step < count; step = step + 1) {
+      const candidate = (start + step + count) % count
+      const itemEl = itemEls[candidate]
+      if (itemEl._mjDisabled === false && itemEl._mjLabel.startsWith(typeAheadText) === true) {
+        setActive(candidate)
+        break
+      }
+    }
+    return
+  }
+
   const onKeydown = (event) => {
     if (event.key === "ArrowDown") {
       event.preventDefault()
@@ -229,40 +330,75 @@ export function openContextMenu(items, anchorX, anchorY, options) {
       moveActive(-1)
     } else if (event.key === "Home") {
       event.preventDefault()
-      activeIndex = itemEls.length - 1
-      moveActive(1)
+      const first = findEnabled(-1, 1)
+      if (first >= 0) {
+        setActive(first)
+      }
     } else if (event.key === "End") {
       event.preventDefault()
-      activeIndex = 0
-      moveActive(-1)
+      const last = findEnabled(itemEls.length, -1)
+      if (last >= 0) {
+        setActive(last)
+      }
     } else if (event.key === "Escape") {
+      /* Handled here: a dialog around the menu must not close as well. */
       event.preventDefault()
+      event.stopPropagation()
+      closeContextMenu()
+    } else if (event.key === "Tab") {
       closeContextMenu()
     } else if (event.key === "Enter" || event.key === " ") {
       event.preventDefault()
       if (activeIndex >= 0) {
         choose(itemEls[activeIndex])
       }
+    } else if (event.key.length === 1 && event.ctrlKey === false && event.metaKey === false && event.altKey === false) {
+      event.preventDefault()
+      typeAhead(event.key)
     }
     return
   }
 
   const onOutsidePointer = (event) => {
-    if (menu.contains(event.target) === false) {
+    /* composedPath: the menu may sit inside a modal surface's shadow root. */
+    if (event.composedPath().includes(menu) === false) {
       closeContextMenu()
     }
     return
   }
 
-  const onDismiss = () => {
+  const onDismiss = (event) => {
+    /* Scrolling the menu's own overflow must not dismiss it. */
+    if (event !== undefined && event.type === "scroll" && event.target === menu) {
+      return
+    }
     closeContextMenu()
     return
   }
 
+  /*
+   * A viewport resize keeps the menu open and inside the viewport, as the
+   * anchored popups of core/overlay.js do. The viewport can change size
+   * because of the menu itself -- an iframe that grows to fit its content,
+   * a mobile browser bar or keyboard -- so closing here would dismiss the
+   * menu the moment it opened.
+   */
+  let resizeFrame = null
+  const onResize = () => {
+    if (resizeFrame === null) {
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null
+        positionAtPoint(menu, anchorX, anchorY, { padding: 4, constrain: true, topLayer: false })
+      })
+    }
+    return
+  }
+
   menu.addEventListener("click", onClick)
+  menu.addEventListener("pointermove", onPointerMove)
   menu.addEventListener("keydown", onKeydown)
   window.addEventListener("scroll", onDismiss, true)
-  window.addEventListener("resize", onDismiss)
+  window.addEventListener("resize", onResize)
   window.addEventListener("blur", onDismiss)
 
   /* Defer the outside-pointer listener so the opening event is not caught. */
@@ -270,20 +406,38 @@ export function openContextMenu(items, anchorX, anchorY, options) {
     document.addEventListener("pointerdown", onOutsidePointer, true)
   }, 0)
 
-  const previousFocus = document.activeElement
+  openedInThisTask = true
+  window.setTimeout(() => {
+    openedInThisTask = false
+  }, 0)
 
   const dispose = () => {
     window.clearTimeout(armTimer)
+    if (typeAheadTimer !== null) {
+      window.clearTimeout(typeAheadTimer)
+    }
+    if (resizeFrame !== null) {
+      window.cancelAnimationFrame(resizeFrame)
+      resizeFrame = null
+    }
     menu.removeEventListener("click", onClick)
+    menu.removeEventListener("pointermove", onPointerMove)
     menu.removeEventListener("keydown", onKeydown)
     document.removeEventListener("pointerdown", onOutsidePointer, true)
     window.removeEventListener("scroll", onDismiss, true)
-    window.removeEventListener("resize", onDismiss)
+    window.removeEventListener("resize", onResize)
     window.removeEventListener("blur", onDismiss)
+
+    /* Only pull focus back if it is still in the menu (or was lost with it). */
+    const focusedNow = deepActiveElement()
+    const focusInMenu = focusedNow === null || focusedNow === document.body || menu.contains(focusedNow) === true
+
+    removeFromTopLayer(menu)
     if (menu.parentNode !== null) {
       menu.parentNode.removeChild(menu)
     }
-    if (previousFocus !== null && typeof previousFocus.focus === "function") {
+
+    if (focusInMenu === true && previousFocus !== null && typeof previousFocus.focus === "function") {
       previousFocus.focus()
     }
     return
@@ -291,9 +445,11 @@ export function openContextMenu(items, anchorX, anchorY, options) {
 
   activeMenu = { menu: menu, dispose: dispose }
 
-  /* Move focus to the first enabled item. */
+  /* Move focus to the first enabled item, or to the menu when there is none. */
   moveActive(1)
+  if (activeIndex < 0) {
+    menu.focus()
+  }
 
-  const handle = { close: closeContextMenu }
   return handle
 }

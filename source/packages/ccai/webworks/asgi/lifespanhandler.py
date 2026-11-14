@@ -6,13 +6,15 @@
     registered startup and shutdown handlers in the correct order.
 """
 
+import inspect
 import logging
 import traceback
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 
-# Type alias for lifespan handler functions
-LifespanCallable = Callable[[], Awaitable[None]]
+# Type alias for lifespan handler functions. A handler is normally an async
+# function, a plain function is accepted as well.
+LifespanCallable = Callable[[], Union[Awaitable[None], None]]
 
 
 class LifespanHandler:
@@ -26,6 +28,24 @@ class LifespanHandler:
         
         If a startup handler fails, the application signals startup failure and
         should not accept requests.
+
+        Besides the startup and shutdown handlers an application registers,
+        two kinds of callbacks mark when the application starts and stops
+        serving (a :class:`WebApplication` uses them to fire its extensions'
+        ``on_app_ready`` and ``on_app_shutdown`` hooks):
+
+        * ready callbacks (:meth:`on_ready`) run once every startup handler
+          has succeeded, in registration order, before
+          ``lifespan.startup.complete`` is sent; requests are still refused
+          while they run. A ready callback that raises fails the startup
+          like a startup handler.
+        * stopping callbacks (:meth:`on_stopping`) run when the shutdown
+          event arrives, in registration order, before the shutdown
+          handlers, so what they stop can still use what the shutdown
+          handlers release. A stopping callback that raises is reported like
+          a failing shutdown handler and the rest still run.
+
+        Neither runs while lifespan is disabled.
     """
     
     def __init__(
@@ -44,8 +64,11 @@ class LifespanHandler:
         """
         self._startup_handlers: List[LifespanCallable] = []
         self._shutdown_handlers: List[LifespanCallable] = []
+        self._ready_callbacks: List[LifespanCallable] = []
+        self._stopping_callbacks: List[LifespanCallable] = []
         self._startup_complete: bool = False
         self._startup_failed: bool = False
+        self._startup_in_progress: bool = False
         self._enabled: bool = enabled
         
         if logger is None:
@@ -72,6 +95,30 @@ class LifespanHandler:
             :returns: True if startup failed.
         """
         return self._startup_failed
+    
+    @property
+    def startup_in_progress(self) -> bool:
+        """
+            Check if the startup handlers are running.
+            
+            :returns: True from the startup event until startup completed or failed.
+        """
+        return self._startup_in_progress
+    
+    @property
+    def requests_blocked(self) -> bool:
+        """
+            Check if requests have to be refused.
+            
+            Requests are refused while the startup handlers are running and
+            after one of them failed, because what the request handlers rely
+            on has not been set up. A server that does not send lifespan
+            events never starts the startup, so nothing is refused there.
+            
+            :returns: True if requests must be answered with 503.
+        """
+        rtnval = self._startup_failed or self._startup_in_progress
+        return rtnval
     
     @property
     def enabled(self) -> bool:
@@ -124,6 +171,36 @@ class LifespanHandler:
         self._startup_handlers.append(handler)
         return handler
     
+    def on_ready(
+        self,
+        callback: LifespanCallable,
+    ) -> LifespanCallable:
+        """
+            Register a callback that runs once every startup handler has
+            succeeded, before the startup is reported complete.
+
+            :param callback: Function (or async function) to run.
+
+            :returns: The callback (for decorator use).
+        """
+        self._ready_callbacks.append(callback)
+        return callback
+
+    def on_stopping(
+        self,
+        callback: LifespanCallable,
+    ) -> LifespanCallable:
+        """
+            Register a callback that runs when the shutdown event arrives,
+            before the shutdown handlers.
+
+            :param callback: Function (or async function) to run.
+
+            :returns: The callback (for decorator use).
+        """
+        self._stopping_callbacks.append(callback)
+        return callback
+
     def on_shutdown(
         self,
         handler: LifespanCallable,
@@ -183,7 +260,8 @@ class LifespanHandler:
         send: Callable[[Dict[str, Any]], Awaitable[None]],
     ) -> None:
         """
-            Run startup handlers in registration order.
+            Run startup handlers in registration order, then the ready
+            callbacks.
             
             If lifespan is disabled, immediately sends "lifespan.startup.complete"
             without executing handlers.
@@ -203,12 +281,20 @@ class LifespanHandler:
             })
             return
         
+        self._startup_in_progress = True
+        
         try:
             for handler in self._startup_handlers:
-                await handler()
+                await self._call_handler(handler)
+
+            # The application is ready to serve once all of its startup
+            # handlers have succeeded.
+            for callback in self._ready_callbacks:
+                await self._call_handler(callback)
             
             self._startup_complete = True
             self._startup_failed = False
+            self._startup_in_progress = False
             
             await send({
                 "type": "lifespan.startup.complete",
@@ -216,6 +302,7 @@ class LifespanHandler:
         except Exception as err:
             self._startup_complete = False
             self._startup_failed = True
+            self._startup_in_progress = False
             
             error_message = self._format_error_message(err)
             self._log_startup_error(err)
@@ -232,14 +319,19 @@ class LifespanHandler:
         send: Callable[[Dict[str, Any]], Awaitable[None]],
     ) -> None:
         """
-            Run shutdown handlers in reverse registration order.
+            Run the stopping callbacks, then the shutdown handlers in
+            reverse registration order.
             
             If lifespan is disabled, immediately sends "lifespan.shutdown.complete"
             without executing handlers.
             
+            Every handler is run, also after one of them failed: a handler
+            that raises must not keep the handlers after it from releasing
+            what they hold.
+            
             If all handlers succeed, sends "lifespan.shutdown.complete".
             If any handler fails, sends "lifespan.shutdown.failed" with the
-            error message.
+            error messages of the handlers that failed.
             
             :param send: Async callable to send messages.
         """
@@ -250,22 +342,47 @@ class LifespanHandler:
             })
             return
         
-        try:
-            # Execute shutdown handlers in reverse order
-            for handler in reversed(self._shutdown_handlers):
-                await handler()
-            
+        error_messages: List[str] = []
+
+        # The application stops serving before the shutdown handlers
+        # release what it uses.
+        for callback in self._stopping_callbacks:
+            try:
+                await self._call_handler(callback)
+            except Exception as err:
+                error_messages.append(self._format_error_message(err))
+                self._log_shutdown_error(err)
+        
+        # Execute shutdown handlers in reverse order
+        for handler in reversed(self._shutdown_handlers):
+            try:
+                await self._call_handler(handler)
+            except Exception as err:
+                error_messages.append(self._format_error_message(err))
+                self._log_shutdown_error(err)
+        
+        if len(error_messages) == 0:
             await send({
                 "type": "lifespan.shutdown.complete",
             })
-        except Exception as err:
-            error_message = self._format_error_message(err)
-            self._log_shutdown_error(err)
-            
+        else:
             await send({
                 "type": "lifespan.shutdown.failed",
-                "message": error_message,
+                "message": "; ".join(error_messages),
             })
+        
+        return
+    
+    async def _call_handler(self, handler: LifespanCallable) -> None:
+        """
+            Call a startup or shutdown handler.
+            
+            :param handler: Async function, or plain function, to call.
+        """
+        result = handler()
+        
+        if inspect.isawaitable(result):
+            await result
         
         return
     

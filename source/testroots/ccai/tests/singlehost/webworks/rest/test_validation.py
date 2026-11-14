@@ -927,3 +927,189 @@ def test_property_4_validation_error_multiple_errors():
                     raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# Dataclass field types are checked and converted
+# =============================================================================
+
+import datetime
+import decimal
+import enum
+import uuid
+
+
+class AuditColour(enum.Enum):
+    RED = "red"
+    BLUE = "blue"
+
+
+@dataclass
+class TypedUser:
+    """A dataclass with scalar and container fields, for type checking."""
+    name: str
+    age: int
+    tags: List[str] = field(default_factory=list)
+    limits: Dict[str, int] = field(default_factory=dict)
+    ratio: float = 1.0
+    active: bool = True
+    nick: str | None = None
+
+
+@dataclass
+class RichRecord:
+    """A dataclass whose fields have no direct JSON type."""
+    created: datetime.datetime
+    ident: uuid.UUID
+    price: decimal.Decimal
+    colour: AuditColour
+
+
+def _field_errors_by_field(data, schema, **kwargs):
+    """Validate ``data`` and return the field errors raised, keyed by field path."""
+    validator = Validator(**kwargs)
+    try:
+        validator.validate(data, schema)
+    except ValidationError as exc:
+        return {fe.field: fe for fe in exc.field_errors}
+    return {}
+
+
+def test_dataclass_scalar_type_mismatch_is_reported():
+    """A number where a string is declared, and a string where an integer is, are type errors."""
+    errors = _field_errors_by_field({"name": 123, "age": "abc"}, TypedUser)
+
+    if sorted(errors.keys()) != ["age", "name"]:
+        raise AssertionError(f"Expected type errors for 'age' and 'name', got {sorted(errors.keys())}")
+
+    if errors["name"].code != "type_error" or errors["age"].code != "type_error":
+        raise AssertionError(f"Expected code 'type_error', got {errors['name'].code} / {errors['age'].code}")
+
+
+def test_dataclass_list_field_rejects_a_non_list():
+    """A string where a list is declared is a type error."""
+    errors = _field_errors_by_field({"name": "a", "age": 1, "tags": "notalist"}, TypedUser)
+
+    if list(errors.keys()) != ["tags"]:
+        raise AssertionError(f"Expected a type error for 'tags', got {list(errors.keys())}")
+
+
+def test_dataclass_list_element_types_are_checked():
+    """Each element of List[str] is checked and reported under its index."""
+    errors = _field_errors_by_field({"name": "a", "age": 1, "tags": ["ok", 5]}, TypedUser)
+
+    if list(errors.keys()) != ["tags.1"]:
+        raise AssertionError(f"Expected a type error for 'tags.1', got {list(errors.keys())}")
+
+
+def test_dataclass_dict_value_types_are_checked():
+    """Each value of Dict[str, int] is checked and reported under its key."""
+    errors = _field_errors_by_field({"name": "a", "age": 1, "limits": {"daily": "many"}}, TypedUser)
+
+    if list(errors.keys()) != ["limits.daily"]:
+        raise AssertionError(f"Expected a type error for 'limits.daily', got {list(errors.keys())}")
+
+
+def test_dataclass_bool_is_not_accepted_as_an_integer():
+    """JSON true is not a number, although bool is a subclass of int in Python."""
+    errors = _field_errors_by_field({"name": "a", "age": True}, TypedUser)
+
+    if list(errors.keys()) != ["age"]:
+        raise AssertionError(f"Expected a type error for 'age', got {list(errors.keys())}")
+
+
+def test_dataclass_integer_is_converted_for_a_float_field():
+    """A whole number is accepted for a float field and converted to float."""
+    result = Validator().validate({"name": "a", "age": 1, "ratio": 2}, TypedUser)
+
+    if result.ratio != 2.0 or not isinstance(result.ratio, float):
+        raise AssertionError(f"Expected ratio 2.0 as a float, got {result.ratio!r}")
+
+
+def test_dataclass_valid_data_builds_the_instance():
+    """Data of the declared types validates into the dataclass."""
+    result = Validator().validate({"name": "a", "age": 3, "tags": ["x"], "limits": {"daily": 2}}, TypedUser)
+
+    if result != TypedUser(name="a", age=3, tags=["x"], limits={"daily": 2}):
+        raise AssertionError(f"Unexpected instance: {result!r}")
+
+
+def test_dataclass_pep_604_optional_field_accepts_null():
+    """A field written ``str | None`` accepts null, as Optional[str] does."""
+    result = Validator().validate({"name": "a", "age": 3, "nick": None}, TypedUser)
+
+    if result.nick is not None:
+        raise AssertionError(f"Expected nick None, got {result.nick!r}")
+
+
+def test_dataclass_text_values_are_converted_to_their_python_types():
+    """ISO date-times, UUID text, decimal text and enum values become their Python types."""
+    result = Validator().validate(
+        {
+            "created": "2026-01-02T03:04:05",
+            "ident": "12345678-1234-5678-1234-567812345678",
+            "price": "9.99",
+            "colour": "blue",
+        },
+        RichRecord,
+    )
+
+    expected = RichRecord(
+        created=datetime.datetime(2026, 1, 2, 3, 4, 5),
+        ident=uuid.UUID("12345678-1234-5678-1234-567812345678"),
+        price=decimal.Decimal("9.99"),
+        colour=AuditColour.BLUE,
+    )
+    if result != expected:
+        raise AssertionError(f"Expected {expected!r}, got {result!r}")
+
+
+def test_dataclass_invalid_enum_value_is_reported_as_an_invalid_choice():
+    """A value that is not a member of the enum is an invalid_choice error."""
+    errors = _field_errors_by_field(
+        {"created": "2026-01-02T03:04:05", "ident": str(uuid.uuid4()), "price": "1", "colour": "green"},
+        RichRecord,
+    )
+
+    if list(errors.keys()) != ["colour"] or errors["colour"].code != "invalid_choice":
+        raise AssertionError(f"Expected an invalid_choice error for 'colour', got {errors}")
+
+
+def test_dataclass_malformed_datetime_is_reported():
+    """Text that is not an ISO 8601 date-time is a type error."""
+    errors = _field_errors_by_field(
+        {"created": "yesterday", "ident": str(uuid.uuid4()), "price": "1", "colour": "red"},
+        RichRecord,
+    )
+
+    if list(errors.keys()) != ["created"]:
+        raise AssertionError(f"Expected a type error for 'created', got {list(errors.keys())}")
+
+
+def test_dataclass_unknown_fields_are_ignored_by_default():
+    """A key that is not a field of the dataclass is ignored unless the validator is told otherwise."""
+    result = Validator().validate({"name": "a", "age": 3, "surprise": 1}, TypedUser)
+
+    if result.name != "a":
+        raise AssertionError("Expected validation to succeed with the unknown key ignored")
+
+
+def test_dataclass_unknown_fields_are_reported_when_requested():
+    """With reject_unknown_fields=True an undefined key is an unknown_field error."""
+    errors = _field_errors_by_field({"name": "a", "age": 3, "surprise": 1}, TypedUser, reject_unknown_fields=True)
+
+    if list(errors.keys()) != ["surprise"] or errors["surprise"].code != "unknown_field":
+        raise AssertionError(f"Expected an unknown_field error for 'surprise', got {errors}")
+
+
+def test_dataclass_partial_validation_checks_the_fields_that_are_present():
+    """A partial (PATCH) validation still type-checks the fields that were sent."""
+    validator = Validator()
+    try:
+        validator.validate({"age": "x"}, TypedUser, partial=True)
+    except ValidationError as exc:
+        fields = [fe.field for fe in exc.field_errors]
+        if fields != ["age"]:
+            raise AssertionError(f"Expected a type error for 'age', got {fields}")
+    else:
+        raise AssertionError("Expected ValidationError for a mistyped field in a partial update")

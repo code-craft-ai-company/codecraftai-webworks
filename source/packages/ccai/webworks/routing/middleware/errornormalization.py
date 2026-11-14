@@ -17,7 +17,7 @@ import json
 import logging
 import traceback as tb_module
 
-from typing import Callable, Dict, Optional, Tuple
+from typing import Awaitable, Callable, Dict, Optional, Tuple
 
 from ccai.webworks.routing.exceptions import HTTPException
 from ccai.webworks.routing.request import Request
@@ -104,6 +104,27 @@ class ErrorNormalizationMiddleware:
         """
         try:
             response = call_next(request)
+            return response
+        except Exception as exc:
+            self._logger.exception("Caught exception in middleware pipeline: %s", exc)
+            return self._build_error_response(exc)
+
+    async def call_async(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """
+            Process a request through the error normalization middleware
+            in the asynchronous pipeline. Behaves as :meth:`__call__`.
+
+            :param request: The incoming Request.
+            :param call_next: Async callable to invoke the next middleware/handler.
+
+            :returns: Response from the next handler, or a JSON error response.
+        """
+        try:
+            response = await call_next(request)
             return response
         except Exception as exc:
             self._logger.exception("Caught exception in middleware pipeline: %s", exc)

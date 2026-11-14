@@ -7,109 +7,174 @@
  *   "splom" — N×N grid of scatter sub-plots for all variable pairs
  *
  * Data shape:
- *   ctx.raw.variables   ordered list of numeric field names  (required)
- *   model.series[]      each series is a group (e.g. species)
+ *   variables           ordered numeric field names; when omitted, the
+ *                       numeric fields of the first point are used
+ *   series[]            each series is a group (e.g. species)
  *     .name             group label
- *     .points[]         each point is a record { var1, var2, ... }
+ *     .points[]         records { var1, var2, ... }; non-finite values skipped
  *
- * Behavior:
- *   - One linear scale per variable (shared across its row / column).
- *   - Diagonal cells show the variable name (or "histogram" / "density" via
- *     ctx.attrs("diagonal")).
- *   - triangle attr controls which off-diagonal cells are drawn:
- *     "full" (default) | "lower" | "upper"
- *   - Axes (tick labels) drawn only on the outer left column (y) and
- *     outer bottom row (x) to avoid repetition.
- *   - Each scatter point is interactive (tabindex / aria / click → emit).
- *   - Color + shape vary by series.
+ * Behaviour:
+ *   - One linear scale per variable, shared along its row and column.
+ *   - Tick labels run along the outer left and bottom edges for every row
+ *     and column, whichever cells are drawn.
+ *   - diagonal: "label" (default: the variable name) | "histogram" |
+ *     "density" (a KDE curve per series)
+ *   - triangle: "full" (default) | "lower" | "upper"; with a half matrix the
+ *     other half shows Pearson's r of each pair (all groups pooled).
+ *   - Colour and shape vary by series; every point is focusable (one tab
+ *     stop with arrow-key movement, provided by the controller).
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber, extent } from "../svgdraw.js";
+import { svgEl, formatNumber, linePath } from "../svgdraw.js";
 import { linearScale, niceTicks } from "../scales.js";
+import {
+  isFiniteNumber, sortNumbers, silvermanBandwidth, gaussianDensity, linspace, binEdges,
+  countBins, axisLayer, fitText, activateOnKey, focusableMark, TEXT_COLOR, MUTED_TEXT_COLOR,
+  GRID_COLOR
+} from "./diststats.js";
 
-
-/* Per-series shapes so groups are distinguishable without color alone. */
-const SHAPES = ["circle", "square", "triangle", "diamond"]
+/* Per-series shapes so groups are distinguishable without colour alone. */
+const SHAPES = ["circle", "square", "triangle", "diamond"];
 
 
 function _miniPoint(shape, cx, cy, r) {
   /*
-   * Build a small mark element for a SPLOM scatter point.
-   *
-   * :param shape: "circle"|"square"|"triangle"|"diamond"
-   * :param cx: Center x in sub-plot coordinates.
-   * :param cy: Center y.
-   * :param r: Mark radius.
-   * :returns: SVGElement.
+   * A small mark of the given shape.
    */
   if (shape === "square") {
     const half = r * 0.8
-    return svgEl("rect", {
-      x: cx - half, y: cy - half,
-      width: half * 2, height: half * 2
-    }, [])
+    return svgEl("rect", { x: cx - half, y: cy - half, width: half * 2, height: half * 2 }, [])
   }
   if (shape === "triangle") {
     const h = r * 1.5
     const w = r * 1.3
-    const pts = `${cx},${(cy - h * 0.6).toFixed(2)} ` +
+    const points = `${cx.toFixed(2)},${(cy - h * 0.6).toFixed(2)} ` +
       `${(cx - w / 2).toFixed(2)},${(cy + h * 0.4).toFixed(2)} ` +
       `${(cx + w / 2).toFixed(2)},${(cy + h * 0.4).toFixed(2)}`
-    return svgEl("polygon", { points: pts }, [])
+    return svgEl("polygon", { points: points }, [])
   }
   if (shape === "diamond") {
-    const d = r
-    const pts = `${cx},${cy - d} ${cx + d},${cy} ` +
-      `${cx},${cy + d} ${cx - d},${cy}`
-    return svgEl("polygon", { points: pts }, [])
+    const points = `${cx.toFixed(2)},${(cy - r).toFixed(2)} ${(cx + r).toFixed(2)},${cy.toFixed(2)} ` +
+      `${cx.toFixed(2)},${(cy + r).toFixed(2)} ${(cx - r).toFixed(2)},${cy.toFixed(2)}`
+    return svgEl("polygon", { points: points }, [])
   }
   return svgEl("circle", { cx: cx, cy: cy, r: r }, [])
 }
 
 
-function _drawHistDiag(group, varName, xScale, cellW, cellH, allVarPoints) {
+export function splomVariables(raw, series) {
   /*
-   * Draw a simple histogram on the diagonal cell for the given variable.
-   *
-   * :param group: SVG group to append into.
-   * :param varName: Variable name (for display only, histogram data below).
-   * :param xScale: Linear pixel scale for this variable.
-   * :param cellW: Cell width in pixels.
-   * :param cellH: Cell height in pixels.
-   * :param allVarPoints: All numeric values for this variable across all series.
+   * The variables of the matrix: raw.variables, else the numeric fields
+   * of the first point found.
    */
-  const binCount = 8
-  const lo = xScale.domain()[0]
-  const hi = xScale.domain()[1]
-  const span = hi - lo || 1
-  const binW = span / binCount
-  const counts = new Array(binCount).fill(0)
-
-  for (let i = 0; i < allVarPoints.length; i = i + 1) {
-    const v = allVarPoints[i]
-    const idx = Math.min(binCount - 1, Math.floor((v - lo) / binW))
-    if (idx >= 0) {
-      counts[idx] = counts[idx] + 1
+  if (raw !== null && raw !== undefined && Array.isArray(raw.variables) === true) {
+    return raw.variables.map((name) => String(name))
+  }
+  for (let si = 0; si < series.length; si = si + 1) {
+    const points = Array.isArray(series[si].points) === true ? series[si].points : []
+    for (let pi = 0; pi < points.length; pi = pi + 1) {
+      const point = points[pi]
+      if (point !== null && typeof point === "object") {
+        return Object.keys(point).filter((key) => isFiniteNumber(point[key]) === true)
+      }
     }
   }
+  return []
+}
 
-  const maxCount = Math.max(...counts, 1)
-  const barW = cellW / binCount
 
-  for (let b = 0; b < binCount; b = b + 1) {
-    const barH = (counts[b] / maxCount) * (cellH * 0.75)
-    const bx = b * barW
-    const by = cellH - barH
-    group.appendChild(svgEl("rect", {
-      x: bx + 0.5,
-      y: by,
-      width: Math.max(barW - 1, 1),
-      height: barH,
-      fill: "var(--mj-color-accent-300, #80a8ff)",
-      opacity: 0.7
-    }, []))
+function _pearson(pairs) {
+  /*
+   * Pearson's correlation coefficient of [x, y] pairs, or null.
+   */
+  const n = pairs.length
+  if (n < 3) {
+    return null
   }
+  let sx = 0
+  let sy = 0
+  for (let index = 0; index < n; index = index + 1) {
+    sx = sx + pairs[index][0]
+    sy = sy + pairs[index][1]
+  }
+  const mx = sx / n
+  const my = sy / n
+  let sxx = 0
+  let syy = 0
+  let sxy = 0
+  for (let index = 0; index < n; index = index + 1) {
+    const dx = pairs[index][0] - mx
+    const dy = pairs[index][1] - my
+    sxx = sxx + dx * dx
+    syy = syy + dy * dy
+    sxy = sxy + dx * dy
+  }
+  if (sxx === 0 || syy === 0) {
+    return null
+  }
+  return sxy / Math.sqrt(sxx * syy)
+}
+
+
+function _drawDiagonal(group, mode, variable, scale, cellW, cellH, valuesBySeries, ctx, series) {
+  /*
+   * The diagonal cell: the variable name, plus a histogram (all groups
+   * pooled) or one density curve per series.
+   */
+  if (mode === "histogram") {
+    const pooled = []
+    for (let si = 0; si < valuesBySeries.length; si = si + 1) {
+      for (let vi = 0; vi < valuesBySeries[si].length; vi = vi + 1) {
+        pooled.push(valuesBySeries[si][vi])
+      }
+    }
+    const bins = countBins(pooled, binEdges(pooled, { count: 8 }))
+    let maxCount = 1
+    for (let bi = 0; bi < bins.length; bi = bi + 1) {
+      maxCount = Math.max(maxCount, bins[bi].count)
+    }
+    for (let bi = 0; bi < bins.length; bi = bi + 1) {
+      const x0 = scale(bins[bi].x0)
+      const x1 = scale(bins[bi].x1)
+      const height = (bins[bi].count / maxCount) * cellH * 0.7
+      group.appendChild(svgEl("rect", {
+        x: Math.min(x0, x1) + 0.5, y: cellH - height, width: Math.max(Math.abs(x1 - x0) - 1, 1),
+        height: height, fill: MUTED_TEXT_COLOR, "fill-opacity": 0.35
+      }, []))
+    }
+  } else if (mode === "density") {
+    let peak = 0
+    const curves = []
+    for (let si = 0; si < valuesBySeries.length; si = si + 1) {
+      const sorted = sortNumbers(valuesBySeries[si])
+      if (sorted.length === 0) {
+        curves.push(null)
+        continue
+      }
+      const xs = linspace(scale.domain()[0], scale.domain()[1], 60)
+      const ys = gaussianDensity(sorted, silvermanBandwidth(sorted), xs)
+      for (let index = 0; index < ys.length; index = index + 1) {
+        peak = Math.max(peak, ys[index])
+      }
+      curves.push({ xs: xs, ys: ys })
+    }
+    for (let si = 0; si < curves.length; si = si + 1) {
+      if (curves[si] === null || peak <= 0) {
+        continue
+      }
+      const curve = curves[si]
+      const points = curve.xs.map((x, index) => ({ x: scale(x), y: cellH - (curve.ys[index] / peak) * cellH * 0.7 }))
+      group.appendChild(svgEl("path", {
+        d: linePath(points), fill: "none", stroke: ctx.colorFor(series[si].name), "stroke-width": 1.5
+      }, []))
+    }
+  }
+  group.appendChild(svgEl("text", {
+    x: cellW / 2, y: mode === "label" ? cellH / 2 + 4 : 12, "text-anchor": "middle",
+    "font-size": Math.max(9, Math.min(13, cellW * 0.12)), "font-weight": 600, fill: TEXT_COLOR
+  }, fitText(variable, cellW - 4, Math.max(9, Math.min(13, cellW * 0.12)))))
+  return
 }
 
 
@@ -118,265 +183,202 @@ export function render(ctx) {
    * Render a scatterplot matrix.
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
   const model = ctx.model
-  const rawVars = (ctx.raw !== null && ctx.raw !== undefined)
-    ? ctx.raw.variables || null
-    : null
-  const variables = rawVars !== null ? rawVars : []
-
+  const series = Array.isArray(model.series) === true ? model.series : []
+  const variables = splomVariables(ctx.raw, series)
   const root = svgEl("g", { part: "plot" }, [])
-
-  const series = model.series
-  if (series === null || series === undefined || series.length === 0) {
-    return root
-  }
-  if (variables.length < 2) {
+  if (series.length === 0 || variables.length < 2) {
     return root
   }
 
-  const diagonal = ctx.attrs("diagonal", "label")
+  const diagonalAttr = ctx.attrs("diagonal", "label")
+  const diagonal = diagonalAttr === "histogram" || diagonalAttr === "density" ? diagonalAttr : "label"
   const triangleMode = ctx.attrs("triangle", "full")
   const n = variables.length
 
-  /* Leave margins for outer axis labels only. */
-  const marginLeft = 52
-  const marginTop = 8
-  const marginRight = 8
-  const marginBottom = 44
+  const margin = { top: 8, right: 8, bottom: 30, left: 44 }
+  const totalW = Math.max(ctx.width - margin.left - margin.right, 10)
+  const totalH = Math.max(ctx.height - margin.top - margin.bottom, 10)
+  const cellW = totalW / n
+  const cellH = totalH / n
+  const innerPad = Math.min(4, cellW * 0.08, cellH * 0.08)
+  const plotW = Math.max(cellW - innerPad * 2, 2)
+  const plotH = Math.max(cellH - innerPad * 2, 2)
 
-  const totalW = Math.max(ctx.width - marginLeft - marginRight, 10)
-  const totalH = Math.max(ctx.height - marginTop - marginBottom, 10)
-
-  const cellW = Math.floor(totalW / n)
-  const cellH = Math.floor(totalH / n)
-  const innerPad = 4   /* padding inside each sub-cell */
-
-  const plotW = cellW - innerPad * 2
-  const plotH = cellH - innerPad * 2
-
-  /* Build one linear scale per variable, mapping over ALL series. */
-  const varScales = {}
-  const varAllValues = {}
-
-  for (let v = 0; v < variables.length; v = v + 1) {
-    const varName = variables[v]
-    const vals = []
-    for (let s = 0; s < series.length; s = s + 1) {
-      const pts = series[s].points
-      if (pts === null || pts === undefined) {
-        continue
-      }
-      for (let p = 0; p < pts.length; p = p + 1) {
-        const val = pts[p][varName]
-        if (typeof val === "number" && Number.isNaN(val) === false) {
-          vals.push(val)
+  /* One domain per variable over every series. */
+  const domains = []
+  const valuesBy = []
+  for (let vi = 0; vi < n; vi = vi + 1) {
+    const perSeries = []
+    let low = Infinity
+    let high = -Infinity
+    for (let si = 0; si < series.length; si = si + 1) {
+      const points = Array.isArray(series[si].points) === true ? series[si].points : []
+      const values = []
+      for (let pi = 0; pi < points.length; pi = pi + 1) {
+        const point = points[pi]
+        const value = point !== null && typeof point === "object" ? point[variables[vi]] : null
+        if (isFiniteNumber(value) === true) {
+          values.push(value)
+          low = Math.min(low, value)
+          high = Math.max(high, value)
         }
       }
+      perSeries.push(values)
     }
-    varAllValues[varName] = vals
-    const dom = extent(vals)
-    const pad = (dom[1] - dom[0]) * 0.08 || 0.5
-    varScales[varName] = linearScale([dom[0] - pad, dom[1] + pad], [0, plotW])
+    if (low === Infinity) {
+      low = 0
+      high = 1
+    }
+    const pad = (high - low) * 0.08 || Math.max(Math.abs(low) * 0.1, 0.5)
+    domains.push([low - pad, high + pad])
+    valuesBy.push(perSeries)
   }
 
-  const outerGroup = svgEl("g", {
-    transform: `translate(${marginLeft},${marginTop})`
-  }, [])
-  root.appendChild(outerGroup)
+  const outer = svgEl("g", { transform: `translate(${margin.left},${margin.top})` }, [])
+  root.appendChild(outer)
+  const axes = axisLayer(outer)
+  const marks = svgEl("g", { part: "marks" }, [])
+  outer.appendChild(marks)
 
-  /* Draw N×N grid. */
+  /* Outer ticks: y along the left edge per row, x along the bottom per column. */
+  const tickFont = 8
+  for (let vi = 0; vi < n; vi = vi + 1) {
+    const yScale = linearScale(domains[vi], [vi * cellH + innerPad + plotH, vi * cellH + innerPad])
+    const yTicks = niceTicks(domains[vi][0], domains[vi][1], cellH > 90 ? 3 : 2)
+    for (let ti = 0; ti < yTicks.length; ti = ti + 1) {
+      axes.appendChild(svgEl("text", {
+        x: -4, y: yScale(yTicks[ti]) + 3, "text-anchor": "end", "font-size": tickFont, fill: MUTED_TEXT_COLOR
+      }, formatNumber(yTicks[ti])))
+    }
+    const xScale = linearScale(domains[vi], [vi * cellW + innerPad, vi * cellW + innerPad + plotW])
+    const xTicks = niceTicks(domains[vi][0], domains[vi][1], cellW > 110 ? 3 : 2)
+    for (let ti = 0; ti < xTicks.length; ti = ti + 1) {
+      axes.appendChild(svgEl("text", {
+        x: xScale(xTicks[ti]), y: n * cellH + 11, "text-anchor": "middle", "font-size": tickFont, fill: MUTED_TEXT_COLOR
+      }, formatNumber(xTicks[ti])))
+    }
+    if (diagonal !== "label") {
+      axes.appendChild(svgEl("text", {
+        x: vi * cellW + cellW / 2, y: n * cellH + 24, "text-anchor": "middle", "font-size": 9, fill: MUTED_TEXT_COLOR
+      }, fitText(variables[vi], cellW - 4, 9)))
+    }
+  }
+
+  const rows = []
   for (let row = 0; row < n; row = row + 1) {
     const yVar = variables[row]
-    const yScaleX = varScales[yVar]           /* reused as y via flip below */
-    /* Flip the x-range scale to a y-range scale for the y axis. */
-    const yDom = yScaleX.domain()
-    const yScale = linearScale(yDom, [plotH, 0])
-
+    const yScale = linearScale(domains[row], [plotH, 0])
     for (let col = 0; col < n; col = col + 1) {
-      /* Respect triangle mode. */
-      if (triangleMode === "lower" && col > row) {
-        continue
-      }
-      if (triangleMode === "upper" && col < row) {
-        continue
-      }
-
       const xVar = variables[col]
-      const xScale = linearScale(varScales[xVar].domain(), [0, plotW])
+      const xScale = linearScale(domains[col], [0, plotW])
+      const hidden = (triangleMode === "lower" && col > row) || (triangleMode === "upper" && col < row)
+      const cell = svgEl("g", { transform: `translate(${col * cellW},${row * cellH})` }, [])
+      const inner = svgEl("g", { transform: `translate(${innerPad},${innerPad})` }, [])
 
-      const cellOriginX = col * cellW
-      const cellOriginY = row * cellH
+      if (row === col) {
+        axes.appendChild(svgEl("rect", {
+          x: col * cellW, y: row * cellH, width: cellW, height: cellH,
+          fill: "var(--mj-bg-subtle, #f6f7f9)", stroke: GRID_COLOR, "stroke-width": 0.5
+        }, []))
+        const diagonalGroup = svgEl("g", {
+          transform: `translate(${col * cellW + innerPad},${row * cellH + innerPad})`
+        }, [])
+        _drawDiagonal(diagonalGroup, diagonal, yVar, xScale, plotW, plotH, valuesBy[row], ctx, series)
+        axes.appendChild(diagonalGroup)
+        continue
+      }
 
-      const cellGroup = svgEl("g", {
-        transform: `translate(${cellOriginX},${cellOriginY})`
-      }, [])
-
-      /* Cell background. */
-      cellGroup.appendChild(svgEl("rect", {
-        x: 0, y: 0, width: cellW, height: cellH,
-        fill: row === col
-          ? "var(--mj-chart-heat-1, #eff6ff)"
-          : "var(--mj-surface, #ffffff)",
-        stroke: "var(--mj-border, #e0e3e9)",
-        "stroke-width": 0.5
+      axes.appendChild(svgEl("rect", {
+        x: col * cellW + innerPad, y: row * cellH + innerPad, width: plotW, height: plotH,
+        fill: "none", stroke: GRID_COLOR, "stroke-width": 0.5
       }, []))
 
-      const innerGroup = svgEl("g", {
-        transform: `translate(${innerPad},${innerPad})`
-      }, [])
-      cellGroup.appendChild(innerGroup)
-
-      /* ── Diagonal cell ── */
-      if (row === col) {
-        if (diagonal === "histogram") {
-          _drawHistDiag(innerGroup, yVar, xScale, plotW, plotH, varAllValues[yVar])
+      if (hidden === true) {
+        /* The suppressed half shows the correlation of the pair. */
+        const pairs = []
+        for (let si = 0; si < series.length; si = si + 1) {
+          const points = Array.isArray(series[si].points) === true ? series[si].points : []
+          for (let pi = 0; pi < points.length; pi = pi + 1) {
+            const point = points[pi]
+            if (point !== null && typeof point === "object" &&
+                isFiniteNumber(point[xVar]) === true && isFiniteNumber(point[yVar]) === true) {
+              pairs.push([point[xVar], point[yVar]])
+            }
+          }
         }
-        /* Always draw variable name label. */
-        innerGroup.appendChild(svgEl("text", {
-          x: plotW / 2,
-          y: plotH / 2 + (diagonal === "histogram" ? plotH * 0.42 : 4),
-          "text-anchor": "middle",
-          "font-size": Math.max(9, Math.min(13, plotW * 0.12)),
-          "font-weight": "600",
-          fill: "var(--mj-text, #14181f)"
-        }, escapeHtml(yVar)))
-        outerGroup.appendChild(cellGroup)
+        const r = _pearson(pairs)
+        const text = r === null ? "r = –" : `r = ${formatNumber(r, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        marks.appendChild(svgEl("text", {
+          x: col * cellW + cellW / 2, y: row * cellH + cellH / 2 + 4, "text-anchor": "middle",
+          "font-size": Math.max(9, Math.min(13, cellW * 0.11)), fill: TEXT_COLOR, part: "correlation",
+          "aria-label": `Correlation of ${xVar} and ${yVar}: ${text}`
+        }, text))
         continue
       }
 
-      /* ── Outer axis tick labels ── */
-      /* Y ticks only on the leftmost column. */
-      if (col === 0) {
-        const yTicks = niceTicks(yDom[0], yDom[1], 3)
-        for (let t = 0; t < yTicks.length; t = t + 1) {
-          const tick = yTicks[t]
-          const ty = yScale(tick)
-          innerGroup.appendChild(svgEl("text", {
-            x: -innerPad - 2,
-            y: ty + 3,
-            "text-anchor": "end",
-            "font-size": 8,
-            fill: "var(--mj-text-muted, #6b7280)"
-          }, formatNumber(tick)))
-        }
-      }
-      /* X ticks only on the bottom row. */
-      if (row === n - 1) {
-        const xTicks = niceTicks(xScale.domain()[0], xScale.domain()[1], 3)
-        for (let t = 0; t < xTicks.length; t = t + 1) {
-          const tick = xTicks[t]
-          const tx = xScale(tick)
-          innerGroup.appendChild(svgEl("text", {
-            x: tx,
-            y: plotH + innerPad + 10,
-            "text-anchor": "middle",
-            "font-size": 8,
-            fill: "var(--mj-text-muted, #6b7280)"
-          }, formatNumber(tick)))
-        }
-      }
-
-      /* ── Scatter points ── */
-      for (let s = 0; s < series.length; s = s + 1) {
-        const ser = series[s]
-        const pts = ser.points
-        if (pts === null || pts === undefined || pts.length === 0) {
-          continue
-        }
-        const color = ctx.colorFor(ser.name)
-        const shape = SHAPES[s % SHAPES.length]
-
-        for (let p = 0; p < pts.length; p = p + 1) {
-          const pt = pts[p]
-          const xVal = pt[xVar]
-          const yVal = pt[yVar]
-          const validX = typeof xVal === "number" && Number.isNaN(xVal) === false
-          const validY = typeof yVal === "number" && Number.isNaN(yVal) === false
-          if (validX === false || validY === false) {
+      for (let si = 0; si < series.length; si = si + 1) {
+        const entry = series[si]
+        const points = Array.isArray(entry.points) === true ? entry.points : []
+        const color = ctx.colorFor(entry.name)
+        const shape = SHAPES[si % SHAPES.length]
+        for (let pi = 0; pi < points.length; pi = pi + 1) {
+          const point = points[pi]
+          if (point === null || typeof point !== "object") {
             continue
           }
-
-          const px = xScale(xVal)
-          const py = yScale(yVal)
-
-          /* Skip out-of-bounds. */
-          if (px < -2 || px > plotW + 2 || py < -2 || py > plotH + 2) {
+          const xValue = point[xVar]
+          const yValue = point[yVar]
+          if (isFiniteNumber(xValue) === false || isFiniteNumber(yValue) === false) {
             continue
           }
-
-          const mark = _miniPoint(shape, px, py, 3)
+          const mark = _miniPoint(shape, xScale(xValue), yScale(yValue), Math.min(3, plotW / 20 + 1))
           mark.setAttribute("fill", color)
           mark.setAttribute("fill-opacity", "0.7")
           mark.setAttribute("stroke", color)
           mark.setAttribute("stroke-width", "0.5")
           mark.setAttribute("part", "point")
-          mark.setAttribute("tabindex", "0")
-          mark.setAttribute("role", "img")
-          const ariaLabel = `${escapeHtml(ser.name)}: ${escapeHtml(xVar)}=${formatNumber(xVal)}, ${escapeHtml(yVar)}=${formatNumber(yVal)}`
-          mark.setAttribute("aria-label", ariaLabel)
-          mark.appendChild(svgEl("title", null,
-            `${ser.name} — ${xVar}: ${formatNumber(xVal)}, ${yVar}: ${formatNumber(yVal)}`))
-
-          const ptX = xVal
-          const ptY = yVal
-          const serName = ser.name
-          const handler = () => {
-            ctx.emit("mj-chart-point-click", {
-              series: serName,
-              xVar: xVar,
-              yVar: yVar,
-              x: ptX,
-              y: ptY
-            })
-          }
-          mark.addEventListener("click", handler)
-          mark.addEventListener("keydown", (event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault()
-              handler()
-            }
+          focusableMark(mark, `${entry.name}: ${xVar} ${formatNumber(xValue)}, ${yVar} ${formatNumber(yValue)}`)
+          activateOnKey(mark, () => {
+            ctx.emit("mj-chart-point-click", { series: entry.name, xVar: xVar, yVar: yVar, x: xValue, y: yValue })
           })
-          innerGroup.appendChild(mark)
+          inner.appendChild(mark)
         }
       }
-
-      /* Sub-plot border. */
-      innerGroup.appendChild(svgEl("rect", {
-        x: 0, y: 0, width: plotW, height: plotH,
-        fill: "none",
-        stroke: "var(--mj-border, #e0e3e9)",
-        "stroke-width": 0.5
-      }, []))
-
-      outerGroup.appendChild(cellGroup)
+      cell.appendChild(inner)
+      marks.appendChild(cell)
     }
   }
 
-  /* Outer axis labels (variable names on left/bottom edges). */
-  for (let v = 0; v < n; v = v + 1) {
-    const varName = variables[v]
-    /* Left edge: y-axis variable label per row. */
-    outerGroup.appendChild(svgEl("text", {
-      x: -marginLeft + 8,
-      y: v * cellH + cellH / 2 + 4,
-      "text-anchor": "start",
-      "font-size": 9,
-      fill: "var(--mj-text-muted, #6b7280)"
-    }, escapeHtml(varName)))
-    /* Bottom edge: x-axis variable label per column. */
-    outerGroup.appendChild(svgEl("text", {
-      x: v * cellW + cellW / 2,
-      y: n * cellH + marginBottom - 4,
-      "text-anchor": "middle",
-      "font-size": 9,
-      fill: "var(--mj-text-muted, #6b7280)"
-    }, escapeHtml(varName)))
+  for (let si = 0; si < series.length; si = si + 1) {
+    const points = Array.isArray(series[si].points) === true ? series[si].points : []
+    for (let pi = 0; pi < points.length; pi = pi + 1) {
+      const point = points[pi]
+      if (point === null || typeof point !== "object") {
+        continue
+      }
+      rows.push([series[si].name].concat(variables.map((name) => isFiniteNumber(point[name]) === true ? point[name] : "")))
+    }
   }
-
+  ctx.setTable({ columns: ["Series"].concat(variables), rows: rows, caption: "Observations" })
   return root
 }
 
 
-registerRenderer("splom", render)
+function _isEmpty(model) {
+  /*
+   * True when there are fewer than two variables or no point.
+   */
+  const series = Array.isArray(model.allSeries) === true ? model.allSeries : []
+  const variables = splomVariables(model.source, series)
+  let points = 0
+  for (let si = 0; si < series.length; si = si + 1) {
+    points = points + (Array.isArray(series[si].points) === true ? series[si].points.length : 0)
+  }
+  return variables.length < 2 || points === 0
+}
+
+
+registerRenderer("splom", render, { isEmpty: _isEmpty })

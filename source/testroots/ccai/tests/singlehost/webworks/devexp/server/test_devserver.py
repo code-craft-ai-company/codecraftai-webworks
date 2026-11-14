@@ -287,10 +287,10 @@ def test_devserver_start_raises_port_in_use():
     """
         Test that start() raises PortInUseError when the port is occupied.
     """
-    # Bind a socket to occupy a port
+    # Occupy a port the way another server does: listening on it.
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", 0))
+    sock.listen(1)
     occupied_port = sock.getsockname()[1]
 
     try:
@@ -346,9 +346,13 @@ def test_check_port_available_returns_false_for_occupied_port():
     """
         Test that check_port_available returns False for an occupied port.
     """
+    # A port is occupied when another socket is listening on it. The probe
+    # binds the way the server does (with SO_REUSEADDR on POSIX), so a
+    # socket that is merely bound, or connections left in TIME_WAIT by a
+    # server that just exited, do not count.
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("127.0.0.1", 0))
+    sock.listen(1)
     occupied_port = sock.getsockname()[1]
 
     try:
@@ -477,36 +481,122 @@ def test_format_port_in_use_message_contains_stop_suggestion():
 # Property Tests for DevelopmentServer
 # =============================================================================
 
+def _free_port():
+    """
+        Return a port number that is free on the loopback interface.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+
+    return port
+
+
+def _wait_until(predicate, timeout=20.0):
+    """
+        Poll a condition until it holds or the timeout expires.
+
+        :returns: True if the condition held in time.
+    """
+    import time
+
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+
+    return predicate()
+
+
+class _SupervisedServer:
+    """
+        Runs a reloading DevelopmentServer in a thread. The server process
+        it supervises is the given command instead of a real server, so
+        the supervision can be tested without serving.
+    """
+
+    def __init__(self, child_code):
+        import sys
+        import tempfile
+        import threading
+
+        self.watch_dir = tempfile.mkdtemp()
+
+        self.server = DevelopmentServer(
+            app="unused_module:app",
+            host="127.0.0.1",
+            port=_free_port(),
+            debug=False,
+            reload=True,
+            reload_command=[sys.executable, "-c", child_code],
+            reload_directory=self.watch_dir,
+        )
+
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def child_pid(self):
+        supervisor = self.server._supervisor
+
+        if supervisor is None:
+            return None
+
+        return supervisor.child_pid
+
+    def close(self):
+        import shutil
+
+        self.server.stop()
+        self.thread.join(timeout=20.0)
+        shutil.rmtree(self.watch_dir, ignore_errors=True)
+
+
+_IDLE_CHILD = "import time; time.sleep(120)"
+
+_FAILING_CHILD = "import sys; sys.exit(7)"
+
+
 def test_property_reload_restart_count():
     """
         Property 13: Reload Restart Count Increment.
 
         For any sequence of successful file-change reloads, the
         restart_count property should equal the number of successful
-        reloads performed.
+        reloads performed. Each reload replaces the server process.
 
         **Validates: Requirements 10.4**
     """
     import random
 
-    for _ in range(100):
-        server = DevelopmentServer(app=_FakeApp(), host="127.0.0.1", port=0)
-        server.serve_forever()
+    supervised = _SupervisedServer(_IDLE_CHILD)
 
-        try:
-            num_reloads = random.randint(0, 20)
+    try:
+        if not _wait_until(lambda: supervised.child_pid() is not None):
+            raise AssertionError("Expected the supervisor to start a server process.")
 
-            for _ in range(num_reloads):
-                server._restart_server()
+        num_reloads = random.randint(1, 4)
 
-            if server.restart_count != num_reloads:
-                errmsg = (
-                    "Expected restart_count={} after {} reloads, got {}"
-                    .format(num_reloads, num_reloads, server.restart_count)
+        for index in range(num_reloads):
+            expected = index + 1
+            supervised.server._restart_server()
+
+            if not _wait_until(lambda: supervised.server.restart_count == expected):
+                errmsg = "Expected restart_count={} after reload #{}, got {}".format(
+                    expected, expected, supervised.server.restart_count
                 )
                 raise AssertionError(errmsg)
-        finally:
-            server.stop()
+
+        if supervised.server.restart_count != num_reloads:
+            errmsg = (
+                "Expected restart_count={} after {} reloads, got {}"
+                .format(num_reloads, num_reloads, supervised.server.restart_count)
+            )
+            raise AssertionError(errmsg)
+    finally:
+        supervised.close()
 
     return
 
@@ -674,72 +764,260 @@ def test_devserver_lifespan_startup_failure_stops_server():
 
 def test_devserver_syntax_error_during_reload_logs_error():
     """
-        Test that a SyntaxError during reload logs the error and the
+        Test that a server process that ends with an error (as it does
+        when the edited code has a syntax error) is recorded and the
         server continues watching for fixes.
 
         Requirements: 10.3
     """
-    server = DevelopmentServer(app=_FakeApp(), host="127.0.0.1", port=0)
-    server.serve_forever()
+    from ccai.webworks.devexp.server.reloader import ReloadChildError
+
+    supervised = _SupervisedServer(_FAILING_CHILD)
 
     try:
-        # Patch _setup_request_logging to raise SyntaxError to simulate
-        # a reload failure.
-        original_setup = server._setup_request_logging
-
-        def _raise_syntax_error():
-            raise SyntaxError("invalid syntax")
-
-        server._setup_request_logging = _raise_syntax_error
-
-        server._restart_server()
-
-        # The server should have recorded the error.
-        if server.last_reload_error is None:
+        if not _wait_until(lambda: supervised.server.last_reload_error is not None):
             raise AssertionError(
-                "Expected last_reload_error to be set after SyntaxError."
+                "Expected last_reload_error to be set after the server process failed."
             )
 
-        if not isinstance(server.last_reload_error, SyntaxError):
+        error = supervised.server.last_reload_error
+
+        if not isinstance(error, ReloadChildError):
             raise AssertionError(
-                "Expected last_reload_error to be SyntaxError, got {}".format(
-                    type(server.last_reload_error).__name__
+                "Expected last_reload_error to be ReloadChildError, got {}".format(
+                    type(error).__name__
                 )
             )
 
-        # The server should not be running after a failed reload.
-        if server.running is not False:
+        if error.return_code != 7:
             raise AssertionError(
-                "Expected running=False after SyntaxError during reload."
+                "Expected the exit code 7 of the server process, got {}".format(error.return_code)
             )
+
+        # The supervisor must still be watching for a fix.
+        if supervised.server.running is not True:
+            raise AssertionError(
+                "Expected the server to keep running (watching) after a failed reload."
+            )
+
+        if supervised.server.watcher is None:
+            raise AssertionError("Expected the file watcher to still be active.")
     finally:
-        server._setup_request_logging = original_setup
-        server.stop()
+        supervised.close()
 
     return
 
 
 def test_devserver_successful_reload_increments_restart_count():
     """
-        Test that a successful reload increments the restart_count.
+        Test that a successful reload increments the restart_count and
+        replaces the server process with a new one.
 
-        Requirements: 10.4
+        Requirements: 10.2, 10.4
     """
-    server = DevelopmentServer(app=_FakeApp(), host="127.0.0.1", port=0)
-    server.serve_forever()
+    supervised = _SupervisedServer(_IDLE_CHILD)
 
     try:
-        initial_count = server.restart_count
+        if not _wait_until(lambda: supervised.child_pid() is not None):
+            raise AssertionError("Expected the supervisor to start a server process.")
 
-        server._restart_server()
+        first_pid = supervised.child_pid()
+        initial_count = supervised.server.restart_count
 
-        if server.restart_count != initial_count + 1:
+        supervised.server._restart_server()
+
+        if not _wait_until(lambda: supervised.server.restart_count == initial_count + 1):
             errmsg = (
                 "Expected restart_count={} after reload, got {}"
-                .format(initial_count + 1, server.restart_count)
+                .format(initial_count + 1, supervised.server.restart_count)
             )
             raise AssertionError(errmsg)
+
+        if not _wait_until(lambda: supervised.child_pid() not in (None, first_pid)):
+            raise AssertionError(
+                "Expected a new server process after the reload, still {}".format(first_pid)
+            )
     finally:
-        server.stop()
+        supervised.close()
 
     return
+
+
+def test_devserver_stop_ends_supervision_and_file_watcher():
+    """
+        Test that stopping a reloading server ends the server process and
+        the file watcher.
+    """
+    supervised = _SupervisedServer(_IDLE_CHILD)
+
+    try:
+        if not _wait_until(lambda: supervised.child_pid() is not None):
+            raise AssertionError("Expected the supervisor to start a server process.")
+    finally:
+        supervised.close()
+
+    if supervised.thread.is_alive():
+        raise AssertionError("Expected serve_forever to return after stop().")
+
+    if supervised.server.watcher is not None:
+        raise AssertionError("Expected the file watcher to be stopped after stop().")
+
+    if supervised.child_pid() is not None:
+        raise AssertionError("Expected the server process to be stopped after stop().")
+
+    return
+
+
+def test_restart_request_without_supervisor_is_ignored():
+    """
+        Test that a restart request on a server that is not reloading
+        does nothing instead of pretending to restart.
+    """
+    server = DevelopmentServer(app=_FakeApp(), host="127.0.0.1", port=0)
+
+    server._restart_server()
+
+    if server.restart_count != 0:
+        raise AssertionError(
+            "Expected restart_count 0 without a supervisor, got {}".format(server.restart_count)
+        )
+
+    return
+
+
+# =============================================================================
+# Unit Tests for Address Handling and Signals
+# =============================================================================
+
+def test_check_port_available_supports_ipv6_loopback():
+    """
+        Test that a free port on the IPv6 loopback address is reported
+        as available.
+    """
+    if not socket.has_ipv6:
+        return
+
+    try:
+        probe = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        probe.bind(("::1", 0))
+    except OSError:
+        # This machine has no usable IPv6 loopback interface.
+        return
+
+    free_port = probe.getsockname()[1]
+    probe.close()
+
+    result = check_port_available("::1", free_port)
+
+    if result is not True:
+        errmsg = "Expected True for free port {} on '::1', got {}".format(free_port, result)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_check_port_available_reports_port_free_after_listener_closes():
+    """
+        Test that a port is available again as soon as the server that
+        listened on it has closed, even though it accepted a connection.
+    """
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+
+    client = socket.create_connection(("127.0.0.1", port))
+    accepted, _address = listener.accept()
+
+    # The server side closes first, which leaves its end in TIME_WAIT.
+    accepted.close()
+    listener.close()
+    client.close()
+
+    result = check_port_available("127.0.0.1", port)
+
+    if result is not True:
+        errmsg = "Expected port {} to be available after its listener closed.".format(port)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_is_loopback_host():
+    """
+        Test the classification of bind addresses as loopback or not.
+    """
+    from ccai.webworks.devexp.server.devserver import is_loopback_host
+
+    expectations = {
+        "127.0.0.1": True,
+        "::1": True,
+        "localhost": True,
+        "0.0.0.0": False,
+        "::": False,
+        "192.168.1.10": False,
+        "example.com": False,
+    }
+
+    for host, expected in expectations.items():
+        result = is_loopback_host(host)
+
+        if result is not expected:
+            errmsg = "Expected is_loopback_host('{}') to be {}, got {}".format(host, expected, result)
+            raise AssertionError(errmsg)
+
+    return
+
+
+def test_signal_handlers_fall_back_when_loop_cannot_register_them():
+    """
+        Test that an event loop without add_signal_handler support (the
+        Windows event loops) does not crash signal handler setup.
+    """
+    import asyncio
+
+    server = DevelopmentServer(
+        app=_FakeApp(), host="127.0.0.1", port=0, debug=False,
+    )
+    server._shutdown_event = asyncio.Event()
+
+    scheduled = []
+
+    class _WindowsLikeLoop:
+        """A loop whose add_signal_handler is not implemented."""
+        def add_signal_handler(self, sig, callback):
+            raise NotImplementedError
+
+        def call_soon_threadsafe(self, callback):
+            scheduled.append(callback)
+
+    previous_handlers = {}
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[sig] = signal.getsignal(sig)
+
+    try:
+        server._setup_signal_handlers(_WindowsLikeLoop())
+
+        installed = signal.getsignal(signal.SIGTERM)
+
+        if callable(installed) and installed is not previous_handlers[signal.SIGTERM]:
+            # The fallback handler was installed (main thread): it must
+            # hand the shutdown to the loop.
+            installed(signal.SIGTERM, None)
+
+            if len(scheduled) != 1:
+                raise AssertionError(
+                    "Expected the fallback handler to schedule the shutdown on the loop."
+                )
+    finally:
+        for sig, handler in previous_handlers.items():
+            try:
+                signal.signal(sig, handler)
+            except (ValueError, TypeError):
+                # Not the main thread: nothing was installed, nothing to restore.
+                pass
+
+    return
+
+

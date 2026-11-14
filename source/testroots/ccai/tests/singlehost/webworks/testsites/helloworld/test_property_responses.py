@@ -172,7 +172,17 @@ def test_property_method_not_allowed_consistency():
 
     for path, spec in REGISTERED_ENDPOINTS.items():
         registered_methods = spec["methods"]
-        disallowed_methods = [m for m in ALL_HTTP_METHODS if m not in registered_methods]
+
+        # HEAD is answered from the GET handler and OPTIONS with the Allow
+        # set of the path, so neither is refused where GET is registered.
+        answered_automatically = ["OPTIONS"]
+        if "GET" in registered_methods:
+            answered_automatically.append("HEAD")
+
+        disallowed_methods = [
+            m for m in ALL_HTTP_METHODS
+            if m not in registered_methods and m not in answered_automatically
+        ]
 
         for method in disallowed_methods:
             request = Request(method=method, path=path)

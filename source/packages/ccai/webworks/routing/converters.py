@@ -171,14 +171,33 @@ class PathConverter:
     
     def convert(self, value: str) -> str:
         """
-        Return the path value unchanged.
+        Return the path value unchanged after checking that it stays
+        below the place it is attached to.
+        
+        A handler that receives this value usually joins it onto a
+        directory. A value such as ``../../etc/passwd`` would walk out of
+        that directory, so a path with a ``..`` segment, a backslash (a
+        separator on Windows) or a NUL character does not convert, and
+        the route does not match. A ``.`` segment stays inside the
+        directory and is passed on.
         
         Args:
             value: String value from remaining path.
         
         Returns:
             The input string unchanged.
+        
+        Raises:
+            ValueError: If the path contains a ``..`` segment, a
+                       backslash or a NUL character.
         """
+        if "\\" in value or "\x00" in value:
+            raise ValueError("A path parameter may not contain a backslash or a NUL character")
+        
+        for segment in value.split("/"):
+            if segment == "..":
+                raise ValueError("A path parameter may not contain '..' segments")
+        
         return value
 
 

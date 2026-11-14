@@ -1408,3 +1408,47 @@ def test_property_cache_consistency_no_cached_mtime():
 
     return
 
+
+# =============================================================================
+# Thread Safety Tests
+# =============================================================================
+
+def test_cache_survives_concurrent_get_and_set_at_capacity():
+    """
+        Test that concurrent get() and set() calls on a full cache do not
+        raise, whichever thread evicts an entry another is reading.
+    """
+    import threading
+    
+    cache = TemplateCache(max_size=4, auto_reload=True)
+    errors = []
+    
+    def worker(worker_index: int) -> None:
+        try:
+            for iteration in range(2000):
+                key = f"template-{(worker_index + iteration) % 16}"
+                cache.set(key, f"compiled-{key}", mtime=float(iteration))
+                cache.get(key, mtime=float(iteration))
+                cache.get(f"template-{iteration % 16}")
+        except Exception as exc:
+            errors.append(exc)
+        return
+    
+    threads = []
+    for worker_index in range(8):
+        thread = threading.Thread(target=worker, args=(worker_index,))
+        threads.append(thread)
+    
+    for thread in threads:
+        thread.start()
+    
+    for thread in threads:
+        thread.join()
+    
+    if len(errors) > 0:
+        raise AssertionError(f"Concurrent cache access raised: {errors[0]!r}")
+    
+    if cache.size > cache.max_size:
+        raise AssertionError(f"Cache grew past its maximum size: {cache.size} > {cache.max_size}")
+    
+    return

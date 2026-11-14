@@ -10,7 +10,6 @@
 
 from testcomponents.catalog.componentdoc import ComponentDoc
 from testcomponents.catalog.groups import GROUP_ORDER
-from testcomponents.catalog.groups import group_by_key
 
 from testcomponents.catalog import selection
 from testcomponents.catalog import text
@@ -113,6 +112,35 @@ def component_for(group_key: str, tag: str) -> "ComponentDoc | None":
         return None
 
     return doc
+
+
+def component_neighbours(
+    group_key: str,
+    tag: str,
+) -> "tuple[ComponentDoc | None, ComponentDoc | None]":
+    """
+        Return the components before and after one within its group, in the
+        order the group page lists them.
+
+        :param group_key: The group key.
+        :param tag: The component tag.
+
+        :returns: (previous, next); either is None at the ends or when unknown.
+    """
+
+    components = group_components(group_key)
+
+    previous_doc = None
+    next_doc = None
+    for index, doc in enumerate(components):
+        if doc.tag == tag:
+            if index > 0:
+                previous_doc = components[index - 1]
+            if index + 1 < len(components):
+                next_doc = components[index + 1]
+            break
+
+    return previous_doc, next_doc
 
 
 def total_component_count() -> int:

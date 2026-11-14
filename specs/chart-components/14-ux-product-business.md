@@ -1,9 +1,11 @@
 # UX, Product & Business Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 ---
 
@@ -11,7 +13,6 @@
 - **Renderer / `type`:** `kpi` — **Primary renderer**
 - **Controller:** `<mj-chart type="kpi" ...>`
 - **Purpose:** Display a single headline metric with an optional comparison value, trend indicator, and spark trend line.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -29,6 +30,7 @@
 - **SVG primitives:** `<text>` (primary value, label, comparison delta), `<path>` (spark trend line, trend-arrow icon), `<rect>` (background badge for delta), `<g>` (layout groups).
 - **Orientation:** `n/a` — the card is a fixed single-block layout; no axis swap applies.
 - **Variants / modes:** None; multiple KPI cards are simply multiple `<mj-chart type="kpi">` elements arranged by the host layout.
+- **Events:** `mj-chart-kpi-click` `{ value, label }` (the card).
 - **Phase:** P5
 - **Notes:** The optional spark line reuses the `line` renderer path builder from `svgdraw.js`. Trend direction is never encoded by color alone — an arrow icon and accessible `aria-label` on the delta are required. The data-table model exposes current value, comparison value, and delta percentage as a two-row `<table>`.
 
@@ -38,7 +40,6 @@
 - **Renderer / `type`:** `gauge` — **Primary renderer**
 - **Controller:** `<mj-chart type="gauge" ...>`
 - **Purpose:** Show progress of a single metric toward a target on a circular arc dial — ideal for KPI dashboards.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-annotation`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -61,6 +62,7 @@
 - **SVG primitives:** `<path>` (arc track segments, needle), `<circle>` (needle pivot), `<text>` (value label, unit, min/max tick labels), `<g>` (rotation transforms for needle).
 - **Orientation:** `n/a` — radial layout; orientation attribute ignored.
 - **Variants / modes:** Semicircle gauge (`sweep_angle=180`); full-circle progress ring (`sweep_angle=360`). Both are modes of `gauge`, not separate renderers.
+- **Events:** `mj-chart-gauge-click` `{ value, min, max }` (the dial).
 - **Phase:** P5 (supersedes `mjgauge.js` in Phase 5 migration)
 - **Notes:** Uses a `linear` scale mapping `[min, max]` to `[start_angle, start_angle + sweep_angle]`. Threshold bands are drawn as separate arc `<path>` segments. The needle is never the sole indicator — the numeric value label is always present. Accessibility: `role="meter"`, `aria-valuenow`, `aria-valuemin`, `aria-valuemax` on the SVG root.
 
@@ -70,7 +72,6 @@
 - **Renderer / `type`:** `bullet` — **Primary renderer**
 - **Controller:** `<mj-chart type="bullet" ...>`
 - **Purpose:** Compare an actual value against one or more targets and qualitative ranges — a dense, space-efficient alternative to the gauge.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value, `side="bottom"` for horizontal), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -90,6 +91,7 @@
 - **SVG primitives:** `<rect>` (qualitative range bands, feature bar), `<line>` (target comparative marker), `<text>` (axis tick labels), `<g>` (row grouping for stacked multi-bullet).
 - **Orientation:** `horizontal` (default) and `vertical`; the `bar` renderer orientation swap logic (plan §3.6) applies directly since bullet is a specialized bar.
 - **Variants / modes:** Multi-bullet — multiple `bullet` objects in a `bullets: [...]` array; each row is one bullet drawn by the same renderer.
+- **Events:** `mj-chart-bullet-click` `{ name, value, target }` (the measure bar of each bullet).
 - **Phase:** P2
 - **Notes:** Qualitative range `<rect>` elements use progressively lighter shades of a single token color (`--mj-chart-bullet-range-*`) so the chart is readable in forced-colors mode. The target marker line is never the only encoding — the data-table exposes actual, target, and range labels.
 
@@ -99,7 +101,6 @@
 - **Renderer / `type`:** `funnel` — **Primary renderer**
 - **Controller:** `<mj-chart type="funnel" ...>`
 - **Purpose:** Visualize sequential stages of a conversion pipeline, showing volume lost at each step.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -113,8 +114,9 @@
 - **SVG primitives:** `<polygon>` or `<path>` (trapezoid stage shapes), `<text>` (stage label, count, conversion-rate annotation), `<g>` (per-stage groups).
 - **Orientation:** `vertical` (wide top, narrowing downward; default) and `horizontal` (left-to-right pipeline); the renderer swaps the major axis.
 - **Variants / modes:** Stacked funnel (multiple series stacked across width, `group="stack"`).
+- **Events:** `mj-chart-segment-click` `{ category, value, index }` (each stage; `category` is the stage name).
 - **Phase:** P4
-- **Notes:** Stage widths are proportional to the `linear` scale over `[0, max(values)]`. Conversion rate between adjacent stages is computed in the renderer and exposed on `mj-chart-point` events. The data-table includes stage name, count, and drop-off rate columns.
+- **Notes:** Stage widths are proportional to the `linear` scale over `[0, max(values)]`. The signed change between adjacent stages is computed in the renderer and annotated between the stages; it is not part of any event (a stage emits `mj-chart-segment-click` `{ category, value, index }`, see **Events**). The data-table includes stage name, count, and drop-off rate columns.
 
 ---
 
@@ -122,7 +124,6 @@
 - **Renderer / `type`:** `cohort` — **Primary renderer**
 - **Controller:** `<mj-chart type="cohort" ...>`
 - **Purpose:** Track how discrete user cohorts (grouped by sign-up period) retain or convert over successive time periods — the canonical product-analytics retention view.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category, `side="start"` for row labels), `mj-chart-axis` (time/period, `side="top"`), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -145,6 +146,7 @@
 - **SVG primitives:** `<rect>` (cell background fill), `<text>` (retention percentage per cell, axis labels), `<g>` (row and column groups).
 - **Orientation:** `n/a` — the row/column grid is fixed; orientation is not meaningful.
 - **Variants / modes:** Absolute count mode (`values` are raw user counts rather than retention rates, toggled by `mode="count"`).
+- **Events:** `mj-chart-cohort-click` `{ cohort, period, value, rate }` (each grid cell; `period` is the column index).
 - **Phase:** P5
 - **Notes:** Cell color encodes retention rate via a sequential color scale (`--mj-chart-sequential-*` tokens) from full retention (darkest) to zero (lightest). Color is never the sole encoding — the numeric value is printed inside each cell. This renderer is essentially a specialized heatmap; the cell-fill logic reuses the `heatmap` renderer's color-scale mapping (see **Heatmap** entry below). The data-table exposes the full cohort × period matrix.
 
@@ -154,7 +156,6 @@
 - **Renderer / `type`:** `retention-curve` — **Variant of `line`**
 - **Controller:** `<mj-chart type="retention-curve" ...>`
 - **Purpose:** Plot the fraction of users from each cohort still active at each period offset — reveals how quickly different cohorts decay.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time/period, `side="bottom"`), `mj-chart-axis` (value 0–100 %, `side="start"`), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -169,6 +170,7 @@
 - **SVG primitives:** `<path>` (line per series via `svgdraw.js` line builder), `<circle>` (data-point markers), `<text>` (axis labels), `<g>` (per-series groups). Identical to the `line` renderer's primitives.
 - **Orientation:** `horizontal` (period on x-axis, retention % on y-axis; default and canonical); `vertical` supported via the `line` renderer orientation swap.
 - **Variants / modes:** None beyond the `line` renderer's existing curve styles (`curve="linear|monotone|step"`).
+- **Events:** `mj-chart-cohort-click` `{ cohort, period, value, rate }` (each curve point; `retention-curve` is drawn by `cohort.js`, not the `line` renderer).
 - **Phase:** P5
 - **Notes:** This is the `line` renderer configured with a `[0, 100]` value domain, percentage axis formatting, and a clamp that prevents values above 100. No new renderer code is required — `type="retention-curve"` applies a preset JSON-schema and default scale configuration on top of the `line` renderer.
 
@@ -178,7 +180,6 @@
 - **Renderer / `type`:** `churn` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="churn" ...>`
 - **Purpose:** Display churn (or attrition) rate over time periods, optionally segmented by reason or cohort — highlights when and where users are lost.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, `side="bottom"`), `mj-chart-axis` (value, `side="start"`), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -193,16 +194,16 @@
 - **SVG primitives:** `<rect>` (bars per period, stacked or grouped), `<text>` (axis labels, value labels), `<g>` (per-series groups). Identical to the `bar` renderer's primitives.
 - **Orientation:** `vertical` (time on x-axis, rate % on y-axis; default) and `horizontal`.
 - **Variants / modes:** Single-series total churn (`group="cluster"`), segmented stacked churn (`group="stack"`). Both handled by the `bar` renderer's existing `group` attribute.
+- **Events:** none (not implemented).
 - **Phase:** P5
 - **Notes:** No new renderer; `type="churn"` applies a percentage axis format preset and negative-value coloring convention (bars drawn in `--mj-color-danger` tokens when values represent loss). The `bar` renderer in `charts/core/renderers/bar.js` (defined in `specs/chart-components/01-comparison.md`) is the underlying renderer.
 
 ---
 
 ### User Journey Map  *(journey map, experience map, UX flow)*
-- **Renderer / `type`:** `journey` — **Primary renderer**
-- **Controller:** `<mj-chart type="journey" ...>`
+- **Renderer / `type`:** `user-journey` — **Primary renderer** (`journey.js`)
+- **Controller:** `<mj-chart type="user-journey" ...>`
 - **Purpose:** Visualize discrete steps (or phases) in a user experience, with a sentiment or quality score at each step — used for qualitative UX storytelling alongside quantitative data.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category/steps, `side="bottom"`), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -220,8 +221,9 @@
 - **SVG primitives:** `<path>` (emotion/score line connecting steps), `<circle>` (step node markers, sized by touchpoint count), `<rect>` (step lane backgrounds), `<text>` (step labels, scores, pain-point annotations), `<g>` (per-step groups).
 - **Orientation:** `horizontal` (steps flow left to right; default and canonical); `vertical` (steps flow top to bottom) supported.
 - **Variants / modes:** Multi-persona journey — multiple `steps` arrays, one per persona, drawn as separate lines on the same layout.
+- **Events:** `mj-chart-journey-click` `{ label, score, touchpoints, pain_points, persona, index }` (each step).
 - **Phase:** P5
-- **Notes:** Uses a `linear` scale for `score_range` on the vertical axis and a `band` scale for steps on the horizontal axis. The emotion line reuses the `line` renderer's `<path>` builder. Pain-point annotations reuse `mj-chart-annotation`. Accessibility: the data-table exposes step, score, touchpoints, and pain points as a structured table.
+- **Notes:** Uses a `linear` scale for `score_range` on the vertical axis and a `band` scale for steps on the horizontal axis. The emotion line reuses the `line` renderer's `<path>` builder. Pain points are not drawn as text: a step with pain points gets a small red dot on its node, and the pain-point texts are in the step's label, which the tooltip shows (`<step>: score <n>, touchpoints: …, pain points: …`). Accessibility: the data-table exposes step, score, touchpoints, and pain points as a structured table.
 
 ---
 
@@ -229,7 +231,6 @@
 - **Renderer / `type`:** `heatmap` — **Primary renderer**
 - **Controller:** `<mj-chart type="heatmap" ...>`
 - **Purpose:** Encode a numeric value in a two-dimensional grid of cells using color intensity — reveals spatial, temporal, or categorical density and usage patterns.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x-category, `side="bottom"`), `mj-chart-axis` (y-category, `side="start"`), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -246,6 +247,7 @@
 - **SVG primitives:** `<rect>` (one per cell, fill driven by sequential color scale), `<text>` (optional value labels inside cells, axis tick labels), `<g>` (row groups).
 - **Orientation:** `n/a` — the x/y grid axes are semantically fixed; swapping them is a data transform, not an orientation mode.
 - **Variants / modes:** Calendar heatmap (`layout="calendar"`, with year/month/week grid structure); diverging color scale (`color_scale="diverging"` for values above and below a midpoint).
+- **Events:** `mj-chart-cell-click` `{ row, col, value }` (each cell; `row` is the series name, `col` the category). `heatmap` does not read `layout="calendar"`; the `calendar-heatmap` type emits `mj-chart-day-click` `{ date, value }`.
 - **Phase:** P3
 - **Notes:** Color scale is a `linear` scale mapping `[domain_min, domain_max]` to the `--mj-chart-sequential-*` or `--mj-chart-diverging-*` token ramp. Color is never the sole encoding — a numeric label or tooltip with the exact value is always accessible. The `cohort` renderer (above) reuses this cell-fill logic directly. The correlation matrix renderer (in `specs/chart-components/04-relationship-correlation.md`) also delegates cell fills to this renderer.
 
@@ -255,7 +257,6 @@
 - **Renderer / `type`:** `session-flow` — **Variant of `sankey`**
 - **Controller:** `<mj-chart type="session-flow" ...>`
 - **Purpose:** Show aggregated paths users navigate through an application — which pages or screens they visit in sequence and where they exit.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`, `mj-chart-tooltip`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -281,8 +282,9 @@
 - **SVG primitives:** `<rect>` (stage nodes), `<path>` (flow bands between stages via cubic Bézier), `<text>` (node labels, flow volume), `<g>` (per-stage groups). Same primitives as the `sankey` renderer.
 - **Orientation:** `horizontal` (stages flow left to right; default) and `vertical`.
 - **Variants / modes:** None beyond the `sankey` renderer modes. Exit nodes are simply leaf nodes with no outbound links.
+- **Events:** `mj-chart-flow-click` `{ id, label, flow, inflow, outflow }` (each page node). `session-flow` is drawn by `journey.js`, so the `sankey` events do not apply; its links are not interactive.
 - **Phase:** P5
-- **Notes:** This is the `sankey` renderer (defined in `specs/chart-components/08-flow-process.md`) applied to session navigation data. `type="session-flow"` sets default node coloring by depth level and enables an exit-rate annotation via `mj-chart-annotation`. No new renderer code is required.
+- **Notes:** This is the `sankey` renderer (defined in `specs/chart-components/08-flow-process.md`) applied to session navigation data. `type="session-flow"` gives each node its own palette colour (links take their source node's colour) and draws no exit-rate annotation; a node's label, which the tooltip shows, gives its sessions with inflow and outflow (`<page>: <n> sessions (in <i>, out <o>)`). No new renderer code is required.
 
 ---
 
@@ -290,7 +292,6 @@
 - **Renderer / `type`:** `feature-adoption` — **Variant of `line`**
 - **Controller:** `<mj-chart type="feature-adoption" ...>`
 - **Purpose:** Track the cumulative or periodic percentage of users who have adopted one or more features over time — shows uptake curves and compares feature rollout trajectories.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (time, `side="bottom"`), `mj-chart-axis` (value 0–100 %, `side="start"`), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-crosshair`, `mj-chart-annotation`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -308,8 +309,9 @@
 - **SVG primitives:** `<path>` (line per series), `<circle>` (data-point markers), `<line>` (annotation reference lines), `<text>` (axis labels, annotation labels), `<g>`. Identical to the `line` renderer.
 - **Orientation:** `vertical` (time on x-axis; default) and `horizontal`.
 - **Variants / modes:** Cumulative vs. periodic adoption toggled by `mode="cumulative|periodic"`.
+- **Events:** none (not implemented).
 - **Phase:** P5
-- **Notes:** `type="feature-adoption"` is the `line` renderer with a `[0, 100]` value clamp, percentage y-axis formatting, and launch-event annotations via `mj-chart-annotation`. No new renderer code; the schema preset enforces the `0–100` value domain. The `line` renderer lives in `specs/chart-components/02-trend-timeseries.md`.
+- **Notes:** `type="feature-adoption"` is planned as the `line` renderer with a `[0, 100]` value clamp and percentage y-axis formatting; no `feature-adoption` key is registered yet. Launch-event lines from `annotations` would have to be drawn by the renderer itself; the `line` renderer reads no `annotations` field today. No new renderer code; the schema preset enforces the `0–100` value domain. The `line` renderer lives in `specs/chart-components/02-trend-timeseries.md`.
 
 ---
 
@@ -317,7 +319,6 @@
 - **Renderer / `type`:** `segmentation` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="segmentation" ...>`
 - **Purpose:** Compare quantitative metrics across distinct user segments side by side — reveals how cohorts or persona groups differ on key KPIs.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category/segment, `side="bottom"` or `side="start"`), `mj-chart-axis` (value, `side="start"` or `side="bottom"`), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-value-labels`, `mj-chart-data-table`.
 - **JSON shape:**
   ```json
   {
@@ -332,5 +333,6 @@
 - **SVG primitives:** `<rect>` (bars per segment, grouped or stacked), `<text>` (axis labels, value labels), `<g>` (per-series groups). Identical to the `bar` renderer.
 - **Orientation:** `vertical` (segments on x-axis; default) and `horizontal` (segments on y-axis, useful for long segment names).
 - **Variants / modes:** Grouped (`group="cluster"`, default), stacked (`group="stack"`), 100%-normalized (`group="stack100"`). All handled by the `bar` renderer's existing `group` attribute.
+- **Events:** none (not implemented).
 - **Phase:** P5
 - **Notes:** No new renderer; `type="segmentation"` is the `bar` renderer with a preset that defaults to `group="cluster"` and enables segment-label truncation for long names. The `bar` renderer is defined in `specs/chart-components/01-comparison.md`.

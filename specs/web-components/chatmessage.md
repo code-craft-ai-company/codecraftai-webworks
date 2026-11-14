@@ -81,14 +81,16 @@ Use as the item component within a chat message list. Do not use for comment thr
 
 | Custom property | Default | Description |
 |-----------------|---------|-------------|
-| `--mj-msg-bubble-bg-incoming` | `var(--mj-color-surface-3)` | Bubble background for incoming messages |
-| `--mj-msg-bubble-bg-outgoing` | `var(--mj-color-accent)` | Bubble background for outgoing messages |
-| `--mj-msg-bubble-color-outgoing` | `var(--mj-color-on-accent)` | Text color inside outgoing bubble |
+| `--mj-msg-bubble-bg-incoming` | `var(--mj-surface)` | Bubble background for incoming messages |
+| `--mj-msg-bubble-bg-outgoing` | `var(--mj-accent)` | Bubble background for outgoing messages |
+| `--mj-msg-bubble-color-outgoing` | `var(--mj-text-on-accent)` | Text color inside outgoing bubble |
 | `--mj-msg-bubble-radius` | `var(--mj-radius-lg)` | Bubble border radius |
-| `--mj-msg-avatar-size` | `var(--mj-size-avatar-sm)` | Author avatar size |
+| `--mj-msg-reply-bg` | `color-mix(in srgb, currentColor 8%, transparent)` | Background of the quoted reply preview; tinted from the bubble's own text color, so it shows on incoming, outgoing (accent) and dark bubbles |
+| `--mj-msg-avatar-size` | `32px` | Author avatar size |
 | `--mj-msg-max-width` | `70%` | Maximum width of the message bubble |
-| `--mj-msg-timestamp-color` | `var(--mj-color-text-secondary)` | Timestamp text color |
-| `--mj-msg-status-color-read` | `var(--mj-color-accent)` | Color of the "read" status icon |
+| `--mj-msg-attachment-size` | `160px` | Maximum size of an image attachment thumbnail |
+| `--mj-msg-timestamp-color` | `var(--mj-text-muted)` | Timestamp text color |
+| `--mj-msg-status-color-read` | `var(--mj-accent)` | Color of the "read" status icon |
 
 ## 10. States
 - **default** — rendered in the feed; actions trigger hidden.

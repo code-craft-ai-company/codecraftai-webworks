@@ -1239,3 +1239,278 @@ def test_property_framework_environ_extensions():
             raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# Tests for scope, host, body reading without a length and the path encoding
+# =============================================================================
+
+class UnreadableInput:
+    """
+        Stand-in for a wsgi.input that must not be read, like a socket stream
+        that would wait for the client to close the connection.
+    """
+    
+    def read(self, size: int = -1) -> bytes:
+        """
+            Fail the test, the input must not be read.
+        """
+        errmsg = "wsgi.input was read although the request states no body"
+        raise AssertionError(errmsg)
+
+
+def test_parse_passes_environ_as_request_scope():
+    """
+        Test that what middleware stored in the environ reaches the request.
+    """
+    parser = EnvironParser()
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/",
+        "wsgi.input": BytesIO(b""),
+        "webworks.marker": "set-by-middleware",
+    }
+    
+    request = parser.parse(environ)
+    
+    if request.scope is not environ:
+        errmsg = "Expected the environ to be the scope of the request"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_host_prefers_host_header_over_bind_address():
+    """
+        Test that the host the client asked for is used, not the listen address.
+    """
+    parser = EnvironParser()
+    environ = {"SERVER_NAME": "0.0.0.0", "SERVER_PORT": "8000", "HTTP_HOST": "shop.example.com"}
+    
+    host = parser.get_host(environ)
+    
+    if host != "shop.example.com":
+        errmsg = f"Expected host 'shop.example.com', got {host!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_port_uses_port_of_host_header():
+    """
+        Test that the port named in the Host header is used.
+    """
+    parser = EnvironParser()
+    environ = {"SERVER_NAME": "0.0.0.0", "SERVER_PORT": "8000", "HTTP_HOST": "shop.example.com:8443"}
+    
+    port = parser.get_port(environ)
+    
+    if port != 8443:
+        errmsg = f"Expected port 8443, got {port}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_port_uses_scheme_default_when_host_header_names_none():
+    """
+        Test that a Host header without a port means the default port of the scheme.
+    """
+    parser = EnvironParser()
+    environ = {
+        "SERVER_NAME": "0.0.0.0",
+        "SERVER_PORT": "8000",
+        "HTTP_HOST": "shop.example.com",
+        "wsgi.url_scheme": "https",
+    }
+    
+    port = parser.get_port(environ)
+    
+    if port != 443:
+        errmsg = f"Expected port 443, got {port}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_host_handles_bracketed_ipv6_host_header():
+    """
+        Test that an IPv6 address in the Host header is taken with its brackets.
+    """
+    parser = EnvironParser()
+    environ = {"SERVER_NAME": "0.0.0.0", "SERVER_PORT": "8000", "HTTP_HOST": "[::1]:9000"}
+    
+    host = parser.get_host(environ)
+    port = parser.get_port(environ)
+    
+    if host != "[::1]" or port != 9000:
+        errmsg = f"Expected host '[::1]' and port 9000, got {host!r} and {port}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_host_falls_back_to_server_name_for_malformed_host_header():
+    """
+        Test that a Host header that is not a host is not used.
+    """
+    parser = EnvironParser()
+    environ = {"SERVER_NAME": "internal.example", "SERVER_PORT": "8000", "HTTP_HOST": "evil.example/path?x=1"}
+    
+    host = parser.get_host(environ)
+    port = parser.get_port(environ)
+    
+    if host != "internal.example" or port != 8000:
+        errmsg = f"Expected the server name and port, got {host!r} and {port}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_builds_url_from_host_header():
+    """
+        Test that the URL of the request names the host the client asked for.
+    """
+    parser = EnvironParser()
+    environ = {
+        "REQUEST_METHOD": "GET",
+        "PATH_INFO": "/cart",
+        "SERVER_NAME": "0.0.0.0",
+        "SERVER_PORT": "8000",
+        "HTTP_HOST": "shop.example.com:8000",
+        "wsgi.input": BytesIO(b""),
+    }
+    
+    request = parser.parse(environ)
+    
+    if "shop.example.com" not in request.url or "0.0.0.0" in request.url:
+        errmsg = f"Expected the URL to name 'shop.example.com', got {request.url!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_body_does_not_read_input_without_content_length():
+    """
+        Test that a request without CONTENT_LENGTH has no body and the input is left alone.
+    """
+    parser = EnvironParser()
+    environ = {"REQUEST_METHOD": "GET", "wsgi.input": UnreadableInput()}
+    
+    body = parser.get_body(environ)
+    
+    if body != b"":
+        errmsg = f"Expected an empty body, got {body!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_body_does_not_read_input_with_invalid_content_length():
+    """
+        Test that an invalid CONTENT_LENGTH does not turn into a read to the end of the stream.
+    """
+    parser = EnvironParser()
+    
+    for value in ("abc", "-5"):
+        environ = {"REQUEST_METHOD": "POST", "CONTENT_LENGTH": value, "wsgi.input": UnreadableInput()}
+        
+        body = parser.get_body(environ)
+        
+        if body != b"":
+            errmsg = f"Expected an empty body for CONTENT_LENGTH {value!r}, got {body!r}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_body_reads_terminated_input_without_content_length():
+    """
+        Test that a stream the server marks as terminated is read to its end.
+    """
+    parser = EnvironParser()
+    environ = {
+        "REQUEST_METHOD": "POST",
+        "wsgi.input": BytesIO(b"chunked upload"),
+        "wsgi.input_terminated": True,
+    }
+    
+    body = parser.get_body(environ)
+    
+    if body != b"chunked upload":
+        errmsg = f"Expected the whole terminated stream, got {body!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_body_enforces_limit_on_terminated_input():
+    """
+        Test that the body limit holds for a stream without CONTENT_LENGTH.
+    """
+    parser = EnvironParser(max_body_size=100)
+    environ = {
+        "REQUEST_METHOD": "POST",
+        "wsgi.input": BytesIO(b"a" * 1000),
+        "wsgi.input_terminated": True,
+    }
+    
+    raised = False
+    try:
+        parser.get_body(environ)
+    except RequestEntityTooLarge:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected RequestEntityTooLarge for a terminated stream over the limit"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_content_length_treats_negative_value_as_invalid():
+    """
+        Test that a negative CONTENT_LENGTH is not returned as a length.
+    """
+    parser = EnvironParser()
+    
+    content_length = parser.get_content_length({"CONTENT_LENGTH": "-1"})
+    
+    if content_length is not None:
+        errmsg = f"Expected None for a negative CONTENT_LENGTH, got {content_length}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_path_decodes_utf8_path_carried_as_latin1():
+    """
+        Test that a UTF-8 path arrives as the characters the client sent.
+    """
+    parser = EnvironParser()
+    
+    # What a PEP 3333 server puts in PATH_INFO for the request target /caf%C3%A9
+    path_info = "/caf\u00e9".encode("utf-8").decode("latin-1")
+    
+    path = parser.get_path({"PATH_INFO": path_info})
+    
+    if path != "/caf\u00e9":
+        errmsg = f"Expected '/caf\u00e9', got {path!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_path_keeps_path_that_is_not_utf8():
+    """
+        Test that a path whose bytes are not valid UTF-8 is left as it is.
+    """
+    parser = EnvironParser()
+    
+    path = parser.get_path({"PATH_INFO": "/caf\xe9"})
+    
+    if path != "/caf\xe9":
+        errmsg = f"Expected the path to be left unchanged, got {path!r}"
+        raise AssertionError(errmsg)
+    
+    return

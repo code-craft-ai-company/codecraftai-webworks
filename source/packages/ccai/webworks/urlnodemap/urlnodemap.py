@@ -9,8 +9,9 @@
 
 from __future__ import annotations
 
+import json
 import threading
-from typing import Iterator, TYPE_CHECKING
+from typing import Any, Iterable, Iterator, List, TYPE_CHECKING
 
 from ccai.webworks.urlnodemap.pathutils import normalize_path, split_path
 from ccai.webworks.urlnodemap.urlnode import URLNode
@@ -68,7 +69,8 @@ class URLNodeMap:
             segment="",
             path="/",
             parent=None,
-            frozen_checker=self._check_frozen
+            frozen_checker=self._check_frozen,
+            lock=self._lock
         )
 
     @property
@@ -111,8 +113,13 @@ class URLNodeMap:
             After freezing, any modification attempt (add_child, remove_node,
             set_metadata, attach_handler) raises FrozenTreeError. This allows
             safe concurrent read access without locking.
+
+            The flag is set while holding the tree lock, so a modification
+            that is in progress finishes before the tree is frozen and
+            none starts afterwards.
         """
-        self._frozen = True
+        with self._lock:
+            self._frozen = True
     
     def get_node(self, path: str) -> URLNode:
         """
@@ -267,10 +274,23 @@ class URLNodeMap:
             with the root node and visiting all descendants. Every node in
             the tree is yielded exactly once.
 
+            A tree that is not frozen may be modified by another thread
+            while it is walked. The nodes are therefore collected under
+            the tree lock first and yielded afterwards; a frozen tree can
+            not change and is walked directly.
+
             :yields: URLNode instances in depth-first traversal order.
         """
-        yield self._root
-        yield from self._root.descendants()
+        if self._frozen:
+            yield self._root
+            yield from self._root.descendants()
+        else:
+            with self._lock:
+                nodes = [self._root]
+                nodes.extend(self._root.descendants())
+
+            for node in nodes:
+                yield node
 
     def iterate_leaves(self) -> Iterator[URLNode]:
         """
@@ -427,4 +447,110 @@ class URLNodeMap:
 
         return entries
 
+    def export_security_map_json(self, filter_tag: str = None, indent: int = 2) -> str:
+        """
+            Export the security map as a JSON string.
 
+            :param filter_tag: Optional tag to filter routes, as for
+                :meth:`export_security_map`.
+            :param indent: Indentation of the JSON text.
+
+            :returns: JSON text holding the list of security map entries.
+        """
+        entries = self.export_security_map(filter_tag=filter_tag)
+        rtnval = json.dumps(entries, indent=indent, default=str)
+        return rtnval
+
+    def export_security_map_markdown(self, filter_tag: str = None) -> str:
+        """
+            Export the security map as a Markdown table, one row per route.
+
+            :param filter_tag: Optional tag to filter routes, as for
+                :meth:`export_security_map`.
+
+            :returns: The Markdown text of the table.
+        """
+        columns = ["path", "methods", "handler", "access_policy", "scopes", "rate_limit"]
+
+        lines = [
+            "| " + " | ".join(columns) + " |",
+            "| " + " | ".join("---" for _ in columns) + " |",
+        ]
+
+        for entry in self.export_security_map(filter_tag=filter_tag):
+            cells = []
+            for column in columns:
+                value = entry.get(column)
+                if isinstance(value, (list, tuple)):
+                    text = ", ".join(str(item) for item in value)
+                elif value is None:
+                    text = ""
+                else:
+                    text = str(value)
+                # A pipe would end the cell and a line break the row
+                text = text.replace("|", "\\|").replace("\n", " ")
+                cells.append(text)
+            lines.append("| " + " | ".join(cells) + " |")
+
+        rtnval = "\n".join(lines) + "\n"
+        return rtnval
+
+    def load_descriptors(self, descriptors: Iterable[Any]) -> List[URLNode]:
+        """
+            Populate the map from endpoint descriptors, so it describes the
+            routes an application actually serves.
+
+            For each descriptor -- for example the result of
+            ``EndpointRegistry.collect()`` -- the node of its path is
+            created, its handler is attached for each of its methods, and
+            its access policy, scopes, tags and rate limit are recorded as
+            metadata of that node. The policy stored is the descriptor's
+            own; :meth:`URLNode.get_effective_access_policy` combines it
+            with any policy set on an ancestor node.
+
+            A handler that is already attached to the node for the same
+            method is not attached twice, which happens when a route is
+            registered with and without a trailing slash.
+
+            :param descriptors: ``EndpointDescriptor`` objects.
+
+            :returns: The nodes the descriptors were loaded into, in order.
+
+            :raises HandlerConflictError: If a different handler is already
+                attached to a node for one of the descriptor's methods.
+            :raises FrozenTreeError: If the tree is frozen.
+        """
+        rtnval: List[URLNode] = []
+
+        for descriptor in descriptors:
+            path = getattr(descriptor, "path", None)
+            if path is None:
+                leaf = getattr(descriptor, "leaf", None)
+                path = f"/{leaf}" if leaf is not None else "/"
+
+            with self._lock:
+                node = self.get_or_create_node(path)
+
+                for method in descriptor.methods:
+                    existing_handler = node.get_handler(method)
+                    if existing_handler is None or existing_handler is not descriptor.handler:
+                        node.attach_handler(method, descriptor.handler)
+
+                constraints = getattr(descriptor, "constraints", None)
+                access_policy = getattr(constraints, "access_policy", None)
+                scopes = getattr(constraints, "scopes", None)
+                rate_limit = getattr(constraints, "rate_limit", None)
+                tags = getattr(descriptor, "tags", None)
+
+                if access_policy is not None:
+                    node.set_metadata("access_policy", access_policy)
+                if scopes:
+                    node.set_metadata("scopes", list(scopes))
+                if rate_limit is not None:
+                    node.set_metadata("rate_limit", rate_limit)
+                if tags:
+                    node.set_metadata("tags", list(tags))
+
+            rtnval.append(node)
+
+        return rtnval

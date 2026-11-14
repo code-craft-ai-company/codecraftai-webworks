@@ -590,17 +590,18 @@ def test_get_descriptors_methods_are_get():
     return
 
 
-def test_get_descriptors_ui_handler_is_serve_ui():
+def test_get_descriptors_ui_handler_is_handle_ui():
     """
-        Test that the UI descriptor handler is the serve_ui bound method.
+        Test that the UI descriptor handler is the handle_ui bound method,
+        the route handler that takes the request and returns a Response.
     """
     generator = _create_mock_generator()
     blueprint = SwaggerUIBlueprint(generator=generator)
     descriptors = blueprint.get_descriptors()
     ui_descriptor = descriptors[0]
 
-    if ui_descriptor.handler.__func__ is not SwaggerUIBlueprint.serve_ui:
-        errmsg = "Expected UI descriptor handler to be bound to Swagger_UI_Blueprint.serve_ui"
+    if ui_descriptor.handler.__func__ is not SwaggerUIBlueprint.handle_ui:
+        errmsg = "Expected UI descriptor handler to be bound to Swagger_UI_Blueprint.handle_ui"
         raise AssertionError(errmsg)
 
     if ui_descriptor.handler.__self__ is not blueprint:
@@ -610,17 +611,18 @@ def test_get_descriptors_ui_handler_is_serve_ui():
     return
 
 
-def test_get_descriptors_spec_handler_is_serve_spec():
+def test_get_descriptors_spec_handler_is_handle_spec():
     """
-        Test that the spec descriptor handler is the serve_spec bound method.
+        Test that the spec descriptor handler is the handle_spec bound method,
+        the route handler that takes the request and returns a Response.
     """
     generator = _create_mock_generator()
     blueprint = SwaggerUIBlueprint(generator=generator)
     descriptors = blueprint.get_descriptors()
     spec_descriptor = descriptors[1]
 
-    if spec_descriptor.handler.__func__ is not SwaggerUIBlueprint.serve_spec:
-        errmsg = "Expected spec descriptor handler to be bound to Swagger_UI_Blueprint.serve_spec"
+    if spec_descriptor.handler.__func__ is not SwaggerUIBlueprint.handle_spec:
+        errmsg = "Expected spec descriptor handler to be bound to Swagger_UI_Blueprint.handle_spec"
         raise AssertionError(errmsg)
 
     if spec_descriptor.handler.__self__ is not blueprint:
@@ -997,8 +999,8 @@ def test_get_descriptors_includes_static_route():
 
     static_descriptor = descriptors[2]
 
-    if "/_swagger/<filename>" != static_descriptor.path:
-        errmsg = f"Expected static descriptor path '/_swagger/<filename>', got {static_descriptor.path!r}"
+    if "/_swagger/{filename}" != static_descriptor.path:
+        errmsg = f"Expected static descriptor path '/_swagger/{{filename}}', got {static_descriptor.path!r}"
         raise AssertionError(errmsg)
 
     return
@@ -1014,24 +1016,25 @@ def test_get_descriptors_static_route_uses_custom_path():
 
     static_descriptor = descriptors[2]
 
-    if "/custom-static/<filename>" != static_descriptor.path:
-        errmsg = f"Expected path '/custom-static/<filename>', got {static_descriptor.path!r}"
+    if "/custom-static/{filename}" != static_descriptor.path:
+        errmsg = f"Expected path '/custom-static/{{filename}}', got {static_descriptor.path!r}"
         raise AssertionError(errmsg)
 
     return
 
 
-def test_get_descriptors_static_handler_is_serve_static():
+def test_get_descriptors_static_handler_is_handle_static():
     """
-        Test that the static descriptor handler is the serve_static bound method.
+        Test that the static descriptor handler is the handle_static bound method,
+        the route handler that takes the request and returns a Response.
     """
     generator = _create_mock_generator()
     blueprint = SwaggerUIBlueprint(generator=generator)
     descriptors = blueprint.get_descriptors()
     static_descriptor = descriptors[2]
 
-    if static_descriptor.handler.__func__ is not SwaggerUIBlueprint.serve_static:
-        errmsg = "Expected static descriptor handler to be bound to SwaggerUIBlueprint.serve_static"
+    if static_descriptor.handler.__func__ is not SwaggerUIBlueprint.handle_static:
+        errmsg = "Expected static descriptor handler to be bound to SwaggerUIBlueprint.handle_static"
         raise AssertionError(errmsg)
 
     if static_descriptor.handler.__self__ is not blueprint:
@@ -1053,5 +1056,127 @@ def test_get_descriptors_static_route_is_get():
     if static_descriptor.methods != ["GET"]:
         errmsg = f"Expected methods ['GET'], got {static_descriptor.methods!r}"
         raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# The registered routes are served through Router and Dispatcher
+# =============================================================================
+
+from ccai.webworks.routing.dispatcher import Dispatcher
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.response import Response
+from ccai.webworks.routing.router import Router
+
+
+def _get_from_registered_blueprint(path, **blueprint_kwargs):
+    """Register a SwaggerUIBlueprint on a Router through the instance and GET ``path`` from it."""
+    blueprint = SwaggerUIBlueprint(generator=_create_mock_generator(), **blueprint_kwargs)
+
+    router = Router()
+    blueprint.register(router)
+
+    response = Dispatcher(router).dispatch(Request("GET", path))
+    return response
+
+
+def test_registered_ui_route_serves_the_html_page():
+    """GET /docs through the dispatcher answers 200 with the HTML page."""
+    response = _get_from_registered_blueprint("/docs")
+
+    if response.status_code != 200:
+        errmsg = f"Expected 200, got {response.status_code}: {response.body[:200]!r}"
+        raise AssertionError(errmsg)
+
+    if not response.headers.get("Content-Type", "").startswith("text/html"):
+        errmsg = f"Expected an HTML content type, got {response.headers.get('Content-Type')!r}"
+        raise AssertionError(errmsg)
+
+    if b"swagger-ui" not in response.body:
+        raise AssertionError("Expected the Swagger UI page in the body")
+
+    return
+
+
+def test_registered_spec_route_serves_the_specification():
+    """GET /openapi.json through the dispatcher answers 200 with the generator's JSON, not a re-encoded tuple."""
+    response = _get_from_registered_blueprint("/openapi.json")
+
+    if response.status_code != 200:
+        errmsg = f"Expected 200, got {response.status_code}: {response.body[:200]!r}"
+        raise AssertionError(errmsg)
+
+    parsed = json.loads(response.body)
+    if parsed.get("openapi") != "3.0.3":
+        errmsg = f"Expected the OpenAPI document, got {parsed!r}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_registered_static_route_serves_a_bundled_asset():
+    """GET /_swagger/swagger-ui.css through the dispatcher answers 200 with the stylesheet."""
+    response = _get_from_registered_blueprint("/_swagger/swagger-ui.css")
+
+    if response.status_code != 200:
+        errmsg = f"Expected 200, got {response.status_code}"
+        raise AssertionError(errmsg)
+
+    if response.headers.get("Content-Type") != "text/css":
+        errmsg = f"Expected 'text/css', got {response.headers.get('Content-Type')!r}"
+        raise AssertionError(errmsg)
+
+    if len(response.body) == 0:
+        raise AssertionError("Expected the stylesheet content")
+
+    return
+
+
+def test_registered_static_route_answers_404_for_an_unknown_file():
+    """A file name that is not a bundled asset is answered 404 by the handler."""
+    response = _get_from_registered_blueprint("/_swagger/not-there.js")
+
+    if response.status_code != 404:
+        errmsg = f"Expected 404, got {response.status_code}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_registered_routes_follow_the_configured_paths():
+    """Custom ui_path and static_path are the paths the routes are served at."""
+    response = _get_from_registered_blueprint("/assets/swagger-ui.css", ui_path="/api-docs", static_path="/assets")
+
+    if response.status_code != 200:
+        errmsg = f"Expected 200 at the custom static path, got {response.status_code}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_instance_register_returns_the_instance_descriptors():
+    """blueprint.register() on a configured instance registers that instance's three routes."""
+    blueprint = SwaggerUIBlueprint(generator=_create_mock_generator(), ui_path="/api-docs")
+
+    descriptors = blueprint.register()
+
+    paths = [descriptor.path for descriptor in descriptors]
+    if paths != ["/api-docs", "/openapi.json", "/_swagger/{filename}"]:
+        errmsg = f"Expected the instance's routes, got {paths}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_handlers_return_response_objects():
+    """The route handlers return Response objects, which the dispatcher sends as they are."""
+    blueprint = SwaggerUIBlueprint(generator=_create_mock_generator())
+
+    for handler in (blueprint.handle_ui, blueprint.handle_spec):
+        response = handler(Request("GET", "/"))
+        if not isinstance(response, Response):
+            errmsg = f"Expected a Response from {handler.__name__}, got {type(response).__name__}"
+            raise AssertionError(errmsg)
 
     return

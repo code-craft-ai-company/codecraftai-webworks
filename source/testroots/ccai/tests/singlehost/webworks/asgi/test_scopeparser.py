@@ -1445,3 +1445,39 @@ def test_property_2_missing_optional_keys_use_defaults():
                 raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Tests for repeated headers
+# =============================================================================
+
+def test_get_headers_joins_repeated_cookie_headers():
+    """
+        Test that Cookie headers split over several fields are all kept.
+    """
+    parser = ScopeParser()
+    scope = {"headers": [(b"cookie", b"a=1"), (b"cookie", b"b=2")]}
+    
+    headers = parser.get_headers(scope)
+    
+    if headers.get("Cookie") != "a=1; b=2":
+        errmsg = f"Expected the cookies joined with '; ', got {headers.get('Cookie')!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_headers_joins_repeated_header_with_comma():
+    """
+        Test that a header sent several times keeps every value.
+    """
+    parser = ScopeParser()
+    scope = {"headers": [(b"x-forwarded-for", b"10.0.0.1"), (b"X-Forwarded-For", b"10.0.0.2")]}
+    
+    headers = parser.get_headers(scope)
+    
+    if headers.get("X-Forwarded-For") != "10.0.0.1, 10.0.0.2":
+        errmsg = f"Expected both values joined with ', ', got {headers.get('X-Forwarded-For')!r}"
+        raise AssertionError(errmsg)
+    
+    return

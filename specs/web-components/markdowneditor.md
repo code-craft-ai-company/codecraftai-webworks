@@ -142,7 +142,8 @@ lightweight markup syntax (GitHub comments, documentation, README authoring).
 - Mode tabs use `role="tablist"` / `role="tab"` / `role="tabpanel"` pattern.
 - Toolbar uses `role="toolbar"` with `aria-label="Markdown formatting"` (localizable).
 - All toolbar buttons have `aria-label` for each format action (localizable).
-- Preview pane has `role="region"` with `aria-label="Preview"` (localizable) and
+- Preview pane has `role="group"` (not a region landmark, which every editor on a page would repeat) with
+  `aria-label="Preview"` (localizable) and
   `aria-live="polite"` so updates are announced.
 - The split-mode divider has `role="separator"` with `aria-valuenow` expressing
   the split ratio.

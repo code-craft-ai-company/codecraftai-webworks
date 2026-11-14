@@ -31,7 +31,9 @@ scheduling use `<mj-calendar>`. For hierarchical data use `<mj-tree-grid>`.
 - **Board** — horizontal scroll container holding all columns; `role="application"` with `aria-label`.
 - **Column** — named `<section>` with `role="group"` and `aria-label` matching the column label.
 - **Column header** — title, item count badge, WIP limit indicator, and optional column actions menu.
-- **Column body** — scrollable card list; `role="list"`.
+- **Column body** — scrollable card list and drop target; `role="list"` while the column
+  holds cards. An empty column's body shows the `empty-[id]` slot and has no list role (a
+  list may own only list items).
 - **Card** — `role="listitem"` containing card content; draggable.
 - **Card drag handle** — explicit drag affordance; `role="button"` with `aria-grabbed`.
 - **Drop zone** — highlighted insertion indicator shown between cards during drag.
@@ -150,7 +152,7 @@ drag. A visual elevation change on the card confirms touch-drag start.
 ## 13. Accessibility
 - Board root: `role="application"` with `aria-label="Kanban board"` (or from `aria-label` attribute) so AT announces the interactive application mode.
 - Columns: `role="group"` inside a `<section>`; `aria-label="{column label} ({count} cards)"`.
-- Column card list: `role="list"`.
+- Column card list: `role="list"` (only while the column has cards; the empty-state slot is never inside a list).
 - Cards: `role="listitem"`; focusable via `tabindex="0"`; `aria-label` derived from card title.
 - Drag handle button: `aria-label="Move card: {card title}"`, `aria-pressed="false"` (true in move mode), `aria-grabbed` reflects drag state.
 - Drop targets during drag: `aria-dropeffect="move"` on valid columns.

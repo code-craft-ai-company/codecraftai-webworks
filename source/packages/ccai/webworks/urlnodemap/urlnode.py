@@ -8,9 +8,12 @@
 
 from __future__ import annotations
 
+import threading
+
 from types import MappingProxyType
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional
 
+from ccai.webworks.security.accesspolicy import AccessPolicy
 from ccai.webworks.urlnodemap.pathutils import is_parameter_segment
 from ccai.webworks.urlnodemap.exceptions import (
     NodeNotFoundError,
@@ -41,7 +44,8 @@ class URLNode:
         segment: str,
         path: str,
         parent: Optional[URLNode] = None,
-        frozen_checker: Optional[Callable[[], None]] = None
+        frozen_checker: Optional[Callable[[], None]] = None,
+        lock: Optional[threading.RLock] = None
     ):
         """
             Initialize a URLNode.
@@ -52,6 +56,11 @@ class URLNode:
             :param frozen_checker: Optional callable that raises FrozenTreeError
                 if the owning tree is frozen. Used to enforce immutability on
                 node-level modification operations.
+            :param lock: The lock that guards the tree this node belongs to.
+                The owning :class:`URLNodeMap` passes its own lock, and a
+                node hands the lock on to the children it creates, so every
+                modification of one tree is serialised by one lock. A node
+                created on its own gets a lock of its own.
         """
         self._segment: str = segment
         self._path: str = path
@@ -62,6 +71,7 @@ class URLNode:
         self._is_parameter: bool = is_parameter_segment(segment)
         self._parameter_name: Optional[str] = None
         self._frozen_checker: Optional[Callable[[], None]] = frozen_checker
+        self._lock: threading.RLock = lock if lock is not None else threading.RLock()
         if self._is_parameter:
             self._parameter_name = segment[1:-1]
     
@@ -190,8 +200,9 @@ class URLNode:
 
             :raises FrozenTreeError: If the owning tree is frozen.
         """
-        self._check_frozen()
-        self._metadata[key] = value
+        with self._lock:
+            self._check_frozen()
+            self._metadata[key] = value
 
     def attach_handler(self, method: str, handler: Callable) -> None:
         """
@@ -206,17 +217,21 @@ class URLNode:
             :raises HandlerConflictError: If a handler already exists for this method.
             :raises FrozenTreeError: If the owning tree is frozen.
         """
-        self._check_frozen()
         method_upper = method.upper()
-        
-        if method_upper in self._handlers:
-            raise HandlerConflictError(
-                path=self._path,
-                method=method_upper,
-                existing_handler=self._handlers[method_upper]
-            )
-        
-        self._handlers[method_upper] = handler
+
+        # The check and the write happen under the tree lock, so two
+        # threads attaching the same method can not both pass the check.
+        with self._lock:
+            self._check_frozen()
+
+            if method_upper in self._handlers:
+                raise HandlerConflictError(
+                    path=self._path,
+                    method=method_upper,
+                    existing_handler=self._handlers[method_upper]
+                )
+
+            self._handlers[method_upper] = handler
 
     def get_handler(self, method: str) -> Optional[Callable]:
         """
@@ -269,57 +284,62 @@ class URLNode:
             :raises PathConflictError: If parameter conflicts with literal segment.
             :raises FrozenTreeError: If the owning tree is frozen.
         """
-        self._check_frozen()
+        # The existence check and the insertion happen under the tree
+        # lock, so two threads adding the same segment can not both pass
+        # the check and one silently replace the other's subtree.
+        with self._lock:
+            self._check_frozen()
 
-        # Check if child already exists
-        if segment in self._children:
-            existing_child = self._children[segment]
-            raise NodeConflictError(existing_child.path, existing_child)
-        
-        # Check for parameter/literal conflict
-        new_is_parameter = is_parameter_segment(segment)
-        
-        for existing_segment, existing_child in self._children.items():
-            existing_is_parameter = existing_child.is_parameter
-            
-            # Conflict: trying to add parameter when literal exists, or vice versa
-            if new_is_parameter and not existing_is_parameter:
-                # Adding parameter when literal exists
-                if self._path == "/":
-                    conflict_path = f"/{segment}"
-                else:
-                    conflict_path = f"{self._path}/{segment}"
-                raise PathConflictError(conflict_path, segment, existing_segment)
-            
-            if not new_is_parameter and existing_is_parameter:
-                # Adding literal when parameter exists
-                if self._path == "/":
-                    conflict_path = f"/{segment}"
-                else:
-                    conflict_path = f"{self._path}/{segment}"
-                raise PathConflictError(conflict_path, existing_segment, segment)
-        
-        # Compute the child's full path
-        if self._path == "/":
-            child_path = f"/{segment}"
-        else:
-            child_path = f"{self._path}/{segment}"
-        
-        # Create the new child node
-        child = URLNode(
-            segment=segment,
-            path=child_path,
-            parent=self,
-            frozen_checker=self._frozen_checker
-        )
-        
-        # Apply initial metadata
-        for key, value in metadata.items():
-            child._metadata[key] = value
-        
-        # Add to children collection
-        self._children[segment] = child
-        
+            # Check if child already exists
+            if segment in self._children:
+                existing_child = self._children[segment]
+                raise NodeConflictError(existing_child.path, existing_child)
+
+            # Check for parameter/literal conflict
+            new_is_parameter = is_parameter_segment(segment)
+
+            for existing_segment, existing_child in self._children.items():
+                existing_is_parameter = existing_child.is_parameter
+
+                # Conflict: trying to add parameter when literal exists, or vice versa
+                if new_is_parameter and not existing_is_parameter:
+                    # Adding parameter when literal exists
+                    if self._path == "/":
+                        conflict_path = f"/{segment}"
+                    else:
+                        conflict_path = f"{self._path}/{segment}"
+                    raise PathConflictError(conflict_path, segment, existing_segment)
+
+                if not new_is_parameter and existing_is_parameter:
+                    # Adding literal when parameter exists
+                    if self._path == "/":
+                        conflict_path = f"/{segment}"
+                    else:
+                        conflict_path = f"{self._path}/{segment}"
+                    raise PathConflictError(conflict_path, existing_segment, segment)
+
+            # Compute the child's full path
+            if self._path == "/":
+                child_path = f"/{segment}"
+            else:
+                child_path = f"{self._path}/{segment}"
+
+            # Create the new child node
+            child = URLNode(
+                segment=segment,
+                path=child_path,
+                parent=self,
+                frozen_checker=self._frozen_checker,
+                lock=self._lock
+            )
+
+            # Apply initial metadata
+            for key, value in metadata.items():
+                child._metadata[key] = value
+
+            # Add to children collection
+            self._children[segment] = child
+
         return child
 
     def get_effective_metadata(self, key: str) -> Any:
@@ -347,17 +367,22 @@ class URLNode:
         """
             Compute the combined access policy from the inheritance chain.
 
-            Collects all access_policy values from this node up to the root
-            and combines them via logical AND. If only one policy exists in
-            the chain, it is returned directly. If no policy is set anywhere
-            in the chain, returns None.
+            Collects all access_policy values from the root down to this
+            node and combines them via logical AND. If only one policy
+            exists in the chain, it is returned directly. If no policy is
+            set anywhere in the chain, returns None.
 
-            Access policies are represented as strings or dicts. When multiple
-            policies exist, they are collected into a list representing the
-            AND-combined constraints.
+            When the policies are :class:`AccessPolicy` objects they are
+            merged with :meth:`AccessPolicy.merge_with`, parent first, so
+            the result is one policy that a subject satisfies only if it
+            satisfies the policy of every node in the chain. Policies
+            given in another form (strings, dicts) can not be merged; they
+            are returned as a list, nearest node first, that stands for
+            the AND of its items.
 
-            :returns: The combined access policy, a single policy if only one
-                exists, or None if no policy is set.
+            :returns: The merged AccessPolicy, a single policy if only one
+                exists, a list of raw policies when they are not
+                AccessPolicy objects, or None if no policy is set.
         """
         policies = []
         current = self
@@ -371,6 +396,20 @@ class URLNode:
             return None
         if len(policies) == 1:
             return policies[0]
+
+        all_mergeable = True
+        for policy in policies:
+            if not isinstance(policy, AccessPolicy):
+                all_mergeable = False
+
+        if all_mergeable:
+            # ``policies`` runs from this node up to the root; merge from
+            # the root down so a child is merged onto its parents.
+            merged = policies[-1]
+            for policy in reversed(policies[:-1]):
+                merged = merged.merge_with(policy)
+            return merged
+
         return policies
 
     def get_effective_tags(self) -> List[str]:
@@ -452,7 +491,12 @@ class URLNode:
 
             :yields: URLNode instances that are descendants of this node.
         """
-        for child in self._children.values():
+        # The children are copied under the tree lock, so a node added
+        # while the tree is being walked does not break the iteration.
+        with self._lock:
+            children = list(self._children.values())
+
+        for child in children:
             yield child
             yield from child.descendants()
 

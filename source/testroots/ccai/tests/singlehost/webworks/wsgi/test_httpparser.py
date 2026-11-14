@@ -12,9 +12,10 @@
 """
 
 import io
+import socket
 import random
 import string
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from ccai.webworks.wsgi.httpparser import (
     HTTPParser,
@@ -23,10 +24,16 @@ from ccai.webworks.wsgi.httpparser import (
 )
 from ccai.webworks.wsgi.serverconfig import ServerConfig
 from ccai.webworks.wsgi.exceptions import (
+    ConnectionClosed,
+    IncompleteRequest,
+    RequestEntityTooLarge,
+    RequestLineTooLong,
     RequestParseError,
+    RequestTimeout,
     HeaderTooLarge,
     TooManyHeaders,
 )
+from ccai.webworks.wsgi.socketreader import SocketReader
 
 
 # =============================================================================
@@ -761,7 +768,7 @@ def test_create_bad_request_response():
     response = parser.create_bad_request_response("Missing header")
     
     if not response.startswith(b"HTTP/1.1 400 Bad Request"):
-        errmsg = f"Expected response to start with 'HTTP/1.1 400 Bad Request'"
+        errmsg = "Expected response to start with 'HTTP/1.1 400 Bad Request'"
         raise AssertionError(errmsg)
     
     if b"Missing header" not in response:
@@ -997,5 +1004,684 @@ def test_property_server_environ_construction():
             if environ[environ_key] != header_value:
                 errmsg = f"Iteration {iteration}: Header '{environ_key}' value mismatch"
                 raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Tests for limits, end of stream and timeouts while reading a request
+# =============================================================================
+
+class StallingSocket:
+    """
+        Mock socket that serves its data and then times out, like a client that
+        stops sending without closing the connection.
+    """
+    
+    def __init__(self, data: bytes):
+        """
+            Construct a stalling socket with the data it serves first.
+        """
+        self._data = data
+        self._position = 0
+        return
+    
+    def recv(self, size: int) -> bytes:
+        """
+            Read data from the mock socket, time out when it is used up.
+        """
+        if self._position >= len(self._data):
+            raise socket.timeout("timed out")
+        
+        end = min(self._position + size, len(self._data))
+        rtnval = self._data[self._position:end]
+        self._position = end
+        return rtnval
+
+
+CLIENT_ADDR = ("127.0.0.1", 12345)
+SERVER_ADDR = ("127.0.0.1", 8000)
+
+
+def parse_raw_request(data: bytes, config: ServerConfig = None) -> Dict[str, Any]:
+    """
+        Parse a raw request with a parser built from the given configuration.
+    """
+    parser = HTTPParser(config)
+    rtnval = parser.parse_request(MockSocket(data), CLIENT_ADDR, SERVER_ADDR)
+    return rtnval
+
+
+def get_parse_error(data: bytes, config: ServerConfig = None) -> Exception:
+    """
+        Parse a raw request that must be refused and return the error raised.
+    """
+    rtnval = None
+    try:
+        parse_raw_request(data, config)
+    except Exception as err:
+        rtnval = err
+    
+    if rtnval is None:
+        errmsg = f"Expected the request to be refused: {data[:80]!r}"
+        raise AssertionError(errmsg)
+    
+    return rtnval
+
+
+def test_parse_request_refuses_request_line_over_limit_with_414():
+    """
+        Test that a request line longer than the limit is refused with 414.
+    """
+    config = ServerConfig(max_request_line=256)
+    data = b"GET /" + b"a" * 5000 + b" HTTP/1.1\r\nHost: x\r\n\r\n"
+    
+    err = get_parse_error(data, config)
+    
+    if not isinstance(err, RequestLineTooLong):
+        errmsg = f"Expected RequestLineTooLong, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    if err.status_code != 414:
+        errmsg = f"Expected status code 414, got {err.status_code}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_refuses_endless_request_line_without_newline():
+    """
+        Test that bytes without any line feed are refused once the limit is passed.
+    """
+    config = ServerConfig(max_request_line=256)
+    
+    err = get_parse_error(b"G" * 100000, config)
+    
+    if not isinstance(err, RequestLineTooLong):
+        errmsg = f"Expected RequestLineTooLong, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_refuses_headers_over_limit_with_431():
+    """
+        Test that headers larger than the limit are refused with 431 while being read.
+    """
+    config = ServerConfig(max_header_size=512)
+    data = b"GET / HTTP/1.1\r\nX-Big: " + b"a" * 5000 + b"\r\n\r\n"
+    
+    err = get_parse_error(data, config)
+    
+    if not isinstance(err, HeaderTooLarge):
+        errmsg = f"Expected HeaderTooLarge, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    if err.status_code != 431:
+        errmsg = f"Expected status code 431, got {err.status_code}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_refuses_too_many_headers_with_431():
+    """
+        Test that more headers than the limit are refused with 431.
+    """
+    config = ServerConfig(max_headers=3)
+    data = b"GET / HTTP/1.1\r\n" + b"".join(b"X-H%d: v\r\n" % idx for idx in range(10)) + b"\r\n"
+    
+    err = get_parse_error(data, config)
+    
+    if not isinstance(err, TooManyHeaders):
+        errmsg = f"Expected TooManyHeaders, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    if err.status_code != 431:
+        errmsg = f"Expected status code 431, got {err.status_code}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_refuses_body_over_limit_with_413():
+    """
+        Test that a Content-Length over the body limit is refused with 413.
+    """
+    config = ServerConfig(max_request_size=10)
+    data = b"POST / HTTP/1.1\r\nContent-Length: 11\r\n\r\nhello world"
+    
+    err = get_parse_error(data, config)
+    
+    if not isinstance(err, RequestEntityTooLarge):
+        errmsg = f"Expected RequestEntityTooLarge, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    if err.status_code != 413:
+        errmsg = f"Expected status code 413, got {err.status_code}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_raises_connection_closed_when_nothing_was_sent():
+    """
+        Test that a connection closed before any request byte is not a bad request.
+    """
+    err = get_parse_error(b"")
+    
+    if not isinstance(err, ConnectionClosed):
+        errmsg = f"Expected ConnectionClosed, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_refuses_connection_closed_inside_headers():
+    """
+        Test that headers that end with the connection, without the empty line, are refused.
+    """
+    err = get_parse_error(b"GET / HTTP/1.1\r\nHost: x\r\n")
+    
+    if not isinstance(err, IncompleteRequest):
+        errmsg = f"Expected IncompleteRequest, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_refuses_body_shorter_than_content_length():
+    """
+        Test that a body cut short is refused and not handed over truncated.
+    """
+    err = get_parse_error(b"POST / HTTP/1.1\r\nContent-Length: 100\r\n\r\nshort")
+    
+    if not isinstance(err, IncompleteRequest):
+        errmsg = f"Expected IncompleteRequest, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_lets_idle_timeout_bubble():
+    """
+        Test that a timeout before any request byte stays a socket timeout.
+    """
+    parser = HTTPParser()
+    
+    raised = None
+    try:
+        parser.parse_request(StallingSocket(b""), CLIENT_ADDR, SERVER_ADDR)
+    except Exception as err:
+        raised = err
+    
+    if not isinstance(raised, socket.timeout) or isinstance(raised, RequestTimeout):
+        errmsg = f"Expected a plain socket.timeout, got {type(raised).__name__}: {raised}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_reports_stall_inside_headers_as_request_timeout():
+    """
+        Test that a client that stalls inside the headers gets a request timeout.
+    """
+    parser = HTTPParser()
+    
+    raised = None
+    try:
+        parser.parse_request(StallingSocket(b"GET / HTTP/1.1\r\nHost: x\r\n"), CLIENT_ADDR, SERVER_ADDR)
+    except Exception as err:
+        raised = err
+    
+    if not isinstance(raised, RequestTimeout):
+        errmsg = f"Expected RequestTimeout, got {type(raised).__name__}: {raised}"
+        raise AssertionError(errmsg)
+    
+    if raised.status_code != 408:
+        errmsg = f"Expected status code 408, got {raised.status_code}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_reports_stall_inside_body_as_request_timeout():
+    """
+        Test that a client that stalls inside the body gets a request timeout.
+    """
+    parser = HTTPParser()
+    data = b"POST / HTTP/1.1\r\nContent-Length: 100\r\n\r\nshort"
+    
+    raised = None
+    try:
+        parser.parse_request(StallingSocket(data), CLIENT_ADDR, SERVER_ADDR)
+    except Exception as err:
+        raised = err
+    
+    if not isinstance(raised, RequestTimeout):
+        errmsg = f"Expected RequestTimeout, got {type(raised).__name__}: {raised}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_skips_one_empty_line_before_request_line():
+    """
+        Test that one empty line before the request line is ignored.
+    """
+    environ = parse_raw_request(b"\r\nGET /after HTTP/1.1\r\nHost: x\r\n\r\n")
+    
+    if environ["PATH_INFO"] != "/after":
+        errmsg = f"Expected PATH_INFO '/after', got {environ['PATH_INFO']!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Tests for request framing
+# =============================================================================
+
+def test_parse_request_refuses_content_length_with_transfer_encoding():
+    """
+        Test that a request with both Content-Length and Transfer-Encoding is refused.
+    """
+    data = b"POST / HTTP/1.1\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
+    
+    err = get_parse_error(data)
+    
+    if not isinstance(err, RequestParseError) or err.status_code != 400:
+        errmsg = f"Expected a 400 RequestParseError, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_refuses_transfer_encoding_that_only_contains_chunked():
+    """
+        Test that a transfer coding such as 'xchunked' is not taken for chunked.
+    """
+    data = b"POST / HTTP/1.1\r\nTransfer-Encoding: xchunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
+    
+    err = get_parse_error(data)
+    
+    if not isinstance(err, RequestParseError) or err.status_code != 400:
+        errmsg = f"Expected a 400 RequestParseError, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_refuses_transfer_encoding_not_ending_in_chunked():
+    """
+        Test that a transfer coding list whose last coding is not chunked is refused.
+    """
+    data = b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked, gzip\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
+    
+    err = get_parse_error(data)
+    
+    if not isinstance(err, RequestParseError) or err.status_code != 400:
+        errmsg = f"Expected a 400 RequestParseError, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_refuses_transfer_encoding_in_http_1_0():
+    """
+        Test that Transfer-Encoding in an HTTP/1.0 request is refused.
+    """
+    data = b"POST / HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
+    
+    err = get_parse_error(data)
+    
+    if not isinstance(err, RequestParseError) or err.status_code != 400:
+        errmsg = f"Expected a 400 RequestParseError, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_refuses_lenient_content_length_forms():
+    """
+        Test that Content-Length values 'int' accepts but HTTP does not are refused.
+    """
+    for value in (b"+5", b"5_0", b"0x10", b"-5", b"5, 5", b"5.0", b"\xb2"):
+        data = b"POST / HTTP/1.1\r\nContent-Length: " + value + b"\r\n\r\nhello"
+        
+        err = get_parse_error(data)
+        
+        if not isinstance(err, RequestParseError) or err.status_code != 400:
+            errmsg = f"Expected a 400 RequestParseError for Content-Length {value!r}, got {type(err).__name__}: {err}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_refuses_conflicting_content_length_headers():
+    """
+        Test that two Content-Length headers with different values are refused.
+    """
+    data = b"POST / HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 3\r\n\r\nhello"
+    
+    err = get_parse_error(data)
+    
+    if not isinstance(err, RequestParseError) or err.status_code != 400:
+        errmsg = f"Expected a 400 RequestParseError, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_accepts_repeated_identical_content_length():
+    """
+        Test that a Content-Length header repeated with the same value is accepted.
+    """
+    data = b"POST / HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\nhello"
+    
+    environ = parse_raw_request(data)
+    
+    if environ["CONTENT_LENGTH"] != "5":
+        errmsg = f"Expected CONTENT_LENGTH '5', got {environ['CONTENT_LENGTH']!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_honours_content_length_in_any_case():
+    """
+        Test that the body is read when the Content-Length name is not capitalised as usual.
+    """
+    data = b"POST / HTTP/1.1\r\nCONTENT-LENGTH: 5\r\n\r\nhello"
+    
+    environ = parse_raw_request(data)
+    body = environ["wsgi.input"].read()
+    
+    if body != b"hello":
+        errmsg = f"Expected the body b'hello', got {body!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_decodes_chunked_body():
+    """
+        Test that a chunked body is decoded and described by CONTENT_LENGTH.
+    """
+    data = b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n6;ext=1\r\n world\r\n0\r\n\r\n"
+    
+    environ = parse_raw_request(data)
+    body = environ["wsgi.input"].read()
+    
+    if body != b"hello world":
+        errmsg = f"Expected the decoded body b'hello world', got {body!r}"
+        raise AssertionError(errmsg)
+    
+    if environ.get("CONTENT_LENGTH") != "11":
+        errmsg = f"Expected CONTENT_LENGTH '11', got {environ.get('CONTENT_LENGTH')!r}"
+        raise AssertionError(errmsg)
+    
+    if "HTTP_TRANSFER_ENCODING" in environ:
+        errmsg = "Expected Transfer-Encoding to be removed once the body is decoded"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_request_consumes_chunked_trailers():
+    """
+        Test that the trailers of a chunked body are not parsed as the next request.
+    """
+    data = (
+        b"POST /first HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b"5\r\nhello\r\n0\r\nX-Trailer: GET /smuggled HTTP/1.1\r\n\r\n"
+        b"GET /second HTTP/1.1\r\nHost: x\r\n\r\n"
+    )
+    parser = HTTPParser()
+    reader = SocketReader(MockSocket(data))
+    
+    parser.parse_request(reader, CLIENT_ADDR, SERVER_ADDR)
+    environ = parser.parse_request(reader, CLIENT_ADDR, SERVER_ADDR)
+    
+    if environ["PATH_INFO"] != "/second":
+        errmsg = f"Expected the next request to be '/second', got {environ['PATH_INFO']!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_chunked_body_refuses_chunk_size_that_is_not_plain_hex():
+    """
+        Test that chunk sizes 'int' accepts but HTTP does not are refused.
+    """
+    for size in (b"0x5", b"+5", b"5_0", b" 5", b"5 "):
+        data = b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n" + size + b"\r\nhello\r\n0\r\n\r\n"
+        
+        err = get_parse_error(data)
+        
+        if not isinstance(err, RequestParseError) or err.status_code != 400:
+            errmsg = f"Expected a 400 RequestParseError for chunk size {size!r}, got {type(err).__name__}: {err}"
+            raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_chunked_body_refuses_missing_crlf_after_chunk():
+    """
+        Test that chunk data that is not followed by CRLF is refused.
+    """
+    data = b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhelloXX0\r\n\r\n"
+    
+    err = get_parse_error(data)
+    
+    if not isinstance(err, RequestParseError):
+        errmsg = f"Expected RequestParseError, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_chunked_body_enforces_body_limit_with_413():
+    """
+        Test that a chunked body over the body limit is refused with 413.
+    """
+    config = ServerConfig(max_request_size=4)
+    data = b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
+    
+    err = get_parse_error(data, config)
+    
+    if not isinstance(err, RequestEntityTooLarge):
+        errmsg = f"Expected RequestEntityTooLarge, got {type(err).__name__}: {err}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Tests for repeated headers, header names and the path
+# =============================================================================
+
+def test_parse_headers_joins_repeated_header_with_comma():
+    """
+        Test that a repeated header keeps every value, joined with a comma.
+    """
+    parser = HTTPParser()
+    
+    headers = parser.parse_headers([b"X-Forwarded-For: 10.0.0.1", b"x-forwarded-for: 10.0.0.2"])
+    
+    if headers.get("X-Forwarded-For") != "10.0.0.1, 10.0.0.2":
+        errmsg = f"Expected both values joined with ', ', got {headers}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_headers_joins_repeated_cookie_with_semicolon():
+    """
+        Test that repeated Cookie headers are joined with a semicolon.
+    """
+    parser = HTTPParser()
+    
+    headers = parser.parse_headers([b"Cookie: a=1", b"Cookie: b=2"])
+    
+    if headers.get("Cookie") != "a=1; b=2":
+        errmsg = f"Expected the cookies joined with '; ', got {headers}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_headers_refuses_second_host_header():
+    """
+        Test that a request with two Host headers is refused.
+    """
+    parser = HTTPParser()
+    
+    raised = False
+    try:
+        parser.parse_headers([b"Host: a.example", b"Host: b.example"])
+    except RequestParseError:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected RequestParseError for two Host headers"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_headers_refuses_whitespace_before_colon():
+    """
+        Test that a header name followed by a space before the colon is refused.
+    """
+    parser = HTTPParser()
+    
+    raised = False
+    try:
+        parser.parse_headers([b"Content-Length : 5"])
+    except RequestParseError:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected RequestParseError for whitespace between the name and the colon"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_headers_refuses_bare_carriage_return_in_value():
+    """
+        Test that a carriage return inside a header value is refused.
+    """
+    parser = HTTPParser()
+    
+    raised = False
+    try:
+        parser.parse_headers([b"X-Test: a\rX-Injected: b"])
+    except RequestParseError:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected RequestParseError for a carriage return inside a value"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_build_environ_drops_header_names_with_underscore():
+    """
+        Test that a header named with an underscore cannot stand in for the hyphen form.
+    """
+    parser = HTTPParser()
+    
+    environ = parser.build_environ(
+        method="GET",
+        path="/",
+        http_version="HTTP/1.1",
+        headers={"X-User": "from-proxy", "X_User": "from-client"},
+        body_stream=io.BytesIO(b""),
+        client_addr=CLIENT_ADDR,
+        server_addr=SERVER_ADDR
+    )
+    
+    if environ.get("HTTP_X_USER") != "from-proxy":
+        errmsg = f"Expected HTTP_X_USER to come from 'X-User', got {environ.get('HTTP_X_USER')!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_build_environ_percent_decodes_path_info():
+    """
+        Test that PATH_INFO is the percent-decoded path.
+    """
+    parser = HTTPParser()
+    
+    environ = parser.build_environ(
+        method="GET",
+        path="/files/a%20b?q=a%20b",
+        http_version="HTTP/1.1",
+        headers={},
+        body_stream=io.BytesIO(b""),
+        client_addr=CLIENT_ADDR,
+        server_addr=SERVER_ADDR
+    )
+    
+    if environ["PATH_INFO"] != "/files/a b":
+        errmsg = f"Expected PATH_INFO '/files/a b', got {environ['PATH_INFO']!r}"
+        raise AssertionError(errmsg)
+    
+    # The query string is left encoded, decoding it is up to the application
+    if environ["QUERY_STRING"] != "q=a%20b":
+        errmsg = f"Expected QUERY_STRING 'q=a%20b', got {environ['QUERY_STRING']!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_build_environ_carries_utf8_path_as_latin1_string():
+    """
+        Test that a UTF-8 path is carried the way PEP 3333 defines, one character per byte.
+    """
+    parser = HTTPParser()
+    
+    environ = parser.build_environ(
+        method="GET",
+        path="/caf%C3%A9",
+        http_version="HTTP/1.1",
+        headers={},
+        body_stream=io.BytesIO(b""),
+        client_addr=CLIENT_ADDR,
+        server_addr=SERVER_ADDR
+    )
+    
+    decoded = environ["PATH_INFO"].encode("latin-1").decode("utf-8")
+    
+    if decoded != "/caf\u00e9":
+        errmsg = f"Expected PATH_INFO to decode to '/caf\u00e9', got {decoded!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_build_environ_keeps_raw_request_target():
+    """
+        Test that the request target as sent is available as REQUEST_URI.
+    """
+    parser = HTTPParser()
+    
+    environ = parser.build_environ(
+        method="GET",
+        path="/files/a%20b?q=1",
+        http_version="HTTP/1.1",
+        headers={},
+        body_stream=io.BytesIO(b""),
+        client_addr=CLIENT_ADDR,
+        server_addr=SERVER_ADDR
+    )
+    
+    if environ.get("REQUEST_URI") != "/files/a%20b?q=1":
+        errmsg = f"Expected REQUEST_URI to be the raw target, got {environ.get('REQUEST_URI')!r}"
+        raise AssertionError(errmsg)
     
     return

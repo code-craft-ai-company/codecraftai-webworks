@@ -427,7 +427,7 @@ def test_generate_code_challenge_plain():
     challenge = generate_code_challenge(verifier, PKCEMethod.PLAIN)
     
     if challenge != verifier:
-        errmsg = f"Expected challenge to equal verifier for plain method"
+        errmsg = "Expected challenge to equal verifier for plain method"
         raise AssertionError(errmsg)
     
     return
@@ -943,7 +943,8 @@ def test_oauth2_authenticator_client_credentials_grant():
     # Add a client
     client_store.add_client(
         client_id="test_client",
-        client_secret="test_secret"
+        client_secret="test_secret",
+        scopes=["read", "write"]
     )
     
     authenticator = OAuth2Authenticator(
@@ -1631,6 +1632,113 @@ def test_property_18_oauth2_error_response_format():
     # Property 8: Error code should be a standard code
     if error_dict["error"] not in standard_error_codes:
         errmsg = f"Error code '{error_dict['error']}' should be a standard OAuth2 error code"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+# =============================================================================
+# Scope Validation Tests
+# =============================================================================
+
+def test_client_credentials_grant_rejects_scope_not_registered_for_client():
+    """
+        Test that the client credentials grant refuses a scope the client
+        is not registered for.
+    """
+    client_store = MockOAuth2ClientStore()
+    token_store = MockOAuth2TokenStore()
+    client_store.add_client(
+        client_id="test_client",
+        client_secret="test_secret",
+        scopes=["read"]
+    )
+    
+    authenticator = OAuth2Authenticator(
+        client_store=client_store,
+        token_store=token_store,
+        supported_grant_types={OAuth2GrantType.CLIENT_CREDENTIALS}
+    )
+    
+    token, error = run_async(authenticator.client_credentials_grant(
+        client_id="test_client",
+        client_secret="test_secret",
+        scope={"admin"}
+    ))
+    
+    if token is not None:
+        errmsg = "Expected no token for a scope the client is not registered for"
+        raise AssertionError(errmsg)
+    
+    if error is None or error.error != "invalid_scope":
+        errmsg = f"Expected invalid_scope error, got {error}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_client_credentials_grant_rejects_scope_for_client_without_registered_scopes():
+    """
+        Test that a client whose record registers no scopes cannot be
+        granted any scope it asks for.
+    """
+    client_store = MockOAuth2ClientStore()
+    token_store = MockOAuth2TokenStore()
+    client_store.add_client(client_id="test_client", client_secret="test_secret")
+    
+    authenticator = OAuth2Authenticator(
+        client_store=client_store,
+        token_store=token_store,
+        supported_grant_types={OAuth2GrantType.CLIENT_CREDENTIALS}
+    )
+    
+    token, error = run_async(authenticator.client_credentials_grant(
+        client_id="test_client",
+        client_secret="test_secret",
+        scope={"admin"}
+    ))
+    
+    if token is not None or error is None or error.error != "invalid_scope":
+        errmsg = f"Expected invalid_scope error and no token, got token={token} error={error}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_token_scope_becomes_permissions_not_roles():
+    """
+        Test that the scope of a validated token is exposed as principal
+        permissions and never as roles, so a scope named "admin" does not
+        satisfy a role requirement.
+    """
+    client_store = MockOAuth2ClientStore()
+    token_store = MockOAuth2TokenStore()
+    token_store.add_access_token(
+        "scoped-token",
+        client_id="test_client",
+        scope={"admin", "read"}
+    )
+    
+    authenticator = OAuth2Authenticator(
+        client_store=client_store,
+        token_store=token_store
+    )
+    
+    request = MockRequest(headers={"Authorization": "Bearer scoped-token"})
+    result = run_async(authenticator.authenticate(request))
+    
+    if result.status != AuthenticationStatus.SUCCESS:
+        errmsg = f"Expected SUCCESS, got {result.status}"
+        raise AssertionError(errmsg)
+    
+    principal = result.context.principal
+    
+    if len(principal.roles) != 0:
+        errmsg = f"Expected no roles derived from scope, got {principal.roles}"
+        raise AssertionError(errmsg)
+    
+    if principal.permissions != {"admin", "read"}:
+        errmsg = f"Expected scope as permissions, got {principal.permissions}"
         raise AssertionError(errmsg)
     
     return

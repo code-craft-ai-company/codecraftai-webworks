@@ -37,6 +37,7 @@ class SocketListener:
         self._ssl_context: Optional[ssl.SSLContext] = None
         self._is_unix_socket = False
         self._bound_address: Optional[str] = None
+        self._owns_address = True
         return
     
     @property
@@ -225,20 +226,17 @@ class SocketListener:
         """
             Configure socket options.
             
-            Sets SO_REUSEADDR and SO_REUSEPORT (if available) on the socket.
+            Sets SO_REUSEADDR, so a restarted server can bind while connections
+            of the previous one are in TIME_WAIT. SO_REUSEPORT is not set: the
+            workers share this one listening socket, and with SO_REUSEPORT a
+            second server started on the same address by mistake would bind
+            as well and silently take part of the connections, instead of
+            failing with "address in use".
             
             :param sock: Socket to configure.
         """
         # Allow address reuse
         sock.setsockopt(socket_module.SOL_SOCKET, socket_module.SO_REUSEADDR, 1)
-        
-        # Allow port reuse (not available on all platforms)
-        if hasattr(socket_module, "SO_REUSEPORT"):
-            try:
-                sock.setsockopt(socket_module.SOL_SOCKET, socket_module.SO_REUSEPORT, 1)
-            except OSError:
-                # SO_REUSEPORT may not be supported even if defined
-                pass
         
         # Set socket to non-blocking for accept timeout handling
         sock.setblocking(True)
@@ -251,7 +249,11 @@ class SocketListener:
             
             Blocks until a connection is available, then returns the client
             socket and address. If SSL is configured, the client socket is
-            wrapped with SSL.
+            wrapped with SSL but the TLS handshake is not performed here: the
+            handshake waits for the client, and waiting in the accept loop
+            would let one silent client stop the server from accepting anyone
+            else. Call 'perform_handshake' from the code that serves the
+            connection.
             
             :returns: Tuple of (client_socket, client_address).
                      For Unix sockets, address is ("", 0).
@@ -264,6 +266,11 @@ class SocketListener:
             raise RuntimeError(errmsg)
         
         client_sock, client_addr = self._socket.accept()
+        
+        # A connection is served with blocking calls and timeouts. On some
+        # platforms it inherits the non-blocking mode of a listener that
+        # is polled, so the mode is set and not assumed.
+        client_sock.setblocking(True)
         
         # Normalize address for Unix sockets
         if self._is_unix_socket is True:
@@ -278,17 +285,70 @@ class SocketListener:
     
     def _wrap_client_ssl(self, client_sock: socket_module.socket) -> ssl.SSLSocket:
         """
-            Wrap a client socket with SSL.
+            Wrap a client socket with SSL without performing the handshake.
             
             :param client_sock: Client socket to wrap.
             
-            :returns: SSL-wrapped socket.
+            :returns: SSL-wrapped socket whose handshake is still to be done.
         """
         ssl_sock = self._ssl_context.wrap_socket(
             client_sock,
-            server_side=True
+            server_side=True,
+            do_handshake_on_connect=False
         )
         return ssl_sock
+    
+    def perform_handshake(
+        self,
+        client_sock: socket_module.socket,
+        timeout: Optional[float] = None
+    ) -> None:
+        """
+            Perform the TLS handshake on an accepted connection.
+            
+            Does nothing for a connection that is not wrapped with SSL. The
+            handshake is bounded by the timeout, so a client that connects and
+            then stays silent is given up on.
+            
+            :param client_sock: Client socket returned by 'accept'.
+            :param timeout: Seconds the handshake is allowed to take, or None
+                            to keep the timeout of the socket.
+            
+            :raises: ssl.SSLError if the handshake fails.
+            :raises: socket.timeout if the handshake does not finish in time.
+            :raises: OSError if the connection fails during the handshake.
+        """
+        if isinstance(client_sock, ssl.SSLSocket):
+            if timeout is not None:
+                client_sock.settimeout(timeout)
+            client_sock.do_handshake()
+        return
+    
+    def attach(self, sock: socket_module.socket) -> None:
+        """
+            Use a socket that is already bound and listening.
+            
+            A worker process that is started rather than forked receives the
+            listening socket of its parent and attaches it here. Binding the
+            address a second time would create a second, separate listener.
+            
+            :param sock: A bound, listening socket.
+        """
+        self._socket = sock
+        
+        # The address belongs to the process that bound it. Closing this
+        # listener must not remove the socket file of that process.
+        self._owns_address = False
+        
+        unix_family = getattr(socket_module, "AF_UNIX", None)
+        if unix_family is not None and sock.family == unix_family:
+            self._is_unix_socket = True
+            self._bound_address = self._config.unix_socket
+        else:
+            self._is_unix_socket = False
+            self._bound_address = f"{self._config.host}:{self._config.port}"
+        
+        return
     
     def setup_ssl(self) -> None:
         """
@@ -327,9 +387,23 @@ class SocketListener:
             address = self._bound_address or "unknown"
             errmsg = f"SSL certificate or key file not found: {file_err}"
             raise BindError(address, errmsg) from file_err
-        
+
         return
-    
+
+    def set_ssl_context(self, context: ssl.SSLContext) -> None:
+        """
+            Use a TLS context that was built elsewhere.
+
+            For a server whose TLS policy (minimum version, cipher suites,
+            client certificates) is decided by a layer above this listener,
+            such as the production server. Accepted connections are wrapped
+            with this context from now on.
+
+            :param context: A server-side SSLContext with its certificate loaded.
+        """
+        self._ssl_context = context
+        return
+
     @property
     def ssl_enabled(self) -> bool:
         """
@@ -357,7 +431,7 @@ class SocketListener:
             self._socket = None
         
         # Remove Unix socket file
-        if self._is_unix_socket is True:
+        if self._is_unix_socket is True and self._owns_address is True:
             socket_path = self._config.unix_socket
             if socket_path is not None and os.path.exists(socket_path):
                 try:

@@ -1220,3 +1220,191 @@ def test_property_10_bulk_operation_mixed_results():
             raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# The list and bulk routes are registered and served
+# =============================================================================
+
+import json
+
+from dataclasses import dataclass
+
+from ccai.webworks.routing.dispatcher import Dispatcher
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.router import Router
+
+
+@dataclass
+class NoteIn:
+    """Request schema for the served collection tests."""
+    text: str
+
+
+class NoteCollection(CollectionEndpoint):
+    """A collection endpoint that records how its operations were called."""
+
+    resource_name = "notes"
+    request_schema = NoteIn
+    filter_fields = ["author"]
+    sort_fields = ["created"]
+    max_page_size = 50
+    bulk_enabled = True
+
+    calls: List[Any] = []
+
+    def list(self, page=1, page_size=None, filters=None, sort=None):
+        type(self).calls.append(("list", page, page_size, filters, sort))
+        return PaginatedResponse(
+            items=[{"text": "first"}],
+            pagination=PaginationInfo.create(total=1, page=page, page_size=page_size, base_url="/notes"),
+        )
+
+    def get(self, id):
+        return {"id": id}
+
+    def bulk_create(self, payloads):
+        type(self).calls.append(("bulk_create", payloads))
+        return BulkOperationResult(succeeded=[{"text": payload.text} for payload in payloads], failed=[])
+
+    def bulk_delete(self, ids):
+        type(self).calls.append(("bulk_delete", ids))
+        return BulkOperationResult(succeeded=list(ids), failed=[])
+
+
+def _serve_notes(method: str, path: str, body=None, query: bytes = b""):
+    """Register NoteCollection on a Router and dispatch one request to it."""
+    NoteCollection.calls = []
+
+    router = Router()
+    NoteCollection.register(router)
+
+    headers = {}
+    raw_body = b""
+    if body is not None:
+        raw_body = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    response = Dispatcher(router).dispatch(Request(method, path, query_string=query, headers=headers, body=raw_body))
+    return response
+
+
+def test_register_includes_a_list_route():
+    """register() returns a GET route for the collection path."""
+    descriptors = NoteCollection.register()
+
+    list_routes = [d for d in descriptors if d.path == "/notes" and d.methods == ["GET"]]
+
+    if len(list_routes) != 1:
+        raise AssertionError(f"Expected one GET /notes route, got {[(d.path, d.methods) for d in descriptors]}")
+
+
+def test_register_includes_the_bulk_routes_when_enabled():
+    """register() returns the POST, PUT and DELETE bulk routes of get_bulk_routes()."""
+    descriptors = NoteCollection.register()
+
+    bulk_methods = sorted(d.methods[0] for d in descriptors if d.path == "/notes/bulk")
+
+    if bulk_methods != ["DELETE", "POST", "PUT"]:
+        raise AssertionError(f"Expected bulk routes for DELETE, POST and PUT, got {bulk_methods}")
+
+
+def test_register_omits_the_bulk_routes_when_disabled():
+    """A collection without bulk_enabled registers no bulk route."""
+
+    class PlainCollection(CollectionEndpoint):
+        resource_name = "plain"
+
+    paths = [d.path for d in PlainCollection.register()]
+
+    if "/plain/bulk" in paths:
+        raise AssertionError(f"Expected no bulk route, got {paths}")
+
+
+def test_served_list_parses_pagination_filters_and_sort_from_the_query():
+    """GET /notes passes the page, clamped page size, allowed filters and allowed sort fields to list()."""
+    response = _serve_notes("GET", "/notes", query=b"page=2&page_size=500&author=ann&ignored=x&sort=-created,bogus")
+
+    if response.status_code != 200:
+        raise AssertionError(f"Expected 200, got {response.status_code}: {response.body!r}")
+
+    expected_call = ("list", 2, 50, {"author": "ann"}, ["-created"])
+    if NoteCollection.calls != [expected_call]:
+        raise AssertionError(f"Expected list() to be called as {expected_call}, got {NoteCollection.calls}")
+
+
+def test_served_list_returns_the_paginated_response_layout():
+    """GET /notes returns the items with the pagination block of PaginatedResponse.to_dict()."""
+    response = _serve_notes("GET", "/notes")
+    body = json.loads(response.body)
+
+    if body["items"] != [{"text": "first"}]:
+        raise AssertionError(f"Unexpected items: {body['items']}")
+
+    if body["pagination"]["page"] != 1 or "links" not in body["pagination"]:
+        raise AssertionError(f"Unexpected pagination block: {body['pagination']}")
+
+
+def test_served_list_route_does_not_shadow_the_item_route():
+    """GET /notes/3 still reaches get(3) beside the list route."""
+    response = _serve_notes("GET", "/notes/3")
+
+    if response.status_code != 200 or json.loads(response.body) != {"id": 3}:
+        raise AssertionError(f"Unexpected response: {response.status_code} {response.body!r}")
+
+
+def test_served_bulk_create_validates_each_item_and_returns_200():
+    """POST /notes/bulk validates every item into the request schema and reports the result with 200."""
+    response = _serve_notes("POST", "/notes/bulk", body=[{"text": "a"}, {"text": "b"}])
+    body = json.loads(response.body)
+
+    if response.status_code != 200 or body["success_count"] != 2:
+        raise AssertionError(f"Expected 200 with two successes, got {response.status_code} {body}")
+
+    if NoteCollection.calls != [("bulk_create", [NoteIn(text="a"), NoteIn(text="b")])]:
+        raise AssertionError(f"Expected bulk_create to receive validated items, got {NoteCollection.calls}")
+
+
+def test_served_bulk_create_reports_invalid_items_by_index():
+    """An invalid item rejects the whole bulk request, its errors prefixed with the item's index."""
+    response = _serve_notes("POST", "/notes/bulk", body=[{"text": "a"}, {"text": 5}])
+    body = json.loads(response.body)
+
+    if response.status_code != 400:
+        raise AssertionError(f"Expected 400, got {response.status_code} {body}")
+
+    if [field_error["field"] for field_error in body["field_errors"]] != ["1.text"]:
+        raise AssertionError(f"Expected a field error for '1.text', got {body['field_errors']}")
+
+    if len(NoteCollection.calls) != 0:
+        raise AssertionError("bulk_create must not be called when an item is invalid")
+
+
+def test_served_bulk_delete_passes_the_identifiers():
+    """DELETE /notes/bulk passes the JSON array of identifiers to bulk_delete()."""
+    response = _serve_notes("DELETE", "/notes/bulk", body=[1, 2, 3])
+
+    if response.status_code != 200:
+        raise AssertionError(f"Expected 200, got {response.status_code}: {response.body!r}")
+
+    if NoteCollection.calls != [("bulk_delete", [1, 2, 3])]:
+        raise AssertionError(f"Expected bulk_delete([1, 2, 3]), got {NoteCollection.calls}")
+
+
+def test_served_bulk_route_rejects_a_body_that_is_not_an_array():
+    """A bulk request whose body is not a JSON array is a 400."""
+    response = _serve_notes("POST", "/notes/bulk", body={"text": "a"})
+
+    if response.status_code != 400:
+        raise AssertionError(f"Expected 400, got {response.status_code}: {response.body!r}")
+
+
+def test_list_query_params_are_declared_for_documentation():
+    """The list route declares its pagination, sort and filter query parameters."""
+    descriptors = NoteCollection.register()
+    list_route = [d for d in descriptors if d.path == "/notes" and d.methods == ["GET"]][0]
+
+    declared = list_route.extras["rest"]["query_params"]
+
+    if declared != {"page": int, "page_size": int, "sort": str, "author": str}:
+        raise AssertionError(f"Unexpected query parameters: {declared}")

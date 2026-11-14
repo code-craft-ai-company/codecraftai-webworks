@@ -3,102 +3,52 @@
  *
  * Heatmap / Correlation-matrix renderer.
  *
- * Registered chart types:
- *   "heatmap"            — generic intensity grid (x=categories, y=series rows)
- *   "correlation-matrix" — symmetric pairwise correlation grid with a
- *                          diverging color scale centered at 0
+ * Registered chart types (ctx.type picks the colour scale):
+ *   "heatmap"            — intensity grid (x = categories, y = series rows)
+ *                          on a sequential ramp over the value domain
+ *   "correlation-matrix" — pairwise correlations on a diverging ramp fixed
+ *                          to [-1, 1] (blue positive, red negative)
  *
  * Data shape (same for both types):
- *   model.categories        — column labels (x axis)
- *   model.series[i].name    — row label (y axis)
- *   model.series[i].values  — one numeric value per category
+ *   categories              column labels (x axis)
+ *   series[i].name          row label (y axis)
+ *   series[i].values        one value per category; null / non-numeric
+ *                           cells are missing and left empty
  *
- * Diverging scale is used automatically when type="correlation-matrix" or
- * when the controller carries scale="diverging".
+ * Ramps are mixed from the chart palette and the surface colour, so they
+ * follow the theme; value labels use var(--mj-text) on every step. A
+ * colour bar on the right maps colours back to values.
+ *
+ * Relevant ctx.attrs:
+ *   scale          "sequential" (heatmap default) | "diverging"
+ *   midpoint       centre of the diverging scale (default 0); the ramp
+ *                  reaches full colour at the largest |value − midpoint|
+ *   value-source   "correlation" — treat a heatmap as a correlation matrix
+ *   show-labels    boolean — print the value inside each cell
+ *   gap            px between cells (default 1)
+ *   corner-radius  cell corner radius in px (default 2)
+ *   triangle       "full" (default) | "upper" | "lower"
+ *   mark           "rect" (default) | "circle" (circle AREA encodes |value|)
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber, extent } from "../svgdraw.js";
-import { bandScale, linearScale } from "../scales.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
+import { bandScale } from "../scales.js";
+import {
+  isFiniteNumber, axisLayer, fitText, sequentialColor, divergingColor, drawColorRamp,
+  activateOnKey, focusableMark, TEXT_COLOR, SURFACE_COLOR
+} from "./diststats.js";
+import { booleanOption } from "../chartoptions.js";
+
+const RAMP_ROOM = 64;
 
 
-/* Sequential single-hue ramp (light → dark) via design tokens. */
-const HEAT_RAMP = [
-  "var(--mj-chart-heat-1, #eff6ff)",
-  "var(--mj-chart-heat-2, #bfdbfe)",
-  "var(--mj-chart-heat-3, #93c5fd)",
-  "var(--mj-chart-heat-4, #60a5fa)",
-  "var(--mj-chart-heat-5, #3b82f6)",
-  "var(--mj-chart-heat-6, #2563eb)",
-  "var(--mj-chart-heat-7, #1d4ed8)",
-  "var(--mj-chart-heat-8, #1e40af)"
-]
-
-/* Diverging ramp (negative = red, neutral = white, positive = blue). */
-const DIV_NEG = [
-  "var(--mj-chart-div-neg-5, #7f1d1d)",
-  "var(--mj-chart-div-neg-4, #b91c1c)",
-  "var(--mj-chart-div-neg-3, #ef4444)",
-  "var(--mj-chart-div-neg-2, #fca5a5)",
-  "var(--mj-chart-div-neg-1, #fee2e2)"
-]
-const DIV_MID = "var(--mj-chart-div-mid, #f8fafc)"
-const DIV_POS = [
-  "var(--mj-chart-div-pos-1, #dbeafe)",
-  "var(--mj-chart-div-pos-2, #93c5fd)",
-  "var(--mj-chart-div-pos-3, #3b82f6)",
-  "var(--mj-chart-div-pos-4, #1d4ed8)",
-  "var(--mj-chart-div-pos-5, #1e3a8a)"
-]
-
-
-function _seqColor(value, min, max) {
+function _numberAttr(ctx, name, fallback) {
   /*
-   * Map a value in [min, max] to a sequential heat-ramp color.
-   *
-   * :param value: The numeric cell value.
-   * :param min: Domain minimum.
-   * :param max: Domain maximum.
-   * :returns: A CSS color string.
+   * A finite number attribute, else the fallback.
    */
-  const span = max - min
-  if (span === 0) {
-    return HEAT_RAMP[0]
-  }
-  const fraction = Math.max(0, Math.min(1, (value - min) / span))
-  const index = Math.min(
-    HEAT_RAMP.length - 1,
-    Math.floor(fraction * HEAT_RAMP.length)
-  )
-  return HEAT_RAMP[index]
-}
-
-
-function _divColor(value) {
-  /*
-   * Map a correlation value in [-1, 1] to a diverging color.
-   *
-   * :param value: The correlation coefficient.
-   * :returns: A CSS color string.
-   */
-  const clamped = Math.max(-1, Math.min(1, value))
-  if (Math.abs(clamped) < 0.02) {
-    return DIV_MID
-  }
-  if (clamped < 0) {
-    const fraction = Math.min(1, Math.abs(clamped))
-    const index = Math.min(
-      DIV_NEG.length - 1,
-      Math.floor(fraction * DIV_NEG.length)
-    )
-    return DIV_NEG[index]
-  }
-  const fraction = Math.min(1, clamped)
-  const index = Math.min(
-    DIV_POS.length - 1,
-    Math.floor(fraction * DIV_POS.length)
-  )
-  return DIV_POS[index]
+  const value = parseFloat(ctx.attrs(name, ""))
+  return isFiniteNumber(value) === true ? value : fallback
 }
 
 
@@ -107,188 +57,186 @@ export function render(ctx) {
    * Render a heatmap or correlation-matrix chart.
    *
    * :param ctx: The renderer context.
-   * :returns: An <g> SVGElement.
+   * :returns: A <g> SVGElement.
    */
   const model = ctx.model
-  const chartType = ctx.attrs("type", "heatmap")
-  const isCorrelation = chartType === "correlation-matrix" ||
+  const isCorrelation = ctx.type === "correlation-matrix" ||
     ctx.attrs("value-source", "") === "correlation"
-  const scaleMode = ctx.attrs("scale", isCorrelation ? "diverging" : "sequential")
-  const isDiverging = scaleMode === "diverging" || isCorrelation === true
-  const showLabels = ctx.attrs("show-labels", "false") === "true"
-  const gap = Number(ctx.attrs("gap", "1"))
-  const cornerRadius = Number(ctx.attrs("corner-radius", "2"))
+  const isDiverging = isCorrelation === true || ctx.attrs("scale", "sequential") === "diverging"
+  const midpoint = isCorrelation === true ? 0 : _numberAttr(ctx, "midpoint", 0)
+  const showLabels = booleanOption(ctx, "show-labels", false)
+  const gap = Math.max(_numberAttr(ctx, "gap", 1), 0)
+  const cornerRadius = Math.max(_numberAttr(ctx, "corner-radius", 2), 0)
   const triangleMode = ctx.attrs("triangle", "full")
   const markMode = ctx.attrs("mark", "rect")
 
   const root = svgEl("g", { part: "plot" }, [])
-
-  const categories = model.categories
-  const series = model.series
-  if (categories === null || categories === undefined || categories.length === 0) {
-    return root
-  }
-  if (series === null || series === undefined || series.length === 0) {
+  const categories = Array.isArray(model.categories) === true ? model.categories : []
+  const series = Array.isArray(model.series) === true ? model.series : []
+  if (categories.length === 0 || series.length === 0) {
     return root
   }
 
-  const margin = { top: 16, right: 16, bottom: 72, left: 80 }
+  /* Value domain over the finite cells. */
+  let low = Infinity
+  let high = -Infinity
+  for (let si = 0; si < series.length; si = si + 1) {
+    const values = Array.isArray(series[si].values) === true ? series[si].values : []
+    for (let ci = 0; ci < categories.length; ci = ci + 1) {
+      if (isFiniteNumber(values[ci]) === true) {
+        low = Math.min(low, values[ci])
+        high = Math.max(high, values[ci])
+      }
+    }
+  }
+  if (low === Infinity) {
+    return root
+  }
+  const reach = isCorrelation === true ? 1 : Math.max(Math.abs(high - midpoint), Math.abs(low - midpoint), 1e-12)
+  const colorOf = (value) => {
+    if (isDiverging === true) {
+      return divergingColor((value - midpoint) / reach)
+    }
+    return sequentialColor(high > low ? (value - low) / (high - low) : 1)
+  }
+
+  /* Margins from the label lengths (capped). */
+  let rowLongest = 0
+  for (let si = 0; si < series.length; si = si + 1) {
+    rowLongest = Math.max(rowLongest, String(series[si].name).length)
+  }
+  let colLongest = 0
+  for (let ci = 0; ci < categories.length; ci = ci + 1) {
+    colLongest = Math.max(colLongest, String(categories[ci]).length)
+  }
+  const left = Math.min(Math.max(rowLongest * 6.4 + 14, 40), Math.max(ctx.width * 0.28, 40))
+  const right = RAMP_ROOM
+  const roughCell = (ctx.width - left - right) / categories.length
+  const rotate = colLongest * 6.4 > roughCell - 4
+  const bottom = rotate === true ? Math.min(Math.max(colLongest * 4.6 + 20, 32), Math.max(ctx.height * 0.3, 32)) : 28
+  const margin = { top: 12, right: right, bottom: bottom, left: left }
   const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
 
-  /* Band scales for x (categories) and y (series rows). */
   const xScale = bandScale(categories, [0, plotW], 0)
-  const rowNames = series.map((ser) => ser.name)
-  const yScale = bandScale(rowNames, [0, plotH], 0)
-
+  const yScale = bandScale(series.map((entry) => entry.name), [0, plotH], 0)
   const cellW = xScale.bandwidth()
-  const cellH = yScale.bandwidth()
+  const cellH = yScale.step()
+  const maxCircleR = Math.max(Math.min(cellW, cellH) / 2 - gap, 1)
 
-  /* Compute domain for sequential scale. */
-  let allValues = []
-  for (let s = 0; s < series.length; s = s + 1) {
-    const vals = series[s].values
-    if (vals === null || vals === undefined) {
-      continue
-    }
-    for (let v = 0; v < vals.length; v = v + 1) {
-      const val = vals[v]
-      if (typeof val === "number" && Number.isNaN(val) === false) {
-        allValues.push(val)
-      }
-    }
-  }
-  const valueDomain = extent(allValues)
-
-  /* Circle size scale for mark="circle" mode. */
-  const maxCircleR = Math.min(cellW, cellH) / 2 - gap
-
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
+  const plot = svgEl("g", { transform: `translate(${margin.left},${margin.top})` }, [])
   root.appendChild(plot)
+  const axes = axisLayer(plot)
+  const marks = svgEl("g", { part: "marks" }, [])
+  plot.appendChild(marks)
 
-  /* Draw cells. */
-  for (let s = 0; s < series.length; s = s + 1) {
-    const ser = series[s]
-    const vals = ser.values
-    if (vals === null || vals === undefined) {
-      continue
-    }
-    const rowY = yScale(ser.name)
+  for (let si = 0; si < series.length; si = si + 1) {
+    const entry = series[si]
+    const values = Array.isArray(entry.values) === true ? entry.values : []
+    const rowY = si * cellH
 
-    for (let c = 0; c < categories.length; c = c + 1) {
-      /* Respect triangle mode for correlation matrices. */
-      if (triangleMode === "upper" && s > c) {
+    for (let ci = 0; ci < categories.length; ci = ci + 1) {
+      if (triangleMode === "upper" && si > ci) {
         continue
       }
-      if (triangleMode === "lower" && s < c) {
+      if (triangleMode === "lower" && si < ci) {
         continue
       }
-
-      const value = vals[c]
-      if (value === null || value === undefined || Number.isNaN(value) === true) {
+      const value = values[ci]
+      if (isFiniteNumber(value) === false) {
         continue
       }
-
-      const colX = xScale(categories[c])
-      const fillColor = isDiverging === true
-        ? _divColor(value)
-        : _seqColor(value, valueDomain[0], valueDomain[1])
-
-      let cellEl = null
-
+      const colX = xScale.at(ci)
+      const fill = colorOf(value)
+      let cell = null
       if (markMode === "circle") {
-        /* Circle whose area encodes |value|. */
-        const absVal = Math.abs(value)
-        const domainMax = isDiverging === true ? 1 : valueDomain[1]
-        const fraction = domainMax !== 0 ? Math.min(1, absVal / domainMax) : 0
-        const r = Math.max(2, maxCircleR * fraction)
-        cellEl = svgEl("circle", {
-          cx: colX + cellW / 2,
-          cy: rowY + cellH / 2,
-          r: r,
-          fill: fillColor
-        }, [])
+        /* Circle AREA encodes |value| (radius grows with the square root). */
+        const magnitude = isDiverging === true ? Math.abs(value - midpoint) / reach
+          : (high > 0 ? Math.abs(value) / Math.max(Math.abs(high), Math.abs(low)) : 0)
+        const r = Math.max(maxCircleR * Math.sqrt(Math.min(magnitude, 1)), 1.5)
+        cell = svgEl("circle", { cx: colX + cellW / 2, cy: rowY + cellH / 2, r: r, fill: fill }, [])
       } else {
-        cellEl = svgEl("rect", {
-          x: colX + gap / 2,
-          y: rowY + gap / 2,
-          width: Math.max(cellW - gap, 1),
-          height: Math.max(cellH - gap, 1),
-          rx: cornerRadius,
-          fill: fillColor
+        cell = svgEl("rect", {
+          x: colX + gap / 2, y: rowY + gap / 2,
+          width: Math.max(cellW - gap, 1), height: Math.max(cellH - gap, 1),
+          rx: Math.min(cornerRadius, cellW / 4, cellH / 4), fill: fill
         }, [])
       }
-
-      cellEl.setAttribute("part", "cell")
-      cellEl.setAttribute("tabindex", "0")
-      cellEl.setAttribute("role", "img")
-      const ariaLabel = `${escapeHtml(ser.name)}, ${escapeHtml(categories[c])}: ${formatNumber(value)}`
-      cellEl.setAttribute("aria-label", ariaLabel)
-      cellEl.appendChild(svgEl("title", null,
-        `${ser.name} × ${categories[c]}: ${formatNumber(value)}`))
-
-      const handler = () => {
-        ctx.emit("mj-chart-cell-click", {
-          row: ser.name,
-          col: categories[c],
-          value: value
-        })
-      }
-      cellEl.addEventListener("click", handler)
-      cellEl.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          handler()
-        }
+      cell.setAttribute("part", "cell")
+      const category = categories[ci]
+      focusableMark(cell, `${entry.name}, ${category}: ${formatNumber(value)}`)
+      activateOnKey(cell, () => {
+        ctx.emit("mj-chart-cell-click", { row: entry.name, col: category, value: value })
       })
-      plot.appendChild(cellEl)
+      marks.appendChild(cell)
 
-      /* Optional value label inside cell. */
-      if (showLabels === true) {
-        const labelText = isDiverging === true
-          ? value.toFixed(2)
+      if (showLabels === true && cellH >= 12) {
+        /* Full precision when it fits, one decimal when not, else no label. */
+        const fontSize = Math.max(9, Math.min(12, cellH * 0.35))
+        let text = isCorrelation === true
+          ? formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
           : formatNumber(value)
-        const textColor = Math.abs(value) > (isDiverging ? 0.5 : (valueDomain[1] * 0.6))
-          ? "var(--mj-text-on-strong, #ffffff)"
-          : "var(--mj-text, #14181f)"
-        plot.appendChild(svgEl("text", {
-          x: colX + cellW / 2,
-          y: rowY + cellH / 2 + 4,
-          "text-anchor": "middle",
-          "font-size": Math.max(9, Math.min(12, cellH * 0.35)),
-          fill: textColor,
-          "pointer-events": "none"
-        }, escapeHtml(labelText)))
+        if (text.length * fontSize * 0.6 > cellW - 4) {
+          text = formatNumber(value, { maximumFractionDigits: 1 })
+        }
+        if (text.length * fontSize * 0.6 > cellW - 4) {
+          continue
+        }
+        marks.appendChild(svgEl("text", {
+          x: colX + cellW / 2, y: rowY + cellH / 2 + 4, "text-anchor": "middle",
+          "font-size": fontSize, "font-weight": 600,
+          fill: TEXT_COLOR, stroke: SURFACE_COLOR, "stroke-width": 2.5, "stroke-opacity": 0.6,
+          "paint-order": "stroke", "pointer-events": "none", "aria-hidden": "true", part: "cell-label"
+        }, text))
       }
     }
   }
 
-  /* X-axis category labels. */
-  for (let c = 0; c < categories.length; c = c + 1) {
-    const colX = xScale(categories[c])
-    plot.appendChild(svgEl("text", {
-      x: colX + cellW / 2,
-      y: plotH + 16,
-      "text-anchor": "middle",
-      "font-size": 11,
-      fill: "var(--mj-text, #14181f)"
-    }, escapeHtml(categories[c])))
+  /* Column labels: straight when they fit, rotated otherwise. */
+  for (let ci = 0; ci < categories.length; ci = ci + 1) {
+    const center = xScale.at(ci) + cellW / 2
+    const full = String(categories[ci])
+    if (rotate === true) {
+      const room = (margin.bottom - 12) / 0.64
+      axes.appendChild(svgEl("text", {
+        x: 0, y: 0, "text-anchor": "end", "font-size": 11, fill: TEXT_COLOR,
+        transform: `translate(${center + 4},${plotH + 12}) rotate(-40)`
+      }, fitText(full, room, 11)))
+    } else {
+      axes.appendChild(svgEl("text", {
+        x: center, y: plotH + 16, "text-anchor": "middle", "font-size": 11, fill: TEXT_COLOR
+      }, fitText(full, cellW - 2, 11)))
+    }
+  }
+  for (let si = 0; si < series.length; si = si + 1) {
+    axes.appendChild(svgEl("text", {
+      x: -8, y: si * cellH + cellH / 2 + 4, "text-anchor": "end", "font-size": 11, fill: TEXT_COLOR
+    }, fitText(series[si].name, margin.left - 12, 11)))
   }
 
-  /* Y-axis row labels. */
-  for (let s = 0; s < series.length; s = s + 1) {
-    const rowY = yScale(series[s].name)
-    plot.appendChild(svgEl("text", {
-      x: -8,
-      y: rowY + cellH / 2 + 4,
-      "text-anchor": "end",
-      "font-size": 11,
-      fill: "var(--mj-text, #14181f)"
-    }, escapeHtml(series[s].name)))
+  /* Colour bar. */
+  const rampLength = Math.min(plotH, 180)
+  const rampLabels = isDiverging === true
+    ? [
+      { fraction: 0, text: formatNumber(midpoint - reach, { maximumSignificantDigits: 3 }) },
+      { fraction: 0.5, text: formatNumber(midpoint, { maximumSignificantDigits: 3 }) },
+      { fraction: 1, text: formatNumber(midpoint + reach, { maximumSignificantDigits: 3 }) }
+    ]
+    : [
+      { fraction: 0, text: formatNumber(low, { maximumSignificantDigits: 3 }) },
+      { fraction: 1, text: formatNumber(high, { maximumSignificantDigits: 3 }) }
+    ]
+  if (isDiverging === false && high > low) {
+    rampLabels.splice(1, 0, { fraction: 0.5, text: formatNumber((low + high) / 2, { maximumSignificantDigits: 3 }) })
   }
+  drawColorRamp(axes, {
+    x: plotW + 12, y: (plotH - rampLength) / 2, length: rampLength, thickness: 10, vertical: true,
+    colorAt: (fraction) => isDiverging === true ? divergingColor(fraction * 2 - 1) : sequentialColor(fraction),
+    labels: rampLabels
+  })
 
+  /* The colour bar explains the colours; rows are not series toggles here. */
+  ctx.setLegend([])
   return root
 }
 

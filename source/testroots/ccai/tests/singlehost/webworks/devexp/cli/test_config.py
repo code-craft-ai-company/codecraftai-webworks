@@ -11,6 +11,7 @@ import json
 import os
 import tempfile
 
+from ccai.webworks.devexp.cli.config import ConfigFileError
 from ccai.webworks.devexp.cli.config import (
     DEFAULT_CONFIG,
     ENV_PREFIX,
@@ -99,14 +100,25 @@ def test_default_config_has_inspector_section():
 # Unit Tests for load_config_from_file
 # =============================================================================
 
-def test_load_config_from_file_returns_empty_for_missing_file():
+def test_load_config_from_file_raises_for_missing_file():
     """
-        Test that loading from a nonexistent file returns an empty dict.
-    """
-    result = load_config_from_file("/nonexistent/path/config.json")
+        Test that loading from a nonexistent file raises ConfigFileError.
 
-    if len(result) != 0:
-        errmsg = "Expected empty dict for missing file, got {} entries".format(len(result))
+        A configuration file is only read because its path was given, so a
+        missing file must be reported instead of silently using defaults.
+    """
+    raised = False
+
+    try:
+        load_config_from_file("/nonexistent/path/config.json")
+    except ConfigFileError as err:
+        raised = True
+        if "/nonexistent/path/config.json" not in str(err):
+            errmsg = "Expected the file path in the error message, got '{}'".format(err)
+            raise AssertionError(errmsg)
+
+    if raised is not True:
+        errmsg = "Expected ConfigFileError for a missing file."
         raise AssertionError(errmsg)
 
     return
@@ -142,19 +154,24 @@ def test_load_config_from_file_reads_json():
     return
 
 
-def test_load_config_from_file_returns_empty_for_invalid_json():
+def test_load_config_from_file_raises_for_invalid_json():
     """
-        Test that an invalid JSON file returns an empty dict.
+        Test that an invalid JSON file raises ConfigFileError.
     """
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
         tmp.write("not valid json {{{")
         tmp_path = tmp.name
 
     try:
-        result = load_config_from_file(tmp_path)
+        raised = False
 
-        if len(result) != 0:
-            errmsg = "Expected empty dict for invalid JSON, got {} entries".format(len(result))
+        try:
+            load_config_from_file(tmp_path)
+        except ConfigFileError:
+            raised = True
+
+        if raised is not True:
+            errmsg = "Expected ConfigFileError for invalid JSON."
             raise AssertionError(errmsg)
     finally:
         os.unlink(tmp_path)
@@ -162,19 +179,24 @@ def test_load_config_from_file_returns_empty_for_invalid_json():
     return
 
 
-def test_load_config_from_file_returns_empty_for_non_dict_json():
+def test_load_config_from_file_raises_for_non_dict_json():
     """
-        Test that a JSON file containing a non-dict value returns empty dict.
+        Test that a JSON file containing a non-dict value raises ConfigFileError.
     """
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
         json.dump([1, 2, 3], tmp)
         tmp_path = tmp.name
 
     try:
-        result = load_config_from_file(tmp_path)
+        raised = False
 
-        if len(result) != 0:
-            errmsg = "Expected empty dict for non-dict JSON, got {} entries".format(len(result))
+        try:
+            load_config_from_file(tmp_path)
+        except ConfigFileError:
+            raised = True
+
+        if raised is not True:
+            errmsg = "Expected ConfigFileError for a JSON file that is not an object."
             raise AssertionError(errmsg)
     finally:
         os.unlink(tmp_path)
@@ -559,9 +581,9 @@ def test_load_config_env_overrides_defaults():
     return
 
 
-def test_load_config_missing_file_uses_defaults():
+def test_load_config_missing_file_raises():
     """
-        Test that a missing config file path falls back to defaults.
+        Test that load_config fails for a config file path that does not exist.
     """
     saved_env = {}
     for key in list(os.environ.keys()):
@@ -569,15 +591,33 @@ def test_load_config_missing_file_uses_defaults():
             saved_env[key] = os.environ.pop(key)
 
     try:
-        result = load_config(config_path="/nonexistent/config.json")
+        raised = False
 
-        if result["server"]["host"] != "127.0.0.1":
-            errmsg = "Expected default host '127.0.0.1', got '{}'".format(
-                result["server"]["host"]
-            )
+        try:
+            load_config(config_path="/nonexistent/config.json")
+        except ConfigFileError:
+            raised = True
+
+        if raised is not True:
+            errmsg = "Expected ConfigFileError when the given config file does not exist."
             raise AssertionError(errmsg)
     finally:
         os.environ.update(saved_env)
+
+    return
+
+
+def test_default_config_has_server_app_key():
+    """
+        Test that the server section has an 'app' key, unset by default.
+    """
+    if "app" not in DEFAULT_CONFIG["server"]:
+        errmsg = "Expected an 'app' key in the server section of DEFAULT_CONFIG."
+        raise AssertionError(errmsg)
+
+    if DEFAULT_CONFIG["server"]["app"] is not None:
+        errmsg = "Expected server.app to default to None, got '{}'".format(DEFAULT_CONFIG["server"]["app"])
+        raise AssertionError(errmsg)
 
     return
 

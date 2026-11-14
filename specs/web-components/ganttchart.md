@@ -1,267 +1,122 @@
 # Gantt Chart Spec
 
 - **Tag:** `<mj-gantt-chart>`
-- **Class / file:** `GanttChart` / `ganttchart.js`
+- **Class / file:** `MjGanttChart` / `components/mjganttchart.js` (base: `components/pmchartwrapper.js`)
 - **Category:** Project-management & configuration-management charts
-- **Primary or Variant:** Primary
+- **Primary or Variant:** Variant — a convenience wrapper for `<mj-chart type="gantt">`
 - **Synonyms covered:** Gantt chart
-- **Phase:** P3
-- **Status:** Planned
+- **Status:** Implemented (wrapper since WW-1498)
 
-> Universal requirements (Custom Element standard, Shadow DOM/theming, WCAG 2.2
-> AA, events/API, form participation, SSR, i18n, performance, testing, docs) are
-> defined once in `web-component-development-plan.md` §3 and are not repeated
-> here. This spec records only what is specific to this component.
+> `<mj-gantt-chart>` is `<mj-chart type="gantt">` with the type fixed and the
+> project data shape of this component family. Drawing, layout, keyboard
+> support, the data table, data loading (`data`, `src`, inline JSON), the
+> loading / empty / error states and resizing are the chart's: see
+> [chart.md](chart.md) (§21 for the gantt type) and the `gantt` chart-type page.
+> This spec records only what differs. Universal requirements are in
+> `web-component-development-plan.md` §3.
 
-## 1. Purpose
+## 1. Purpose and when to use
 
-`<mj-gantt-chart>` renders a classic Gantt chart — task bars positioned on a
-shared time axis with dependency arrows, percent-complete fills, milestone
-diamonds, and phase bands. It serves as the primary tool for visualizing project
-schedules and release plans in the webworks component library.
+A project schedule: task bars with percent-complete fills, finish-to-start
+dependency arrows, collapsible group rows, milestone markers, phase bands and a
+today line. Use it when the page already holds data in the shape below; use
+`<mj-chart type="gantt">` directly for the chart type's own shape. For
+initiative-level plans use `<mj-roadmap-chart>`, for a single axis of key dates
+`<mj-milestone-timeline>`.
 
-## 2. When to use / when not to use
+## 2. Data shape (mapped onto the chart type)
 
-**Use** for project schedules where start/end dates, task dependencies, and
-completion status need to be visualized together. **Do not use** for a simple
-list of milestones (use `<mj-milestone-timeline>`), for sprint velocity trends
-(use `<mj-velocity-chart>`), or for CI pipeline stages (use
-`<mj-pipeline-chart>`). Nearest alternative: `<mj-roadmap-chart>` for
-initiative-level roadmaps without day-level precision.
+```
+{ tasks: [{ id, name, start, end, percentComplete, status, groupId, milestone }],
+  groups: [{ id, name }], dependencies: [{ from, to }],
+  markers: [{ name, date }], phases: [{ name, start, end }] }
+```
 
-## 3. Anatomy
+| Wrapper field | Chart type field |
+|---|---|
+| `task.name` (else `id`, else `task-N`) | `label`; `id` defaults to the name, else `task-N` |
+| `task.percentComplete` (0-100, clamped; missing = 0) | `progress` (0-1) |
+| `task.groupId` naming a declared group | `group` (an unknown id leaves the task ungrouped) |
+| `dependencies: [{ from, to }]` | `depends` of the `to` task |
+| `task.milestone` / `type: "milestone"` | `milestone: true` |
+| `groups[].name`, `markers[].name`, `phases[].name` | `label` |
 
-- **Task list panel** — left column listing task names and optional metadata
-  (assignee, status chip); collapsible.
-- **Time axis** — shared horizontal ruler from the time-axis utility; supports
-  zoom, pan, today marker, locale-aware tick labels.
-- **Task bars** — horizontal bars spanning start-to-end per task; filled to
-  show `% complete`.
-- **Dependency arrows** — finish-to-start (and other) directed arrows between
-  bars.
-- **Milestone diamonds** — from the shared milestone/marker model; sit on the
-  time axis above or on a specific task row.
-- **Phase bands** — colored date-range backgrounds (e.g. design, development,
-  QA, release).
-- **Today marker** — vertical line indicating the current date.
-- **Group rows** — collapsible parent rows that aggregate child tasks.
-- **Accessible data table** — a visually hidden `<table>` of tasks always in DOM.
+`YYYY-MM-DD` dates are local days and a date-only end is inclusive. A task with
+a start and no end runs to the edge of the chart; one without dates keeps its
+row ("No dates").
 
-## 4. Variants & modes
+## 3. Attributes
 
-| Mode / Variant | Attribute | Behavior |
+| Attribute | Chart type option | Notes |
 |---|---|---|
-| Day scale | `scale="day"` | Axis ticks at day intervals |
-| Week scale | `scale="week"` (default) | Axis ticks at week intervals |
-| Month scale | `scale="month"` | Axis ticks at month intervals |
-| Quarter scale | `scale="quarter"` | Axis ticks at quarter intervals |
-| Read-only | `readonly` (boolean, default) | No task editing or drag |
-| Editable | `editable` (boolean) | Bar drag-to-reschedule and percent-complete handle |
-| Compact | `density="compact"` | Reduced row height; no assignee chip |
-| Full | `density="full"` (default) | Full row height with assignee and status chips |
+| `scale` | `scale` | day / week / month / quarter |
+| `start-date`, `end-date` | same | fix the window |
+| `today-marker` | `today` | default on |
+| `show-dependencies` | same | default on |
+| `show-percent` | `show-progress` | default on |
+| `density` | `density`, and `row-height` 40 (normal) / 28 (compact) | |
+| `collapsed-groups` | same | JSON array of collapsed group ids; activating a header updates it; new data removes it |
+| `src` | — | as on `<mj-chart>` |
 
-## 5. Attributes
+## 4. Properties
 
-| Attribute | Type | Default | Reflects | Description |
-|-----------|------|---------|----------|-------------|
-| `src` | string | `""` | yes | URL for the data-source adapter |
-| `adapter` | string | `"static"` | yes | Adapter key: `"static"`, `"jira"`, `"linear"`, `"asana"` |
-| `scale` | `"day"` \| `"week"` \| `"month"` \| `"quarter"` | `"week"` | yes | Time axis granularity |
-| `start-date` | string (ISO 8601) | `""` | yes | Left bound of visible window |
-| `end-date` | string (ISO 8601) | `""` | yes | Right bound of visible window |
-| `today-marker` | boolean | `true` | yes | Show today vertical line |
-| `show-dependencies` | boolean | `true` | yes | Render dependency arrows |
-| `show-percent` | boolean | `true` | yes | Render % complete fill on bars |
-| `editable` | boolean | `false` | yes | Enable bar drag and resize |
-| `readonly` | boolean | `false` | yes | Alias; explicit read-only lock |
-| `density` | `"compact"` \| `"full"` | `"full"` | yes | Row height variant |
-| `locale` | string | `""` | yes | BCP 47 locale for axis tick formatting |
-| `max-rows` | number | `500` | yes | Row count above which virtual scroll activates |
+| Property | Description |
+|---|---|
+| `data` | The data above. Assigning draws at once, clears the selection and the collapsed groups, and emits `mj-data-load` |
+| `selectedTask` | The selected task object, or null |
+| `collapsedGroups` | `Set` of the collapsed group ids (as the data names them) |
 
-## 6. Properties
+All `<mj-chart>` properties and methods (`chartState`, `chartTable`, `redraw()`, ...) are available.
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `data` | `GanttData` | `{ tasks, groups, dependencies, markers, phases }` |
-| `selectedTask` | `Task \| null` | Currently focused/selected task |
-| `collapsedGroups` | `Set<string>` | IDs of collapsed group rows |
-| `visibleRange` | `{ start: Date, end: Date }` | Current time window |
+## 5. Events
 
-## 7. Slots
+| Event | `detail` | From |
+|---|---|---|
+| `mj-task-select` | `{ task }` | `mj-chart-bar-click`; opens the detail panel |
+| `mj-task-deselect` | `{}` | the detail panel closed (Close, Escape) |
+| `mj-marker-select` | `{ marker }` | `mj-chart-marker-click` |
+| `mj-group-toggle` | `{ groupId, collapsed }` | `mj-chart-group-toggle` |
+| `mj-data-load` | `{ tasks, groups }` | first draw of each assigned / loaded data object |
+| `mj-error` | `{ message }` | `mj-chart-error` (once per message) |
 
-| Slot | Description |
-|------|-------------|
-| `(default)` | Fallback `<table>` rendered before upgrade |
-| `task-detail` | Custom detail panel for a selected task |
-| `toolbar` | Custom controls to slot above the chart (e.g. scale picker) |
-| `empty` | Shown when `data.tasks` is empty |
-| `loading` | Shown during adapter fetch |
-| `error` | Shown on adapter failure |
+The chart's own events (`mj-chart-*`) fire as well.
 
-## 8. Events
+## 6. Slots, parts, custom properties
 
-| Event | `detail` | Bubbles | Cancelable | Description |
-|-------|----------|---------|------------|-------------|
-| `mj-task-select` | `{ task: Task }` | yes | no | Task row or bar focused/clicked |
-| `mj-task-deselect` | `{}` | yes | no | Selection cleared |
-| `mj-task-update` | `{ task: Task, changes: Partial<Task> }` | yes | yes | Bar drag/resize complete (editable mode) |
-| `mj-group-toggle` | `{ groupId: string, collapsed: boolean }` | yes | no | Group row collapsed or expanded |
-| `mj-range-change` | `{ start: string, end: string }` | yes | no | Visible time window changed |
-| `mj-marker-select` | `{ marker: Marker }` | yes | no | Milestone marker activated |
-| `mj-data-load` | `{ tasks: number, groups: number }` | yes | no | Data fetch succeeded |
-| `mj-error` | `{ message: string, cause: unknown }` | yes | no | Adapter or validation error |
+- Slots: `toolbar` (controls after the data-table button), `task-detail` (extra
+  detail-panel content), `empty` (the chart's empty message).
+- Parts: `toolbar`, `task-detail` (floating panel), the chart's `surface`, `svg`,
+  `message`, `table data-table`, and the renderer's mark parts, which carry the
+  wrapper's names too: `bar task-bar`, `bar-fill task-bar-fill`,
+  `dependency dependency-arrow`, `task-label task-list-panel`, `group-row`,
+  `milestone-marker`, `phase-band`, `time-axis`, `today-marker`, `today-label`.
+- Custom properties: the chart's (`--mj-chart-series-*`, `--mj-chart-min-height`).
 
-## 9. CSS parts & custom properties
+## 7. Keyboard and accessibility
 
-**Parts:**
-- `::part(task-list-panel)` — left column task list
-- `::part(task-list-header)` — header row of task list column
-- `::part(chart-area)` — scrollable bar area to the right
-- `::part(time-axis)` — horizontal ruler
-- `::part(task-row)` — individual task row across both panels
-- `::part(task-bar)` — horizontal bar for a task
-- `::part(task-bar-fill)` — inner fill showing % complete
-- `::part(dependency-arrow)` — SVG arrow between dependent tasks
-- `::part(milestone-marker)` — diamond and label
-- `::part(phase-band)` — background phase span
-- `::part(today-marker)` — today vertical line
-- `::part(group-row)` — collapsible group header row
+The chart's model: the marks (group headers, bars, markers) are one tab stop with
+arrow / Home / End movement; Enter or Space activates. The activated mark gets
+`aria-current="true"`; the detail panel is a labelled region that takes focus,
+and Escape or Close returns focus to the mark. The toolbar button discloses the
+chart's data table (`aria-expanded`).
 
-**Custom properties:**
-- `--mj-gantt-row-height` — task row height (default `40px`)
-- `--mj-gantt-task-list-width` — left panel width (default `260px`)
-- `--mj-bar-color` — default task bar fill color
-- `--mj-bar-complete-color` — % complete fill color
-- `--mj-bar-milestone-color` — milestone diamond color
-- `--mj-dependency-color` — dependency arrow stroke color
-- `--mj-today-color` — today marker stroke color
-- `--mj-phase-opacity` — phase band fill opacity (default `0.10`)
-- `--mj-axis-tick-color` — tick label color
+## 8. Migration (behaviour changes from the standalone implementation)
 
-## 10. States
-
-- **loading** — `aria-busy="true"`; loading slot shown.
-- **empty** — empty slot shown.
-- **error** — error slot shown; `mj-error` fired.
-- **task-selected** — row highlighted; detail panel opens.
-- **group-collapsed** — child rows hidden; group collapse button `aria-expanded="false"`.
-- **editable** — cursor changes on bars; drag handles visible.
-- **task-dragging** — bar currently being repositioned; live region announces new dates.
-
-## 11. Behavior & interactions
-
-The time-axis utility controls zoom (scroll wheel, pinch, ± buttons) and pan
-(drag on axis, Arrow keys). Task bars are positioned by the rendering adapter
-using `start`/`end` dates relative to the axis scale. Clicking a task row or
-bar fires `mj-task-select` and opens the detail panel. Group rows toggle child
-visibility via a disclosure button. In editable mode, drag-handle on bar ends
-resizes; dragging the bar body repositions; dropping fires `mj-task-update`
-(cancelable so the host can validate or revert). Dependency arrows are SVG paths
-drawn from the right edge of the predecessor bar to the left edge of the
-successor bar; they update on zoom/pan. Percent-complete fill is a nested div
-with width set to `task.percentComplete + "%"`.
-
-## 12. Keyboard interaction
-
-| Key | Action |
-|-----|--------|
-| `Tab` | Move focus between task rows, group collapse buttons, toolbar controls, and milestone markers |
-| `Arrow Up` / `Arrow Down` | Move focus between task rows |
-| `Arrow Left` / `Arrow Right` | Scroll the chart area left/right; also adjusts bar dates in editable mode (by one `scale` unit) |
-| `Enter` / `Space` | Select focused task; toggle group collapse |
-| `Escape` | Deselect task; cancel pending bar drag |
-| `+` / `-` | Zoom in / zoom out on the time axis |
-| `0` | Reset zoom to fit all tasks |
-| `Home` / `End` | Jump to first / last task row |
-| `Page Up` / `Page Down` | Scroll task list by one viewport height |
-
-## 13. Accessibility
-
-- Root: `role="img"` with `aria-label` = "Gantt chart: {n} tasks, {start} to {end}".
-- Task list panel: `role="treegrid"` with `aria-label` = "Task list".
-- Each task row: `role="row"`; task name cell `role="rowheader"`.
-- Group rows: `aria-expanded` on collapse button; `aria-controls` points to
-  child row group.
-- Task bars: `aria-label` = "{name}: {start} to {end}, {percent}% complete,
-  status: {status}"; role is presentational inside the row.
-- Milestone markers: `role="button"` with `aria-label` = "{name} milestone, {date}".
-- Dependency arrows: `aria-hidden="true"` (visual only; relationship conveyed
-  by data table).
-- Accessible data table: columns Task, Start, End, % Complete, Status, Dependencies.
-- Bar drag in editable mode: new dates announced via live-region as bar is dropped.
-- Phase bands: `aria-hidden="true"`.
-
-## 14. Form participation
-
-N/A — this component is not an input control.
-
-## 15. Internationalization & RTL
-
-- Axis tick labels use `Intl.DateTimeFormat` with `locale` attribute.
-- Localizable strings (all overridable via attributes): `label-loading`,
-  `label-empty`, `label-error`, `label-today`, `label-collapse`, `label-expand`,
-  `label-zoom-in`, `label-zoom-out`, `label-reset-zoom`, `label-show-table`.
-- RTL: time axis flows right-to-left; task list panel moves to the right;
-  dependency arrows mirror; bar fill grows from right to left.
-
-## 16. Progressive enhancement / SSR
-
-Server renders a `<table>` of tasks inside the default slot. Before the script
-loads the table is the full accessible content. On upgrade the component hides
-the table visually (accessible via a disclosure toggle), initializes the adapter,
-and draws the Gantt without layout shift using `height-hint`.
-
-## 17. Dependencies
-
-- §6 time-axis utility (zoom, pan, today marker, locale-aware tick labels)
-- §6 milestone/marker model
-- §6 data-source adapter interface (adapter keys: `static`, `jira`, `linear`,
-  `asana`)
-- §6 registry + base element helper
-- §6 design-token stylesheet
-- §6 live-region/announcement service
-- §6 localization/formatting hook
-- §5.9 pluggable rendering adapter (SVG; injected, not bundled)
-
-## 18. Edge cases & error handling
-
-- **Tasks with no end date** — bar extends to the right edge of the viewport
-  with a dashed border.
-- **Overlapping tasks in the same row** — bars stack vertically within the row
-  up to `max-overlap` (default 3); remaining tasks shown as "+N more".
-- **Circular dependencies** — detected on load; warning emitted; affected arrows
-  drawn in an error color.
-- **`start-date` after `end-date`** — swapped with console warning.
-- **Zero-duration task** (start equals end) — rendered as a milestone diamond
-  regardless of task type.
-- **Adapter failure** — error slot shown; stale data retained.
-- **More than `max-rows` tasks** — virtual scroll activates; offscreen rows
-  not rendered.
-- **Long task names** — truncated in the task list panel with tooltip on hover/focus.
-
-## 19. Acceptance criteria
-
-- [ ] Task bars render at correct positions from static `data` property.
-- [ ] Dependency arrows connect predecessor right-edge to successor left-edge.
-- [ ] Percent-complete fill matches `task.percentComplete`.
-- [ ] Today marker appears at the current date on the axis.
-- [ ] Milestone diamonds render at correct dates with names.
-- [ ] Phase bands span correct date ranges behind task bars.
-- [ ] Group collapse toggles child rows and fires `mj-group-toggle`.
-- [ ] Zoom changes axis tick labels and repositions bars.
-- [ ] Keyboard navigation per §12 works across rows and toolbar.
-- [ ] Accessible data table present with all tasks and dependency columns.
-- [ ] In editable mode, bar drag fires `mj-task-update` with new dates.
-- [ ] RTL layout mirrors correctly.
-- [ ] axe automated accessibility check passes with zero violations.
-- [ ] Empty, loading, and error states display correct slots.
-
-## 20. Open questions
-
-- Should `mj-task-update` carry only the changed fields or the full updated task
-  object? Partial updates are easier for the host to merge but require careful
-  diffing.
-- Is a resource/assignee swim-lane grouping mode (tasks grouped by owner instead
-  of hierarchy) in scope for P3?
-- Should the critical path be highlighted automatically based on the dependency
-  graph, or is that deferred to `<mj-dependency-graph>`?
+- The chart fits its width; a long plan no longer scrolls sideways (3 px/day
+  minimum). Rows grow the chart vertically as before.
+- Bars use the chart palette (the group's colour, else series 1) instead of
+  `--mj-accent`; the today line is the accent colour (was danger red); marker
+  colour is unchanged (warning).
+- Parts `wrapper`, `chart-area` and `empty-state` are gone (use `surface` and
+  `message`); `data-table` now names the table's container.
+- The empty / loading / error states are the chart's messages: the error text is
+  generic ("Chart data is not valid." / "Chart data could not be loaded."); the
+  detail is in `mj-error` / `mj-chart-error`. The default-slot fallback content is
+  no longer shown before data arrives.
+- The host's accessible name is "Gantt chart" (no task count); the table is
+  Task / Group / Start / End / Progress / Status / Assignee / Depends on.
+- Marks are `role="img"` with `aria-current` for the selection (were
+  `role="button"` with `aria-pressed`); group headers stay buttons.
+- Not built (removed from this spec, never implemented): `editable` / `readonly`,
+  `mj-task-update`, zoom and pan, `mj-range-change`, `visibleRange`, `adapter`,
+  `locale`, `max-rows`, `loading` / `error` slots, the `label-*` attributes.

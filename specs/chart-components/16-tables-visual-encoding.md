@@ -1,15 +1,17 @@
 # Tables with Visual Encoding
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Table-based charts blend tabular DOM structure with inline SVG cell encodings.
 The plain table shell reuses `<mj-table>` / `<mj-data-table>` from the
 component library when the primary structure is a DOM `<table>`; the SVG chart
 system contributes in-cell SVG marks rendered by a thin cell-renderer function
-keyed on `type`. Pure SVG rendering (the `<mj-chart-plot>` surface) is used
+keyed on `type`. Pure SVG rendering (`<mj-chart>`'s own drawing) is used
 only where the spatial layout cannot be expressed as rows and columns — notably
 icon arrays and small-multiples tables.
 
@@ -21,7 +23,6 @@ icon arrays and small-multiples tables.
 - **Purpose:** Display raw or summarized data as exact values in a sortable,
   scrollable DOM table; the chart system's accessible baseline for every chart
   type.
-- **Decomposition:** `mj-chart-data-table`, `mj-chart-title`, `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -42,11 +43,13 @@ icon arrays and small-multiples tables.
 - **Variants / modes:** `mode="striped"` alternates row fills; `mode="compact"`
   reduces cell padding; `mode="bordered"` adds cell borders. The `heatmap-table`
   renderer adds per-cell fill SVG — see below.
+- **Events:** none (not implemented).
 - **Phase:** P5
 - **Notes:** This is the accessible data-table alternative surfaced by every
   other chart type. As a standalone chart type it becomes a fully-featured
-  report table. Sorting is handled via a `sort` event on column headers;
-  pagination is caller-controlled through `data` updates. No SVG rendering
+  report table. Sorting on column headers is planned (no event is defined
+  while the type is not implemented); pagination is caller-controlled through
+  `data` updates. No SVG rendering
   occurs; `<mj-chart-data-table>` generates a real `<table>` that screen readers
   traverse normally.
 
@@ -58,8 +61,6 @@ icon arrays and small-multiples tables.
 - **Purpose:** Show a matrix of numeric values where each cell's background fill
   intensity encodes magnitude, combining exact readability with spatial pattern
   detection.
-- **Decomposition:** `mj-chart-data-table`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -81,6 +82,7 @@ icon arrays and small-multiples tables.
 - **Orientation:** `n/a`
 - **Variants / modes:** `mode="diverging"` uses a bi-directional color scale
   centred at zero; `mode="categorical"` maps discrete categories to hue bands.
+- **Events:** `mj-chart-cell-click` `{ row, column, value }` (each data cell of the table; `row` is the row index, `column` the column key; header cells emit nothing).
 - **Phase:** P5
 - **Notes:** The DOM `<table>` is emitted by `<mj-chart-data-table>`; each cell
   hosts a small inline `<svg>` that the `heatmap-table` cell-renderer injects.
@@ -92,12 +94,11 @@ icon arrays and small-multiples tables.
 ---
 
 ### Bar-in-cell table  *(inline bar table, magnitude table)*
-- **Renderer / `type`:** `bar-cell-table` — **Primary renderer**
-- **Controller:** `<mj-chart type="bar-cell-table" ...>`
+- **Renderer / `type`:** `bar-in-cell` — **Primary renderer** (`heatmaptable.js`, shared with `heatmap-table` and `conditional-format-table`)
+- **Controller:** `<mj-chart type="bar-in-cell" ...>`
 - **Purpose:** Render a DOM table where one or more numeric columns are replaced
   by miniature horizontal bars, enabling compact side-by-side magnitude
   comparisons across rows without leaving tabular alignment.
-- **Decomposition:** `mj-chart-data-table`, `mj-chart-title`, `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -120,9 +121,10 @@ icon arrays and small-multiples tables.
 - **Variants / modes:** `mode="diverging"` centers bars on zero for delta
   columns; `mode="stacked"` splits a cell into a proportional pair (positive /
   negative segments).
+- **Events:** `mj-chart-cell-click` `{ row, column, value }` (each data cell of the table; `row` is the row index, `column` the column key; header cells emit nothing).
 - **Phase:** P5
 - **Notes:** Each cell flagged `"render": "bar"` receives an inline `<svg>` from
-  the `bar-cell-table` cell-renderer. Bars share the same domain across all rows
+  the `bar-in-cell` cell-renderer. Bars share the same domain across all rows
   in that column (set by `column.domain` or auto-computed from data). This is
   a DOM-first table; the bar SVGs are decorative and `aria-hidden`; the numeric
   value is present as accessible text inside the `<td>`.
@@ -134,8 +136,6 @@ icon arrays and small-multiples tables.
 - **Controller:** `<mj-chart type="icon-array" ...>`
 - **Purpose:** Represent counts or proportions as a grid of discrete unit icons,
   making the magnitude of a part-to-whole relationship viscerally countable.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`, `mj-chart-value-labels`
 - **JSON shape:**
   ```json
   {
@@ -154,8 +154,9 @@ icon arrays and small-multiples tables.
   columns top-to-bottom)
 - **Variants / modes:** `mode="person"` uses a person-silhouette `<path>`
   instead of circles; `mode="square"` uses `<rect>` icons.
+- **Events:** `mj-chart-icon-click` `{ series, count }` (each series' group of icons).
 - **Phase:** P5
-- **Notes:** Rendered entirely on `<mj-chart-plot>` as pure SVG — not a DOM
+- **Notes:** Rendered entirely by `<mj-chart>` as pure SVG — not a DOM
   table. The grid layout is computed in the renderer: `total` icons are placed
   at `(col, row)` positions; series fill sequentially. Icon paths are inline SVG
   paths from `svgdraw.js`. The `waffle` renderer (category 5) is the analogous
@@ -164,12 +165,11 @@ icon arrays and small-multiples tables.
 ---
 
 ### Conditional formatting table  *(highlight table, rules-based table)*
-- **Renderer / `type`:** `cf-table` — **Primary renderer**
-- **Controller:** `<mj-chart type="cf-table" ...>`
+- **Renderer / `type`:** `conditional-format-table` — **Primary renderer** (`heatmaptable.js`)
+- **Controller:** `<mj-chart type="conditional-format-table" ...>`
 - **Purpose:** Emphasize patterns in tabular data by applying color, icon, or
   typographic highlights to cells that satisfy declarative rules, analogous to
   spreadsheet conditional formatting.
-- **Decomposition:** `mj-chart-data-table`, `mj-chart-title`, `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -194,6 +194,7 @@ icon arrays and small-multiples tables.
 - **Orientation:** `n/a`
 - **Variants / modes:** `mode="icon-only"` hides fill and shows only the icon;
   `mode="text-color"` applies rule color to the text rather than the background.
+- **Events:** `mj-chart-cell-click` `{ row, column, value }` (each data cell of the table; `row` is the row index, `column` the column key; header cells emit nothing).
 - **Phase:** P5
 - **Notes:** Rules are evaluated client-side by the renderer; order is
   first-match. Icons are drawn as `<path>` elements from a small icon set in
@@ -209,7 +210,6 @@ icon arrays and small-multiples tables.
 - **Purpose:** Summarize multi-dimensional data by grouping rows and columns
   independently, displaying aggregated values at each intersection, with
   optional visual encoding in cells.
-- **Decomposition:** `mj-chart-data-table`, `mj-chart-title`, `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -232,6 +232,7 @@ icon arrays and small-multiples tables.
 - **Variants / modes:** `mode="heatmap"` activates per-cell fill encoding (reuses
   the `heatmap-table` cell-renderer on value cells); `mode="bar"` activates
   bar-in-cell encoding on value cells.
+- **Events:** none (not implemented).
 - **Phase:** P5
 - **Notes:** Aggregation (`sum`, `mean`, `count`, `min`, `max`) is performed
   client-side by the controller from flat `rows` data; the pivot matrix is
@@ -248,8 +249,6 @@ icon arrays and small-multiples tables.
 - **Purpose:** Surface one or more key performance indicators as prominently
   displayed numbers with supporting context (label, target, trend indicator,
   delta), suitable for dashboard headers and metric tiles.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -269,12 +268,13 @@ icon arrays and small-multiples tables.
   ```
 - **SVG primitives:** `<text>` (headline value, label, delta); `<path>` (trend
   arrow glyph, sparkline line); `<rect>` (progress bar toward target, optional);
-  `<circle>` (sparkline dots, optional); all within `<mj-chart-plot>`'s SVG.
+  `<circle>` (sparkline dots, optional); all within `<mj-chart>`'s SVG.
 - **Orientation:** `horizontal` (metrics arranged in a row) / `vertical`
   (metrics stacked)
 - **Variants / modes:** `mode="compact"` shows only value + label; `mode="full"`
   adds target, delta, and sparkline; `mode="gauge"` replaces the progress bar
   with a radial arc (reuses the `gauge` renderer arc primitive).
+- **Events:** `mj-chart-tile-click` `{ metric, index }` (each tile; `metric` is the metric object from the data).
 - **Phase:** P5
 - **Notes:** Each metric's sparkline is a miniature `line` renderer path drawn
   directly on the scorecard SVG surface; a full `<mj-chart>` is not spawned per
@@ -291,8 +291,6 @@ icon arrays and small-multiples tables.
 - **Purpose:** Arrange many miniature chart panels in a row-column grid, each
   showing the same chart type applied to a different data slice, facilitating
   comparison across groups without overlapping series.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-legend`,
-  `mj-chart-tooltip`
 - **JSON shape:**
   ```json
   {
@@ -323,6 +321,7 @@ icon arrays and small-multiples tables.
   `mode="bar"` renders bar sparklines; `mode="area"` renders area sparklines.
   The `faceted` renderer in category 17 is the general-purpose version of this
   pattern applied to any renderer — note the relationship.
+- **Events:** none (not implemented).
 - **Phase:** P5
 - **Notes:** When `sharedScales: true`, all panels share the same domain (union
   of all panel domains) so panel heights are visually comparable. Each mini-chart

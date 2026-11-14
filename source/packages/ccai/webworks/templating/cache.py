@@ -28,6 +28,8 @@
         cache.clear()
 """
 
+import threading
+
 from collections import OrderedDict
 from typing import Any, Optional
 
@@ -80,6 +82,8 @@ class TemplateCache:
         :ivar _cache: OrderedDict storing cache entries (LRU order).
         :ivar _max_size: Maximum number of cached templates.
         :ivar _auto_reload: Whether to check for template changes.
+        :ivar _lock: Lock held while the cache is read or changed, so the
+            cache can be shared by the request threads of a threaded server.
         
         Example:
             cache = TemplateCache(max_size=400, auto_reload=False)
@@ -120,6 +124,11 @@ class TemplateCache:
         self._cache: OrderedDict[str, CacheEntry] = OrderedDict()
         self._max_size = max_size
         self._auto_reload = auto_reload
+        
+        # Guards every read and write of self._cache. A lookup is a
+        # membership test, a read and a reorder; without the lock another
+        # thread's eviction between those steps raises KeyError.
+        self._lock = threading.Lock()
         return
     
     def get(
@@ -154,22 +163,23 @@ class TemplateCache:
                     # Template not cached or stale, need to reload
                     pass
         """
-        if key not in self._cache:
-            return None
-        
-        entry = self._cache[key]
-        
-        # Check for staleness in auto_reload mode
-        if self._auto_reload and mtime is not None:
-            if entry.mtime is None or mtime > entry.mtime:
-                # Template is stale, remove from cache
-                del self._cache[key]
+        with self._lock:
+            if key not in self._cache:
                 return None
-        
-        # Move to end (most recently used)
-        self._cache.move_to_end(key)
-        
-        return entry.template
+            
+            entry = self._cache[key]
+            
+            # Check for staleness in auto_reload mode
+            if self._auto_reload and mtime is not None:
+                if entry.mtime is None or mtime > entry.mtime:
+                    # Template is stale, remove from cache
+                    del self._cache[key]
+                    return None
+            
+            # Move to end (most recently used)
+            self._cache.move_to_end(key)
+            
+            return entry.template
     
     def set(
         self,
@@ -205,17 +215,18 @@ class TemplateCache:
         if self._max_size <= 0:
             return
         
-        # If key exists, remove it first (will be re-added at end)
-        if key in self._cache:
-            del self._cache[key]
-        
-        # Evict least recently used if at capacity
-        while len(self._cache) >= self._max_size:
-            # Remove first item (least recently used)
-            self._cache.popitem(last=False)
-        
-        # Add new entry at end (most recently used)
-        self._cache[key] = CacheEntry(template=template, mtime=mtime)
+        with self._lock:
+            # If key exists, remove it first (will be re-added at end)
+            if key in self._cache:
+                del self._cache[key]
+            
+            # Evict least recently used if at capacity
+            while len(self._cache) >= self._max_size:
+                # Remove first item (least recently used)
+                self._cache.popitem(last=False)
+            
+            # Add new entry at end (most recently used)
+            self._cache[key] = CacheEntry(template=template, mtime=mtime)
         return
     
     def clear(self) -> None:
@@ -229,7 +240,8 @@ class TemplateCache:
                 # Clear entire cache
                 cache.clear()
         """
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
         return
     
     def remove(self, key: str) -> None:
@@ -245,8 +257,9 @@ class TemplateCache:
                 # Remove specific template
                 cache.remove("index.html")
         """
-        if key in self._cache:
-            del self._cache[key]
+        with self._lock:
+            if key in self._cache:
+                del self._cache[key]
         return
     
     @property
@@ -261,7 +274,9 @@ class TemplateCache:
             Example:
                 print(f"Cache contains {cache.size} templates")
         """
-        return len(self._cache)
+        with self._lock:
+            current_size = len(self._cache)
+        return current_size
     
     @property
     def max_size(self) -> int:

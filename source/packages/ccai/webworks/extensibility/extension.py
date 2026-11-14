@@ -15,6 +15,7 @@ from ccai.webworks.extensibility.exceptions import ExtensionNotInitializedError
 
 if TYPE_CHECKING:
     from ccai.webworks.extensibility.context import ExtensionContext
+    from ccai.webworks.extensibility.manifest import ExtensionManifest
 
 
 class Extension(ABC):
@@ -43,6 +44,49 @@ class Extension(ABC):
     def __init__(self):
         self._context: Optional['ExtensionContext'] = None
         self._state: ExtensionState = ExtensionState.REGISTERED
+        self._manifest: Optional['ExtensionManifest'] = None
+        return
+
+    @property
+    def manifest(self) -> Optional['ExtensionManifest']:
+        """
+            Get the manifest the extension was loaded from.
+
+            :returns: The manifest, or None for an extension that was
+                      created and registered without one.
+        """
+        rtnval = getattr(self, "_manifest", None)
+        return rtnval
+
+    def attach_manifest(self, manifest: 'ExtensionManifest') -> None:
+        """
+            Attach the manifest the extension was loaded from.
+
+            The ExtensionLoader calls this for every extension it loads.
+            The registry reads the manifest's configuration schema from it
+            when the extension is initialized. Metadata the class leaves at
+            its default (name, version, description and the dependency
+            lists) is taken from the manifest.
+
+            :param manifest: The manifest describing this extension.
+        """
+        self._manifest = manifest
+
+        if self.name == "":
+            self.name = manifest.name
+
+        if self.version == "0.0.0":
+            self.version = manifest.version
+
+        if self.description == "":
+            self.description = manifest.description
+
+        if len(self.dependencies) == 0:
+            self.dependencies = list(manifest.dependencies)
+
+        if len(self.optional_dependencies) == 0:
+            self.optional_dependencies = list(manifest.optional_dependencies)
+
         return
 
     @property

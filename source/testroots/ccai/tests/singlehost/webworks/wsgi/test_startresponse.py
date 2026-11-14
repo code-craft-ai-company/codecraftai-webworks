@@ -10,6 +10,7 @@ from typing import List, Tuple
 
 from ccai.webworks.wsgi.startresponse import StartResponse
 from ccai.webworks.wsgi.serverconfig import ServerConfig
+from ccai.webworks.wsgi.exceptions import InvalidResponseHeader
 
 
 # =============================================================================
@@ -716,3 +717,338 @@ def test_complete_response_flow():
     
     return
 
+
+
+# =============================================================================
+# Tests for header validation and body framing
+# =============================================================================
+
+def test_call_refuses_header_value_with_line_break():
+    """
+        Test that start_response refuses a header that would split the response.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock)
+    
+    raised = False
+    try:
+        start_response("302 Found", [("Location", "/x\r\nSet-Cookie: sid=evil")])
+    except InvalidResponseHeader:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected InvalidResponseHeader for a header value containing CRLF"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_call_stores_nothing_when_header_is_refused():
+    """
+        Test that a refused start_response call leaves no status behind.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock)
+    
+    try:
+        start_response("200 OK", [("X-Bad", "a\nb")])
+    except InvalidResponseHeader:
+        pass
+    
+    if start_response.status is not None:
+        errmsg = f"Expected no status to be stored, got {start_response.status!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_call_refuses_status_with_line_break():
+    """
+        Test that start_response refuses a status that contains CRLF.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock)
+    
+    raised = False
+    try:
+        start_response("200 OK\r\nSet-Cookie: sid=evil", [])
+    except InvalidResponseHeader:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected InvalidResponseHeader for a status containing CRLF"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_call_refuses_transfer_encoding_from_application():
+    """
+        Test that the application cannot set the Transfer-Encoding header.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock)
+    
+    raised = False
+    try:
+        start_response("200 OK", [("Transfer-Encoding", "chunked")])
+    except InvalidResponseHeader:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected InvalidResponseHeader for a Transfer-Encoding header"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_keep_alive_response_without_length_is_chunked():
+    """
+        Test that a kept-alive HTTP/1.1 response without Content-Length is chunked.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock, keep_alive=True, http_version="HTTP/1.1")
+    
+    start_response("200 OK", [("Content-Type", "text/plain")])
+    start_response.send_headers()
+    start_response.writer.write_body(b"hello")
+    start_response.finish()
+    
+    data = mock_sock.data
+    
+    if b"Transfer-Encoding: chunked\r\n" not in data:
+        errmsg = "Expected a Transfer-Encoding: chunked header"
+        raise AssertionError(errmsg)
+    
+    if not data.endswith(b"\r\n\r\n5\r\nhello\r\n0\r\n\r\n"):
+        errmsg = f"Expected a chunked body with its terminating chunk, got {data!r}"
+        raise AssertionError(errmsg)
+    
+    if start_response.keep_alive is not True:
+        errmsg = "Expected the connection to stay alive"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_http_1_0_response_without_length_closes_connection():
+    """
+        Test that an HTTP/1.0 response without Content-Length ends with the connection.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock, keep_alive=True, http_version="HTTP/1.0")
+    
+    start_response("200 OK", [("Content-Type", "text/plain")])
+    start_response.send_headers()
+    
+    data = mock_sock.get_data_as_string()
+    
+    if "Transfer-Encoding" in data:
+        errmsg = "Expected no chunked encoding for an HTTP/1.0 client"
+        raise AssertionError(errmsg)
+    
+    if "Connection: close\r\n" not in data:
+        errmsg = "Expected Connection: close"
+        raise AssertionError(errmsg)
+    
+    if start_response.keep_alive is not False:
+        errmsg = "Expected keep_alive to be False"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_response_with_content_length_is_not_chunked():
+    """
+        Test that a declared Content-Length is used as the framing of the body.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock, keep_alive=True)
+    
+    start_response("200 OK", [("Content-Length", "5")])
+    start_response.send_headers()
+    start_response.writer.write_body(b"hello")
+    start_response.finish()
+    
+    data = mock_sock.data
+    
+    if b"Transfer-Encoding" in data:
+        errmsg = "Expected no Transfer-Encoding header when Content-Length is declared"
+        raise AssertionError(errmsg)
+    
+    if not data.endswith(b"\r\n\r\nhello"):
+        errmsg = f"Expected the plain body after the headers, got {data!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_finish_without_body_sends_content_length_zero():
+    """
+        Test that a response without any body states a Content-Length of zero.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock, keep_alive=True)
+    
+    start_response("302 Found", [("Location", "/next")])
+    start_response.finish()
+    
+    data = mock_sock.get_data_as_string()
+    
+    if "Content-Length: 0\r\n" not in data:
+        errmsg = f"Expected Content-Length: 0, got {data!r}"
+        raise AssertionError(errmsg)
+    
+    if start_response.keep_alive is not True:
+        errmsg = "Expected the connection to stay alive"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_known_body_size_is_sent_as_content_length():
+    """
+        Test that a body size the server knows is declared when the application did not.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock, keep_alive=True)
+    
+    start_response("200 OK", [("Content-Type", "text/plain")])
+    start_response.set_known_body_size(5)
+    start_response.send_headers()
+    
+    data = mock_sock.get_data_as_string()
+    
+    if "Content-Length: 5\r\n" not in data:
+        errmsg = f"Expected Content-Length: 5, got {data!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_head_response_carries_no_body():
+    """
+        Test that the body of a response to a HEAD request is not written.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock, request_method="HEAD")
+    
+    start_response("200 OK", [("Content-Length", "5")])
+    start_response.send_headers()
+    start_response.writer.write_body(b"hello")
+    start_response.finish()
+    
+    data = mock_sock.data
+    
+    if not data.endswith(b"\r\n\r\n"):
+        errmsg = f"Expected the response to end after the headers, got {data!r}"
+        raise AssertionError(errmsg)
+    
+    if b"Content-Length: 5\r\n" not in data:
+        errmsg = "Expected the Content-Length of the HEAD response to be kept"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_204_response_carries_no_body_and_no_content_length():
+    """
+        Test that a 204 response has neither a body nor a Content-Length.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock)
+    
+    start_response("204 No Content", [("Content-Length", "5")])
+    start_response.send_headers()
+    start_response.writer.write_body(b"hello")
+    start_response.finish()
+    
+    data = mock_sock.data
+    
+    if b"Content-Length" in data:
+        errmsg = "Expected no Content-Length header in a 204 response"
+        raise AssertionError(errmsg)
+    
+    if not data.endswith(b"\r\n\r\n"):
+        errmsg = f"Expected the response to end after the headers, got {data!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_304_response_carries_no_body():
+    """
+        Test that the body of a 304 response is not written.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock)
+    
+    start_response("304 Not Modified", [])
+    start_response.send_headers()
+    start_response.writer.write_body(b"hello")
+    start_response.finish()
+    
+    if not mock_sock.data.endswith(b"\r\n\r\n"):
+        errmsg = f"Expected the response to end after the headers, got {mock_sock.data!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_short_body_closes_connection():
+    """
+        Test that a body shorter than its Content-Length ends keep-alive.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock, keep_alive=True)
+    
+    start_response("200 OK", [("Content-Length", "100")])
+    start_response.send_headers()
+    start_response.writer.write_body(b"partial")
+    start_response.finish()
+    
+    if start_response.keep_alive is not False:
+        errmsg = "Expected keep_alive to be False after a short body"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_connection_close_from_application_ends_keep_alive():
+    """
+        Test that a Connection: close header of the application is honoured.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock, keep_alive=True)
+    
+    start_response("200 OK", [("Connection", "close"), ("Content-Length", "0")])
+    start_response.finish()
+    
+    if start_response.keep_alive is not False:
+        errmsg = "Expected keep_alive to be False when the application asks to close"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_refused_response_leaves_nothing_in_the_writer():
+    """
+        Test that a response refused while its headers are prepared writes nothing.
+    """
+    mock_sock = MockSocket()
+    start_response = StartResponse(mock_sock)
+    
+    start_response("200 OK", [("Content-Length", "five")])
+    
+    try:
+        start_response.send_headers()
+    except InvalidResponseHeader:
+        pass
+    
+    start_response.flush()
+    
+    if len(mock_sock.data) != 0:
+        errmsg = f"Expected nothing to be written, got {mock_sock.data!r}"
+        raise AssertionError(errmsg)
+    
+    return

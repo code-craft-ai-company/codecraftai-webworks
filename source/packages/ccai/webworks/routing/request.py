@@ -8,12 +8,12 @@
 
 import json
 import logging
-from http.cookies import SimpleCookie
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs
 
 from ccai.webworks.authentication.core import AuthenticationContext
-from ccai.webworks.routing.headers import Headers
+from ccai.webworks.routing.exceptions import MalformedRequestBody
+from ccai.webworks.routing.headers import Headers, parse_cookie_header
 from ccai.webworks.routing.queryparams import QueryParams
 
 # Avoid circular import; use TYPE_CHECKING for MiddlewareContext
@@ -23,7 +23,7 @@ from ccai.webworks.routing.queryparams import QueryParams
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ccai.webworks.routing.middlewarecontext import MiddlewareContext
-    from ccai.webworks.routing.multipart import UploadedFile
+    from ccai.webworks.routing.multipart import MultipartResult, UploadedFile
 
 
 # Module-level logger. Body parsing, cookie parsing, and port
@@ -88,6 +88,7 @@ class Request:
         # Lazily initialized
         self._query_params: Optional[QueryParams] = None
         self._cookies: Optional[Dict[str, str]] = None
+        self._multipart_result: Optional["MultipartResult"] = None
         self._background_tasks: Optional[Any] = None
         return
     
@@ -123,59 +124,35 @@ class Request:
             elif key == "CONTENT_LENGTH" and value:
                 headers["Content-Length"] = value
         
-        # Extract body from wsgi.input
-        body = b""
-        wsgi_input = environ.get("wsgi.input")
-        if wsgi_input is not None:
-            content_length_str = environ.get("CONTENT_LENGTH", "")
-            if content_length_str:
-                try:
-                    content_length = int(content_length_str)
-                    body = wsgi_input.read(content_length)
-                except (ValueError, TypeError) as exc:
-                    # Bad Content-Length — fall back to a full read so
-                    # the handler still sees the body, but the
-                    # operator gets a breadcrumb pointing at the
-                    # malformed header.
-                    logger.warning(
-                        "Request.from_wsgi: invalid CONTENT_LENGTH=%r (%s); "
-                        "falling back to full wsgi.input read",
-                        content_length_str,
-                        exc,
-                    )
-                    body = wsgi_input.read()
-            else:
-                # Try to read without content length
-                try:
-                    body = wsgi_input.read()
-                except Exception as exc:
-                    # wsgi.input may have been exhausted or closed by
-                    # an upstream component; emit a warning so a
-                    # silently-empty body stops being mysterious.
-                    logger.warning(
-                        "Request.from_wsgi: failed to read wsgi.input: %s", exc
-                    )
-                    body = b""
-        
+        # The body, host and port are read the way the WSGI layer's
+        # EnvironParser reads them, so a request built here and one built
+        # by the WSGI application agree. In particular a request without a
+        # valid CONTENT_LENGTH has no body unless the server sets
+        # 'wsgi.input_terminated': reading such a stream to its end would
+        # wait for the client to close the connection. Imported here
+        # because the WSGI package imports this module.
+        from ccai.webworks.wsgi.environparser import EnvironParser
+
+        environ_parser = EnvironParser()
+
+        if environ.get("CONTENT_LENGTH") and environ_parser.get_content_length(environ) is None:
+            logger.warning(
+                "Request.from_wsgi: invalid CONTENT_LENGTH=%r; the request "
+                "is read as having no body",
+                environ.get("CONTENT_LENGTH"),
+            )
+
+        body = environ_parser.get_body(environ)
+
         # Extract scheme
         scheme = environ.get("wsgi.url_scheme", "http")
-        
-        # Extract host and port
-        host = environ.get("SERVER_NAME", "localhost")
-        port_str = environ.get("SERVER_PORT", "80")
-        try:
-            port = int(port_str)
-        except (ValueError, TypeError) as exc:
-            # SERVER_PORT was non-integer — defaulting to 80 keeps
-            # the request usable but the operator should know the
-            # WSGI environ was malformed.
-            logger.warning(
-                "Request.from_wsgi: invalid SERVER_PORT=%r (%s); defaulting to 80",
-                port_str,
-                exc,
-            )
-            port = 80
-        
+
+        # Extract host and port: the Host header the client sent is
+        # preferred over SERVER_NAME / SERVER_PORT, the address the server
+        # listens on.
+        host = environ_parser.get_host(environ)
+        port = environ_parser.get_port(environ)
+
         request = cls(
             method=method,
             path=path,
@@ -213,7 +190,13 @@ class Request:
         
         # Extract headers from ASGI format
         # ASGI headers are a list of [name, value] pairs as bytes
+        # A header may arrive as several fields: HTTP/2 clients commonly
+        # split Cookie that way. The fields are joined rather than
+        # letting the last one replace the others -- Cookie with "; ",
+        # which is how its pairs are separated, everything else with
+        # ", ", which HTTP defines as equivalent to repeating the field.
         headers: Dict[str, str] = {}
+        names_by_lower: Dict[str, str] = {}
         raw_headers = scope.get("headers", [])
         for header_pair in raw_headers:
             if len(header_pair) >= 2:
@@ -224,7 +207,15 @@ class Request:
                     name = name.decode("latin-1")
                 if isinstance(value, bytes):
                     value = value.decode("latin-1")
-                headers[name] = value
+
+                lower_name = name.lower()
+                if lower_name in names_by_lower:
+                    stored_name = names_by_lower[lower_name]
+                    separator = "; " if lower_name == "cookie" else ", "
+                    headers[stored_name] = f"{headers[stored_name]}{separator}{value}"
+                else:
+                    names_by_lower[lower_name] = name
+                    headers[name] = value
         
         # Extract scheme
         scheme = scope.get("scheme", "http")
@@ -478,6 +469,17 @@ class Request:
         """
         rtnval = self._path
         return rtnval
+
+    @path.setter
+    def path(self, value: str) -> None:
+        """
+            Set the request path (called by the dispatcher to publish the
+            canonical spelling of the path before anything compares it).
+
+            :param value: Request path without query string.
+        """
+        self._path = value
+        return
     
     @property
     def query_params(self) -> QueryParams:
@@ -517,10 +519,41 @@ class Request:
             
             :returns: Parsed JSON as Python object.
             
-            :raises json.JSONDecodeError: If body is not valid JSON.
+            :raises MalformedRequestBody: If the body is not UTF-8 text or
+                not valid JSON. The exception is a ``BadRequest`` (the
+                client receives 400 when it propagates) and a
+                ``ValueError``.
         """
-        body_str = self._body.decode("utf-8")
-        rtnval = json.loads(body_str)
+        try:
+            body_str = self._body.decode("utf-8")
+            rtnval = json.loads(body_str)
+        except (UnicodeDecodeError, ValueError) as exc:
+            # json.JSONDecodeError is a ValueError
+            raise MalformedRequestBody("The request body is not valid JSON") from exc
+
+        return rtnval
+
+    def _get_multipart_result(self, content_type_header: str) -> "MultipartResult":
+        """
+            Parse the body as ``multipart/form-data`` once and keep the
+            result, so :meth:`form` and :meth:`files` do not each pay for a
+            parse of the same body.
+
+            :param content_type_header: The full Content-Type header value.
+
+            :returns: The parsed MultipartResult.
+
+            :raises PayloadTooLarge: If the body exceeds the multipart limits.
+        """
+        if self._multipart_result is None:
+            from ccai.webworks.routing.multipart import parse_multipart
+
+            self._multipart_result = parse_multipart(
+                body=self._body,
+                content_type=content_type_header,
+            )
+
+        rtnval = self._multipart_result
         return rtnval
     
     def form(self) -> Dict[str, str]:
@@ -548,17 +581,17 @@ class Request:
             :returns: Dict of field name to first-value string.
                       Empty dict for non-form bodies (JSON, etc.) or
                       when the body could not be parsed.
+
+            :raises MalformedRequestBody: If a URL-encoded body is not
+                UTF-8 text. The client receives 400 when it propagates.
+            :raises PayloadTooLarge: If a multipart body exceeds the
+                multipart limits.
         """
         content_type_header = self._headers.get("Content-Type", "") or ""
         content_type_lower = str(content_type_header).split(";", 1)[0].strip().lower()
 
         if content_type_lower == "multipart/form-data":
-            from ccai.webworks.routing.multipart import parse_multipart
-
-            multipart_result = parse_multipart(
-                body=self._body,
-                content_type=str(content_type_header),
-            )
+            multipart_result = self._get_multipart_result(str(content_type_header))
 
             rtnval: Dict[str, str] = {}
             for field_name, value in multipart_result.form_parts:
@@ -567,7 +600,11 @@ class Request:
 
             return rtnval
 
-        body_str = self._body.decode("utf-8")
+        try:
+            body_str = self._body.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise MalformedRequestBody("The form body is not valid UTF-8 text") from exc
+
         parsed = parse_qs(body_str, keep_blank_values=True)
         # Convert lists to single values (first value)
         rtnval = {}
@@ -592,23 +629,17 @@ class Request:
             :returns: Dict of form-field name to
                       :class:`UploadedFile`. Empty dict for
                       non-multipart bodies.
-        """
-        from ccai.webworks.routing.multipart import (
-            UploadedFile as _UploadedFile,
-            parse_multipart,
-        )
 
+            :raises PayloadTooLarge: If the body exceeds the multipart limits.
+        """
         content_type_header = self._headers.get("Content-Type", "") or ""
         content_type_lower = str(content_type_header).split(";", 1)[0].strip().lower()
 
         if content_type_lower != "multipart/form-data":
-            empty: Dict[str, "_UploadedFile"] = {}
+            empty: Dict[str, "UploadedFile"] = {}
             return empty
 
-        multipart_result = parse_multipart(
-            body=self._body,
-            content_type=str(content_type_header),
-        )
+        multipart_result = self._get_multipart_result(str(content_type_header))
 
         rtnval = multipart_result.files
         return rtnval
@@ -657,28 +688,21 @@ class Request:
     def cookies(self) -> Dict[str, str]:
         """
             Request cookies parsed from Cookie header.
+
+            The header is parsed pair by pair, so a cookie the parser does
+            not like -- a value with a space or a brace in it -- does not
+            make the cookies after it disappear. When a name occurs more
+            than once the last occurrence is the one returned; use
+            :func:`ccai.webworks.routing.headers.parse_cookie_header` on
+            the ``Cookie`` header to see every occurrence.
             
             :returns: Dictionary of cookie names to values.
         """
         if self._cookies is None:
             self._cookies = {}
             cookie_header = self._headers.get("Cookie", "")
-            if cookie_header:
-                simple_cookie = SimpleCookie()
-                try:
-                    simple_cookie.load(cookie_header)
-                    for key, morsel in simple_cookie.items():
-                        self._cookies[key] = morsel.value
-                except Exception as exc:
-                    # Malformed cookie header — return empty dict so
-                    # the handler still works, but log enough context
-                    # for the operator to spot a misbehaving client
-                    # without leaking the cookie value itself.
-                    logger.warning(
-                        "Request.cookies: failed to parse Cookie header (path=%s): %s",
-                        getattr(self, "_path", "<unknown>"),
-                        exc,
-                    )
+            for cookie_name, cookie_value in parse_cookie_header(cookie_header):
+                self._cookies[cookie_name] = cookie_value
         rtnval = self._cookies
         return rtnval
     

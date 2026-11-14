@@ -5,133 +5,122 @@
  *
  * Registered types:
  *   "area"         — single or multi-series filled area chart
- *   "stacked-area" — stacked area (alias; also triggered by stack="stack")
- *   "area100"      — 100% stacked area (alias; also triggered by stack="stack100")
+ *   "stacked-area" — stacked area (also stack="stack" on type="area")
+ *   "area100"      — 100% stacked area (also stack="stack100")
  *
  * ctx.attrs recognised:
- *   stack          "none" | "stack" | "stack100" (default "none")
- *   curve          "linear" | "monotone" (default "linear")
+ *   stack          "none" | "stack" | "stack100" (default from the type)
+ *   curve          "linear" (default) | "monotone" | "step"
+ *   fill-opacity   fill opacity of the areas (default 0.3)
+ *   x-scale        see line.js
  *
  * Series data may use either:
  *   series[].points  [{x, y}, ...]
  *   series[].values  [...] aligned with model.categories
+ *
+ * X values follow the same time / linear / categorical rules as line.js. A
+ * null value is a gap: the area is split around it (in the stacked modes
+ * the layers above still stack on the ones below). An unstacked area fills
+ * to y = 0, so all-negative data fills downward from zero. The stacked
+ * modes stack positive values upward and negative values downward from
+ * zero; stack100 shows each value's signed share of the absolute total at
+ * that x. Each point has a focusable target that reads its value (and its
+ * share in the stacked modes).
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber, linePath, smoothPath, extent } from "../svgdraw.js";
-import { linearScale, pointScale, niceTicks } from "../scales.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
+import { numericValue } from "./bar.js";
+import {
+  trendSeries, trendFrame, resolveXAxis, sortedPixels, curveMode, curvePath, bandPath,
+  pointTargets, loneIndices
+} from "./line.js";
 
 
-function _normalise(series, categories) {
+function _stackMode(ctx) {
   /*
-   * Convert each series to a flat {name, xy:[{x,y}]} structure.
-   *
-   * :param series: Model series array.
-   * :param categories: Model categories array.
-   * :returns: Normalised array.
+   * The stack mode from the type key and the `stack` attribute.
    */
-  const result = []
-  for (let s = 0; s < series.length; s = s + 1) {
-    const ser = series[s]
-    const xy = []
-    if (ser.points !== undefined && ser.points !== null && ser.points.length > 0) {
-      for (let p = 0; p < ser.points.length; p = p + 1) {
-        const pt = ser.points[p]
-        xy.push({ x: String(pt.x), y: typeof pt.y === "number" ? pt.y : 0 })
-      }
-    } else if (ser.values !== undefined && ser.values !== null) {
-      for (let v = 0; v < ser.values.length; v = v + 1) {
-        const cat = categories[v] !== undefined ? String(categories[v]) : String(v)
-        xy.push({ x: cat, y: typeof ser.values[v] === "number" ? ser.values[v] : 0 })
-      }
-    }
-    result.push({ name: ser.name, xy: xy })
+  let fallback = "none"
+  if (ctx.type === "stacked-area") {
+    fallback = "stack"
+  } else if (ctx.type === "area100") {
+    fallback = "stack100"
   }
-  return result
+  const value = String(ctx.attrs("stack", fallback)).trim().toLowerCase()
+  let mode = "none"
+  if (value === "stack" || value === "stacked") {
+    mode = "stack"
+  } else if (value === "stack100") {
+    mode = "stack100"
+  }
+  return mode
 }
 
 
-function _stackedBands(normSeries, xLabels, mode) {
+function _stackLayers(list, axis, mode) {
   /*
-   * Compute stacked {x, y0, y1} bands for every series.
+   * Stack the series over the shared x positions.
    *
-   * :param normSeries: Output of _normalise.
-   * :param xLabels: Ordered x label array.
-   * :param mode: "stack" or "stack100".
-   * :returns: Array of {name, bands:[{x, y0, y1}]}.
+   * :param axis: An x axis from resolveXAxis (only its keys are used).
+   * :returns: [{ name, cells: [{ value, share, from, to, point } | null] }]
+   *     -- cells are index-aligned with the sorted x keys; a missing or
+   *     null value is null (a gap).
    */
+  const keys = axis.keys
+  const keyIndex = new Map()
+  for (let index = 0; index < keys.length; index = index + 1) {
+    keyIndex.set(keys[index].key, index)
+  }
 
-  /* Build per-x totals for stack100 normalisation. */
-  const totals = {}
-  for (let s = 0; s < normSeries.length; s = s + 1) {
-    const xy = normSeries[s].xy
-    for (let p = 0; p < xy.length; p = p + 1) {
-      const label = xy[p].x
-      if (totals[label] === undefined) {
-        totals[label] = 0
+  /* values[s][k]: the series' value at key k, or null. */
+  const values = list.map((series) => {
+    const row = new Array(keys.length).fill(null)
+    for (let p = 0; p < series.points.length; p = p + 1) {
+      const point = series.points[p]
+      const key = axis.keyOf(point)
+      if (key === null || keyIndex.has(key) === false || point.y === null) {
+        continue
       }
-      totals[label] = totals[label] + Math.abs(xy[p].y)
+      row[keyIndex.get(key)] = { value: point.y, point: point }
     }
-  }
+    return row
+  })
 
-  const stacks = {}
-  for (let i = 0; i < xLabels.length; i = i + 1) {
-    stacks[xLabels[i]] = 0
-  }
+  const totals = keys.map((entry, k) => {
+    let sum = 0
+    for (let s = 0; s < values.length; s = s + 1) {
+      sum = sum + (values[s][k] !== null ? Math.abs(values[s][k].value) : 0)
+    }
+    return sum
+  })
 
-  const result = []
-  for (let s = 0; s < normSeries.length; s = s + 1) {
-    const ser = normSeries[s]
-    const bands = []
-    for (let p = 0; p < ser.xy.length; p = p + 1) {
-      const label = ser.xy[p].x
-      let rawY = ser.xy[p].y
-      if (mode === "stack100") {
-        const total = totals[label]
-        rawY = total > 0 ? (rawY / total) * 100 : 0
+  const positive = new Array(keys.length).fill(0)
+  const negative = new Array(keys.length).fill(0)
+  const layers = []
+  for (let s = 0; s < list.length; s = s + 1) {
+    const cells = []
+    for (let k = 0; k < keys.length; k = k + 1) {
+      const entry = values[s][k]
+      if (entry === null) {
+        cells.push(null)
+        continue
       }
-      const base = stacks[label] !== undefined ? stacks[label] : 0
-      stacks[label] = base + rawY
-      bands.push({ x: label, y0: base, y1: base + rawY })
+      const share = totals[k] > 0 ? (entry.value / totals[k]) * 100 : 0
+      const shown = mode === "stack100" ? share : entry.value
+      let from = 0
+      if (shown >= 0) {
+        from = positive[k]
+        positive[k] = positive[k] + shown
+      } else {
+        from = negative[k]
+        negative[k] = negative[k] + shown
+      }
+      cells.push({ value: entry.value, share: share, from: from, to: from + shown, point: entry.point })
     }
-    result.push({ name: ser.name, bands: bands })
+    layers.push({ name: list[s].name, cells: cells })
   }
-  return result
-}
-
-
-function _bandPath(bands, xScale, yScale, curveMode) {
-  /*
-   * Build a closed area path from {x, y0, y1} band data.
-   *
-   * :param bands: Array of {x, y0, y1}.
-   * :param xScale: Pixel x scale function.
-   * :param yScale: Pixel y scale function.
-   * :param curveMode: "linear" | "monotone".
-   * :returns: Path data string.
-   */
-  const topPts = []
-  const botPts = []
-  for (let i = 0; i < bands.length; i = i + 1) {
-    const b = bands[i]
-    topPts.push({ x: xScale(b.x), y: yScale(b.y1) })
-    botPts.push({ x: xScale(b.x), y: yScale(b.y0) })
-  }
-
-  const topPath = curveMode === "monotone" ? smoothPath(topPts) : linePath(topPts)
-  if (topPath === "") {
-    return ""
-  }
-
-  /* Close by tracing bottom in reverse. The bottom edge must continue
-   * the same subpath (L commands), not start a new one (M), otherwise
-   * fill creates two thin edges instead of a filled band. */
-  const botReversed = botPts.slice().reverse()
-  const botCommands = botReversed
-    .map((point) => `L${point.x.toFixed(2)},${point.y.toFixed(2)}`)
-    .join(" ")
-  const data = `${topPath} ${botCommands} Z`
-  return data
+  return layers
 }
 
 
@@ -145,197 +134,159 @@ export function render(ctx) {
   const model = ctx.model
   const root = svgEl("g", { part: "plot" }, [])
 
-  /* Resolve stack mode from both the type key and the explicit attr. */
-  const typeKey = ctx.attrs("type", "area")
-  let defaultStack = "none"
-  if (typeKey === "stacked-area") {
-    defaultStack = "stack"
-  } else if (typeKey === "area100") {
-    defaultStack = "stack100"
-  }
-  const stackMode = ctx.attrs("stack", defaultStack)
-  const curveMode = ctx.attrs("curve", "linear")
-  const fillOpacity = ctx.attrs("fill-opacity", "0.3")
+  const stackMode = _stackMode(ctx)
+  const mode = curveMode(ctx, "linear")
+  const opacity = numericValue(ctx.attrs("fill-opacity", "0.3"))
+  const fillOpacity = opacity !== null ? Math.min(Math.max(opacity, 0), 1) : 0.3
 
-  const normSeries = _normalise(model.series, model.categories)
-  if (normSeries.length === 0) {
+  const list = trendSeries(model)
+  let anyValue = false
+  for (let s = 0; s < list.length && anyValue === false; s = s + 1) {
+    anyValue = list[s].points.some((point) => point.y !== null)
+  }
+  if (anyValue === false) {
     return root
   }
 
-  /* Collect ordered x labels. */
-  const xLabelSet = []
-  const xLabelSeen = {}
-  for (let s = 0; s < normSeries.length; s = s + 1) {
-    const xy = normSeries[s].xy
-    for (let p = 0; p < xy.length; p = p + 1) {
-      const label = xy[p].x
-      if (xLabelSeen[label] !== true) {
-        xLabelSet.push(label)
-        xLabelSeen[label] = true
-      }
-    }
-  }
-  if (xLabelSet.length === 0) {
-    return root
-  }
+  const stacked = stackMode !== "none"
 
-  /* Determine y domain. */
+  /*
+   * The y domain needs the stacked sums, which need the shared x keys. The
+   * keys (and their order) do not depend on the pixel range, so they are
+   * read from a unit-range axis before the frame is laid out.
+   */
   let yMin = 0
   let yMax = 0
-  if (stackMode === "stack100") {
-    yMax = 100
-  } else if (stackMode === "stack") {
-    const stacked = _stackedBands(normSeries, xLabelSet, "stack")
-    for (let s = 0; s < stacked.length; s = s + 1) {
-      const bands = stacked[s].bands
-      for (let b = 0; b < bands.length; b = b + 1) {
-        if (bands[b].y1 > yMax) {
-          yMax = bands[b].y1
+  let layers = null
+  if (stacked === true) {
+    layers = _stackLayers(list, resolveXAxis(ctx, list, model, [0, 1], null), stackMode)
+    for (let s = 0; s < layers.length; s = s + 1) {
+      for (let k = 0; k < layers[s].cells.length; k = k + 1) {
+        const cell = layers[s].cells[k]
+        if (cell !== null) {
+          yMin = Math.min(yMin, cell.from, cell.to)
+          yMax = Math.max(yMax, cell.from, cell.to)
         }
       }
     }
+    if (stackMode === "stack100") {
+      yMin = yMin < 0 ? -100 : 0
+      yMax = yMax > 0 || yMin === 0 ? 100 : 0
+    }
   } else {
-    const allY = []
-    for (let s = 0; s < normSeries.length; s = s + 1) {
-      for (let p = 0; p < normSeries[s].xy.length; p = p + 1) {
-        allY.push(normSeries[s].xy[p].y)
+    for (let s = 0; s < list.length; s = s + 1) {
+      for (let p = 0; p < list[s].points.length; p = p + 1) {
+        const value = list[s].points[p].y
+        if (value !== null) {
+          yMin = Math.min(yMin, value)
+          yMax = Math.max(yMax, value)
+        }
       }
     }
-    const ext = extent(allY)
-    yMin = Math.min(0, ext[0])
-    yMax = ext[1]
   }
   if (yMin === yMax) {
     yMax = yMin + 1
   }
 
-  const margin = { top: 16, right: 16, bottom: 40, left: 52 }
-  const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
-  const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
+  const frame = trendFrame(ctx, list, model, {
+    yDomain: [yMin, yMax],
+    nice: stackMode !== "stack100",
+    percent: stackMode === "stack100"
+  })
+  root.appendChild(frame.plot)
+  const zero = frame.y(0)
 
-  const xScale = pointScale(xLabelSet, [0, plotW])
-  const yScale = linearScale([yMin, yMax], [plotH, 0])
-
-  const plot = svgEl("g", {
-    transform: `translate(${margin.left},${margin.top})`
-  }, [])
-  root.appendChild(plot)
-
-  /* Gridlines + y-axis labels. */
-  const ticks = niceTicks(yMin, yMax, 5)
-  for (let t = 0; t < ticks.length; t = t + 1) {
-    const tick = ticks[t]
-    const y = yScale(tick)
-    plot.appendChild(svgEl("line", {
-      x1: 0, y1: y, x2: plotW, y2: y,
-      stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
+  /* Zero line when the domain crosses zero. */
+  if (yMin < 0) {
+    frame.chrome.appendChild(svgEl("line", {
+      x1: 0, y1: zero, x2: frame.plotW, y2: zero,
+      stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
     }, []))
-    const tickLabel = stackMode === "stack100"
-      ? `${formatNumber(tick)}%`
-      : formatNumber(tick)
-    plot.appendChild(svgEl("text", {
-      x: -8, y: y + 4, "text-anchor": "end",
-      "font-size": 11, fill: "var(--mj-text-muted, #6b7280)"
-    }, tickLabel))
   }
 
-  /* X-axis labels. */
-  const labelStep = Math.max(1, Math.ceil(xLabelSet.length / 10))
-  for (let i = 0; i < xLabelSet.length; i = i + labelStep) {
-    const label = xLabelSet[i]
-    const x = xScale(label)
-    plot.appendChild(svgEl("text", {
-      x: x, y: plotH + 16, "text-anchor": "middle",
-      "font-size": 11, fill: "var(--mj-text, #14181f)"
-    }, escapeHtml(label)))
-  }
+  const areas = svgEl("g", { part: "areas" }, [])
+  const strokes = svgEl("g", { part: "edges" }, [])
+  const targetsGroup = svgEl("g", { part: "targets" }, [])
+  frame.marks.appendChild(areas)
+  frame.marks.appendChild(strokes)
+  frame.marks.appendChild(targetsGroup)
 
-  /* Axis baseline. */
-  plot.appendChild(svgEl("line", {
-    x1: 0, y1: plotH, x2: plotW, y2: plotH,
-    stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
-  }, []))
+  for (let s = 0; s < list.length; s = s + 1) {
+    const name = list[s].name
+    const color = ctx.colorFor(name)
+    let top = []
+    let bottom = zero
+    const targets = []
 
-  /* Draw the areas. */
-  if (stackMode === "stack" || stackMode === "stack100") {
-    const stackedBands = _stackedBands(normSeries, xLabelSet, stackMode)
-    for (let s = 0; s < stackedBands.length; s = s + 1) {
-      const ser = stackedBands[s]
-      const color = ctx.colorFor(normSeries[s].name)
-      const pathData = _bandPath(ser.bands, xScale, yScale, curveMode)
-      if (pathData === "") {
-        continue
-      }
-      const areaEl = svgEl("path", {
-        d: pathData,
-        fill: color,
-        "fill-opacity": fillOpacity,
-        stroke: color,
-        "stroke-width": 1.5,
-        part: "area",
-        tabindex: "0",
-        role: "img",
-        "aria-label": escapeHtml(normSeries[s].name)
-      }, [])
-      areaEl.appendChild(svgEl("title", null, normSeries[s].name))
-      const capturedName = normSeries[s].name
-      const handler = () => {
-        ctx.emit("mj-chart-area-click", { series: capturedName })
-      }
-      areaEl.addEventListener("click", handler)
-      areaEl.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          handler()
+    if (stacked === true) {
+      const cells = layers[s].cells
+      const keys = frame.x.keys
+      top = cells.map((cell, k) => ({ x: keys[k].px, y: cell === null ? null : frame.y(cell.to) }))
+      bottom = cells.map((cell, k) => ({ x: keys[k].px, y: cell === null ? null : frame.y(cell.from) }))
+      for (let k = 0; k < cells.length; k = k + 1) {
+        const cell = cells[k]
+        if (cell === null) {
+          continue
         }
-      })
-      plot.appendChild(areaEl)
-    }
-  } else {
-    /* Plain (unstacked) area — one area path per series closing to baseline. */
-    for (let s = 0; s < normSeries.length; s = s + 1) {
-      const ser = normSeries[s]
-      const color = ctx.colorFor(ser.name)
-      const topPts = []
-      for (let p = 0; p < ser.xy.length; p = p + 1) {
-        topPts.push({ x: xScale(ser.xy[p].x), y: yScale(ser.xy[p].y) })
+        const xLabel = frame.x.labelOf(cell.point)
+        const share = formatNumber(cell.share, { maximumFractionDigits: 1 })
+        targets.push({
+          x: keys[k].px, y: frame.y(cell.to),
+          label: `${name}, ${xLabel}: ${formatNumber(cell.value)} (${share}%)`,
+          detail: { series: name, x: cell.point.raw !== null ? cell.point.raw : xLabel, y: cell.value, share: cell.share }
+        })
       }
-      const topPath = curveMode === "monotone" ? smoothPath(topPts) : linePath(topPts)
-      if (topPath === "") {
-        continue
-      }
-      const baseline = yScale(0)
-      const first = topPts[0]
-      const last = topPts[topPts.length - 1]
-      const closePath = `L${last.x.toFixed(2)},${baseline.toFixed(2)} ` +
-        `L${first.x.toFixed(2)},${baseline.toFixed(2)} Z`
-      const pathData = `${topPath} ${closePath}`
-
-      const areaEl = svgEl("path", {
-        d: pathData,
-        fill: color,
-        "fill-opacity": fillOpacity,
-        stroke: color,
-        "stroke-width": 1.5,
-        part: "area",
-        tabindex: "0",
-        role: "img",
-        "aria-label": escapeHtml(ser.name)
-      }, [])
-      areaEl.appendChild(svgEl("title", null, ser.name))
-      const capturedName = ser.name
-      const handler = () => {
-        ctx.emit("mj-chart-area-click", { series: capturedName })
-      }
-      areaEl.addEventListener("click", handler)
-      areaEl.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          handler()
+    } else {
+      const pixels = sortedPixels(list[s], frame)
+      top = pixels.map((pixel) => ({ x: pixel.x, y: pixel.y }))
+      for (let index = 0; index < pixels.length; index = index + 1) {
+        const pixel = pixels[index]
+        if (pixel.y === null) {
+          continue
         }
-      })
-      plot.appendChild(areaEl)
+        const xLabel = frame.x.labelOf(pixel.point)
+        targets.push({
+          x: pixel.x, y: pixel.y,
+          label: `${name}, ${xLabel}: ${formatNumber(pixel.value)}`,
+          detail: { series: name, x: pixel.point.raw !== null ? pixel.point.raw : xLabel, y: pixel.value }
+        })
+      }
     }
+
+    const data = bandPath(top, bottom, mode)
+    const area = svgEl("path", {
+      d: data,
+      fill: color,
+      "fill-opacity": fillOpacity,
+      stroke: "none",
+      part: "area",
+      "data-series": name
+    }, [svgEl("title", null, name)])
+    area.addEventListener("click", () => {
+      ctx.emit("mj-chart-area-click", { series: name })
+    })
+    areas.appendChild(area)
+
+    strokes.appendChild(svgEl("path", {
+      d: curvePath(top, mode),
+      fill: "none",
+      stroke: color,
+      "stroke-width": 1.5,
+      "stroke-linejoin": "round",
+      part: "area-line",
+      "pointer-events": "none"
+    }, []))
+
+    /* A value with no neighbour has no area: mark it. */
+    const lone = loneIndices(top)
+    for (let index = 0; index < lone.length; index = index + 1) {
+      strokes.appendChild(svgEl("circle", {
+        cx: top[lone[index]].x.toFixed(2), cy: top[lone[index]].y.toFixed(2), r: 3,
+        fill: color, part: "dot", "pointer-events": "none"
+      }, []))
+    }
+
+    pointTargets(targetsGroup, targets, { ctx: ctx, eventName: "mj-chart-area-click", width: frame.plotW })
   }
 
   return root

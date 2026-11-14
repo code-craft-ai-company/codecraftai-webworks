@@ -32,6 +32,7 @@ from ccai.webworks.routing.router import (
     Router,
     RouteMatch,
     URLNode,
+    canonicalize_path,
 )
 from ccai.webworks.routing.middleware import (
     Middleware,
@@ -48,6 +49,8 @@ from ccai.webworks.routing.exceptions import (
     Unauthorized,
     Forbidden,
     MethodNotAllowed,
+    MalformedRequestBody,
+    PayloadTooLarge,
     RoutingError,
 )
 from ccai.webworks.routing.dispatcher import Dispatcher
@@ -82,6 +85,7 @@ __all__ = [
     "RouteMatch",
     "RoutingError",
     "URLNode",
+    "canonicalize_path",
     # Middleware
     "Middleware",
     "AsyncMiddleware",
@@ -96,6 +100,8 @@ __all__ = [
     "Unauthorized",
     "Forbidden",
     "MethodNotAllowed",
+    "MalformedRequestBody",
+    "PayloadTooLarge",
     # Dispatcher
     "Dispatcher",
 ]

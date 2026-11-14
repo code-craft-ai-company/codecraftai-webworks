@@ -6,13 +6,23 @@
 """
 
 import io
+import re
 import socket
-from typing import Any, Dict, IO, List, Optional, Tuple
+from typing import Any, Dict, IO, List, Optional, Tuple, Union
+from urllib.parse import unquote_to_bytes, urlsplit
 
+from ccai.webworks.wsgi.headervalidation import HEADER_NAME_PATTERN
 from ccai.webworks.wsgi.serverconfig import ServerConfig
+from ccai.webworks.wsgi.socketreader import SocketReader
 from ccai.webworks.wsgi.exceptions import (
-    RequestParseError,
+    ConnectionClosed,
     HeaderTooLarge,
+    IncompleteRequest,
+    LineTooLong,
+    RequestEntityTooLarge,
+    RequestLineTooLong,
+    RequestParseError,
+    RequestTimeout,
     TooManyHeaders,
 )
 
@@ -28,6 +38,22 @@ SUPPORTED_VERSIONS: Tuple[str, ...] = ("HTTP/1.0", "HTTP/1.1")
 
 # Default buffer size for reading from socket
 DEFAULT_BUFFER_SIZE: int = 8192
+
+# Limit for a chunk size line or a trailer section when the header size limit
+# has been turned off. Framing lines are never read without a limit.
+DEFAULT_FRAMING_LINE_SIZE: int = 8192
+
+# A Content-Length value is one or more ASCII digits and nothing else. The
+# 'int' builtin is far more lenient ('+5', '5_0', ' 5 ', other digit scripts),
+# and every extra form is a chance for a proxy in front of this server to
+# frame the same request differently.
+CONTENT_LENGTH_PATTERN = re.compile(r"[0-9]+")
+
+# A chunk size is one to sixteen hexadecimal digits and nothing else
+CHUNK_SIZE_PATTERN = re.compile(r"[0-9A-Fa-f]{1,16}")
+
+# The type of the objects the parser can read a request from
+RequestSource = Union[socket.socket, SocketReader]
 
 
 class HTTPParser:
@@ -50,10 +76,20 @@ class HTTPParser:
         else:
             self._config = ServerConfig()
         
+        self._max_request_line = self._config.max_request_line
         self._max_header_size = self._config.max_header_size
         self._max_headers = self._config.max_headers
         self._max_request_size = self._config.max_request_size
         return
+    
+    @property
+    def max_request_line(self) -> int:
+        """
+            Get the maximum request line size limit.
+            
+            :returns: Maximum request line size in bytes (0 = unlimited).
+        """
+        return self._max_request_line
     
     @property
     def max_header_size(self) -> int:
@@ -176,6 +212,7 @@ class HTTPParser:
             :raises: RequestParseError if headers are malformed.
         """
         headers: Dict[str, str] = {}
+        names_seen: Dict[str, str] = {}
         total_size = 0
         header_count = 0
         current_name: Optional[str] = None
@@ -200,12 +237,14 @@ class HTTPParser:
                     errmsg = "Header continuation without preceding header"
                     raise RequestParseError(errmsg)
                 # Append to current header value (folded header)
-                current_value = current_value + " " + line_str.strip()
+                continuation = line_str.strip()
+                self._check_header_value(current_name, continuation)
+                current_value = current_value + " " + continuation
                 continue
             
             # Save previous header if exists
             if current_name is not None:
-                headers[current_name] = current_value
+                self._store_header(headers, names_seen, current_name, current_value)
             
             # Skip empty lines
             line_str = line_str.strip()
@@ -220,13 +259,17 @@ class HTTPParser:
                 raise RequestParseError(errmsg)
             
             colon_pos = line_str.index(":")
-            name = line_str[:colon_pos].strip()
+            name = line_str[:colon_pos]
             value = line_str[colon_pos + 1:].strip()
             
-            # Validate header name (no whitespace allowed)
-            if " " in name or "\t" in name:
+            # Validate header name. Whitespace between the name and the colon
+            # is rejected and not stripped: a proxy that does not strip it sees
+            # a different header than this server would.
+            if HEADER_NAME_PATTERN.fullmatch(name) is None:
                 errmsg = f"Invalid header name: {name}"
                 raise RequestParseError(errmsg)
+            
+            self._check_header_value(name, value)
             
             # Check header count limit
             header_count += 1
@@ -238,175 +281,359 @@ class HTTPParser:
         
         # Save last header if exists
         if current_name is not None:
-            headers[current_name] = current_value
+            self._store_header(headers, names_seen, current_name, current_value)
         
         rtnval = headers
         return rtnval
     
-    def parse_headers_from_socket(self, sock: socket.socket) -> Dict[str, str]:
+    def _check_header_value(self, name: str, value: str) -> None:
+        """
+            Check that a header value holds no character that ends a line.
+            
+            :param name: Header name, used in the error message.
+            :param value: Header value with the line ending already removed.
+            
+            :raises: RequestParseError if the value contains CR, LF or NUL.
+        """
+        for forbidden in ("\r", "\n", "\x00"):
+            if forbidden in value:
+                errmsg = f"Invalid character in the value of header '{name}'"
+                raise RequestParseError(errmsg)
+        return
+    
+    def _store_header(
+        self,
+        headers: Dict[str, str],
+        names_seen: Dict[str, str],
+        name: str,
+        value: str
+    ) -> None:
+        """
+            Store a parsed header, combining it with an earlier header of the same name.
+            
+            Header names are compared without regard to case. A repeated header is
+            joined to the earlier value with ', ' as RFC 7230 section 3.2.2 allows,
+            except Cookie which is joined with '; '. The framing headers are not
+            joined: a second Content-Length must repeat the first value and a
+            second Host is refused.
+            
+            :param headers: Headers collected so far, keyed by the first spelling
+                            seen of each name.
+            :param names_seen: Map of lower case header name to the key used
+                               in 'headers'.
+            :param name: Name of the header to store.
+            :param value: Value of the header to store.
+            
+            :raises: RequestParseError if the header conflicts with an earlier one.
+        """
+        name_lower = name.lower()
+        
+        if name_lower not in names_seen:
+            names_seen[name_lower] = name
+            headers[name] = value
+            return
+        
+        stored_name = names_seen[name_lower]
+        stored_value = headers[stored_name]
+        
+        if name_lower == "content-length":
+            if stored_value != value:
+                errmsg = "Conflicting Content-Length headers"
+                raise RequestParseError(errmsg)
+        elif name_lower == "host":
+            errmsg = "More than one Host header"
+            raise RequestParseError(errmsg)
+        elif name_lower == "cookie":
+            headers[stored_name] = stored_value + "; " + value
+        else:
+            headers[stored_name] = stored_value + ", " + value
+        
+        return
+    
+    def _get_header(self, headers: Dict[str, str], name: str) -> Optional[str]:
+        """
+            Look up a header without regard to the case of its name.
+            
+            :param headers: Parsed headers dictionary.
+            :param name: Header name to look up.
+            
+            :returns: The header value or None if the header is not present.
+        """
+        rtnval: Optional[str] = None
+        name_lower = name.lower()
+        
+        for header_name, header_value in headers.items():
+            if header_name.lower() == name_lower:
+                rtnval = header_value
+                break
+        
+        return rtnval
+    
+    def _get_reader(self, source: RequestSource) -> SocketReader:
+        """
+            Get the reader to use for a request source.
+            
+            A SocketReader is used as it is, so the bytes it has read ahead stay
+            available across calls. A plain socket is wrapped in a reader that
+            does not read ahead, so no byte the caller did not ask for is taken
+            from the socket.
+            
+            :param source: Socket or SocketReader to read from.
+            
+            :returns: SocketReader for the source.
+        """
+        if isinstance(source, SocketReader):
+            rtnval = source
+        else:
+            rtnval = SocketReader(source, read_ahead=False)
+        return rtnval
+    
+    def parse_headers_from_socket(self, sock: RequestSource) -> Dict[str, str]:
         """
             Parse HTTP headers from a socket.
             
             Reads header lines from the socket until an empty line is encountered.
+            The size and count limits are enforced while the lines are read, so
+            headers over the limit are refused without being held in memory.
             
-            :param sock: Socket to read from.
+            :param sock: Socket or SocketReader to read from.
             
             :returns: Dict of header name to value.
             
             :raises: HeaderTooLarge if total header size exceeds limit.
             :raises: TooManyHeaders if header count exceeds limit.
+            :raises: IncompleteRequest if the connection closed inside the headers.
             :raises: RequestParseError if headers are malformed.
         """
-        header_lines: List[bytes] = []
-        total_size = 0
-        
-        while True:
-            line = self._read_line(sock)
-            
-            # Track total size
-            total_size += len(line)
-            if self._max_header_size > 0 and total_size > self._max_header_size:
-                raise HeaderTooLarge(self._max_header_size)
-            
-            # Empty line signals end of headers
-            stripped = line.strip()
-            if len(stripped) == 0:
-                break
-            
-            header_lines.append(line)
+        reader = self._get_reader(sock)
+        header_lines = self._read_header_section(reader)
         
         rtnval = self.parse_headers(header_lines)
         return rtnval
     
-    def _read_line(self, sock: socket.socket) -> bytes:
+    def _read_header_section(self, reader: SocketReader) -> List[bytes]:
+        """
+            Read the lines of a header section, up to the empty line that ends it.
+            
+            :param reader: SocketReader to read from.
+            
+            :returns: List of raw header lines without the terminating empty line.
+            
+            :raises: HeaderTooLarge if total header size exceeds limit.
+            :raises: TooManyHeaders if header count exceeds limit.
+            :raises: IncompleteRequest if the connection closed inside the section.
+        """
+        header_lines: List[bytes] = []
+        total_size = 0
+        header_count = 0
+        
+        while True:
+            if self._max_header_size > 0:
+                line_limit = self._max_header_size - total_size
+                if line_limit <= 0:
+                    raise HeaderTooLarge(self._max_header_size)
+            else:
+                line_limit = 0
+            
+            try:
+                line = reader.read_line(line_limit)
+            except LineTooLong as long_err:
+                raise HeaderTooLarge(self._max_header_size) from long_err
+            
+            if not line.endswith(b"\n"):
+                errmsg = "Connection closed before the end of the headers"
+                raise IncompleteRequest(errmsg)
+            
+            total_size += len(line)
+            
+            # Only a line that is empty ends the headers. A line of blanks is
+            # a continuation line and must not be taken for the end.
+            if line == b"\r\n" or line == b"\n":
+                break
+            
+            # Continuation lines extend the header before them
+            if not line.startswith((b" ", b"\t")):
+                header_count += 1
+                if self._max_headers > 0 and header_count > self._max_headers:
+                    raise TooManyHeaders(self._max_headers)
+            
+            header_lines.append(line)
+        
+        return header_lines
+    
+    def _read_line(self, sock: RequestSource, max_size: int = 0) -> bytes:
         """
             Read a line from a socket.
             
-            Reads bytes until CRLF or LF is encountered.
+            Reads bytes until LF is encountered. The line is not allowed to
+            grow past the limit.
             
-            :param sock: Socket to read from.
+            :param sock: Socket or SocketReader to read from.
+            :param max_size: Maximum line size in bytes (0 = unlimited).
             
-            :returns: Line bytes including line ending.
+            :returns: Line bytes including line ending. If the connection closed
+                      first, the bytes read so far without a line ending.
+            
+            :raises: LineTooLong if the line is longer than 'max_size'.
+            :raises: socket.timeout if the read timed out.
         """
-        line = b""
-        while True:
-            try:
-                char = sock.recv(1)
-            except socket.error:
-                break
-            
-            if len(char) == 0:
-                break
-            
-            line += char
-            
-            if char == b"\n":
-                break
-        
-        rtnval = line
+        reader = self._get_reader(sock)
+        rtnval = reader.read_line(max_size)
         return rtnval
 
     
-    def parse_chunked_body(self, sock: socket.socket) -> bytes:
+    def parse_chunked_body(self, sock: RequestSource) -> bytes:
         """
             Parse a chunked transfer encoded request body.
             
-            Reads chunks from the socket until a zero-length chunk is encountered.
+            Reads chunks from the socket until a zero-length chunk is encountered,
+            then reads and discards the trailer section so the next request on the
+            connection starts at the right byte.
             
-            :param sock: Socket to read from.
+            :param sock: Socket or SocketReader to read from.
             
             :returns: Complete body bytes.
             
             :raises: RequestParseError if chunked encoding is malformed.
+            :raises: IncompleteRequest if the connection closed inside the body.
+            :raises: RequestEntityTooLarge if the body exceeds the size limit.
         """
+        reader = self._get_reader(sock)
         body_parts: List[bytes] = []
         total_size = 0
         
+        if self._max_header_size > 0:
+            line_limit = self._max_header_size
+        else:
+            line_limit = DEFAULT_FRAMING_LINE_SIZE
+        
         while True:
             # Read chunk size line
-            size_line = self._read_line(sock)
+            try:
+                size_line = reader.read_line(line_limit)
+            except LineTooLong as long_err:
+                errmsg = "Chunk size line too long"
+                raise RequestParseError(errmsg) from long_err
+            
+            if not size_line.endswith(b"\n"):
+                errmsg = "Connection closed inside a chunked body"
+                raise IncompleteRequest(errmsg)
+            
+            if not size_line.endswith(b"\r\n"):
+                errmsg = "Chunk size line not terminated by CRLF"
+                raise RequestParseError(errmsg)
             
             try:
-                size_str = size_line.decode("ascii").strip()
+                size_str = size_line[:-2].decode("ascii")
             except UnicodeDecodeError as decode_err:
                 errmsg = "Invalid characters in chunk size"
                 raise RequestParseError(errmsg) from decode_err
             
             # Handle chunk extensions (ignore them)
             if ";" in size_str:
-                size_str = size_str.split(";")[0].strip()
+                size_str = size_str.split(";")[0]
             
-            # Parse chunk size (hexadecimal)
-            try:
-                chunk_size = int(size_str, 16)
-            except ValueError as val_err:
+            # Parse chunk size (hexadecimal digits only)
+            if CHUNK_SIZE_PATTERN.fullmatch(size_str) is None:
                 errmsg = f"Invalid chunk size: {size_str}"
-                raise RequestParseError(errmsg) from val_err
+                raise RequestParseError(errmsg)
+            
+            chunk_size = int(size_str, 16)
             
             # Zero-length chunk signals end of body
             if chunk_size == 0:
-                # Read trailing CRLF after last chunk
-                self._read_line(sock)
+                self._discard_trailers(reader, line_limit)
                 break
             
             # Check size limit
             total_size += chunk_size
             if self._max_request_size > 0 and total_size > self._max_request_size:
-                errmsg = f"Chunked body exceeds maximum size of {self._max_request_size} bytes"
-                raise RequestParseError(errmsg)
+                raise RequestEntityTooLarge(self._max_request_size, total_size)
             
             # Read chunk data
-            chunk_data = self._read_exact(sock, chunk_size)
+            chunk_data = reader.read_exact(chunk_size)
             if len(chunk_data) != chunk_size:
                 errmsg = f"Incomplete chunk: expected {chunk_size} bytes, got {len(chunk_data)}"
-                raise RequestParseError(errmsg)
+                raise IncompleteRequest(errmsg)
             
             body_parts.append(chunk_data)
             
-            # Read trailing CRLF after chunk data
-            trailing = self._read_line(sock)
-            if trailing.strip() != b"":
+            # Read the CRLF that follows the chunk data
+            trailing = reader.read_exact(2)
+            if len(trailing) != 2:
+                errmsg = "Connection closed inside a chunked body"
+                raise IncompleteRequest(errmsg)
+            
+            if trailing != b"\r\n":
                 errmsg = "Missing CRLF after chunk data"
                 raise RequestParseError(errmsg)
         
         rtnval = b"".join(body_parts)
         return rtnval
     
-    def _read_exact(self, sock: socket.socket, size: int) -> bytes:
+    def _discard_trailers(self, reader: SocketReader, section_limit: int) -> None:
+        """
+            Read and discard the trailer section that follows the last chunk.
+            
+            The trailer section is zero or more header lines followed by an empty
+            line. It has to be consumed, otherwise its bytes would be parsed as
+            the start of the next request on the connection.
+            
+            :param reader: SocketReader to read from.
+            :param section_limit: Maximum size in bytes of the whole trailer section.
+            
+            :raises: RequestParseError if the trailer section is too large.
+            :raises: IncompleteRequest if the connection closed inside the trailers.
+        """
+        total_size = 0
+        
+        while True:
+            line_limit = section_limit - total_size
+            if line_limit <= 0:
+                errmsg = "Trailer section too large"
+                raise RequestParseError(errmsg, status_code=431)
+            
+            try:
+                line = reader.read_line(line_limit)
+            except LineTooLong as long_err:
+                errmsg = "Trailer section too large"
+                raise RequestParseError(errmsg, status_code=431) from long_err
+            
+            if not line.endswith(b"\n"):
+                errmsg = "Connection closed inside the trailers of a chunked body"
+                raise IncompleteRequest(errmsg)
+            
+            total_size += len(line)
+            
+            if line == b"\r\n" or line == b"\n":
+                break
+        
+        return
+    
+    def _read_exact(self, sock: RequestSource, size: int) -> bytes:
         """
             Read exactly the specified number of bytes from a socket.
             
-            :param sock: Socket to read from.
+            :param sock: Socket or SocketReader to read from.
             :param size: Number of bytes to read.
             
-            :returns: Bytes read.
+            :returns: Bytes read. Fewer than 'size' bytes only when the
+                      connection closed first.
+            
+            :raises: socket.timeout if the read timed out.
         """
-        data = b""
-        remaining = size
-        
-        while remaining > 0:
-            try:
-                chunk = sock.recv(min(remaining, DEFAULT_BUFFER_SIZE))
-            except socket.error:
-                break
-            
-            if len(chunk) == 0:
-                break
-            
-            data += chunk
-            remaining -= len(chunk)
-        
-        rtnval = data
+        reader = self._get_reader(sock)
+        rtnval = reader.read_exact(size)
         return rtnval
     
-    def create_chunked_body_stream(self, sock: socket.socket) -> IO[bytes]:
+    def create_chunked_body_stream(self, sock: RequestSource) -> IO[bytes]:
         """
             Create a file-like object for reading a chunked body.
             
             This allows lazy reading of chunked bodies without loading
             the entire body into memory.
             
-            :param sock: Socket to read from.
+            :param sock: Socket or SocketReader to read from.
             
             :returns: File-like object for reading the body.
         """
@@ -446,7 +673,8 @@ class HTTPParser:
             :returns: Complete WSGI environ dict.
         """
         # Extract path and query string
-        path_info, query_string = self._extract_path_and_query(path)
+        raw_path, query_string = self._extract_path_and_query(path)
+        path_info = self._decode_path(raw_path)
         
         # Build the environ dictionary
         environ: Dict[str, Any] = {}
@@ -464,6 +692,9 @@ class HTTPParser:
         environ["wsgi.version"] = (1, 0)
         environ["wsgi.url_scheme"] = scheme
         environ["wsgi.input"] = body_stream
+        # The body stream holds exactly the body of this request and reports
+        # end of file after it, so it is safe to read without CONTENT_LENGTH.
+        environ["wsgi.input_terminated"] = True
         environ["wsgi.errors"] = io.StringIO()
         environ["wsgi.multithread"] = True
         environ["wsgi.multiprocess"] = True
@@ -474,8 +705,19 @@ class HTTPParser:
         environ["REMOTE_HOST"] = client_addr[0]
         environ["REMOTE_PORT"] = str(client_addr[1])
         
+        # The request target exactly as the client sent it
+        environ["REQUEST_URI"] = path
+        environ["RAW_URI"] = path
+        
         # Convert headers to CGI/environ format
         for header_name, header_value in headers.items():
+            # The environ key replaces '-' with '_', so 'X-User' and 'X_User'
+            # would become the same key. A client could then supply a header
+            # that a proxy in front of the server strips or sets. Names with
+            # an underscore are not passed to the application.
+            if "_" in header_name:
+                continue
+            
             header_name_upper = header_name.upper()
             
             # Content-Type and Content-Length are special
@@ -484,23 +726,105 @@ class HTTPParser:
             elif header_name_upper == "CONTENT-LENGTH":
                 environ["CONTENT_LENGTH"] = header_value
             else:
-                # Other headers get HTTP_ prefix
+                # Other headers get HTTP_ prefix. The Host header is passed
+                # through as HTTP_HOST and does not override SERVER_NAME/PORT,
+                # which come from the actual server address.
                 environ_key = "HTTP_" + header_name_upper.replace("-", "_")
                 environ[environ_key] = header_value
-        
-        # Set Host header info if present
-        host_header = headers.get("Host") or headers.get("host")
-        if host_header is not None:
-            # The Host header may carry a port; it is passed through as-is and does not
-            # override SERVER_NAME/PORT, which come from the actual server address.
-            environ["HTTP_HOST"] = host_header
         
         rtnval = environ
         return rtnval
     
+    def _decode_path(self, raw_path: str) -> str:
+        """
+            Convert the path of a request target into a PATH_INFO value.
+            
+            PEP 3333 defines PATH_INFO as the percent-decoded path, carried in
+            a native string whose characters are the decoded bytes (latin-1).
+            A request target in absolute form, as sent to a proxy, is reduced
+            to its path first.
+            
+            :param raw_path: Path part of the request target, without the query string.
+            
+            :returns: PATH_INFO value.
+        """
+        target_path = raw_path
+        
+        target_lower = raw_path.lower()
+        if target_lower.startswith("http://") or target_lower.startswith("https://"):
+            target_parts = urlsplit(raw_path)
+            target_path = target_parts.path
+            if len(target_path) == 0:
+                target_path = "/"
+        
+        path_bytes = unquote_to_bytes(target_path)
+        rtnval = path_bytes.decode("latin-1")
+        return rtnval
+    
+    def _parse_content_length(self, value: str) -> int:
+        """
+            Parse a Content-Length header value strictly.
+            
+            :param value: Content-Length header value.
+            
+            :returns: Content length in bytes.
+            
+            :raises: RequestParseError if the value is not a plain decimal number.
+        """
+        if CONTENT_LENGTH_PATTERN.fullmatch(value) is None:
+            errmsg = f"Invalid Content-Length: {value}"
+            raise RequestParseError(errmsg)
+        
+        rtnval = int(value)
+        return rtnval
+    
+    def _read_request_line(self, reader: SocketReader) -> bytes:
+        """
+            Read the request line of the next request on a connection.
+            
+            One empty line before the request line is skipped, as RFC 7230
+            section 3.5 asks of a robust server.
+            
+            :param reader: SocketReader to read from.
+            
+            :returns: Raw request line including its line ending.
+            
+            :raises: ConnectionClosed if the client closed the connection
+                     without sending a request.
+            :raises: RequestLineTooLong if the request line exceeds the limit.
+            :raises: IncompleteRequest if the connection closed inside the line.
+        """
+        empty_lines_skipped = 0
+        
+        while True:
+            try:
+                request_line = reader.read_line(self._max_request_line)
+            except LineTooLong as long_err:
+                raise RequestLineTooLong(self._max_request_line) from long_err
+            
+            if len(request_line) == 0:
+                # End of stream before any byte of a request
+                raise ConnectionClosed()
+            
+            if not request_line.endswith(b"\n"):
+                errmsg = "Connection closed inside the request line"
+                raise IncompleteRequest(errmsg)
+            
+            if request_line == b"\r\n" or request_line == b"\n":
+                if empty_lines_skipped == 0:
+                    empty_lines_skipped += 1
+                    continue
+                
+                errmsg = "Empty request"
+                raise RequestParseError(errmsg)
+            
+            break
+        
+        return request_line
+    
     def parse_request(
         self,
-        sock: socket.socket,
+        sock: RequestSource,
         client_addr: Tuple[str, int],
         server_addr: Tuple[str, int],
         scheme: str = "http"
@@ -508,9 +832,67 @@ class HTTPParser:
         """
             Parse a complete HTTP request from socket and build environ.
             
-            This is the main entry point for parsing HTTP requests.
+            This is the main entry point for parsing HTTP requests. Pass the
+            SocketReader of the connection when more than one request is read
+            from it, so bytes read ahead are kept for the next request.
             
-            :param sock: Socket to read from.
+            A request is only returned when all of it was received. A request
+            that is cut short, stalls or has ambiguous framing raises and is
+            never handed to the application.
+            
+            :param sock: Socket or SocketReader to read from.
+            :param client_addr: Client address tuple (host, port).
+            :param server_addr: Server address tuple (host, port).
+            :param scheme: URL scheme (http or https).
+            
+            :returns: Complete WSGI environ dict.
+            
+            :raises: ConnectionClosed if the client closed the connection
+                     without sending a request.
+            :raises: RequestParseError if request is malformed.
+            :raises: RequestEntityTooLarge if the body exceeds the size limit.
+            :raises: RequestTimeout if the client stalled part way through
+                     a request.
+            :raises: socket.timeout if no request arrived before the timeout.
+        """
+        reader = self._get_reader(sock)
+        
+        # A timeout before the first byte of a request is an idle connection
+        # and is left to bubble. Once a request has started, a timeout means
+        # the client stalled and is reported as a request timeout.
+        try:
+            request_line = self._read_request_line(reader)
+        except socket.timeout as timeout_err:
+            if reader.has_buffered_data:
+                raise RequestTimeout(self._config.timeout) from timeout_err
+            raise
+        
+        try:
+            rtnval = self._parse_started_request(
+                reader,
+                request_line,
+                client_addr,
+                server_addr,
+                scheme
+            )
+        except socket.timeout as timeout_err:
+            raise RequestTimeout(self._config.timeout) from timeout_err
+        
+        return rtnval
+    
+    def _parse_started_request(
+        self,
+        reader: SocketReader,
+        request_line: bytes,
+        client_addr: Tuple[str, int],
+        server_addr: Tuple[str, int],
+        scheme: str
+    ) -> Dict[str, Any]:
+        """
+            Parse the rest of a request whose request line has been read.
+            
+            :param reader: SocketReader to read from.
+            :param request_line: Raw request line.
             :param client_addr: Client address tuple (host, port).
             :param server_addr: Server address tuple (host, port).
             :param scheme: URL scheme (http or https).
@@ -518,43 +900,67 @@ class HTTPParser:
             :returns: Complete WSGI environ dict.
             
             :raises: RequestParseError if request is malformed.
+            :raises: RequestEntityTooLarge if the body exceeds the size limit.
         """
-        # Read and parse request line
-        request_line = self._read_line(sock)
-        if len(request_line.strip()) == 0:
-            errmsg = "Empty request"
-            raise RequestParseError(errmsg)
-        
         method, path, http_version = self.parse_request_line(request_line)
         
         # Parse headers
-        headers = self.parse_headers_from_socket(sock)
+        headers = self.parse_headers_from_socket(reader)
+        
+        # A deadline placed on the reader bounds the request line and the
+        # headers. The body is bounded by its size limit and by the timeout
+        # of each read, a large upload is allowed to take longer.
+        reader.set_deadline(None)
         
         # Determine body handling
-        content_length_str = headers.get("Content-Length") or headers.get("content-length")
-        transfer_encoding = headers.get("Transfer-Encoding") or headers.get("transfer-encoding")
+        content_length_str = self._get_header(headers, "Content-Length")
+        transfer_encoding = self._get_header(headers, "Transfer-Encoding")
         
-        if transfer_encoding is not None and "chunked" in transfer_encoding.lower():
+        if transfer_encoding is not None:
+            # A request that states its length both ways is the classic
+            # request smuggling vector, it is refused and not interpreted.
+            if content_length_str is not None:
+                errmsg = "Both Transfer-Encoding and Content-Length are present"
+                raise RequestParseError(errmsg)
+            
+            if http_version == "HTTP/1.0":
+                errmsg = "Transfer-Encoding is not allowed in an HTTP/1.0 request"
+                raise RequestParseError(errmsg)
+            
+            codings: List[str] = []
+            for coding in transfer_encoding.split(","):
+                codings.append(coding.strip().lower())
+            
+            final_coding = codings[-1]
+            if final_coding != "chunked":
+                errmsg = "The final transfer coding of a request must be chunked"
+                raise RequestParseError(errmsg)
+            
+            if len(codings) != 1:
+                errmsg = f"Unsupported transfer coding: {transfer_encoding}"
+                raise RequestParseError(errmsg, status_code=501)
+            
             # Chunked transfer encoding
-            body_stream = self.create_chunked_body_stream(sock)
+            body_data = self.parse_chunked_body(reader)
+            
+            # The body handed to the application is the decoded one, so the
+            # headers are made to describe it.
+            headers = self._describe_decoded_body(headers, len(body_data))
+            
+            body_stream = io.BytesIO(body_data)
         elif content_length_str is not None:
             # Fixed-length body
-            try:
-                content_length = int(content_length_str)
-            except ValueError as val_err:
-                errmsg = f"Invalid Content-Length: {content_length_str}"
-                raise RequestParseError(errmsg) from val_err
-            
-            if content_length < 0:
-                errmsg = f"Negative Content-Length: {content_length}"
-                raise RequestParseError(errmsg)
+            content_length = self._parse_content_length(content_length_str)
             
             # Check size limit
             if self._max_request_size > 0 and content_length > self._max_request_size:
-                errmsg = f"Request body exceeds maximum size of {self._max_request_size} bytes"
-                raise RequestParseError(errmsg)
+                raise RequestEntityTooLarge(self._max_request_size, content_length)
             
-            body_data = self._read_exact(sock, content_length)
+            body_data = reader.read_exact(content_length)
+            if len(body_data) != content_length:
+                errmsg = f"Incomplete body: expected {content_length} bytes, got {len(body_data)}"
+                raise IncompleteRequest(errmsg)
+            
             body_stream = io.BytesIO(body_data)
         else:
             # No body
@@ -571,6 +977,29 @@ class HTTPParser:
             server_addr=server_addr,
             scheme=scheme
         )
+        return rtnval
+    
+    def _describe_decoded_body(
+        self,
+        headers: Dict[str, str],
+        body_size: int
+    ) -> Dict[str, str]:
+        """
+            Rewrite the framing headers of a request whose chunked body was decoded.
+            
+            :param headers: Parsed headers of the request.
+            :param body_size: Size in bytes of the decoded body.
+            
+            :returns: Copy of the headers without Transfer-Encoding and with a
+                      Content-Length equal to the size of the decoded body.
+        """
+        rtnval: Dict[str, str] = {}
+        
+        for header_name, header_value in headers.items():
+            if header_name.lower() != "transfer-encoding":
+                rtnval[header_name] = header_value
+        
+        rtnval["Content-Length"] = str(body_size)
         return rtnval
 
     
@@ -600,7 +1029,7 @@ class HTTPParser:
         try:
             self.parse_headers(header_lines)
             rtnval = True
-        except (RequestParseError, HeaderTooLarge, TooManyHeaders):
+        except RequestParseError:
             rtnval = False
         return rtnval
     

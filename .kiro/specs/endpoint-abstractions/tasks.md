@@ -165,6 +165,14 @@ This implementation plan creates the endpoint abstractions system for declarativ
 - [x] 12. Final checkpoint - All components complete
   - Ensure all tests pass, ask the user if questions arise.
 
+- [x] 13. Add the `rest_processing` keyword and class attribute (audit WW-0075)
+  - [x] 13.1 `record_rest_processing` / `declares_rest_processing` and the `managed` / `processing` keys in `endpoints/descriptor.py`
+    - _Requirements: 12.3, 12.4_
+  - [x] 13.2 `rest_processing` on `Endpoint.attach_at`, `RestEndpoint.attach_at` and its helpers, `Blueprint.attach_at`, `RestBlueprint.attach_at`; `Endpoint.rest_processing = True`
+    - _Requirements: 12.1, 12.2_
+  - [x] 13.3 Tests in `test_descriptor.py`, `test_endpoint.py`, `test_restendpoint.py`, `test_blueprint.py`, `test_restblueprint.py`
+    - _Requirements: 12.1-12.4_
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for faster MVP

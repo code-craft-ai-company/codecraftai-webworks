@@ -1,9 +1,11 @@
 # Part-to-Whole Charts
 
 > Catalog of part-to-whole chart types for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 ---
 
@@ -12,7 +14,6 @@
 - **Renderer / `type`:** `pie` — **Primary renderer**
 - **Controller:** `<mj-chart type="pie" ...>`
 - **Purpose:** Compare parts of a whole when there are a small number of slices and relative proportion is the primary message.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`
 - **JSON shape:**
   ```json
   {
@@ -28,6 +29,7 @@
 - **Orientation:** `n/a` — pie charts have no meaningful horizontal/vertical orientation.
 - **Variants / modes:**
   - `inner-radius` attribute > 0 → Donut chart (see entry below).
+- **Events:** `mj-chart-slice-click` `{ label, value, fraction }` (each slice).
 - **Phase:** P2
 - **Notes:** Scales used: `ordinal-color` for slice fill. Angular domain is `[0, 2π]` mapped from the value sum. Labels are placed radially; an optional leader-line mode activates when slices are narrow. The renderer enforces a maximum of 12 slices before emitting `mj-chart-error` and collapsing excess slices into an "Other" segment.
 
@@ -38,7 +40,6 @@
 - **Renderer / `type`:** `pie` — **Variant of `pie`**
 - **Controller:** `<mj-chart type="pie" inner-radius="0.5" ...>`
 - **Purpose:** Same as pie chart but reserves a center area, typically used for a summary KPI label or total annotation.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`
 - **JSON shape:** Identical to the `pie` renderer. The `inner-radius` attribute (0–1 as a fraction of outer radius, default `0.5`) activates donut mode; no JSON change is required.
   ```json
   {
@@ -53,6 +54,7 @@
 - **SVG primitives:** `<path>` (annular sectors), `<text>` (center label, slice annotations), `<g>`
 - **Orientation:** `n/a`
 - **Variants / modes:** `inner-radius="0"` degrades to a standard pie.
+- **Events:** `mj-chart-slice-click` `{ label, value, fraction }` (each slice).
 - **Phase:** P2
 - **Notes:** Implemented by the same `pie.js` renderer. The center label is drawn by the renderer when `meta.center-label` is present; it can also be supplied as a regular DOM child positioned via `anchor` over the plot.
 
@@ -63,7 +65,6 @@
 - **Renderer / `type`:** `bar` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="bar" group="stack" orientation="vertical" ...>`
 - **Purpose:** Show how each category is composed of multiple sub-series, and compare absolute totals across categories.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`, `mj-chart-annotation`
 - **JSON shape:** Standard common envelope with multiple series:
   ```json
   {
@@ -79,6 +80,7 @@
 - **SVG primitives:** `<rect>` (stacked segments per bar), `<text>` (optional segment and total labels), `<g>` (per-category group)
 - **Orientation:** `horizontal` | `vertical` — `orientation` attribute swaps category and value axes; `bar` renderer handles both modes.
 - **Variants / modes:** `group="cluster"` → grouped bar; `group="stack100"` → 100% stacked bar. All three modes live in `bar.js`.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each segment).
 - **Phase:** P1 (bar renderer); stacked mode enabled in P1.
 - **Notes:** Value axis scale is `linear` over `[0, max-stack-total]`. Stacking is computed in `chartmodel.js` before the renderer runs. See the `bar` primary renderer entry in `01-comparison.md` for full axis and scale details.
 
@@ -89,7 +91,6 @@
 - **Renderer / `type`:** `bar` — **Variant of `bar`**
 - **Controller:** `<mj-chart type="bar" group="stack100" orientation="vertical" ...>`
 - **Purpose:** Compare the relative composition across categories when absolute magnitudes are less important than proportional breakdown.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value, value axis labeled 0–100%), `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`
 - **JSON shape:** Identical to the stacked bar. `chartmodel.js` normalizes each stack to 100% when `group="stack100"`.
   ```json
   {
@@ -105,6 +106,7 @@
 - **SVG primitives:** `<rect>`, `<text>`, `<g>` — same primitives as stacked bar; only the value scale changes.
 - **Orientation:** `horizontal` | `vertical`
 - **Variants / modes:** Reducing `stack100` to `stack` reverts to absolute stacked bar.
+- **Events:** `mj-chart-bar-click` `{ series, category, value }` (each segment; `value` is the data value, not the percentage drawn).
 - **Phase:** P1 (enabled alongside stacked mode in `bar.js`).
 - **Notes:** Value axis domain is fixed `[0, 100]`; tick labels are formatted as percentages. Tooltip shows both the absolute value and the percentage. No new renderer file — `bar.js` branch on `model.group`.
 
@@ -115,7 +117,6 @@
 - **Renderer / `type`:** `treemap` — **Primary renderer**
 - **Controller:** `<mj-chart type="treemap" layout="squarify" ...>`
 - **Purpose:** Visualize hierarchical part-to-whole data where area encodes magnitude and nesting encodes hierarchy; effective for spotting dominant nodes.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-legend`
 - **JSON shape:** Hierarchical family shape (plan §3.4):
   ```json
   {
@@ -153,8 +154,9 @@
   - `layout="dice"` — column-only tiling.
   - `layout="slice-dice"` — alternating (Treemap/Icicle mix).
   - Sunburst chart uses the same hierarchical layout engine with a polar projection (see entry below).
+- **Events:** `mj-chart-node-click` `{ name, value, depth, path }` (each rectangle; `path` lists the names from the root).
 - **Phase:** P2
-- **Notes:** Layout algorithm lives in `charts/core/hierarchylayout.js` (shared with Sunburst). Colors are assigned by `ordinal-color` scale at depth 1; child nodes are tinted lighter. Breadcrumb drill-down is an optional overlay using `mj-chart-annotation`.
+- **Notes:** Layout algorithm lives in `charts/core/hierarchylayout.js` (shared with Sunburst). Colors are assigned by `ordinal-color` scale at depth 1; child nodes are tinted lighter. There is no breadcrumb or drill-down: a click on a rectangle only emits `mj-chart-node-click`.
 
 ---
 
@@ -163,7 +165,6 @@
 - **Renderer / `type`:** `sunburst` — **Variant of `treemap`**
 - **Controller:** `<mj-chart type="sunburst" ...>`
 - **Purpose:** Show hierarchical proportions in a radial layout where each ring represents one level of the hierarchy; supports drill-down interaction.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-legend`
 - **JSON shape:** Identical hierarchical shape as Treemap (`root` with recursive `children` and leaf `value`).
   ```json
   {
@@ -188,6 +189,7 @@
 - **SVG primitives:** `<path>` (annular arc sectors via `svgdraw.arc()` for each node), `<text>` (radial labels for larger arcs), `<g>` (per-depth ring group)
 - **Orientation:** `n/a`
 - **Variants / modes:** `inner-radius="0"` collapses to a full multi-ring pie. The Icicle chart (linear icicle partition) uses the same layout engine with a Cartesian projection and is a further variant keyed `icicle`.
+- **Events:** `mj-chart-node-click` `{ name, value, depth, path }` (each arc; `path` lists the names from the root).
 - **Phase:** P2
 - **Notes:** Partitioning is computed by `hierarchylayout.js` (shared with Treemap); `sunburst.js` only applies the polar coordinate projection (`angle → arc path`). Click-to-zoom drill-down re-roots the visible subtree and re-calls the layout engine without re-fetching data.
 
@@ -198,7 +200,6 @@
 - **Renderer / `type`:** `waffle` — **Primary renderer**
 - **Controller:** `<mj-chart type="waffle" ...>`
 - **Purpose:** Communicate a percentage or progress in a visually approachable grid of equal units; favored for dashboards and infographics over precise comparisons.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-legend`, `mj-chart-value-labels`
 - **JSON shape:**
   ```json
   {
@@ -213,6 +214,7 @@
 - **SVG primitives:** `<rect>` (one per cell, styled by category fill), `<text>` (center percentage label), `<g>` (grid row groups)
 - **Orientation:** `n/a` — the grid fills the plot area. `meta.grid` controls shape.
 - **Variants / modes:** Icon-based pictogram variant (replacing `<rect>` with a repeated `<path>` icon) is a future enhancement enabled by an optional `meta.icon` SVG path string.
+- **Events:** `mj-chart-cell-click` `{ category, value, fraction }` (one mark per category: its block of cells).
 - **Phase:** P2
 - **Notes:** The renderer lays out cells in reading order (left-to-right, top-to-bottom). Color assignments use `ordinal-color` scale. Hover highlights the category group across all matching cells.
 
@@ -223,7 +225,6 @@
 - **Renderer / `type`:** `marimekko` — **Primary renderer**
 - **Controller:** `<mj-chart type="marimekko" ...>`
 - **Purpose:** Show composition across two categorical dimensions simultaneously: bar width encodes the category's share of the whole, while bar segments show the internal breakdown.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (value axis: 0–100%), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-legend`, `mj-chart-value-labels`
 - **JSON shape:**
   ```json
   {
@@ -240,6 +241,7 @@
 - **SVG primitives:** `<rect>` (one per cell, variable width and height), `<text>` (category and series labels), `<line>` (optional column separator), `<g>` (per-column group)
 - **Orientation:** `n/a` — Marimekko layout is defined by its two-dimensional encoding; rotation is not meaningful.
 - **Variants / modes:** None. The Mosaic plot (see below) is a distinct renderer with a statistical framing.
+- **Events:** `mj-chart-segment-click` `{ series, category, value, pct }` (each segment).
 - **Phase:** P2
 - **Notes:** Width scale is `linear` over the proportion of each column total to the grand total. Height segments are normalized per column. `chartmodel.js` computes column totals and proportions before rendering. Labels inside narrow columns are suppressed; a tooltip provides exact values.
 
@@ -250,7 +252,6 @@
 - **Renderer / `type`:** `mosaic` — **Primary renderer**
 - **Controller:** `<mj-chart type="mosaic" ...>`
 - **Purpose:** Visualize the relationship and interaction between two categorical variables using area-encoded cells, similar to a Marimekko but emphasizing statistical frequency rather than business composition.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (both axes categorical), `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-legend`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -266,6 +267,7 @@
 - **SVG primitives:** `<rect>` (variable-width, variable-height cells), `<text>` (axis labels, cell frequency labels), `<g>`
 - **Orientation:** `n/a`
 - **Variants / modes:** Spine plot is a degenerate mosaic where all column widths are equal (`meta.equal-widths: true`).
+- **Events:** `mj-chart-cell-click` `{ series, category, value, pct, residual }` (each tile).
 - **Phase:** P2
 - **Notes:** Distinguished from Marimekko by statistical intent (contingency table input, optional residual coloring) rather than by renderer mechanism. May share layout geometry helpers with `marimekko.js` but is a separate renderer file to keep statistical logic isolated.
 
@@ -276,7 +278,6 @@
 - **Renderer / `type`:** `waterfall` — **Primary renderer**
 - **Controller:** `<mj-chart type="waterfall" ...>`
 - **Purpose:** Show how an initial value is increased or decreased by a series of intermediate positive and negative contributions, arriving at a final total.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (category + value), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-value-labels`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -295,5 +296,6 @@
 - **SVG primitives:** `<rect>` (floating delta bars, grounded start/total/subtotal bars), `<line>` (connectors between bars), `<text>` (value labels), `<g>`
 - **Orientation:** `horizontal` | `vertical` — orientation swaps category (categorical `band` scale) and value (`linear`) axes.
 - **Variants / modes:** None. Stacked waterfall (multiple series) is a future enhancement.
+- **Events:** `mj-chart-bar-click` `{ category, index, value, kind, runningTotal }` (each bar).
 - **Phase:** P2
 - **Notes:** Delta bars are positioned by computing running totals in `chartmodel.js`. Positive deltas use one token color, negative deltas another (`--mj-chart-positive`, `--mj-chart-negative`). Connector lines span from the top of one bar to the base of the next floating bar, drawn as `<line>` elements. Value axis domain must accommodate negative running totals.

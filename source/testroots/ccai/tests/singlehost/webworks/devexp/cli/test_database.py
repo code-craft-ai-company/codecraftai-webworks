@@ -259,9 +259,12 @@ def test_add_env_argument_registers_env():
     return
 
 
-def test_add_env_argument_defaults_to_none():
+def test_add_env_argument_has_no_default():
     """
-        Test that the --env argument defaults to None.
+        Test that the --env argument sets nothing when it is not given.
+
+        A default on the subcommand would overwrite a global --env given
+        before the command name, so the attribute must be absent.
     """
     parser = ArgumentParser()
 
@@ -269,8 +272,8 @@ def test_add_env_argument_defaults_to_none():
 
     parsed = parser.parse_args([])
 
-    if parsed.env is not None:
-        errmsg = "Expected env default None, got '{}'.".format(parsed.env)
+    if hasattr(parsed, "env"):
+        errmsg = "Expected no 'env' attribute when --env is not given, got '{}'.".format(parsed.env)
         raise AssertionError(errmsg)
 
     return
@@ -1117,6 +1120,173 @@ def test_db_status_empty_status():
 
     if exit_code != EXIT_SUCCESS:
         errmsg = "Expected EXIT_SUCCESS, got {}.".format(exit_code)
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# Unit Tests for Global Options and the Persona Backend
+# =============================================================================
+
+def _build_cli_parser():
+    """
+        Build the parser of a CLI that has the database group registered.
+    """
+    from ccai.webworks.devexp.cli.webworkscli import WebworksCLI
+
+    cli = WebworksCLI()
+    cli.register_group(DatabaseGroup())
+
+    return cli._build_parser()
+
+
+def test_global_env_is_not_overwritten_by_db_subcommand():
+    """
+        Test that '--env' given before the command name reaches the
+        database command instead of being reset by the subcommand default.
+    """
+    parsed = _build_cli_parser().parse_args(["--env", "production", "db", "migrate"])
+
+    resolved = resolve_env(parsed, {})
+
+    if resolved != "production":
+        errmsg = "Expected env 'production' from the global option, got '{}'.".format(resolved)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_subcommand_env_overrides_global_env():
+    """
+        Test that '--env' given after the command name takes precedence.
+    """
+    parsed = _build_cli_parser().parse_args(["--env", "production", "db", "migrate", "--env", "staging"])
+
+    resolved = resolve_env(parsed, {})
+
+    if resolved != "staging":
+        errmsg = "Expected env 'staging' from the subcommand option, got '{}'.".format(resolved)
+        raise AssertionError(errmsg)
+
+    return
+
+
+class _FakePersona:
+    """
+        Stands in for the web application persona and records hook calls.
+    """
+
+    def __init__(self, ready=True):
+        self.calls = []
+        self._ready = ready
+
+    def prepare_database(self):
+        self.calls.append("prepare_database")
+
+    def connect_database(self):
+        self.calls.append("connect_database")
+
+    def startup_database(self):
+        self.calls.append("startup_database")
+
+    def ensure_database_ready(self):
+        self.calls.append("ensure_database_ready")
+        return self._ready
+
+
+def test_webapp_backend_initialize_runs_persona_hooks_in_order():
+    """
+        Test that initializing through the persona backend runs the
+        persona's database hooks in lifecycle order.
+    """
+    from ccai.webworks.devexp.cli.database import WebApplicationDatabaseBackend
+
+    persona = _FakePersona()
+    backend = WebApplicationDatabaseBackend(persona)
+
+    backend.initialize("development")
+
+    expected = ["prepare_database", "connect_database", "startup_database", "ensure_database_ready"]
+    if persona.calls != expected:
+        errmsg = "Expected hooks {}, got {}.".format(expected, persona.calls)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_webapp_backend_initialize_fails_when_database_not_ready():
+    """
+        Test that db init fails when the persona reports the database
+        is not ready.
+    """
+    from ccai.webworks.devexp.cli.database import WebApplicationDatabaseBackend
+
+    config = _make_config(backend=WebApplicationDatabaseBackend(_FakePersona(ready=False)))
+
+    exit_code = DbInitCommand().execute(_make_args(env="development"), config)
+
+    if exit_code != EXIT_ERROR:
+        errmsg = "Expected EXIT_ERROR when the database is not ready, got {}.".format(exit_code)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_webapp_backend_migrate_reports_missing_persona_support():
+    """
+        Test that db migrate fails with an error, not a crash, when the
+        persona does not implement migrations.
+    """
+    from ccai.webworks.devexp.cli.database import WebApplicationDatabaseBackend
+
+    config = _make_config(backend=WebApplicationDatabaseBackend(_FakePersona()))
+
+    exit_code = DbMigrateCommand().execute(_make_args(env="development"), config)
+
+    if exit_code != EXIT_ERROR:
+        errmsg = "Expected EXIT_ERROR when migrations are not implemented, got {}.".format(exit_code)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_webapp_backend_forwards_migrations_to_persona():
+    """
+        Test that migration queries are forwarded to a persona that
+        implements them.
+    """
+    from ccai.webworks.devexp.cli.database import WebApplicationDatabaseBackend
+
+    class _MigratingPersona(_FakePersona):
+        def get_pending_migrations(self, env):
+            return ["001_init"]
+
+        def get_applied_migrations(self, env):
+            return ["000_base"]
+
+    backend = WebApplicationDatabaseBackend(_MigratingPersona())
+
+    status = backend.get_status("development")
+
+    if status != {"applied": ["000_base"], "pending": ["001_init"], "current": "000_base"}:
+        errmsg = "Unexpected status from the persona backend: {}".format(status)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_db_command_returns_config_error_for_unimportable_app():
+    """
+        Test that a database command exits with EXIT_CONFIG_ERROR when the
+        application target cannot be imported.
+    """
+    args = _make_args(env="development", app="no_such_module_for_db_test:app")
+
+    exit_code = DbStatusCommand().execute(args, {})
+
+    if exit_code != EXIT_CONFIG_ERROR:
+        errmsg = "Expected EXIT_CONFIG_ERROR, got {}.".format(exit_code)
         raise AssertionError(errmsg)
 
     return

@@ -850,3 +850,200 @@ def test_property_default_deny_enforcement():
                 raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Routing Request / Response integration
+# =============================================================================
+
+import asyncio
+import base64
+import hashlib
+import hmac
+import json
+import time
+
+from ccai.webworks.endpoints.constraints import EndpointConstraints
+from ccai.webworks.endpoints.descriptor import EndpointDescriptor
+from ccai.webworks.routing.dispatcher import Dispatcher
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.response import Response
+from ccai.webworks.routing.router import Router
+from ccai.webworks.security.auditlogger import AuditLogger
+from ccai.webworks.security.authenticationmanager import AuthenticationManager
+from ccai.webworks.security.authenticationprovider import JWTAuthProvider
+from ccai.webworks.security.authorizationengine import AuthorizationEngine
+from ccai.webworks.security.policyattachment import get_attached_policy
+from ccai.webworks.security.securitycontext import SECURITY_CONTEXT_SCOPE_KEY
+
+
+PIPELINE_SECRET_KEY = "pipeline-test-secret-key-0123456789abcdef"
+
+
+def _sign_token(payload: dict) -> str:
+    """
+        Create an HS256 token over ``payload`` signed with the test secret.
+    """
+    def encode(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+    header = encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode("utf-8"))
+    body = encode(json.dumps(payload).encode("utf-8"))
+    signing_input = "{}.{}".format(header, body).encode("ascii")
+    signature = hmac.new(PIPELINE_SECRET_KEY.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    return "{}.{}.{}".format(header, body, encode(signature))
+
+
+def _create_pipeline_dispatcher(policy=None, **middleware_options):
+    """
+        Create a dispatcher whose route pipeline holds a SecurityMiddleware
+        backed by the real JWT provider, with one route at /reports.
+    """
+    auth_manager = AuthenticationManager()
+    auth_manager.register_provider(JWTAuthProvider(secret_key=PIPELINE_SECRET_KEY))
+
+    middleware = SecurityMiddleware(
+        auth_manager=auth_manager,
+        authz_engine=AuthorizationEngine(),
+        audit_logger=AuditLogger(),
+        **middleware_options
+    )
+
+    def handler(request):
+        return {"user": request.scope[SECURITY_CONTEXT_SCOPE_KEY].user_id}
+
+    descriptor = EndpointDescriptor(
+        handler=handler,
+        module="test",
+        path="/reports",
+        methods=["GET"],
+        constraints=EndpointConstraints(access_policy=policy),
+    )
+
+    router = Router()
+    router.add_endpoint(descriptor)
+
+    dispatcher = Dispatcher(router)
+    dispatcher.route_pipeline.add(middleware)
+
+    return dispatcher
+
+
+def _bearer_headers(roles):
+    """
+        Build request headers carrying a valid bearer token with ``roles``.
+    """
+    token = _sign_token({"sub": "user-1", "roles": roles, "exp": int(time.time()) + 600})
+    return {"Authorization": "Bearer {}".format(token)}
+
+
+def test_middleware_authenticates_routing_request_with_jwt_provider():
+    """
+        In the dispatcher pipeline the middleware authenticates a routing
+        Request through a built-in provider and lets an authorized request
+        reach the handler.
+    """
+    dispatcher = _create_pipeline_dispatcher(AccessPolicy(roles=("analyst",)))
+
+    request = Request(method="GET", path="/reports", headers=_bearer_headers(["analyst"]))
+    response = dispatcher.dispatch(request)
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}: {response.body!r}"
+    assert b"user-1" in response.body, f"Unexpected body {response.body!r}"
+    return
+
+
+def test_middleware_returns_401_response_object_for_anonymous_routing_request():
+    """
+        An anonymous routing Request is refused with a routing Response the
+        pipeline can send, not a dictionary.
+    """
+    dispatcher = _create_pipeline_dispatcher(AccessPolicy(roles=("analyst",)))
+
+    response = dispatcher.dispatch(Request(method="GET", path="/reports"))
+
+    assert isinstance(response, Response), f"Expected a Response, got {type(response).__name__}"
+    assert response.status_code == 401, f"Expected 401, got {response.status_code}"
+    assert response.headers.get("WWW-Authenticate") == "Bearer", f"Unexpected headers {response.headers}"
+    return
+
+
+def test_middleware_returns_403_for_routing_request_without_role():
+    """
+        An authenticated routing Request without the required role is refused 403.
+    """
+    dispatcher = _create_pipeline_dispatcher(AccessPolicy(roles=("analyst",)))
+
+    request = Request(method="GET", path="/reports", headers=_bearer_headers(["viewer"]))
+    response = dispatcher.dispatch(request)
+
+    assert response.status_code == 403, f"Expected 403, got {response.status_code}"
+    return
+
+
+def test_middleware_denies_endpoint_without_policy_by_default():
+    """
+        Default deny: an endpoint without a policy and no default policy
+        configured requires authentication.
+    """
+    dispatcher = _create_pipeline_dispatcher(policy=None)
+
+    anonymous = dispatcher.dispatch(Request(method="GET", path="/reports"))
+    authenticated = dispatcher.dispatch(
+        Request(method="GET", path="/reports", headers=_bearer_headers([])))
+
+    assert anonymous.status_code == 401, f"Expected 401, got {anonymous.status_code}"
+    assert authenticated.status_code == 200, f"Expected 200, got {authenticated.status_code}"
+    return
+
+
+def test_middleware_runs_in_async_dispatch():
+    """
+        The middleware works in dispatch_async through call_async.
+    """
+    dispatcher = _create_pipeline_dispatcher(AccessPolicy(roles=("analyst",)))
+
+    request = Request(method="GET", path="/reports", headers=_bearer_headers(["analyst"]))
+    response = asyncio.run(dispatcher.dispatch_async(request))
+
+    assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+    return
+
+
+def test_get_attached_policy_reads_endpoint_constraints_object():
+    """
+        The policy of a real descriptor is stored on an EndpointConstraints
+        object, not in a dictionary.
+    """
+    policy = AccessPolicy(roles=("analyst",))
+    constraints = EndpointConstraints(access_policy=policy)
+
+    assert get_attached_policy(constraints) is policy
+    assert get_attached_policy(EndpointConstraints()) is None
+    return
+
+
+def test_validate_completeness_accepts_endpoint_descriptors():
+    """
+        The completeness check runs on the descriptors a router is built from.
+    """
+    def handler(request):
+        return {}
+
+    protected = EndpointDescriptor(
+        handler=handler, module="test", path="/protected",
+        constraints=EndpointConstraints(access_policy=AccessPolicy(require_auth=True)),
+    )
+    unprotected = EndpointDescriptor(handler=handler, module="test", path="/open")
+
+    validate_security_completeness([protected])
+
+    raised = None
+    try:
+        validate_security_completeness([protected, unprotected])
+    except SecurityCompletenessError as exc:
+        raised = exc
+
+    assert raised is not None, "Expected SecurityCompletenessError for the unprotected endpoint"
+    assert raised.unprotected_endpoints == ["/open"], f"Unexpected list {raised.unprotected_endpoints}"
+    return

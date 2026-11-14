@@ -689,3 +689,264 @@ def test_export_security_map_multiple_endpoints():
     
     return
 
+
+
+# =============================================================================
+# Index integrity: replace and failed registrations
+# =============================================================================
+
+def test_replacing_one_method_keeps_the_other_methods_registered():
+    """Replacing GET on a descriptor registered for GET and POST leaves POST served by the original handler."""
+    registry = setup_clean_registry()
+
+    original = EndpointDescriptor(handler=sample_handler, module=__name__, path="/a", methods=["GET", "POST"])
+    override = EndpointDescriptor(handler=another_handler, module=__name__, path="/a", methods=["GET"])
+
+    registry.register(original)
+    registry.register(override, on_conflict="replace")
+
+    served = {}
+    for descriptor in registry.collect():
+        for method in descriptor.methods:
+            served[method] = descriptor.handler
+
+    if served != {"GET": another_handler, "POST": sample_handler}:
+        errmsg = f"Expected GET -> another_handler and POST -> sample_handler, got {served}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_replacing_one_method_does_not_modify_the_replaced_descriptor():
+    """The descriptor that lost a method is narrowed in the registry only; the object passed in is untouched."""
+    registry = setup_clean_registry()
+
+    original = EndpointDescriptor(handler=sample_handler, module=__name__, path="/a", methods=["GET", "POST"])
+    override = EndpointDescriptor(handler=another_handler, module=__name__, path="/a", methods=["GET"])
+
+    registry.register(original)
+    registry.register(override, on_conflict="replace")
+
+    if original.methods != ["GET", "POST"]:
+        errmsg = f"Expected the original descriptor to keep its methods, got {original.methods}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_replaced_method_can_be_claimed_again_after_replace():
+    """After a replace, the surviving method still conflicts and the replaced one belongs to the override."""
+    registry = setup_clean_registry()
+
+    original = EndpointDescriptor(handler=sample_handler, module=__name__, path="/a", methods=["GET", "POST"])
+    override = EndpointDescriptor(handler=another_handler, module=__name__, path="/a", methods=["GET"])
+    late = EndpointDescriptor(handler=third_handler, module=__name__, path="/a", methods=["POST"])
+
+    registry.register(original)
+    registry.register(override, on_conflict="replace")
+
+    try:
+        registry.register(late)
+    except EndpointConflictError as err:
+        if err.existing_handler is not sample_handler:
+            errmsg = f"Expected the conflict to name the handler still serving POST, got {err.existing_handler}"
+            raise AssertionError(errmsg)
+    else:
+        raise AssertionError("Expected POST /a to still be registered and to conflict")
+
+    return
+
+
+def test_replacing_every_method_removes_the_descriptor():
+    """A descriptor whose every method is replaced is no longer collected."""
+    registry = setup_clean_registry()
+
+    original = EndpointDescriptor(handler=sample_handler, module=__name__, path="/a", methods=["GET"])
+    override = EndpointDescriptor(handler=another_handler, module=__name__, path="/a", methods=["GET"])
+
+    registry.register(original)
+    registry.register(override, on_conflict="replace")
+
+    handlers = [descriptor.handler for descriptor in registry.collect()]
+
+    if handlers != [another_handler]:
+        errmsg = f"Expected only the override to remain, got {handlers}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_failed_registration_leaves_no_index_entry_behind():
+    """A registration rejected on its second method claims nothing: its first method stays free."""
+    registry = setup_clean_registry()
+
+    holder = EndpointDescriptor(handler=sample_handler, module=__name__, path="/b", methods=["POST"])
+    rejected = EndpointDescriptor(handler=another_handler, module=__name__, path="/b", methods=["GET", "POST"])
+    later = EndpointDescriptor(handler=third_handler, module=__name__, path="/b", methods=["GET"])
+
+    registry.register(holder)
+
+    try:
+        registry.register(rejected)
+    except EndpointConflictError:
+        pass
+    else:
+        raise AssertionError("Expected the second registration to conflict on POST")
+
+    # GET /b was never registered, so it must be free for another handler
+    registry.register(later)
+
+    handlers = [descriptor.handler for descriptor in registry.collect()]
+
+    if handlers != [sample_handler, third_handler]:
+        errmsg = f"Expected the holder and the later handler only, got {handlers}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# collect_from: order independence and class sources
+# =============================================================================
+
+def test_collect_from_replace_does_not_depend_on_handler_names():
+    """An override named to sort before the handler it replaces still replaces it."""
+    import types
+
+    from ccai.webworks.endpoints.endpoint import Endpoint
+
+    module = types.ModuleType("override_before_original")
+
+    @Endpoint.attach_at(leaf="thing", methods=["GET"], on_conflict="replace")
+    def a_override(request):
+        return "override"
+
+    @Endpoint.attach_at(leaf="thing", methods=["GET"])
+    def z_original(request):
+        return "original"
+
+    module.a_override = a_override
+    module.z_original = z_original
+
+    registry = setup_clean_registry()
+    registry.collect_from(module)
+
+    handlers = [descriptor.handler for descriptor in registry.collect()]
+
+    if handlers != [a_override]:
+        errmsg = f"Expected only the override to be registered, got {handlers}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_collect_from_registers_in_definition_order():
+    """Handlers of a module are registered in the order they are defined, not by name."""
+    import types
+
+    from ccai.webworks.endpoints.endpoint import Endpoint
+
+    module = types.ModuleType("definition_order")
+
+    @Endpoint.attach_at(leaf="zebra", methods=["GET"])
+    def zebra(request):
+        return {}
+
+    @Endpoint.attach_at(leaf="apple", methods=["GET"])
+    def apple(request):
+        return {}
+
+    module.zebra = zebra
+    module.apple = apple
+
+    registry = setup_clean_registry()
+    registry.collect_from(module)
+
+    leaves = [descriptor.leaf for descriptor in registry.collect()]
+
+    if leaves != ["zebra", "apple"]:
+        errmsg = f"Expected definition order ['zebra', 'apple'], got {leaves}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_collect_from_class_includes_free_function_handlers():
+    """Collecting a blueprint class registers the free functions declared through it."""
+    from ccai.webworks.endpoints.blueprint import Blueprint
+
+    class ApiBlueprint(Blueprint):
+        base_path = "/api"
+
+    @ApiBlueprint.attach_at(leaf="users", methods=["GET"])
+    def list_users(request):
+        return {}
+
+    registry = setup_clean_registry()
+    count = registry.collect_from(ApiBlueprint)
+
+    if count != 1:
+        errmsg = f"Expected 1 descriptor collected from the blueprint class, got {count}"
+        raise AssertionError(errmsg)
+
+    if registry.collect()[0].path != "/api/users":
+        errmsg = f"Expected '/api/users', got {registry.collect()[0].path}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_collect_from_module_does_not_pull_in_endpoints_declared_through_an_imported_class():
+    """A module that merely holds a blueprint class does not collect that class's free-function handlers."""
+    import types
+
+    from ccai.webworks.endpoints.blueprint import Blueprint
+
+    class SharedBlueprint(Blueprint):
+        base_path = "/shared"
+
+    @SharedBlueprint.attach_at(leaf="elsewhere", methods=["GET"])
+    def defined_elsewhere(request):
+        return {}
+
+    module = types.ModuleType("holds_only_the_class")
+    module.SharedBlueprint = SharedBlueprint
+
+    registry = setup_clean_registry()
+    count = registry.collect_from(module)
+
+    if count != 0:
+        errmsg = f"Expected nothing to be collected through the imported class, got {count}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_collecting_again_after_a_replace_registers_nothing():
+    """Re-collecting a module whose handler was replaced is a no-op, not a conflict."""
+    import types
+
+    from ccai.webworks.endpoints.endpoint import Endpoint
+
+    module = types.ModuleType("collected_twice")
+
+    @Endpoint.attach_at(leaf="twice", methods=["GET"])
+    def original(request):
+        return {}
+
+    @Endpoint.attach_at(leaf="twice", methods=["GET"], on_conflict="replace")
+    def override(request):
+        return {}
+
+    module.original = original
+    module.override = override
+
+    registry = setup_clean_registry()
+    registry.collect_from(module)
+    count = registry.collect_from(module)
+
+    if count != 0:
+        errmsg = f"Expected the second collection to register nothing, got {count}"
+        raise AssertionError(errmsg)
+
+    return

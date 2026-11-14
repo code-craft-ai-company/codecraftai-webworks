@@ -11,18 +11,28 @@
     **Validates: Requirements 1.5, 1.6**
 """
 
+import os
 import random
 import string
+import subprocess
+import sys
 from io import BytesIO
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from ccai.errors.exceptions import ConfigurationError
+
 from ccai.webworks.wsgi.application import (
+    APP_TARGET_ENVIRON_KEY,
     WSGIApplication,
+    as_wsgi_application,
     get_wsgi_application,
     create_wsgi_application,
+    resolve_wsgi_application,
     set_wsgi_application,
     reset_wsgi_application,
 )
+from ccai.webworks.wsgi.asgibridge import ASGIBridge
+from ccai.webworks.wsgi.constants import DEFAULT_MAX_REQUEST_BODY_SIZE
 from ccai.webworks.wsgi.response import Response
 from ccai.webworks.routing.request import Request
 from ccai.webworks.wsgi.exceptions import HTTPException
@@ -225,8 +235,12 @@ def test_wsgi_application_default_construction():
         errmsg = f"Expected debug=False, got {app.debug}"
         raise AssertionError(errmsg)
     
-    if app.max_request_body_size != 0:
-        errmsg = f"Expected max_request_body_size=0, got {app.max_request_body_size}"
+    # Request bodies are held in memory, so the default is a limit
+    if app.max_request_body_size != DEFAULT_MAX_REQUEST_BODY_SIZE:
+        errmsg = (
+            f"Expected max_request_body_size={DEFAULT_MAX_REQUEST_BODY_SIZE}, "
+            f"got {app.max_request_body_size}"
+        )
         raise AssertionError(errmsg)
     
     return
@@ -468,19 +482,6 @@ def test_wsgi_application_unhandled_exception():
     return
 
 
-def test_get_wsgi_application():
-    """
-        Test that get_wsgi_application returns an application.
-    """
-    app = get_wsgi_application()
-    
-    if not isinstance(app, WSGIApplication):
-        errmsg = f"Expected WSGIApplication, got {type(app)}"
-        raise AssertionError(errmsg)
-    
-    return
-
-
 def test_create_wsgi_application():
     """
         Test that create_wsgi_application creates new instances.
@@ -517,219 +518,259 @@ def test_create_wsgi_application_with_config():
     return
 
 
-def test_set_wsgi_application():
+def test_set_wsgi_application_is_returned_by_get():
     """
-        Test that set_wsgi_application sets the module-level application.
+        An application set with set_wsgi_application is the one served.
     """
-    # Reset first to ensure clean state
     reset_wsgi_application()
     
-    # Create a custom application
     custom_app = WSGIApplication(debug=True)
     
-    # Set it as the module-level application
-    set_wsgi_application(custom_app)
-    
-    # Get should return the same instance
-    retrieved_app = get_wsgi_application()
+    try:
+        set_wsgi_application(custom_app)
+        retrieved_app = get_wsgi_application()
+    finally:
+        reset_wsgi_application()
     
     if retrieved_app is not custom_app:
         errmsg = "Expected get_wsgi_application to return the set application"
         raise AssertionError(errmsg)
     
-    # Clean up
-    reset_wsgi_application()
-    
     return
 
 
-def test_reset_wsgi_application():
+def test_module_attribute_application_is_the_resolved_application():
     """
-        Test that reset_wsgi_application clears the module-level application.
-    """
-    # First ensure there's an application
-    app1 = get_wsgi_application()
-    
-    # Reset it
-    reset_wsgi_application()
-    
-    # Get should create a new instance
-    app2 = get_wsgi_application()
-    
-    if app1 is app2:
-        errmsg = "Expected new application after reset"
-        raise AssertionError(errmsg)
-    
-    # Clean up
-    reset_wsgi_application()
-    
-    return
-
-
-def test_get_wsgi_application_returns_same_instance():
-    """
-        Test that get_wsgi_application returns the same instance on repeated calls.
-    """
-    # Reset first to ensure clean state
-    reset_wsgi_application()
-    
-    app1 = get_wsgi_application()
-    app2 = get_wsgi_application()
-    
-    if app1 is not app2:
-        errmsg = "Expected same instance on repeated calls"
-        raise AssertionError(errmsg)
-    
-    # Clean up
-    reset_wsgi_application()
-    
-    return
-
-
-def test_get_wsgi_application_with_environ_config():
-    """
-        Test that get_wsgi_application respects environment variables.
-    """
-    import os
-    
-    # Reset first to ensure clean state
-    reset_wsgi_application()
-    
-    # Set environment variables
-    original_debug = os.environ.get("WSGI_APP_DEBUG")
-    original_max_body = os.environ.get("WSGI_APP_MAX_BODY_SIZE")
-    
-    try:
-        os.environ["WSGI_APP_DEBUG"] = "true"
-        os.environ["WSGI_APP_MAX_BODY_SIZE"] = "4096"
-        
-        app = get_wsgi_application()
-        
-        if app.debug is not True:
-            errmsg = f"Expected debug=True from environ, got {app.debug}"
-            raise AssertionError(errmsg)
-        
-        if app.max_request_body_size != 4096:
-            errmsg = f"Expected max_request_body_size=4096 from environ, got {app.max_request_body_size}"
-            raise AssertionError(errmsg)
-        
-    finally:
-        # Restore original environment
-        if original_debug is None:
-            os.environ.pop("WSGI_APP_DEBUG", None)
-        else:
-            os.environ["WSGI_APP_DEBUG"] = original_debug
-        
-        if original_max_body is None:
-            os.environ.pop("WSGI_APP_MAX_BODY_SIZE", None)
-        else:
-            os.environ["WSGI_APP_MAX_BODY_SIZE"] = original_max_body
-        
-        # Clean up
-        reset_wsgi_application()
-    
-    return
-
-
-def test_module_level_application_variable():
-    """
-        Test that the module-level application variable is accessible.
-        
-        This tests Requirement 5a.3: THE system SHALL support the `application`
-        module-level variable convention for external WSGI servers.
+        The module attribute 'application' (the uWSGI convention) is what
+        get_wsgi_application() returns.
     """
     import ccai.webworks.wsgi.application as app_module
     
-    # Reset first
-    reset_wsgi_application()
+    custom_app = WSGIApplication()
     
-    # Initially should be None
-    if app_module.application is not None:
-        errmsg = "Expected application to be None initially after reset"
+    try:
+        set_wsgi_application(custom_app)
+        module_attribute = app_module.application
+    finally:
+        reset_wsgi_application()
+    
+    if module_attribute is not custom_app:
+        errmsg = "Expected the module attribute 'application' to be the set application"
         raise AssertionError(errmsg)
-    
-    # After get_wsgi_application, it should be set
-    app = get_wsgi_application()
-    
-    if app_module.application is None:
-        errmsg = "Expected application to be set after get_wsgi_application"
-        raise AssertionError(errmsg)
-    
-    if app_module.application is not app:
-        errmsg = "Expected module-level application to match returned application"
-        raise AssertionError(errmsg)
-    
-    # Clean up
-    reset_wsgi_application()
     
     return
 
 
-def test_external_server_compatibility_callable():
+def test_get_wsgi_application_resolves_the_environment_target_once():
     """
-        Test that the application is compatible with external WSGI servers.
-        
-        This tests Requirement 5a.2: THE WSGI_Application SHALL remain compatible
-        with Gunicorn, uWSGI, mod_wsgi, and Waitress.
-        
-        External servers expect:
-        1. A callable that accepts (environ, start_response)
-        2. Returns an iterable yielding bytes
-        3. Calls start_response before yielding
+        WEBWORKS_SERVER_APP names the application; it is resolved once.
     """
-    # Reset first
+    import ccai.testshared.servers.plainapps as plainapps
+    
+    original = os.environ.get(APP_TARGET_ENVIRON_KEY)
     reset_wsgi_application()
     
-    # Get the application
-    app = get_wsgi_application()
+    try:
+        os.environ[APP_TARGET_ENVIRON_KEY] = "ccai.testshared.servers.plainapps:wsgi_app"
+        first = get_wsgi_application()
+        os.environ[APP_TARGET_ENVIRON_KEY] = "ccai.testshared.servers.plainapps:asgi_app"
+        second = get_wsgi_application()
+    finally:
+        if original is None:
+            os.environ.pop(APP_TARGET_ENVIRON_KEY, None)
+        else:
+            os.environ[APP_TARGET_ENVIRON_KEY] = original
+        reset_wsgi_application()
     
-    # Verify it's callable
-    if not callable(app):
-        errmsg = "Application must be callable"
+    if first is not plainapps.wsgi_app or second is not first:
+        errmsg = f"Expected the WSGI application of the target, resolved once, got {first!r} and {second!r}"
         raise AssertionError(errmsg)
     
-    # Create a minimal environ
+    return
+
+
+def test_reset_wsgi_application_resolves_again():
+    """
+        After reset_wsgi_application the application is found again.
+    """
+    first_app = WSGIApplication()
+    second_app = WSGIApplication()
+    
+    try:
+        set_wsgi_application(first_app)
+        reset_wsgi_application()
+        set_wsgi_application(second_app)
+        current = get_wsgi_application()
+    finally:
+        reset_wsgi_application()
+    
+    if current is not second_app:
+        errmsg = "Expected the application set after the reset"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_resolve_target_naming_an_asgi_application_bridges_it():
+    """
+        A plain ASGI application is served through an ASGIBridge of its own.
+    """
+    
+    application = resolve_wsgi_application("ccai.testshared.servers.plainapps:asgi_app")
+    
+    if not isinstance(application, ASGIBridge):
+        errmsg = f"Expected an ASGIBridge, got {type(application).__name__}"
+        raise AssertionError(errmsg)
+    
+    start_response = MockStartResponse()
     environ = {
         "REQUEST_METHOD": "GET",
         "PATH_INFO": "/",
         "QUERY_STRING": "",
         "SERVER_NAME": "localhost",
         "SERVER_PORT": "8000",
+        "SERVER_PROTOCOL": "HTTP/1.1",
         "wsgi.url_scheme": "http",
         "wsgi.input": BytesIO(b""),
-        "wsgi.errors": BytesIO(),
-        "wsgi.multithread": True,
-        "wsgi.multiprocess": False,
-        "wsgi.run_once": False,
     }
     
-    # Create a mock start_response
-    start_response = MockStartResponse()
+    try:
+        body_iterable = application(environ, start_response)
+        body = b"".join(body_iterable)
+        body_iterable.close()
+    finally:
+        application.shutdown()
     
-    # Call the application
-    result = app(environ, start_response)
-    
-    # Result must be iterable
-    if not hasattr(result, "__iter__"):
-        errmsg = "Application must return an iterable"
+    if start_response.status != "200 OK" or body != b"asgi":
+        errmsg = f"Expected the ASGI application to answer, got {start_response.status} {body!r}"
         raise AssertionError(errmsg)
     
-    # Consume the iterator
-    body_chunks = list(result)
+    return
+
+
+def test_as_wsgi_application_keeps_a_wsgi_callable():
+    """
+        A WSGI callable is served as it is.
+    """
+    import ccai.testshared.servers.plainapps as plainapps
     
-    # start_response must have been called
-    if start_response.call_count < 1:
-        errmsg = "start_response must be called"
+    if as_wsgi_application(plainapps.wsgi_app) is not plainapps.wsgi_app:
+        errmsg = "Expected the WSGI callable itself"
         raise AssertionError(errmsg)
     
-    # All chunks must be bytes
-    for chunk in body_chunks:
-        if not isinstance(chunk, bytes):
-            errmsg = f"All chunks must be bytes, got {type(chunk)}"
+    return
+
+
+def test_as_wsgi_application_refuses_what_is_not_an_application():
+    """
+        An object that is not callable is a configuration error.
+    """
+    try:
+        as_wsgi_application(42)
+    except ConfigurationError:
+        return
+    
+    errmsg = "Expected ConfigurationError for a non-callable object"
+    raise AssertionError(errmsg)
+
+
+def test_resolve_target_that_cannot_be_imported_is_a_configuration_error():
+    """
+        A target whose module does not exist fails early.
+    """
+    try:
+        resolve_wsgi_application("ccai.testshared.servers.does_not_exist:app")
+    except ConfigurationError as err:
+        if "does_not_exist" not in str(err):
+            errmsg = f"Expected the message to name the target, got {err}"
             raise AssertionError(errmsg)
+        return
     
-    # Clean up
-    reset_wsgi_application()
+    errmsg = "Expected ConfigurationError for a target that cannot be imported"
+    raise AssertionError(errmsg)
+
+
+def _run_resolution_probe(code: str, extra_env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
+    """
+        Run code that resolves the WSGI application in a child process.
+        
+        The web application persona is process-global, so what is
+        established in this process must not decide the outcome.
+    """
+    from ccai.testshared.servers.serverprocess import child_environment
+    
+    env = child_environment(extra_env)
+    env.pop(APP_TARGET_ENVIRON_KEY, None)
+    if extra_env is not None and APP_TARGET_ENVIRON_KEY in extra_env:
+        env[APP_TARGET_ENVIRON_KEY] = extra_env[APP_TARGET_ENVIRON_KEY]
+    
+    rtnval = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return rtnval
+
+
+def test_get_wsgi_application_without_application_fails_early():
+    """
+        With no target and no persona there is nothing to serve: ConfigurationError.
+    """
+    code = (
+        "from ccai.webworks.wsgi.application import get_wsgi_application\n"
+        "get_wsgi_application()\n"
+    )
+    completed = _run_resolution_probe(code)
+    
+    if completed.returncode == 0 or "ConfigurationError" not in completed.stderr:
+        errmsg = f"Expected a ConfigurationError, got {completed.returncode}:\n{completed.stderr}"
+        raise AssertionError(errmsg)
+    
+    if APP_TARGET_ENVIRON_KEY not in completed.stderr:
+        errmsg = f"Expected the message to name {APP_TARGET_ENVIRON_KEY}, got:\n{completed.stderr}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_get_wsgi_application_serves_the_established_persona():
+    """
+        Without a target, the established web application persona is served
+        through its wsgi_app.
+    """
+    code = (
+        "import helloworld.app as site\n"
+        "from ccai.webworks.wsgi.application import get_wsgi_application\n"
+        "application = get_wsgi_application()\n"
+        "print('SAME=' + str(application is site.webapp.wsgi_app))\n"
+    )
+    completed = _run_resolution_probe(code)
+    
+    if completed.returncode != 0 or "SAME=True" not in completed.stdout:
+        errmsg = f"Expected the persona's wsgi_app, got {completed.returncode}:\n{completed.stdout}\n{completed.stderr}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_target_naming_the_site_asgi_app_serves_the_persona_wsgi_app():
+    """
+        A target naming the ASGI app a site exports is served by the persona's
+        wsgi_app, so the persona's lifespan is not run twice.
+    """
+    code = (
+        "import helloworld.app as site\n"
+        "from ccai.webworks.wsgi.application import resolve_wsgi_application\n"
+        "application = resolve_wsgi_application('helloworld.app:app')\n"
+        "print('SAME=' + str(application is site.webapp.wsgi_app))\n"
+    )
+    completed = _run_resolution_probe(code)
+    
+    if completed.returncode != 0 or "SAME=True" not in completed.stdout:
+        errmsg = f"Expected the persona's wsgi_app, got {completed.returncode}:\n{completed.stdout}\n{completed.stderr}"
+        raise AssertionError(errmsg)
     
     return
 

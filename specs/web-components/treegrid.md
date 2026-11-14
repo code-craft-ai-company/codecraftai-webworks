@@ -31,11 +31,15 @@ where column alignment is unimportant, consider `<mj-list>` with nesting.
 
 ## 3. Anatomy
 - **Column header row** — identical to `<mj-data-table>`; supports sort, resize, reorder.
+  It is inside the body's scroll container and sticks to its top: it scrolls sideways
+  with the rows, so focusing a header cell that is out of view brings its column into
+  view and every header stays over its column.
 - **Tree row** — `role="row"` with `aria-level`, `aria-expanded`, `aria-setsize`, `aria-posinset`.
 - **Expander cell** — first column cell contains an expand/collapse toggle button; indented by `level * --mj-tg-indent`.
 - **Leaf row** — row with no children; no expander rendered; `aria-expanded` omitted.
 - **Children group** — collapsible container of child rows; rendered immediately after their parent row in DOM order.
-- **Virtualized body** — same windowed render engine as `<mj-data-table>`; flattened row list with depth metadata.
+- **Virtualized body** (`::part(body)`) — the scroll container of the header row and the rows;
+  same windowed render engine as `<mj-data-table>`; flattened row list with depth metadata.
 
 ## 4. Variants & modes
 | Variant | `mode` value | Behavior |

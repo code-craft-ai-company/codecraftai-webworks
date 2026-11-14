@@ -233,7 +233,8 @@ def test_property_operation_completeness():
         For any EndpointDescriptor with multiple HTTP methods, the generated
         OpenAPI specification SHALL contain a separate operation object for
         each method, all with correct operationId, summary, description,
-        and tags.
+        and tags. The operationId is the handler name, with the method
+        appended when the handler serves more than one.
 
         This test exercises the property across diverse method combinations
         and documentation configurations.
@@ -301,13 +302,20 @@ def test_property_operation_completeness():
             operation = path_item[method_lower]
 
             # ---------------------------------------------------------
-            # Check 2: operationId matches handler name (Req 3.4)
+            # Check 2: operationId comes from the handler name (Req 3.4)
+            # and is unique. A handler serving one method gives its name
+            # as it is; one serving several gives name_method, because
+            # OpenAPI requires every operationId to be different.
             # ---------------------------------------------------------
             op_id = operation.get("operationId")
-            if op_id != handler_name:
+            if len(methods) == 1:
+                expected_op_id = handler_name
+            else:
+                expected_op_id = f"{handler_name}_{method_lower}"
+            if op_id != expected_op_id:
                 errmsg = (
                     f"[{case_desc}][{method_lower}] operationId is "
-                    f"'{op_id}', expected '{handler_name}'"
+                    f"'{op_id}', expected '{expected_op_id}'"
                 )
                 raise AssertionError(errmsg)
 

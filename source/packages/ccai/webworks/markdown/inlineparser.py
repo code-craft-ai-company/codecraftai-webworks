@@ -37,6 +37,14 @@ from ccai.webworks.markdown.inlinenode import (
     INLINE_KIND_TEXT,
     InlineNode,
 )
+from ccai.webworks.markdown.inlinenodechain import InlineNodeChain
+
+#: The position on the delimiter stack that stands for "no delimiter".
+MARKDOWN_NO_DELIMITER = -1
+
+#: How deeply emphasis, links and images may nest. Content nested deeper keeps its text and loses its markup, so the
+#: walks over the inline nodes (merging text, linking addresses, writing HTML) never recurse further than this.
+MARKDOWN_MAX_INLINE_NESTING = 32
 
 #: The ASCII punctuation characters that a backslash makes literal.
 MARKDOWN_ESCAPABLE_CHARACTERS = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
@@ -179,6 +187,7 @@ class InlineParser:
         self._nodes: List[InlineNode] = []
         self._delimiters: List[DelimiterRun] = []
         self._brackets: List[BracketOpener] = []
+        self._last_backtick_runs: Optional[Dict[int, int]] = None
         return
 
     def parse(self, text: str) -> List[InlineNode]:
@@ -194,6 +203,7 @@ class InlineParser:
         self._nodes = []
         self._delimiters = []
         self._brackets = []
+        self._last_backtick_runs = None
 
         length = len(text)
         while self._pos < length:
@@ -219,7 +229,9 @@ class InlineParser:
             else:
                 self._parse_plain_text()
 
-        self._process_emphasis(bottom=0)
+        self._process_emphasis(bottom=0, first_node=0)
+
+        self._limit_nesting(self._nodes)
 
         merged = self._merge_text_nodes(self._nodes)
         rtnval = self._link_bare_urls(merged)
@@ -293,9 +305,12 @@ class InlineParser:
         run_end = self._run_end(start, "`")
         run_length = run_end - start
 
+        # Looking for the closing run reads every run of backticks up to it. That is only done when a run of the
+        # right length is known to follow; otherwise a text made of runs of different lengths would be read to its
+        # end once for every run.
         search = run_end
         close_start = -1
-        while True:
+        while self._has_backtick_run_after(run_length, run_end):
             found = self._text.find("`", search)
             if found < 0:
                 break
@@ -318,6 +333,33 @@ class InlineParser:
         self._nodes.append(InlineNode(INLINE_KIND_CODE, text=content))
         self._pos = close_start + run_length
         return
+
+    def _has_backtick_run_after(self, run_length: int, position: int) -> bool:
+        """
+            Whether a run of exactly ``run_length`` backticks starts at or after a position. The first call reads the
+            text once and notes where the last run of each length starts.
+
+            :param run_length: The length of the run to look for.
+            :param position: The position to look from.
+
+            :returns: True when such a run exists.
+        """
+        if self._last_backtick_runs is None:
+            last_runs: Dict[int, int] = {}
+            search = 0
+            while True:
+                found = self._text.find("`", search)
+                if found < 0:
+                    break
+                found_end = self._run_end(found, "`")
+                last_runs[found_end - found] = found
+                search = found_end
+            self._last_backtick_runs = last_runs
+
+        rtnval = False
+        if run_length in self._last_backtick_runs:
+            rtnval = self._last_backtick_runs[run_length] >= position
+        return rtnval
 
     def _run_end(self, start: int, char: str) -> int:
         """
@@ -441,9 +483,10 @@ class InlineParser:
 
         destination, title, end_position = target
 
-        self._process_emphasis(bottom=opener.delimiter_bottom)
+        opener_index = self._last_index_of(opener.node)
 
-        opener_index = self._index_of(opener.node)
+        self._process_emphasis(bottom=opener.delimiter_bottom, first_node=opener_index + 1)
+
         children = self._nodes[opener_index + 1:]
         del self._nodes[opener_index:]
 
@@ -456,8 +499,12 @@ class InlineParser:
 
         self._brackets.pop()
         if not opener.is_image:
-            for earlier in self._brackets:
+            # A link cannot contain a link, so every "[" below this one is made inactive. Every time this happens the
+            # whole stack is covered, so below an inactive "[" there is nothing left to do.
+            for earlier in reversed(self._brackets):
                 if not earlier.is_image:
+                    if not earlier.active:
+                        break
                     earlier.active = False
 
         self._pos = end_position
@@ -749,9 +796,11 @@ class InlineParser:
             self._pos += 1
         return
 
-    def _index_of(self, node: InlineNode) -> int:
+    def _last_index_of(self, node: InlineNode) -> int:
         """
-            The position of a node in the node list, compared by identity.
+            The position of a node in the node list, compared by identity and searched from the end. The node of an
+            opening bracket is found this way: everything behind it is about to become the content of its link, so
+            the search costs no more than the link has nodes.
 
             :param node: The node.
 
@@ -759,44 +808,117 @@ class InlineParser:
 
             :raises: ValueError
         """
-        for index, candidate in enumerate(self._nodes):
-            if candidate is node:
+        index = len(self._nodes) - 1
+        while index >= 0:
+            if self._nodes[index] is node:
                 return index
+            index -= 1
 
         errmsg = "The inline node {!r} is not in the node list of the parser.".format(node)
         raise ValueError(errmsg)
 
-    def _process_emphasis(self, *, bottom: int) -> None:
+    def _process_emphasis(self, *, bottom: int, first_node: int) -> None:
         """
             Matches openers and closers on the delimiter stack above ``bottom`` and wraps what is between them in
             emphasis, strong or strikethrough nodes, following the "process emphasis" procedure of CommonMark.
 
+            The delimiters above ``bottom`` are taken off the stack and linked to their neighbours by position, and
+            the nodes they belong to are put in an :class:`InlineNodeChain`, so matching a pair costs the same however
+            many delimiters and nodes there are. For each kind of closer the procedure remembers how far down the
+            stack it has already looked without finding an opener (the "openers bottom" of CommonMark) and does not
+            look there again.
+
             :param bottom: The height of the stack below which delimiters are left alone.
+            :param first_node: The position in the node list of the first node that can belong to a delimiter above
+                               ``bottom``. The nodes before it are left alone.
         """
-        current = bottom
-        while current < len(self._delimiters):
-            closer = self._delimiters[current]
+        runs = self._delimiters[bottom:]
+        del self._delimiters[bottom:]
+
+        total = len(runs)
+        if total == 0:
+            return
+
+        chain = InlineNodeChain(self._nodes[first_node:])
+
+        # The delimiters as a linked sequence: previous_run[i] and next_run[i] are the positions in "runs" of the
+        # neighbours of runs[i] that are still on the stack.
+        previous_run: List[int] = []
+        next_run: List[int] = []
+        for position in range(total):
+            previous_run.append(position - 1)
+            next_run.append(position + 1)
+        next_run[total - 1] = MARKDOWN_NO_DELIMITER
+
+        # For each kind of closer, the position at or below which no opener can match it.
+        openers_bottom: Dict[Tuple[str, bool, int], int] = {}
+
+        current = 0
+        while current != MARKDOWN_NO_DELIMITER:
+            closer = runs[current]
             if not closer.can_close:
-                current += 1
+                current = next_run[current]
                 continue
 
-            opener_index = current - 1
-            found_index = -1
-            while opener_index >= bottom:
-                opener = self._delimiters[opener_index]
+            closer_kind = self._closer_kind(closer)
+            search_bottom = openers_bottom.get(closer_kind, MARKDOWN_NO_DELIMITER)
+
+            found = MARKDOWN_NO_DELIMITER
+            candidate = previous_run[current]
+            while candidate > search_bottom:
+                opener = runs[candidate]
                 if opener.char == closer.char and opener.can_open and self._delimiters_match(opener=opener, closer=closer):
-                    found_index = opener_index
+                    found = candidate
                     break
-                opener_index -= 1
+                candidate = previous_run[candidate]
 
-            if found_index >= 0:
-                current = self._apply_emphasis(opener_index=found_index, closer_index=current)
-            elif not closer.can_open:
-                del self._delimiters[current]
-            else:
-                current += 1
+            if found != MARKDOWN_NO_DELIMITER:
+                current = self._apply_emphasis(runs, previous_run, next_run, chain, opener_index=found, closer_index=current)
+                continue
 
-        del self._delimiters[bottom:]
+            # No opener matches this kind of closer anywhere below it.
+            openers_bottom[closer_kind] = previous_run[current]
+
+            following = next_run[current]
+            if not closer.can_open:
+                self._unlink_delimiter(previous_run, next_run, current)
+            current = following
+
+        self._nodes[first_node:] = chain.to_list()
+        return
+
+    def _closer_kind(self, closer: DelimiterRun) -> Tuple[str, bool, int]:
+        """
+            What decides whether an opener matches a closer, apart from the opener itself: the closer's character and,
+            for ``*`` and ``_``, whether it can also open and its original length modulo three (the "multiple of three"
+            rule); for ``~``, its length. Two closers of the same kind are matched by exactly the same openers.
+
+            :param closer: The closing run.
+
+            :returns: The kind, usable as a dictionary key.
+        """
+        if closer.char == "~":
+            rtnval = (closer.char, False, closer.count)
+        else:
+            rtnval = (closer.char, closer.can_open, closer.original_count % 3)
+        return rtnval
+
+    def _unlink_delimiter(self, previous_run: List[int], next_run: List[int], position: int) -> None:
+        """
+            Takes a delimiter out of the linked sequence of delimiters.
+
+            :param previous_run: For each delimiter, the position of the delimiter before it.
+            :param next_run: For each delimiter, the position of the delimiter after it.
+            :param position: The position of the delimiter to take out.
+        """
+        before = previous_run[position]
+        after = next_run[position]
+
+        if before != MARKDOWN_NO_DELIMITER:
+            next_run[before] = after
+        if after != MARKDOWN_NO_DELIMITER:
+            previous_run[after] = before
+
         return
 
     def _delimiters_match(self, *, opener: DelimiterRun, closer: DelimiterRun) -> bool:
@@ -824,18 +946,23 @@ class InlineParser:
 
         return rtnval
 
-    def _apply_emphasis(self, *, opener_index: int, closer_index: int) -> int:
+    def _apply_emphasis(self, runs: List[DelimiterRun], previous_run: List[int], next_run: List[int], chain: InlineNodeChain,
+                        *, opener_index: int, closer_index: int) -> int:
         """
             Wraps the nodes between a matched opener and closer, uses up their delimiter characters and removes the
             delimiters between them from the stack.
 
-            :param opener_index: The position of the opener on the delimiter stack.
-            :param closer_index: The position of the closer on the delimiter stack.
+            :param runs: The delimiters being processed.
+            :param previous_run: For each delimiter, the position of the delimiter before it.
+            :param next_run: For each delimiter, the position of the delimiter after it.
+            :param chain: The nodes the delimiters belong to.
+            :param opener_index: The position of the opener in ``runs``.
+            :param closer_index: The position of the closer in ``runs``.
 
-            :returns: The position on the delimiter stack to continue from.
+            :returns: The position in ``runs`` to continue from, or :data:`MARKDOWN_NO_DELIMITER` at the end.
         """
-        opener = self._delimiters[opener_index]
-        closer = self._delimiters[closer_index]
+        opener = runs[opener_index]
+        closer = runs[closer_index]
 
         if closer.char == "~":
             used = closer.count
@@ -852,27 +979,75 @@ class InlineParser:
         opener.node.text = opener.node.text[:len(opener.node.text) - used]
         closer.node.text = closer.node.text[used:]
 
-        open_position = self._index_of(opener.node)
-        close_position = self._index_of(closer.node)
-        inner = self._nodes[open_position + 1:close_position]
-        wrapper = InlineNode(kind, children=inner)
-        self._nodes[open_position + 1:close_position] = [wrapper]
+        open_position = chain.position_of(opener.node)
+        close_position = chain.position_of(closer.node)
+        wrapper = InlineNode(kind)
+        chain.wrap_between(open_position, close_position, wrapper)
 
-        del self._delimiters[opener_index + 1:closer_index]
-        next_index = opener_index + 1
+        # The delimiters between the opener and the closer are inside the wrapper now and can no longer match.
+        next_run[opener_index] = closer_index
+        previous_run[closer_index] = opener_index
 
         if opener.count == 0:
-            opener_position = self._index_of(opener.node)
-            del self._nodes[opener_position]
-            del self._delimiters[opener_index]
-            next_index -= 1
+            chain.remove(open_position)
+            self._unlink_delimiter(previous_run, next_run, opener_index)
 
+        next_index = closer_index
         if closer.count == 0:
-            closer_position = self._index_of(closer.node)
-            del self._nodes[closer_position]
-            del self._delimiters[next_index]
+            chain.remove(close_position)
+            next_index = next_run[closer_index]
+            self._unlink_delimiter(previous_run, next_run, closer_index)
 
         return next_index
+
+    def _limit_nesting(self, nodes: List[InlineNode]) -> None:
+        """
+            Makes sure emphasis, links and images nest no deeper than :data:`MARKDOWN_MAX_INLINE_NESTING`. A node
+            nested deeper is replaced by its content, so its text is kept and its markup is dropped. The nodes are
+            changed in place.
+
+            This walk and the flattening it does use a list of work to do rather than recursion, because the nodes it
+            is given can be nested thousands deep.
+
+            :param nodes: The top-level nodes.
+        """
+        pending: List[Tuple[List[InlineNode], int]] = [(nodes, 0)]
+        while len(pending) > 0:
+            siblings, depth = pending.pop()
+
+            if depth >= MARKDOWN_MAX_INLINE_NESTING:
+                siblings[:] = self._flatten_nodes(siblings)
+                continue
+
+            for node in siblings:
+                if len(node.children) > 0:
+                    pending.append((node.children, depth + 1))
+
+        return
+
+    def _flatten_nodes(self, nodes: List[InlineNode]) -> List[InlineNode]:
+        """
+            The text, code and line break nodes found in a list of nodes and in everything nested in them, in order.
+
+            :param nodes: The nodes.
+
+            :returns: The nodes that hold no other nodes.
+        """
+        flattened: List[InlineNode] = []
+
+        pending: List[InlineNode] = list(reversed(nodes))
+        while len(pending) > 0:
+            node = pending.pop()
+
+            is_container = node.kind in (INLINE_KIND_EMPHASIS, INLINE_KIND_STRONG, INLINE_KIND_STRIKETHROUGH, INLINE_KIND_LINK,
+                                         INLINE_KIND_IMAGE)
+            if is_container:
+                pending.extend(reversed(node.children))
+                continue
+
+            flattened.append(node)
+
+        return flattened
 
     def _merge_text_nodes(self, nodes: List[InlineNode]) -> List[InlineNode]:
         """
@@ -883,19 +1058,27 @@ class InlineParser:
             :returns: The merged list.
         """
         merged: List[InlineNode] = []
+
+        # The texts of the neighbouring text nodes read since the last other node. They are joined once, when the
+        # run of text nodes ends; adding each one to a growing string copies that string every time.
+        run_texts: List[str] = []
+
         for node in nodes:
             if node.kind == INLINE_KIND_TEXT:
-                if node.text == "":
-                    continue
-                if len(merged) > 0 and merged[-1].kind == INLINE_KIND_TEXT:
-                    merged[-1].text = merged[-1].text + node.text
-                    continue
-                merged.append(InlineNode(INLINE_KIND_TEXT, text=node.text))
+                if node.text != "":
+                    run_texts.append(node.text)
                 continue
+
+            if len(run_texts) > 0:
+                merged.append(InlineNode(INLINE_KIND_TEXT, text="".join(run_texts)))
+                run_texts = []
 
             if len(node.children) > 0:
                 node.children = self._merge_text_nodes(node.children)
             merged.append(node)
+
+        if len(run_texts) > 0:
+            merged.append(InlineNode(INLINE_KIND_TEXT, text="".join(run_texts)))
 
         return merged
 

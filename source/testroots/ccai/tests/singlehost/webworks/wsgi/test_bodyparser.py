@@ -831,3 +831,198 @@ def test_property_body_within_limit_succeeds():
             raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# Tests for multipart parameters, repeated fields and reading without a length
+# =============================================================================
+
+def build_multipart_body(boundary: str, parts: list) -> bytes:
+    """
+        Build a multipart/form-data body from (disposition, content) pairs.
+        
+        :param boundary: Boundary string.
+        :param parts: List of (Content-Disposition value, content bytes) pairs.
+        
+        :returns: The encoded body.
+    """
+    lines = []
+    
+    for disposition, content in parts:
+        lines.append(b"--" + boundary.encode("ascii") + b"\r\n")
+        lines.append(b"Content-Disposition: " + disposition.encode("utf-8") + b"\r\n\r\n")
+        lines.append(content + b"\r\n")
+    
+    lines.append(b"--" + boundary.encode("ascii") + b"--\r\n")
+    
+    rtnval = b"".join(lines)
+    return rtnval
+
+
+def test_parse_multipart_keeps_semicolon_in_quoted_filename():
+    """
+        Test that a semicolon inside a quoted filename does not end the parameter.
+    """
+    parser = RequestBodyParser()
+    boundary = "boundary123"
+    body = build_multipart_body(boundary, [
+        ('form-data; name="doc"; filename="a;b.txt"', b"content"),
+    ])
+    
+    _, uploaded_files = parser.parse_multipart(
+        BytesIO(body),
+        f"multipart/form-data; boundary={boundary}",
+        len(body)
+    )
+    
+    if "doc" not in uploaded_files:
+        errmsg = f"Expected the file field 'doc', got {list(uploaded_files.keys())}"
+        raise AssertionError(errmsg)
+    
+    if uploaded_files["doc"].filename != "a;b.txt":
+        errmsg = f"Expected filename 'a;b.txt', got {uploaded_files['doc'].filename!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_multipart_multi_keeps_every_value_of_repeated_field():
+    """
+        Test that a field sent several times keeps all of its values, in order.
+    """
+    parser = RequestBodyParser()
+    boundary = "boundary123"
+    body = build_multipart_body(boundary, [
+        ('form-data; name="colour"', b"red"),
+        ('form-data; name="colour"', b"green"),
+        ('form-data; name="size"', b"large"),
+    ])
+    
+    form_fields, _ = parser.parse_multipart_multi(
+        BytesIO(body),
+        f"multipart/form-data; boundary={boundary}",
+        len(body)
+    )
+    
+    if form_fields.get("colour") != ["red", "green"]:
+        errmsg = f"Expected both values of 'colour', got {form_fields.get('colour')}"
+        raise AssertionError(errmsg)
+    
+    if form_fields.get("size") != ["large"]:
+        errmsg = f"Expected one value of 'size', got {form_fields.get('size')}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_multipart_multi_keeps_every_file_of_repeated_field():
+    """
+        Test that a file input that sent several files keeps all of them.
+    """
+    parser = RequestBodyParser()
+    boundary = "boundary123"
+    body = build_multipart_body(boundary, [
+        ('form-data; name="photos"; filename="one.png"', b"first"),
+        ('form-data; name="photos"; filename="two.png"', b"second"),
+    ])
+    
+    _, uploaded_files = parser.parse_multipart_multi(
+        BytesIO(body),
+        f"multipart/form-data; boundary={boundary}",
+        len(body)
+    )
+    
+    filenames = [uploaded_file.filename for uploaded_file in uploaded_files.get("photos", [])]
+    
+    if filenames != ["one.png", "two.png"]:
+        errmsg = f"Expected both uploaded files, got {filenames}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_multipart_does_not_split_on_boundary_inside_a_line():
+    """
+        Test that the boundary text in the middle of a line of content is content.
+    """
+    parser = RequestBodyParser()
+    boundary = "boundary123"
+    content = b"before --boundary123 after"
+    body = build_multipart_body(boundary, [
+        ('form-data; name="note"', content),
+    ])
+    
+    form_fields, _ = parser.parse_multipart(
+        BytesIO(body),
+        f"multipart/form-data; boundary={boundary}",
+        len(body)
+    )
+    
+    if form_fields.get("note") != content.decode("ascii"):
+        errmsg = f"Expected the whole content of the field, got {form_fields.get('note')!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_uploaded_file_safe_filename_removes_path():
+    """
+        Test that safe_filename cannot point outside of the directory it is saved in.
+    """
+    uploaded_file = UploadedFile(
+        filename="../../etc/cron.d/job",
+        content_type="text/plain",
+        content=b"",
+        size=0
+    )
+    
+    safe_name = uploaded_file.safe_filename
+    
+    if "/" in safe_name or ".." in safe_name or len(safe_name) == 0:
+        errmsg = f"Expected a filename without path parts, got {safe_name!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_raw_refuses_negative_content_length():
+    """
+        Test that a negative content length is refused and not read as "everything".
+    """
+    parser = RequestBodyParser()
+    
+    raised = False
+    try:
+        parser.parse_raw(BytesIO(b"hello"), -1)
+    except BadRequestBody:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected BadRequestBody for a negative content length"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_parse_raw_stops_reading_at_limit_without_content_length():
+    """
+        Test that a body without a stated length is not read far past the limit.
+    """
+    parser = RequestBodyParser(max_size=1000)
+    wsgi_input = BytesIO(b"a" * (5 * 1024 * 1024))
+    
+    raised = False
+    try:
+        parser.parse_raw(wsgi_input, None)
+    except RequestEntityTooLarge:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected RequestEntityTooLarge for a body over the limit"
+        raise AssertionError(errmsg)
+    
+    if wsgi_input.tell() > 1024 * 1024:
+        errmsg = f"Expected reading to stop near the limit, {wsgi_input.tell()} bytes were read"
+        raise AssertionError(errmsg)
+    
+    return

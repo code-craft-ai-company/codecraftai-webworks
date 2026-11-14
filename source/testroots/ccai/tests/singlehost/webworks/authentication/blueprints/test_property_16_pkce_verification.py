@@ -14,6 +14,7 @@ import string
 
 from base64 import urlsafe_b64encode
 
+from ccai.webworks.authentication.core import AuthenticationContext, Principal
 from ccai.webworks.authentication.blueprints.oauth2 import (
     OAuth2Blueprint,
 )
@@ -22,6 +23,9 @@ from ccai.webworks.authentication.blueprints.oauth2 import (
 # =============================================================================
 # Test Helpers
 # =============================================================================
+
+
+RESOURCE_OWNER = Principal(identifier="resource-owner-1")
 
 
 class MockJsonRequest:
@@ -33,6 +37,10 @@ class MockJsonRequest:
     def __init__(self, data=None, query_params=None):
         self._data = data or {}
         self.query_params = query_params or {}
+
+        # The resource owner the authentication middleware established.
+        # The authorization endpoint issues codes on this user's behalf.
+        self.auth = AuthenticationContext(principal=RESOURCE_OWNER, scheme="Test")
 
     def json(self):
         return self._data
@@ -177,7 +185,7 @@ def test_property_16_pkce_verification():
         clients = {
             client_id: {
                 "client_id": client_id,
-                "client_secret": _random_string(10, 20),
+                "client_type": "public",
                 "redirect_uris": [redirect_uri],
                 "grant_types": ["authorization_code"],
             }

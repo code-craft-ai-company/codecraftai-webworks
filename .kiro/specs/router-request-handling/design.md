@@ -664,6 +664,34 @@ class Dispatcher:
         pass
 ```
 
+#### Request lifecycle hooks
+
+The `Dispatcher` takes two optional arguments a `WebApplication` passes:
+`request_hooks` (the application's `RequestLifecycleHooks`) and
+`on_first_request` (the callable that fires `on_app_ready` when the server
+did not start the application through the ASGI lifespan). `dispatch` and
+`dispatch_async` share one structure:
+
+```
+if first request pending or a request hook has a callback:
+    prepare request (canonical path)
+    first-request work, once (lock): on_first_request(); before_first_request(request)
+    response = before_request(request) or run pipeline
+        (pipeline: global middleware -> routing -> scoped middleware -> handler;
+         an unhandled exception -> on_request_error(request, exc) -> 500)
+    response = after_request(request, response)      # chained, may replace
+    on failure of a hook above: on_request_error, 500
+    HEAD rule
+    finally: teardown_request(request, response, exception)
+else:
+    run pipeline; HEAD rule                            # the plain path
+```
+
+The plain path costs a flag and `HookManager.has_any_callbacks` (a
+dictionary-size check when nothing is registered), so an application
+without extensions executes no hook for a request. Hook callbacks are
+synchronous and run on the dispatching thread.
+
 ### Exception Classes
 
 ```python

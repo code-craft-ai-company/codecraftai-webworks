@@ -13,69 +13,54 @@ Key design principles:
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           Production Server                                  │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                      ProductionServer                                │    │
-│  │  - config: ServerConfig                                             │    │
-│  │  - worker_manager: WorkerManager                                    │    │
-│  │  - signal_handler: SignalHandler                                    │    │
-│  │  - metrics_collector: MetricsCollector                              │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│                              │                                               │
-│          ┌───────────────────┼───────────────────┐                          │
-│          ▼                   ▼                   ▼                          │
-│  ┌───────────────┐   ┌───────────────┐   ┌───────────────┐                 │
-│  │ WorkerManager │   │ SignalHandler │   │HealthChecker  │                 │
-│  │ - workers     │   │ - handlers    │   │ - liveness    │                 │
-│  │ - spawn()     │   │ - register()  │   │ - readiness   │                 │
-│  │ - terminate() │   │ - handle()    │   │ - status()    │                 │
-│  └───────────────┘   └───────────────┘   └───────────────┘                 │
-└─────────────────────────────────────────────────────────────────────────────┘
+The production server is the built-in WSGI server (`ccai.webworks.wsgi`) with a
+production layer on top (revision of November 2026, audit finding WW-0174; the
+first implementation had in-process stub workers and never bound a socket).
+There is one socket server in the package: `wsgi.WSGIServer` binds, parses
+HTTP/1.1, pre-forks the workers, runs their threads, terminates TLS, shuts down
+gracefully and replaces workers; `ProductionServer` subclasses it.
 
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Worker Management Layer                              │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                       WorkerManager                                  │    │
-│  │  - num_workers: int                                                 │    │
-│  │  - max_requests: Optional[int]                                      │    │
-│  │  - max_requests_jitter: int                                         │    │
-│  │  - timeout: Optional[int]                                           │    │
-│  │  - worker_class: Type[Worker]                                       │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│                              │                                               │
-│          ┌───────────────────┼───────────────────┐                          │
-│          ▼                   ▼                   ▼                          │
-│  ┌───────────────┐   ┌───────────────┐   ┌───────────────┐                 │
-│  │ SyncWorker    │   │ AsyncWorker   │   │ GeventWorker  │                 │
-│  │ - WSGI        │   │ - ASGI        │   │ - greenlets   │                 │
-│  │ - threads     │   │ - async/await │   │ - cooperative │                 │
-│  └───────────────┘   └───────────────┘   └───────────────┘                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Observability Layer                                  │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                      MetricsCollector                                │    │
-│  │  - request_count: Counter                                           │    │
-│  │  - request_latency: Histogram                                       │    │
-│  │  - error_rate: Counter                                              │    │
-│  │  - active_connections: Gauge                                        │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-│                              │                                               │
-│          ┌───────────────────┼───────────────────┐                          │
-│          ▼                   ▼                   ▼                          │
-│  ┌───────────────┐   ┌───────────────┐   ┌───────────────┐                 │
-│  │StructuredLogger│  │ RequestTracer │   │ PrometheusExp │                 │
-│  │ - json format │   │ - request_id  │   │ - /metrics    │                 │
-│  │ - context     │   │ - spans       │   │ - exposition  │                 │
-│  └───────────────┘   └───────────────┘   └───────────────┘                 │
-└─────────────────────────────────────────────────────────────────────────────┘
 ```
+                        master process
+┌──────────────────────────────────────────────────────────────────────────┐
+│ ProductionServer(WSGIServer)                                              │
+│   serve(): validate ─ on_starting ─ chdir ─ daemon ─ TLS context (SSLManager)│
+│            ─ bind (SocketListener) ─ _after_bind:                         │
+│                PID file ─ log files ─ drop privileges ─ worker tmp dir    │
+│                ─ load application (preload/object) ─ build pipeline       │
+│            ─ spawn workers (wsgi.WorkerManager, fork) ─ when_ready        │
+│            ─ main loop: reap/replace workers, SIGHUP -> replace_workers   │
+│            ─ SIGTERM/SIGINT -> graceful shutdown ─ on_exit ─ cleanup      │
+│   exit callback: MetricsStore.retire_worker(pid)                          │
+└──────────────────────────────────────────────────────────────────────────┘
+                 │ fork (shared listening socket)
+                 ▼
+                        worker process (xN)
+┌──────────────────────────────────────────────────────────────────────────┐
+│ wsgi.Worker: accept loop + `threads` handler threads, HTTPParser limits   │
+│   (413/414/431 before the app), keep-alive, max_requests recycling        │
+│   app = ProductionMiddleware(application)                                  │
+│     on_worker_start: logger context, request-id log filter, health       │
+│        checks, metrics snapshot writer, application.on_worker_start       │
+│        (ASGIBridge: event loop thread + lifespan startup)                 │
+│     per request: request ID ─ 431 per header field ─ /health ─ /metrics   │
+│        ─ HTTPS redirect ─ request timeout into the environ ─ application  │
+│        ─ access log, metrics, span, memory limit                          │
+│   application = WebApplication.wsgi_app (ASGIBridge) or any WSGI callable │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+Removed in the revision, because the WSGI layer does the work for real:
+`Worker`, `SyncWorker`, `AsyncWorker`, `GeventWorker`, the production
+`WorkerManager`, `SignalHandler`, `ConnectionManager`, `ShutdownCoordinator`
+and `ReloadCoordinator`. The `async` worker class is gone: ASGI applications
+are served through the ASGI bridge, whose event loop runs in every worker. The
+`gevent` worker class is the WSGI worker run after `gevent.monkey.patch_all()`
+in the new worker process; selecting it without the `gevent` extra is a
+ConfigurationError.
+
+The ProductionServer only runs where `os.fork` exists (POSIX); elsewhere
+`serve()` raises ConfigurationError.
 
 ## Components and Interfaces
 
@@ -110,8 +95,9 @@ class ServerConfig:
     limit_request_line: int = 4094
     limit_request_fields: int = 100
     limit_request_field_size: int = 8190
-    limit_request_body: int = 0  # 0 = unlimited
-    limit_memory: Optional[int] = None
+    limit_request_body: int = 16 * 1024 * 1024  # the body is held in memory; 0 = unlimited
+    limit_memory: Optional[int] = None          # resident bytes per worker
+    worker_tmp_dir: Optional[str] = None        # parent of the workers' shared directory
     
     # SSL/TLS
     ssl_certfile: Optional[str] = None
@@ -158,353 +144,55 @@ class ServerConfig:
 ### Production Server
 
 ```python
-class ProductionServer:
-    """
-    Main production server class that orchestrates all components.
-    """
-    
-    def __init__(self, app: "WebApplication", config: ServerConfig):
-        self.app = app
-        self.config = config
-        self.worker_manager: Optional["WorkerManager"] = None
-        self.signal_handler: Optional["SignalHandler"] = None
-        self.health_checker: Optional["HealthChecker"] = None
-        self.metrics_collector: Optional["MetricsCollector"] = None
-        self.structured_logger: Optional["StructuredLogger"] = None
-        self.request_tracer: Optional["RequestTracer"] = None
-        self._state: ServerState = ServerState.STOPPED
-    
-    def start(self) -> None:
-        """
-        Start the production server.
-        
-        1. Initialize components
-        2. Set up signal handlers
-        3. Spawn workers
-        4. Begin accepting connections
-        """
-        pass
-    
-    def stop(self, graceful: bool = True) -> None:
-        """
-        Stop the production server.
-        
-        Args:
-            graceful: If True, allow in-flight requests to complete.
-        """
-        pass
-    
-    def reload(self) -> None:
-        """
-        Reload configuration without dropping connections.
-        """
-        pass
-    
-    def _initialize_components(self) -> None:
-        """Initialize all server components."""
-        pass
-    
-    def _setup_signal_handlers(self) -> None:
-        """Register signal handlers for SIGTERM, SIGINT, SIGHUP."""
-        pass
-    
-    def _write_pid_file(self) -> None:
-        """Write the master process PID to file."""
-        pass
-    
-    def _cleanup_pid_file(self) -> None:
-        """Remove the PID file on shutdown."""
-        pass
-
-
-class ServerState(Enum):
-    """Server lifecycle states."""
-    STOPPED = "stopped"
-    STARTING = "starting"
-    RUNNING = "running"
-    SHUTTING_DOWN = "shutting_down"
-    RELOADING = "reloading"
+class ProductionServer(WSGIServer):
+    def __init__(self, app=None, config: ServerConfig = None, app_factory=None): ...
+        # exactly one of app (WebApplication, ASGI app or WSGI callable, loaded
+        # already) and app_factory (called in the master with preload, else in
+        # every worker)
+    def serve(self) -> int: ...          # blocks; returns an EXIT_* code
+    def stop(self, graceful=True): ...   # thread-safe
+    def reload(self): ...                # as SIGHUP: replace the workers
+    def get_status(self) -> dict: ...
+    # WSGIServer hooks: _setup_ssl, _after_bind, _create_worker_manager,
+    # _after_spawn, _handle_sigint (graceful), _handle_reload (replace workers)
 ```
 
-### Worker Manager
+Startup order: configuration validation (ConfigurationError ends the run),
+`on_starting`, `chdir`, daemon, TLS context (the key is read while privileged),
+bind, PID file (refuses to start when it names a running process), log files,
+privilege drop (umask, group, user), worker temp directory, application
+loading, workers, `when_ready`. Exit codes: `EXIT_SUCCESS`, `EXIT_BIND_ERROR`,
+`EXIT_PID_FILE_ERROR`, `EXIT_APP_LOAD_ERROR` (the application could not be
+loaded in the master, or a worker failed to boot: the server stops instead of
+restarting workers that fail the same way), `EXIT_ERROR`.
 
-```python
-class WorkerManager:
-    """
-    Manages worker processes including spawning, monitoring, and termination.
-    """
-    
-    def __init__(self, config: ServerConfig, app: "WebApplication"):
-        self.config = config
-        self.app = app
-        self._workers: Dict[int, "Worker"] = {}
-        self._worker_pids: Dict[int, int] = {}  # worker_id -> pid
-        self._request_counts: Dict[int, int] = {}  # worker_id -> count
-        self._min_workers: int = 1
-    
-    def spawn_workers(self) -> None:
-        """
-        Spawn all worker processes (prefork model).
-        
-        Spawns config.workers processes before accepting any requests.
-        """
-        pass
-    
-    def spawn_worker(self, worker_id: int) -> "Worker":
-        """
-        Spawn a single worker process.
-        
-        Args:
-            worker_id: Unique identifier for the worker.
-        
-        Returns:
-            The spawned Worker instance.
-        """
-        pass
-    
-    def terminate_worker(self, worker_id: int, graceful: bool = True) -> None:
-        """
-        Terminate a worker process.
-        
-        Args:
-            worker_id: ID of the worker to terminate.
-            graceful: If True, allow in-flight requests to complete.
-        """
-        pass
-    
-    def restart_worker(self, worker_id: int) -> None:
-        """
-        Restart a worker process.
-        
-        Terminates the existing worker and spawns a new one.
-        """
-        pass
-    
-    def monitor_workers(self) -> None:
-        """
-        Monitor worker health and restart crashed workers.
-        
-        Runs in a loop, checking worker status and restarting
-        any that have crashed within 5 seconds.
-        """
-        pass
-    
-    def increment_request_count(self, worker_id: int) -> None:
-        """
-        Increment the request count for a worker.
-        
-        If max_requests is configured and exceeded, schedules
-        the worker for restart.
-        """
-        pass
-    
-    def get_worker_count(self) -> int:
-        """Return the number of active workers."""
-        return len(self._workers)
-    
-    def get_worker_status(self) -> Dict[int, "WorkerStatus"]:
-        """Return status information for all workers."""
-        pass
-    
-    def _calculate_max_requests(self, worker_id: int) -> int:
-        """
-        Calculate max requests for a worker with jitter.
-        
-        Returns:
-            max_requests + random(-jitter, +jitter)
-        """
-        pass
-    
-    def _get_default_worker_count(self) -> int:
-        """
-        Get default worker count based on CPU cores.
-        
-        Returns:
-            Number of CPU cores * 2 + 1
-        """
-        pass
-```
+### Production Middleware
 
-### Worker Classes
+`ProductionMiddleware` (WSGI middleware, `prodserver/productionmiddleware.py`)
+puts the production features on the request path of every worker:
 
-```python
-class Worker(ABC):
-    """
-    Abstract base class for worker implementations.
-    """
-    
-    def __init__(
-        self,
-        worker_id: int,
-        app: "WebApplication",
-        config: ServerConfig
-    ):
-        self.worker_id = worker_id
-        self.app = app
-        self.config = config
-        self._request_count = 0
-        self._state: WorkerState = WorkerState.IDLE
-    
-    @abstractmethod
-    def run(self) -> None:
-        """Main worker loop."""
-        pass
-    
-    @abstractmethod
-    def handle_request(self, request: "Request") -> "Response":
-        """Handle a single request."""
-        pass
-    
-    def shutdown(self, graceful: bool = True) -> None:
-        """Shutdown the worker."""
-        pass
-    
-    @property
-    def state(self) -> "WorkerState":
-        """Return current worker state."""
-        return self._state
+| Feature | How |
+|---|---|
+| Request ID | `RequestTracer.get_or_create_request_id`: a received plain token (≤128 chars of `[A-Za-z0-9._:/+=@-]`) is kept, otherwise a UUID is generated; written into the trace header of the environ (the application sees it), `environ["webworks.request_id"]`, the `current_request_id` contextvar (copied into the ASGI task by the bridge; `RequestIdLogFilter` adds `record.request_id`), the response header and the access log |
+| Header field size | `ResourceLimiter.validate_header_field_size` per field → 431 |
+| Health | `HealthChecker` at `health_check_path` (GET/HEAD), JSON, 200 or 503 when the worker drains or the application cannot serve (failed lifespan) |
+| Metrics | `metrics_path` (GET/HEAD), Prometheus text of the totals of all workers (`MetricsStore`) |
+| HTTPS redirect | `ssl_redirect`: requests whose scheme is http (X-Forwarded-Proto, else `wsgi.url_scheme`) get 301 to https |
+| Request time limit | `timeout` into `environ["webworks.request_timeout"]`; the ASGI bridge answers 504 |
+| Access log | `StructuredLogger.access_log` with request_id, worker_id, client, bytes |
+| Tracing | with `enable_tracing`, a span per request (parent from `traceparent`), exported at the end of the request |
+| Memory limit | `limit_memory`: resident memory after each request; over the limit the worker stops gracefully and is replaced |
 
+### Metrics Store
 
-class SyncWorker(Worker):
-    """
-    Synchronous worker for WSGI applications.
-    
-    Uses threading for concurrent request handling within the worker.
-    """
-    
-    def __init__(
-        self,
-        worker_id: int,
-        app: "WebApplication",
-        config: ServerConfig
-    ):
-        super().__init__(worker_id, app, config)
-        self._thread_pool: Optional["ThreadPoolExecutor"] = None
-    
-    def run(self) -> None:
-        """
-        Main worker loop.
-        
-        Accepts connections and dispatches to thread pool.
-        """
-        pass
-    
-    def handle_request(self, request: "Request") -> "Response":
-        """Handle request synchronously."""
-        pass
-
-
-class AsyncWorker(Worker):
-    """
-    Asynchronous worker for ASGI applications.
-    
-    Uses asyncio for concurrent request handling.
-    """
-    
-    def __init__(
-        self,
-        worker_id: int,
-        app: "WebApplication",
-        config: ServerConfig
-    ):
-        super().__init__(worker_id, app, config)
-        self._loop: Optional["asyncio.AbstractEventLoop"] = None
-    
-    def run(self) -> None:
-        """
-        Main worker loop.
-        
-        Runs the asyncio event loop.
-        """
-        pass
-    
-    async def handle_request(self, request: "Request") -> "Response":
-        """Handle request asynchronously."""
-        pass
-
-
-class GeventWorker(Worker):
-    """
-    Gevent-based worker using greenlets.
-    
-    Requires gevent to be installed.
-    """
-    
-    def __init__(
-        self,
-        worker_id: int,
-        app: "WebApplication",
-        config: ServerConfig
-    ):
-        super().__init__(worker_id, app, config)
-        self._pool: Optional["gevent.pool.Pool"] = None
-    
-    def run(self) -> None:
-        """
-        Main worker loop.
-        
-        Uses gevent pool for cooperative multitasking.
-        """
-        pass
-    
-    def handle_request(self, request: "Request") -> "Response":
-        """Handle request in a greenlet."""
-        pass
-
-
-class WorkerState(Enum):
-    """Worker lifecycle states."""
-    IDLE = "idle"
-    ACTIVE = "active"
-    SHUTTING_DOWN = "shutting_down"
-    STOPPED = "stopped"
-
-
-@dataclass
-class WorkerStatus:
-    """Status information for a worker."""
-    worker_id: int
-    pid: int
-    state: WorkerState
-    request_count: int
-    memory_usage: int
-    uptime: float
-```
-
-### Signal Handler
-
-```python
-class SignalHandler:
-    """
-    Handles OS signals for server control.
-    """
-    
-    def __init__(self, server: "ProductionServer"):
-        self.server = server
-        self._handlers: Dict[int, Callable] = {}
-    
-    def register(self) -> None:
-        """
-        Register signal handlers.
-        
-        - SIGTERM: Graceful shutdown
-        - SIGINT: Graceful shutdown
-        - SIGHUP: Reload configuration
-        """
-        pass
-    
-    def handle_sigterm(self, signum: int, frame: Any) -> None:
-        """Handle SIGTERM signal."""
-        self.server.stop(graceful=True)
-    
-    def handle_sigint(self, signum: int, frame: Any) -> None:
-        """Handle SIGINT signal."""
-        self.server.stop(graceful=True)
-    
-    def handle_sighup(self, signum: int, frame: Any) -> None:
-        """Handle SIGHUP signal."""
-        self.server.reload()
-```
+`MetricsStore` (`prodserver/metricsstore.py`) adds up the metrics of the
+worker processes through the worker temp directory: each worker writes
+`worker-<pid>.json` (a writer thread once per second while counts change, plus
+before a scrape and at exit); the master folds the file of an ended worker into
+`retired.json` (which lists the pids it holds, so nothing is counted twice) so
+counters never go down when workers are recycled. `MetricsCollector` keeps
+bounded memory: a latency histogram plus a window of recent values, and at
+most 1000 endpoint keys (more are counted under `__other__`).
 
 ### Health Checker
 
@@ -792,68 +480,15 @@ class Span:
         self.attributes[key] = value
 ```
 
-### Connection Manager
+### Connections and Limits
 
-```python
-class ConnectionManager:
-    """
-    Manages connection lifecycle and limits.
-    """
-    
-    def __init__(self, config: ServerConfig):
-        self.config = config
-        self._connections: Dict[str, "Connection"] = {}
-        self._connection_count: int = 0
-    
-    def accept_connection(self, conn: "Connection") -> bool:
-        """
-        Accept a new connection if within limits.
-        
-        Args:
-            conn: The incoming connection.
-        
-        Returns:
-            True if accepted, False if rejected due to limits.
-        """
-        pass
-    
-    def close_connection(self, conn_id: str) -> None:
-        """Close and remove a connection."""
-        pass
-    
-    def drain_connections(self, timeout: float) -> None:
-        """
-        Drain all connections during graceful shutdown.
-        
-        Args:
-            timeout: Maximum time to wait for connections to close.
-        """
-        pass
-    
-    def close_idle_connections(self) -> int:
-        """
-        Close idle keep-alive connections.
-        
-        Returns:
-            Number of connections closed.
-        """
-        pass
-    
-    def get_connection_count(self) -> int:
-        """Return current connection count."""
-        return self._connection_count
-
-
-@dataclass
-class Connection:
-    """Represents a client connection."""
-    conn_id: str
-    socket: Any
-    created_at: float
-    last_activity: float
-    keep_alive: bool = True
-    requests_handled: int = 0
-```
+Connections are managed by the WSGI layer (`wsgi.ConnectionManager`, the
+Worker's accept loop): `max_connections` per worker (503 beyond it),
+keep-alive timeout, closing idle keep-alive connections and draining at
+shutdown. `limit_request_line`, `limit_request_fields`, the header section
+(fields × field size) and `limit_request_body` are enforced by the WSGI
+HTTPParser before the application is called (414, 431, 413);
+`ServerConfig.to_wsgi_config()` maps them.
 
 ### SSL/TLS Manager
 
@@ -952,15 +587,10 @@ DEFAULT_CONFIG = {
 }
 ```
 
-### Worker Class Registry
+### Worker Classes
 
 ```python
-# Available worker classes
-WORKER_CLASSES = {
-    "sync": SyncWorker,
-    "async": AsyncWorker,
-    "gevent": GeventWorker,
-}
+VALID_WORKER_CLASSES = {"sync", "gevent"}   # "gevent" needs the gevent extra
 ```
 
 ## Correctness Properties
@@ -969,13 +599,13 @@ WORKER_CLASSES = {
 
 ### Property 1: Worker Configuration Consistency
 
-*For any* valid worker count N specified via `--workers`, the WorkerManager SHALL spawn exactly N worker processes before accepting requests, and maintain N workers during normal operation.
+*For any* valid worker count N specified via `--workers`, the WorkerManager SHALL spawn exactly N worker processes before accepting requests, and maintain N workers during normal operation. (Tested on a real server: the metrics endpoint reports the status of each worker.)
 
 **Validates: Requirements 1.1, 1.4, 1.8**
 
 ### Property 2: Worker Restart on Crash
 
-*For any* worker process that crashes, the WorkerManager SHALL spawn a replacement worker within 5 seconds, maintaining the configured worker count.
+*For any* worker process that crashes, the WorkerManager SHALL spawn a replacement worker within 5 seconds, maintaining the configured worker count. A worker that fails to boot is not replaced; the server stops with EXIT_APP_LOAD_ERROR.
 
 **Validates: Requirements 1.3**
 
@@ -1026,16 +656,16 @@ WORKER_CLASSES = {
 ### Server Startup Errors
 
 - Configuration file not found: Use defaults and log warning
-- Invalid configuration: Exit with `EXIT_CONFIG_ERROR` and descriptive message
+- Invalid configuration (including the gevent worker class without gevent, a TLS certificate that cannot be loaded, a platform without fork): raise `ConfigurationError` (a `ccai.errors` ConfigurationError, BaseException), which ends the run; it is never caught
 - Port already in use: Exit with `EXIT_BIND_ERROR` and suggestion
 - Application load failure: Exit with `EXIT_APP_LOAD_ERROR` and stack trace
 - PID file conflict: Exit with `EXIT_PID_FILE_ERROR` and existing PID info
-- SSL certificate error: Exit with `EXIT_CONFIG_ERROR` and certificate details
+- A worker that cannot load or start the application: the server stops with `EXIT_APP_LOAD_ERROR`
 
 ### Worker Errors
 
 - Worker crash: Log error, restart worker within 5 seconds
-- Worker timeout: Terminate worker, log timeout details, restart
+- Request timeout: the ASGI bridge cancels the handler and answers 504 (a hung thread in a plain WSGI application is not killed)
 - Memory limit exceeded: Log warning, restart worker
 - Max requests reached: Gracefully restart worker
 
@@ -1080,6 +710,10 @@ Property tests should verify:
 - TLS version rejection
 
 ### Integration Tests
+
+The integration tests (`test_productionserver.py`, `devexp/cli/test_prodserve.py`)
+start real servers in child processes on ports 18100-18199 and use
+`http.client`; the shared helpers are in `ccai.testshared.servers`.
 
 Integration tests should cover:
 - Full server startup and shutdown cycle

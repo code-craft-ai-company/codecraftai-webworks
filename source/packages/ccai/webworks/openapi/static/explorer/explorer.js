@@ -42,14 +42,16 @@
         this.rootElement = rootElement;
         this.config = config;
         this.title = config.title || "API explorer";
+        /* The three maps below are keyed by text from the document or the page address, so they have no prototype: ``constructor`` is not a key
+           until an operation, a group or a pane of that name is added. */
         this.operations = [];
-        this.byKey = {};
+        this.byKey = Object.create(null);
         this.tree = null;
-        this.openGroups = {};
+        this.openGroups = Object.create(null);
         this.query = "";
         this.pins = [];
         this.folds = [];
-        this.panes = {};
+        this.panes = Object.create(null);
         this.missing = [];
         this.paneCounter = 0;
     }
@@ -88,7 +90,7 @@
     /* ---- The page ----------------------------------------------------------------------------------------------------------------------- */
 
     Explorer.prototype.build = function () {
-        var pathCount = {};
+        var pathCount = Object.create(null);
         this.operations.forEach(function (op) { pathCount[op.path] = true; });
 
         this.rootElement.innerHTML =

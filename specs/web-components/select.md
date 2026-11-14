@@ -91,7 +91,7 @@
 | Property | Default token | Description |
 |----------|---------------|-------------|
 | `--mj-select-trigger-height` | `--mj-size-control-md` | Trigger button height |
-| `--mj-select-popup-max-height` | `18rem` | Max height of the dropdown popup |
+| `--mj-select-popup-max-height` | `18rem` | Max height of the listbox in the popup, which scrolls beyond it |
 | `--mj-select-popup-min-width` | `trigger width` | Min width of the popup |
 | `--mj-select-option-padding` | `--mj-space-2 --mj-space-3` | Padding per option row |
 | `--mj-select-border-radius` | `--mj-radius-md` | Trigger and popup corner radius |

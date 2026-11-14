@@ -855,9 +855,10 @@ def test_issue_and_build_magic_link_round_trip_format_check():
 
 def test_blueprint_register_resolves_token_path_against_base():
     """
-        The redeem handler is registered at ``{base_path}/{token}``;
-        the descriptor produced by ``register`` must reflect the
-        subclass's overridden ``base_path``.
+        The confirmation page is registered at ``GET {base_path}/{token}``
+        and the redemption at ``POST {base_path}/redeem``; the descriptors
+        produced by ``register`` must reflect the subclass's overridden
+        ``base_path``.
     """
 
     blueprint = _create_magic_blueprint(token_consumer=lambda t: MagicLinkConsumeResult(principal=TEST_PRINCIPAL))
@@ -865,18 +866,207 @@ def test_blueprint_register_resolves_token_path_against_base():
 
     descriptors = blueprint.register()
 
-    if len(descriptors) != 1:
-        errmsg = "Expected exactly one descriptor, got {}".format(len(descriptors))
+    routes = sorted(
+        (descriptor.path, tuple(descriptor.methods)) for descriptor in descriptors
+    )
+
+    expected_routes = [
+        ("/login/magic/redeem", ("POST",)),
+        ("/login/magic/{token}", ("GET",)),
+    ]
+
+    if routes != expected_routes:
+        errmsg = "Expected routes {!r}, got {!r}".format(expected_routes, routes)
         raise AssertionError(errmsg)
 
-    descriptor = descriptors[0]
+    return
 
-    if descriptor.path != "/login/magic/{token}":
-        errmsg = "Expected path /login/magic/{{token}}, got {!r}".format(descriptor.path)
+
+# =============================================================================
+# Confirmation Page (GET does not consume the token)
+# =============================================================================
+
+def _create_counting_blueprint():
+    """
+        Create a magic-link blueprint whose consumer records every token
+        it is asked to consume.
+    """
+    consumed = []
+
+    def consumer(token):
+        consumed.append(token)
+        return MagicLinkConsumeResult(principal=TEST_PRINCIPAL)
+
+    blueprint = _create_magic_blueprint(token_consumer=consumer)
+    return blueprint, consumed
+
+
+def test_confirm_does_not_consume_token():
+    """
+        Opening the link (GET) must not consume the single-use token, so a
+        mail scanner that fetches the URL does not burn it.
+    """
+    blueprint, consumed = _create_counting_blueprint()
+
+    response = blueprint.confirm(MockRequest(path_params={"token": "abcdefghijklmnop"}))
+
+    if response.status_code != 200:
+        errmsg = "Expected 200, got {}".format(response.status_code)
         raise AssertionError(errmsg)
 
-    if descriptor.methods != ["GET"]:
-        errmsg = "Expected methods ['GET'], got {!r}".format(descriptor.methods)
+    if len(consumed) != 0:
+        errmsg = "Expected the token to stay unconsumed, consumer saw {!r}".format(consumed)
+        raise AssertionError(errmsg)
+
+    if "Set-Cookie" in response.headers:
+        errmsg = "Expected no session cookie from the confirmation page"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_confirm_page_posts_token_to_redeem_path():
+    """
+        The confirmation page must hold a form that posts the token to the
+        redemption endpoint.
+    """
+    blueprint, _ = _create_counting_blueprint()
+
+    response = blueprint.confirm(MockRequest(path_params={"token": "abcdefghijklmnop"}))
+    page = response.body.decode("utf-8")
+
+    if 'method="post"' not in page or 'action="/auth/magic/redeem"' not in page:
+        errmsg = "Expected a POST form to /auth/magic/redeem, got {!r}".format(page)
+        raise AssertionError(errmsg)
+
+    if 'name="token" value="abcdefghijklmnop"' not in page:
+        errmsg = "Expected the token in a hidden form field, got {!r}".format(page)
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_confirm_page_is_not_cacheable_and_sends_no_referrer():
+    """
+        The page URL contains the token, so the response must stay out of
+        caches and out of Referer headers.
+    """
+    blueprint, _ = _create_counting_blueprint()
+
+    response = blueprint.confirm(MockRequest(path_params={"token": "abcdefghijklmnop"}))
+
+    if response.headers.get("Cache-Control") != "no-store":
+        errmsg = "Expected Cache-Control: no-store, got {!r}".format(
+            response.headers.get("Cache-Control")
+        )
+        raise AssertionError(errmsg)
+
+    if response.headers.get("Referrer-Policy") != "no-referrer":
+        errmsg = "Expected Referrer-Policy: no-referrer, got {!r}".format(
+            response.headers.get("Referrer-Policy")
+        )
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_confirm_malformed_token_redirects_with_invalid_error():
+    """
+        A token that fails the format check is rejected on GET without a
+        confirmation page and without calling the consumer.
+    """
+    blueprint, consumed = _create_counting_blueprint()
+
+    response = blueprint.confirm(MockRequest(path_params={"token": "bad token!"}))
+
+    if response.status_code != 302:
+        errmsg = "Expected 302, got {}".format(response.status_code)
+        raise AssertionError(errmsg)
+
+    if "error=magic_link_invalid" not in response.headers.get("Location", ""):
+        errmsg = "Expected magic_link_invalid in Location, got {!r}".format(
+            response.headers.get("Location")
+        )
+        raise AssertionError(errmsg)
+
+    if len(consumed) != 0:
+        errmsg = "Expected the consumer not to be called for a malformed token"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_confirm_on_get_disabled_consumes_token_on_get():
+    """
+        With ``confirm_on_get`` turned off the GET redeems the token
+        directly (legacy behaviour).
+    """
+    blueprint, consumed = _create_counting_blueprint()
+    blueprint.confirm_on_get = False
+
+    response = blueprint.confirm(MockRequest(path_params={"token": "abcdefghijklmnop"}))
+
+    if response.status_code != 302:
+        errmsg = "Expected 302, got {}".format(response.status_code)
+        raise AssertionError(errmsg)
+
+    if consumed != ["abcdefghijklmnop"]:
+        errmsg = "Expected the token to be consumed, consumer saw {!r}".format(consumed)
+        raise AssertionError(errmsg)
+
+    return
+
+
+class FormRequest:
+    """
+        Request stand-in for the form the confirmation page submits.
+    """
+
+    def __init__(self, fields: Dict[str, Any]):
+        self.headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        self.path_params: Dict[str, Any] = {}
+        self._fields = fields
+
+    def form(self) -> Dict[str, Any]:
+        return self._fields
+
+
+def test_redeem_reads_token_from_posted_form():
+    """
+        The redemption handler must consume the token posted by the
+        confirmation page as a form field.
+    """
+    blueprint, consumed = _create_counting_blueprint()
+
+    response = blueprint.redeem(FormRequest({"token": "abcdefghijklmnop"}))
+
+    if response.status_code != 302:
+        errmsg = "Expected 302, got {}".format(response.status_code)
+        raise AssertionError(errmsg)
+
+    if consumed != ["abcdefghijklmnop"]:
+        errmsg = "Expected the posted token to be consumed, consumer saw {!r}".format(consumed)
+        raise AssertionError(errmsg)
+
+    if "site_session=" not in response.headers.get("Set-Cookie", ""):
+        errmsg = "Expected the session cookie on the redemption redirect"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_csrf_exempt_paths_name_the_redeem_endpoint():
+    """
+        Sites exempt the redemption POST from CSRF checks; the blueprint
+        must report its path against the subclass's base path.
+    """
+    blueprint, _ = _create_counting_blueprint()
+    blueprint.base_path = "/login/magic"
+
+    paths = blueprint.get_csrf_exempt_paths()
+
+    if paths != ["/login/magic/redeem"]:
+        errmsg = "Expected ['/login/magic/redeem'], got {!r}".format(paths)
         raise AssertionError(errmsg)
 
     return

@@ -52,8 +52,13 @@ def generate_random_string(min_length: int = 1, max_length: int = 20) -> str:
 
 
 def generate_random_quality() -> float:
-    """Generate a random quality value between 0.0 and 1.0."""
-    return round(random.uniform(0.0, 1.0), 2)
+    """
+        Generate a random quality value between 0.01 and 1.0.
+
+        Zero is left out on purpose: ``q=0`` means "not acceptable", so a
+        header generated here always still accepts every type it lists.
+    """
+    return round(random.uniform(0.01, 1.0), 2)
 
 
 def generate_random_accept_header_with_json() -> str:
@@ -700,3 +705,41 @@ def test_property_6_content_negotiation_validate_default():
             raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# q=0 means "not acceptable"
+# =============================================================================
+
+def test_accept_range_with_zero_quality_is_not_selected():
+    """Accept: application/json;q=0 refuses JSON, so nothing is acceptable."""
+    negotiator = ContentNegotiator(create_default_registry())
+
+    try:
+        negotiator.select_response_format("application/json;q=0")
+    except NotAcceptable:
+        pass
+    else:
+        raise AssertionError("Expected NotAcceptable when the only supported type has q=0")
+
+
+def test_wildcard_does_not_select_a_type_refused_with_zero_quality():
+    """A type refused with q=0 is not selected through */* either."""
+    negotiator = ContentNegotiator(create_default_registry())
+
+    try:
+        negotiator.select_response_format("application/json;q=0, */*;q=0.5")
+    except NotAcceptable:
+        pass
+    else:
+        raise AssertionError("Expected NotAcceptable: JSON was refused and nothing else is registered")
+
+
+def test_zero_quality_on_another_type_leaves_json_acceptable():
+    """Refusing a type the server does not offer has no effect on the ones it does."""
+    negotiator = ContentNegotiator(create_default_registry())
+
+    selected = negotiator.select_response_format("text/xml;q=0, application/json")
+
+    if selected != "application/json":
+        raise AssertionError(f"Expected 'application/json', got {selected!r}")

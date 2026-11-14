@@ -144,14 +144,15 @@ class SessionInfo:
     """
         Response schema for session information.
 
-        :param session_id: The unique session identifier.
+        The session identifier is deliberately not part of the response:
+        it travels only in the HttpOnly session cookie.
+
         :param principal_id: The identifier of the authenticated principal.
         :param created_at: ISO 8601 timestamp of when the session was created.
         :param expires_at: Optional ISO 8601 timestamp of when the session expires.
         :param last_accessed: ISO 8601 timestamp of the last session activity.
     """
 
-    session_id: str
     principal_id: str
     created_at: str
     expires_at: Optional[str] = None

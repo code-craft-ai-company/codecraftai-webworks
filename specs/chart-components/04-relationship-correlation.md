@@ -1,9 +1,11 @@
 # Relationship & Correlation Charts
 
 > Catalog of chart types in this category for the codecraftai-webworks SVG chart
-> library. Architecture, the coordinated-element model, the part components,
-> the JSON contract, and phasing are defined in `../../chart-components-plan.md`
-> and are not repeated here.
+> library. Architecture, the coordinated-element model, the title / legend /
+> data-table parts, the JSON contract, and phasing are defined in
+> `../../chart-components-plan.md` and are not repeated here. `<mj-chart>` draws
+> each type whole (plot, axes, gridlines, marks) and shows the tooltip of the
+> hovered or focused mark; any chart can bind the three parts.
 
 Charts in this category reveal associations, correlations, and density patterns
 between two or more numeric variables. Three primary renderers cover all ten
@@ -18,10 +20,6 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Controller:** `<mj-chart type="scatter" ...>`
 - **Purpose:** Show the relationship between two numeric variables; reveal
   clusters, trends, and outliers in bivariate data.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x, value; y, value),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-crosshair`, `mj-chart-brush`, `mj-chart-annotation`,
-  `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -48,12 +46,13 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Variants / modes:** Bubble chart (adds `size` field and a sqrt scale),
   Connected scatter plot (adds `path` mode joining points in data order),
   Residual plot (same renderer; residual values on y-axis).
+- **Events:** `mj-chart-point-click` `{ series, x, y }`, plus `size` and `label` when the data point has them (each point).
 - **Phase:** P1
 - **Notes:** Uses `linear` scales for both axes. The renderer plots each
   series as a `<g>` of `<circle>` elements. Point shape can be varied per
   series (`circle`, `square`, `triangle`, `diamond`) via a series-level
-  `shape` field, ensuring encoding is never color-only. The `mj-chart-brush`
-  part enables rectangular range selection for zoom or filtering.
+  `shape` field, ensuring encoding is never color-only. There is no range
+  selection, zoom or filtering (no brushing).
 
 ---
 
@@ -63,9 +62,6 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Controller:** `<mj-chart type="scatter" bubble="true" ...>`
 - **Purpose:** Extend a scatter plot with a third numeric variable encoded as
   circle area, enabling simultaneous inspection of three dimensions.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x, value; y, value),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -89,6 +85,7 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Variants / modes:** Activated via `bubble="true"` on the controller;
   no separate renderer file. Size-scale legend (showing example bubble sizes)
   is rendered inside `mj-chart-legend` when `bubble="true"`.
+- **Events:** `mj-chart-point-click` `{ series, x, y, size }`, plus `label` when the data point has one (each bubble).
 - **Phase:** P3
 - **Notes:** The `sqrt` scale (`scales.js`) maps `size` domain to a pixel
   radius range (e.g. 4–40 px) so that perceived area is proportional to
@@ -104,9 +101,6 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Controller:** `<mj-chart type="scatter" connected="true" ...>`
 - **Purpose:** Reveal how a relationship between two variables evolves over a
   sequence or time, by drawing a path that joins points in their data order.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x, value; y, value),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -131,6 +125,7 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Variants / modes:** Activated via `connected="true"`; the scatter
   renderer draws a `<path>` through the series points using `svgdraw.js`
   line-builder before drawing the circles on top.
+- **Events:** `mj-chart-point-click` `{ series, x, y }`, plus `size` and `label` when the data point has them (each point; the connecting path is not interactive).
 - **Phase:** P3
 - **Notes:** Path draw order follows data array index, not x-sort, so the
   line traces the actual sequence. Arrowheads (`<marker>` defs) can be
@@ -145,9 +140,6 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Purpose:** Summarize very dense scatter data by aggregating points into
   hexagonal bins and encoding bin count (or a statistic) as fill color or
   hexagon size.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x, value; y, value),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -176,6 +168,7 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Orientation:** `n/a` — hexagonal grid is symmetric; no swap applies.
 - **Variants / modes:** Color-encoded bins (fill by count/stat — default)
   or size-encoded bins (radius proportional to count, `encoding="size"`).
+- **Events:** `mj-chart-hexbin-click` `{ x, y, x0, x1, y0, y1, stat, value, count, cx, cy }` (each hexagon: centre and extent in data units, the aggregate `stat` and its `value`, the point `count`, and the centre `cx`, `cy` in plot pixels).
 - **Phase:** P3
 - **Notes:** The hexbin layout algorithm is implemented in the renderer
   (`charts/core/renderers/hexbin.js`) using offset-grid geometry; it does
@@ -193,9 +186,6 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Purpose:** Estimate and display the joint probability density of two
   numeric variables across a continuous surface, useful for revealing the
   underlying distribution in dense scatter data.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x, value; y, value),
-  `mj-chart-grid`, `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -225,6 +215,7 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Variants / modes:** `style="contour"` produces the contour plot variant;
   `style="fill"` is the 2D density heatmap; `style="both"` overlays both.
   The contour plot is therefore a mode of the `density` renderer.
+- **Events:** `mj-chart-density-click` `{ x, y, density }` from the fill surface (click: the value under the pointer; Enter / Space: the peak); with `style` `contour` or `both`, `mj-chart-contour-click` `{ level, index, lines }` (each level's path). These come from the 2-D renderer (`density.js`, keys `density-2d` and `contour`); `type="density"` is the 1-D KDE of `histogram.js`, which emits `mj-chart-density-click` `{ series, bandwidth }`.
 - **Phase:** P4
 - **Notes:** The renderer computes a 2D KDE on a `resolution × resolution`
   grid using a Gaussian kernel. For the fill style, grid cells become
@@ -241,7 +232,6 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Controller:** `<mj-chart type="density" density.style="contour" ...>`
 - **Purpose:** Show lines of equal density or equal value (iso-contours)
   across a 2D space, conveying structure, peaks, and gradients.
-- **Decomposition:** Same as 2D density plot.
 - **JSON shape:** Same as 2D density plot. When the input data is a
   pre-computed grid rather than raw points, use:
   ```json
@@ -263,6 +253,7 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Variants / modes:** Pure mode of `density` renderer via
   `density.style="contour"`. Filled contour (choropleth-style bands) is
   `density.style="both"` with `opacity` on fill.
+- **Events:** `mj-chart-contour-click` `{ level, index, lines }` (each level's path; `lines` is its number of line pieces); with `style` `fill` or `both` the surface also emits `mj-chart-density-click` `{ x, y, density }`. As for the 2D density plot, these come from the `contour` / `density-2d` keys (`density.js`).
 - **Phase:** P4
 - **Notes:** This entry exists as a named catalog entry because "contour
   plot" is a commonly searched chart type. Implementation is entirely within
@@ -277,9 +268,6 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Controller:** `<mj-chart type="heatmap" value-source="correlation" ...>`
 - **Purpose:** Display pairwise correlation coefficients between multiple
   numeric variables as a symmetric color-encoded grid.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x, category/band;
-  y, category/band), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -303,6 +291,7 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Variants / modes:** Mode of the `heatmap` renderer. A diverging color
   scale (negative = one hue, zero = neutral, positive = opposite hue) is
   automatically applied when `value-source="correlation"`.
+- **Events:** `mj-chart-cell-click` `{ row, col, value }` (each cell; `row` is the series name, `col` the category).
 - **Phase:** P3
 - **Notes:** The grid axes use `band` scales so cells are evenly spaced.
   The renderer optionally draws a diagonal divider line and can suppress the
@@ -319,9 +308,6 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Purpose:** Encode a scalar intensity value across two categorical or
   ordinal dimensions as a color-filled grid, revealing patterns by position
   and hue.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x, category/band;
-  y, category/band), `mj-chart-legend`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-data-table`, `mj-chart-annotation`
 - **JSON shape:**
   ```json
   {
@@ -344,6 +330,7 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Variants / modes:** Correlation matrix (`value-source="correlation"`,
   diverging scale), 2D density heatmap (grid supplied by `density` renderer
   via `grid` block), Calendar heatmap (P5 — day/week axes, special layout).
+- **Events:** `mj-chart-cell-click` `{ row, col, value }` (each cell; `row` is the series name, `col` the category).
 - **Phase:** P3
 - **Notes:** Both axes use `band` scales. Color scale defaults to a
   sequential single-hue ramp from `--mj-chart-heat-*` tokens; set
@@ -361,8 +348,6 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Purpose:** Display all pairwise scatter plots for a set of numeric
   variables in a grid layout, enabling rapid inspection of multi-dimensional
   relationships.
-- **Decomposition:** `mj-chart-plot` (the full grid surface), `mj-chart-title`,
-  `mj-chart-tooltip`, `mj-chart-data-table`, `mj-chart-legend`
 - **JSON shape:**
   ```json
   {
@@ -390,13 +375,13 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
   each variable alone (`diagonal="histogram|density|label"`, default
   `label`). Upper triangle can be suppressed or replaced with correlation
   values (`triangle="lower|full"`).
+- **Events:** `mj-chart-point-click` `{ series, xVar, yVar, x, y }` (each point of an off-diagonal cell).
 - **Phase:** P4
 - **Notes:** The SPLOM renderer manages an N×N grid of sub-plots, each
   sharing synchronized `linear` scales per variable (one x-scale per
-  column, one y-scale per row). All sub-plots are rendered into a single
-  `<svg>` in `mj-chart-plot`; each sub-plot is a `<g>` with a `clipPath`
-  to its cell bounds. Brushing on one cell projects the selected points
-  across all cells (requires `mj-chart-brush`). Axes are drawn only on the
+  column, one y-scale per row). All sub-plots are drawn into the chart's
+  single SVG; each sub-plot is a `<g>` translated to its cell. There is no
+  brushing or linked selection across cells. Axes are drawn only on the
   outer edge cells to avoid repetition. Color and shape vary by series so
   groups are distinguishable without color alone.
 
@@ -409,9 +394,6 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Purpose:** Diagnose regression model fit by plotting residuals
   (observed minus predicted) against fitted values or a predictor, exposing
   heteroscedasticity, non-linearity, and outliers.
-- **Decomposition:** `mj-chart-plot`, `mj-chart-axis` (x, value "Fitted";
-  y, value "Residual"), `mj-chart-grid`, `mj-chart-title`, `mj-chart-tooltip`,
-  `mj-chart-annotation` (zero reference line), `mj-chart-data-table`
 - **JSON shape:**
   ```json
   {
@@ -432,8 +414,9 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
   }
   ```
   `x` is the fitted value (or predictor); `y` is the residual. The
-  `residual.zero-line` flag instructs the renderer to draw a horizontal
-  reference line at y = 0 via `mj-chart-annotation`.
+  `residual.zero-line` flag makes the renderer draw a dashed horizontal
+  reference line at y = 0 itself; a residual chart draws it with or without
+  the flag.
 - **SVG primitives:** `<circle>` (one per observation), `<line>` (zero
   reference line), `<text>` (optional point labels), `<g>`
 - **Orientation:** `n/a` — x is fitted values, y is residuals; swapping
@@ -441,9 +424,11 @@ entries: `scatter` (points and paths), `heatmap` (grid-cell intensity), and
 - **Variants / modes:** Residuals vs predictor (same shape; x changes
   semantic only). Scale-location plot (y = √|residual|; computed by the
   renderer when `residual.transform="scale-location"`).
+- **Events:** `mj-chart-point-click` `{ series, x, y }`, plus `size` and `label` when the data point has them (each point).
 - **Phase:** P3
 - **Notes:** This is a semantically specialized scatter plot. The
-  `residual="true"` flag triggers automatic zero-line injection via
-  `mj-chart-annotation` and sets default axis labels to "Fitted values"
+  `residual="true"` flag (or `type="residual"`) centres the y-axis on 0 and
+  makes the renderer draw the dashed zero line itself (neither in
+  scale-location mode), and sets default axis labels to "Fitted values"
   and "Residuals". No new renderer file is needed; the scatter renderer
   handles it via the `residual` config block in the JSON.

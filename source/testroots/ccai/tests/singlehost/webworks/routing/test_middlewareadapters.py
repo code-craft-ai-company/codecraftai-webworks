@@ -777,3 +777,198 @@ def test_middleware_to_wsgi_modifies_response():
 if __name__ == "__main__":
     from ccai.testbase.entrypoints import generic_test_entrypoint
     generic_test_entrypoint()
+
+
+# =============================================================================
+# Duplicate headers, streaming content and request carry-through
+# =============================================================================
+
+from ccai.webworks.authentication.core import AuthenticationContext, Principal
+from ccai.webworks.routing.response import StreamingResponse
+
+
+def test_asgi_adapter_keeps_every_set_cookie_header():
+    """
+        A response that sets two cookies still carries both after passing
+        through an adapted ASGI middleware.
+    """
+    def passthrough_asgi(app):
+        async def middleware(scope, receive, send):
+            await app(scope, receive, send)
+        return middleware
+
+    async def call_next(request):
+        response = _make_response()
+        response.set_cookie("first", "1")
+        response.set_cookie("second", "2")
+        return response
+
+    adapter = ASGIMiddlewareAdapter(passthrough_asgi, name="passthrough")
+    response = asyncio.run(adapter(_make_request(), call_next))
+
+    cookie_headers = [value for name, value in response._get_all_headers() if name.lower() == "set-cookie"]
+
+    assert len(cookie_headers) == 2, f"Expected two Set-Cookie headers, got {cookie_headers}"
+    return
+
+
+def test_asgi_adapter_passes_streaming_content_through():
+    """
+        The content of a streaming response is not lost by the adapter.
+    """
+    def passthrough_asgi(app):
+        async def middleware(scope, receive, send):
+            await app(scope, receive, send)
+        return middleware
+
+    async def call_next(request):
+        return StreamingResponse(iter([b"part-1;", b"part-2"]))
+
+    adapter = ASGIMiddlewareAdapter(passthrough_asgi, name="passthrough")
+    response = asyncio.run(adapter(_make_request(), call_next))
+
+    assert response.body == b"part-1;part-2", f"Unexpected body {response.body!r}"
+    return
+
+
+def test_async_middleware_to_asgi_forwards_real_receive_after_body():
+    """
+        After the buffered body the inner app receives what the client
+        really sends, not a fabricated disconnect.
+    """
+    events = []
+
+    async def inner_app(scope, receive, send):
+        events.append(await receive())
+        events.append(await receive())
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    async def middleware(request, call_next):
+        return await call_next(request)
+
+    pending = [
+        {"type": "http.request", "body": b"payload", "more_body": False},
+        {"type": "custom.marker"},
+    ]
+
+    async def receive():
+        return pending.pop(0)
+
+    async def send(event):
+        return
+
+    adapter = AsyncMiddlewareToASGI(middleware, inner_app)
+    scope = {"type": "http", "method": "POST", "path": "/", "headers": []}
+    asyncio.run(adapter(scope, receive, send))
+
+    assert events[0]["body"] == b"payload", f"Unexpected first event {events[0]}"
+    assert events[1] == {"type": "custom.marker"}, f"Expected the real channel, got {events[1]}"
+    return
+
+
+def test_wsgi_adapter_keeps_path_params_and_auth_of_the_request():
+    """
+        A handler behind an adapted WSGI middleware still sees the path
+        parameters and the authentication context of the request.
+    """
+    def passthrough_wsgi(app):
+        def middleware(environ, start_response):
+            return app(environ, start_response)
+        return middleware
+
+    context = AuthenticationContext(principal=Principal(identifier="u1"), scheme="Test")
+    request = Request(method="GET", path="/items/7", scope={"auth": context})
+    request.path_params = {"id": 7}
+
+    seen = {}
+
+    def call_next(inner_request):
+        seen["path_params"] = inner_request.path_params
+        seen["auth"] = inner_request.auth
+        seen["same_object"] = inner_request is request
+        return _make_response()
+
+    adapter = WSGIMiddlewareAdapter(passthrough_wsgi, name="passthrough")
+    adapter(request, call_next)
+
+    assert seen["path_params"] == {"id": 7}, f"Unexpected path params {seen['path_params']}"
+    assert seen["auth"] is context, "The authentication context was lost"
+    assert seen["same_object"] is True, "An unchanged request should be passed on as it is"
+    return
+
+
+def test_wsgi_adapter_overlays_what_the_middleware_changed():
+    """
+        A header added and a key set by the WSGI middleware reach the
+        handler, on a request that keeps its path parameters.
+    """
+    def tagging_wsgi(app):
+        def middleware(environ, start_response):
+            environ["HTTP_X_TAGGED"] = "yes"
+            environ["myapp.user"] = "alice"
+            return app(environ, start_response)
+        return middleware
+
+    request = Request(method="GET", path="/items/7")
+    request.path_params = {"id": 7}
+
+    seen = {}
+
+    def call_next(inner_request):
+        seen["header"] = inner_request.headers.get("X-Tagged")
+        seen["state"] = inner_request.scope.get("myapp.user")
+        seen["path_params"] = inner_request.path_params
+        return _make_response()
+
+    adapter = WSGIMiddlewareAdapter(tagging_wsgi, name="tagging")
+    adapter(request, call_next)
+
+    assert seen["header"] == "yes", f"Expected the added header, got {seen['header']!r}"
+    assert seen["state"] == "alice", f"Expected the environ key on the scope, got {seen['state']!r}"
+    assert seen["path_params"] == {"id": 7}, f"Unexpected path params {seen['path_params']}"
+    return
+
+
+def test_wsgi_adapter_environ_has_required_keys():
+    """
+        The synthesised environ carries the keys PEP 3333 requires.
+    """
+    captured = {}
+
+    def capturing_wsgi(app):
+        def middleware(environ, start_response):
+            captured.update(environ)
+            return app(environ, start_response)
+        return middleware
+
+    adapter = WSGIMiddlewareAdapter(capturing_wsgi, name="capturing")
+    adapter(_make_request(), lambda inner_request: _make_response())
+
+    for key in ["SCRIPT_NAME", "SERVER_PROTOCOL", "wsgi.version", "wsgi.input", "wsgi.errors"]:
+        assert key in captured, f"Expected {key} in the environ"
+    return
+
+
+def test_wsgi_adapter_keeps_every_set_cookie_header():
+    """
+        Two Set-Cookie headers survive the WSGI adapter.
+    """
+    def passthrough_wsgi(app):
+        def middleware(environ, start_response):
+            return app(environ, start_response)
+        return middleware
+
+    def call_next(inner_request):
+        response = _make_response()
+        response.set_cookie("first", "1")
+        response.set_cookie("second", "2")
+        return response
+
+    adapter = WSGIMiddlewareAdapter(passthrough_wsgi, name="passthrough")
+    response = adapter(_make_request(), call_next)
+
+    cookie_headers = [value for name, value in response._get_all_headers() if name.lower() == "set-cookie"]
+
+    assert len(cookie_headers) == 2, f"Expected two Set-Cookie headers, got {cookie_headers}"
+    return

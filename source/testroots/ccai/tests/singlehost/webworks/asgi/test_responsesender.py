@@ -6,9 +6,11 @@
 """
 
 import asyncio
+import threading
 from typing import Any, Dict, List
 
 from ccai.webworks.asgi.responsesender import ResponseSender
+from ccai.webworks.routing.response import StreamingResponse
 from ccai.webworks.asgi.constants import (
     MESSAGE_HTTP_RESPONSE_START,
     MESSAGE_HTTP_RESPONSE_BODY,
@@ -600,20 +602,27 @@ def test_send_streaming_handles_single_chunk():
     
     asyncio.get_event_loop().run_until_complete(run_test())
     
-    # Should have start + 1 body message
-    if len(sent_messages) != 2:
-        errmsg = f"Expected 2 messages, got {len(sent_messages)}"
+    # Should have start + the chunk + the empty message that ends the body
+    if len(sent_messages) != 3:
+        errmsg = f"Expected 3 messages, got {len(sent_messages)}"
         raise AssertionError(errmsg)
     
-    # Body message should have more_body=False
+    # The chunk is sent as soon as it is produced, before the end is known
     body_message = sent_messages[1]
     
-    if body_message.get("more_body") is not False:
-        errmsg = f"Expected more_body=False for single chunk, got {body_message.get('more_body')}"
+    if body_message.get("more_body") is not True:
+        errmsg = f"Expected more_body=True for the chunk, got {body_message.get('more_body')}"
         raise AssertionError(errmsg)
     
     if body_message.get("body") != b"only chunk":
         errmsg = f"Expected body 'only chunk', got {body_message.get('body')}"
+        raise AssertionError(errmsg)
+    
+    # The body is ended by an empty message
+    end_message = sent_messages[2]
+    
+    if end_message.get("more_body") is not False or end_message.get("body") != b"":
+        errmsg = f"Expected an empty message with more_body=False to end the body, got {end_message}"
         raise AssertionError(errmsg)
     
     return
@@ -678,8 +687,9 @@ def test_send_streaming_preserves_chunk_content():
     
     asyncio.get_event_loop().run_until_complete(run_test())
     
-    # Extract body content from messages
-    body_messages = sent_messages[1:]
+    # Extract body content from messages. The last message is the empty
+    # one that ends the body.
+    body_messages = sent_messages[1:-1]
     received_chunks = [msg.get("body") for msg in body_messages]
     
     if received_chunks != chunks:
@@ -932,9 +942,9 @@ def test_send_handles_streaming_response():
     
     asyncio.get_event_loop().run_until_complete(run_test())
     
-    # Should have start + 2 body messages
-    if len(sent_messages) != 3:
-        errmsg = f"Expected 3 messages, got {len(sent_messages)}"
+    # Should have start + 2 body messages + the empty message that ends the body
+    if len(sent_messages) != 4:
+        errmsg = f"Expected 4 messages, got {len(sent_messages)}"
         raise AssertionError(errmsg)
     
     # First should be start
@@ -1524,4 +1534,197 @@ def test_send_emits_cookie_jar_and_raw_set_cookies_on_the_wire():
             )
             raise AssertionError(errmsg)
 
+    return
+
+
+# =============================================================================
+# Tests for streaming without buffering and for unsupported bodies
+# =============================================================================
+
+def test_send_streaming_sends_each_chunk_before_the_next_is_produced():
+    """
+        Test that a chunk reaches the client before the stream produces the next one.
+    """
+    sender = ResponseSender()
+    send, sent_messages = create_send_callable()
+    sent_before_second_chunk: List[int] = []
+    
+    async def body_stream():
+        yield b"first"
+        # Count the body messages that are out when the second chunk is asked for
+        body_count = 0
+        for message in sent_messages:
+            if message.get("type") == MESSAGE_HTTP_RESPONSE_BODY:
+                body_count += 1
+        sent_before_second_chunk.append(body_count)
+        yield b"second"
+    
+    asyncio.get_event_loop().run_until_complete(
+        sender.send_streaming(send, status=200, headers=[], body_stream=body_stream())
+    )
+    
+    if sent_before_second_chunk != [1]:
+        errmsg = f"Expected the first chunk to be sent before the second was produced, got {sent_before_second_chunk}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_send_streams_framework_streaming_response_chunk_by_chunk():
+    """
+        Test that send() sends a StreamingResponse as one message per chunk.
+    """
+    sender = ResponseSender()
+    send, sent_messages = create_send_callable()
+    
+    def generate():
+        yield b"chunk1"
+        yield b"chunk2"
+    
+    response = StreamingResponse(generate(), media_type="text/plain")
+    
+    asyncio.get_event_loop().run_until_complete(sender.send(send, response))
+    
+    bodies = [msg.get("body") for msg in sent_messages if msg.get("type") == MESSAGE_HTTP_RESPONSE_BODY]
+    
+    if bodies != [b"chunk1", b"chunk2", b""]:
+        errmsg = f"Expected one message per chunk and an empty end message, got {bodies}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_send_does_not_collect_streaming_response_before_sending():
+    """
+        Test that the first chunk of a StreamingResponse is sent before the stream is exhausted.
+    """
+    sender = ResponseSender()
+    send, sent_messages = create_send_callable()
+    sent_before_second_chunk: List[int] = []
+    
+    def generate():
+        yield b"chunk1"
+        sent_before_second_chunk.append(len(sent_messages))
+        yield b"chunk2"
+    
+    response = StreamingResponse(generate(), media_type="text/plain")
+    
+    asyncio.get_event_loop().run_until_complete(sender.send(send, response))
+    
+    # The response start and the first chunk are out before the second chunk is produced
+    if sent_before_second_chunk != [2]:
+        errmsg = f"Expected 2 messages to be sent before the second chunk was produced, got {sent_before_second_chunk}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_send_takes_blocking_iterator_off_the_event_loop():
+    """
+        Test that the chunks of an ordinary iterator are produced on another thread.
+    """
+    sender = ResponseSender()
+    send, _ = create_send_callable()
+    producing_threads: List[int] = []
+    
+    def generate():
+        producing_threads.append(threading.get_ident())
+        yield b"chunk"
+    
+    response = StreamingResponse(generate(), media_type="text/plain")
+    loop_thread = threading.get_ident()
+    
+    asyncio.get_event_loop().run_until_complete(sender.send(send, response))
+    
+    if producing_threads == [loop_thread] or len(producing_threads) != 1:
+        errmsg = "Expected the iterator to be advanced on a thread other than the event loop thread"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_send_streams_async_generator_given_to_streaming_response():
+    """
+        Test that a StreamingResponse built from an async generator is streamed.
+    """
+    sender = ResponseSender()
+    send, sent_messages = create_send_callable()
+    
+    async def run_test():
+        response = StreamingResponse(create_async_body_generator([b"a", b"b"]), media_type="text/plain")
+        await sender.send(send, response)
+        return
+    
+    asyncio.get_event_loop().run_until_complete(run_test())
+    
+    bodies = [msg.get("body") for msg in sent_messages if msg.get("type") == MESSAGE_HTTP_RESPONSE_BODY]
+    
+    if bodies != [b"a", b"b", b""]:
+        errmsg = f"Expected the chunks of the async generator and an empty end message, got {bodies}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_send_raises_for_unsupported_body_type():
+    """
+        Test that a body that cannot be sent raises and is not replaced by an empty body.
+    """
+    sender = ResponseSender()
+    send, sent_messages = create_send_callable()
+    
+    response = MockResponse(status_code=200, headers={}, body=12345)
+    
+    raised = False
+    try:
+        asyncio.get_event_loop().run_until_complete(sender.send(send, response))
+    except TypeError:
+        raised = True
+    
+    if not raised:
+        errmsg = "Expected TypeError for a body of an unsupported type"
+        raise AssertionError(errmsg)
+    
+    if len(sent_messages) != 0:
+        errmsg = f"Expected nothing to be sent for an unsupported body, got {sent_messages}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_send_accepts_bytearray_body():
+    """
+        Test that a bytearray body is sent with its content.
+    """
+    sender = ResponseSender()
+    send, sent_messages = create_send_callable()
+    
+    response = MockResponse(status_code=200, headers={}, body=bytearray(b"binary"))
+    
+    asyncio.get_event_loop().run_until_complete(sender.send(send, response))
+    
+    if sent_messages[-1].get("body") != b"binary":
+        errmsg = f"Expected the content of the bytearray, got {sent_messages[-1].get('body')!r}"
+        raise AssertionError(errmsg)
+    
+    return
+
+
+def test_send_streams_iterator_body_of_duck_typed_response():
+    """
+        Test that an iterator given as the body of a response object is streamed.
+    """
+    sender = ResponseSender()
+    send, sent_messages = create_send_callable()
+    
+    response = MockResponse(status_code=200, headers={}, body=iter([b"one", b"two"]))
+    
+    asyncio.get_event_loop().run_until_complete(sender.send(send, response))
+    
+    bodies = [msg.get("body") for msg in sent_messages if msg.get("type") == MESSAGE_HTTP_RESPONSE_BODY]
+    
+    if bodies != [b"one", b"two", b""]:
+        errmsg = f"Expected the items of the iterator and an empty end message, got {bodies}"
+        raise AssertionError(errmsg)
+    
     return

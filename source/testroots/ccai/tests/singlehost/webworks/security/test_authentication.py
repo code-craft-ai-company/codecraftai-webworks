@@ -28,7 +28,7 @@ from ccai.webworks.security.securitycontext import SecurityContext
 # Test Helpers
 # =============================================================================
 
-TEST_SECRET_KEY = "test-secret-key-for-unit-tests"
+TEST_SECRET_KEY = "test-secret-key-for-unit-tests-0123456789"
 
 
 def _create_jwt_token(payload: dict, secret_key: str = TEST_SECRET_KEY, algorithm: str = "HS256") -> str:
@@ -1242,4 +1242,126 @@ def test_session_provider_accepts_set_roles_in_session_data():
     if "read" not in result.scopes:
         errmsg = "Expected 'read' scope, got {}".format(result.scopes)
         raise AssertionError(errmsg)
+    return
+
+
+# =============================================================================
+# JWT claim validation and secret requirements
+# =============================================================================
+
+def _bearer_request(payload: dict, secret_key: str = TEST_SECRET_KEY) -> Mock:
+    """
+        Create a mock request carrying a bearer token signed over ``payload``.
+    """
+    token = _create_jwt_token(payload, secret_key=secret_key)
+    return _create_mock_request(headers={"Authorization": f"Bearer {token}"})
+
+
+def test_jwt_provider_rejects_token_without_exp():
+    """
+        A token without an exp claim never expires and is refused.
+    """
+    provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY)
+
+    result = provider.authenticate(_bearer_request({"sub": "user-1"}))
+
+    assert result is None, "Expected a token without exp to be rejected"
+    return
+
+
+def test_jwt_provider_rejects_token_not_yet_valid():
+    """
+        A token whose nbf lies in the future is refused.
+    """
+    provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY)
+    now = int(time.time())
+
+    result = provider.authenticate(_bearer_request({"sub": "user-1", "exp": now + 600, "nbf": now + 300}))
+
+    assert result is None, "Expected a not-yet-valid token to be rejected"
+    return
+
+
+def test_jwt_provider_rejects_token_for_another_audience():
+    """
+        With an audience configured, a token minted for another audience is refused.
+    """
+    provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY, audience="orders-api")
+    now = int(time.time())
+
+    other = provider.authenticate(_bearer_request({"sub": "u", "exp": now + 600, "aud": "billing-api"}))
+    missing = provider.authenticate(_bearer_request({"sub": "u", "exp": now + 600}))
+    matching = provider.authenticate(_bearer_request({"sub": "u", "exp": now + 600, "aud": "orders-api"}))
+
+    assert other is None, "Expected a token for another audience to be rejected"
+    assert missing is None, "Expected a token without audience to be rejected"
+    assert matching is not None, "Expected a token for the configured audience to be accepted"
+    return
+
+
+def test_jwt_provider_rejects_token_from_another_issuer():
+    """
+        With an issuer configured, a token from another issuer is refused.
+    """
+    provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY, issuer="https://idp.example")
+    now = int(time.time())
+
+    other = provider.authenticate(_bearer_request({"sub": "u", "exp": now + 600, "iss": "https://evil.example"}))
+    matching = provider.authenticate(_bearer_request({"sub": "u", "exp": now + 600, "iss": "https://idp.example"}))
+
+    assert other is None, "Expected a token from another issuer to be rejected"
+    assert matching is not None, "Expected a token from the configured issuer to be accepted"
+    return
+
+
+def test_jwt_provider_rejects_empty_secret():
+    """
+        An empty secret verifies tokens anyone can forge and is refused.
+    """
+    raised = False
+    try:
+        JWTAuthProvider(secret_key="")
+    except ValueError:
+        raised = True
+
+    assert raised, "Expected ValueError for an empty secret"
+    return
+
+
+def test_jwt_provider_rejects_short_secret():
+    """
+        A secret shorter than the minimum length is refused.
+    """
+    raised = False
+    try:
+        JWTAuthProvider(secret_key="short-secret")
+    except ValueError:
+        raised = True
+
+    assert raised, "Expected ValueError for a short secret"
+    return
+
+
+def test_jwt_provider_returns_none_for_non_object_header():
+    """
+        A token whose header JSON is not an object is rejected without raising.
+    """
+    provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY)
+    request = _create_mock_request(headers={"Authorization": "Bearer W10.e30.eA"})
+
+    result = provider.authenticate(request)
+
+    assert result is None, "Expected a token with a non-object header to be rejected"
+    return
+
+
+def test_jwt_provider_returns_none_for_non_numeric_exp():
+    """
+        A token whose exp is not a number is rejected without raising.
+    """
+    provider = JWTAuthProvider(secret_key=TEST_SECRET_KEY)
+
+    result = provider.authenticate(_bearer_request({"sub": "u", "exp": "tomorrow"}))
+
+    assert result is None, "Expected a token with a non-numeric exp to be rejected"
     return

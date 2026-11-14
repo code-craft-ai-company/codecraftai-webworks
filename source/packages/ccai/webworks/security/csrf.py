@@ -73,13 +73,15 @@ __credits__ = []
 
 
 import base64
+import fnmatch
 import hashlib
 import hmac
 import json
 import logging
+import re
 import secrets
 
-from typing import Any, Awaitable, Callable, Dict, Optional, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Set, Tuple, Union
 from urllib.parse import parse_qsl
 
 
@@ -97,11 +99,20 @@ DEFAULT_HEADER_NAME = "X-CSRF-Token"
 DEFAULT_FORM_FIELD_NAME = "csrf_token"
 DEFAULT_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+# Methods that do not change state (RFC 9110 section 9.2.1). Every other
+# method is validated, including verbs the list of unsafe methods does
+# not name, so a state-changing custom verb is not left unprotected.
+DEFAULT_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
 # Content-Type prefix that the base middleware will parse as a form
 # body when looking for a token. The match is on the prefix only so
 # that explicit charset suffixes (e.g.
 # ``application/x-www-form-urlencoded; charset=utf-8``) still match.
 FORM_URLENCODED_CONTENT_TYPE = "application/x-www-form-urlencoded"
+
+# Content-Type prefix of file-upload forms. The token of such a form is
+# read from its ``csrf_token`` part.
+MULTIPART_FORM_CONTENT_TYPE = "multipart/form-data"
 
 # Default ceiling on the request body size the middleware will buffer
 # for form-token extraction. CSRF-protected dashboard forms are tiny
@@ -136,6 +147,22 @@ class CSRFError(Exception):
         :meth:`CSRFTokenManager.validate` are reported by returning
         ``False``, not by raising. ``CSRFError`` is reserved for cases such
         as an empty secret key or a malformed token argument.
+    """
+
+    pass
+
+
+class CSRFSessionError(CSRFError):
+    """
+        Raised by a session-id resolver when a request does not identify
+        one session: it carries the session cookie more than once with
+        different values.
+
+        Which of two cookies with the same name a server reads is not
+        defined, and the layers of an application need not agree. If the
+        CSRF check read one and the session layer the other, a token valid
+        for an attacker's own session would authorize a request executed
+        in the victim's. The middleware answers such a request ``403``.
     """
 
     pass
@@ -252,7 +279,12 @@ class CSRFTokenManager:
             )
             return False
 
-        is_valid = secrets.compare_digest(expected, token)
+        # Compare bytes: ``compare_digest`` refuses ``str`` arguments
+        # that are not ASCII, and a client controls the candidate token.
+        is_valid = secrets.compare_digest(
+            expected.encode("utf-8"),
+            token.encode("utf-8", errors="surrogatepass")
+        )
         return is_valid
 
 
@@ -266,7 +298,12 @@ def cookie_session_id_resolver(cookie_name: str) -> SessionIdResolver:
         a request cookie.
 
         The returned callable inspects the ASGI scope's ``headers`` list
-        for a ``Cookie`` header and parses the named cookie out of it.
+        for ``Cookie`` headers and parses the named cookie out of them
+        with the same parser the framework :class:`Request` uses. A request
+        that carries the cookie more than once with different values does
+        not identify one session; the resolver raises
+        :class:`CSRFSessionError` for it and the middleware refuses the
+        request.
 
         :param cookie_name: Name of the session cookie issued by the
                             application's session blueprint.
@@ -281,8 +318,12 @@ def cookie_session_id_resolver(cookie_name: str) -> SessionIdResolver:
     target_name = str(cookie_name)
 
     def resolver(scope: Dict[str, Any]) -> Optional[str]:
+        # The cookie parser is the one the framework Request uses, so the
+        # CSRF check and the session layer read a Cookie header alike.
+        from ccai.webworks.routing.headers import parse_cookie_header
+
         headers = scope.get("headers", []) or []
-        cookie_header_value = None
+        found_values: List[str] = []
 
         for header_pair in headers:
             if not isinstance(header_pair, (list, tuple)):
@@ -305,24 +346,25 @@ def cookie_session_id_resolver(cookie_name: str) -> SessionIdResolver:
                 cookie_header_value = bytes(value_bytes).decode("latin-1")
             else:
                 cookie_header_value = str(value_bytes)
-            break
 
-        if cookie_header_value is None:
+            # A Cookie header may be sent as several fields (HTTP/2);
+            # every field is read.
+            for pair_name, pair_value in parse_cookie_header(cookie_header_value):
+                if pair_name == target_name and len(pair_value) > 0:
+                    found_values.append(pair_value)
+
+        if len(found_values) == 0:
             return None
 
-        for pair in cookie_header_value.split(";"):
-            pair = pair.strip()
-            if "=" not in pair:
-                continue
+        if len(set(found_values)) > 1:
+            errmsg = (
+                "The request carries the session cookie {!r} more than once "
+                "with different values.".format(target_name)
+            )
+            raise CSRFSessionError(errmsg)
 
-            name, _, value = pair.partition("=")
-            name = name.strip()
-            value = value.strip()
-
-            if name == target_name and len(value) > 0:
-                return value
-
-        return None
+        rtnval = found_values[0]
+        return rtnval
 
     return resolver
 
@@ -333,8 +375,8 @@ class CSRFMiddleware:
         HTTP methods.
 
         The middleware lets requests using safe methods (GET, HEAD,
-        OPTIONS, TRACE by default) pass through unchanged. For unsafe
-        methods (POST, PUT, PATCH, DELETE by default) it:
+        OPTIONS, TRACE by default) pass through unchanged. For every
+        other method -- POST, PUT, PATCH, DELETE and any custom verb -- it:
 
             1. Resolves the session identifier from the request via the
                configured ``session_id_resolver``.
@@ -345,9 +387,11 @@ class CSRFMiddleware:
                buffers the body, parses out the hidden ``csrf_token``
                field (configurable via ``form_field_name``), and
                wraps the ``receive`` callable so the downstream
-               application still observes the original body. Other
-               body shapes (e.g. multipart) fall through to the
-               :meth:`_extract_form_token` hook for subclasses.
+               application still observes the original body. A
+               ``multipart/form-data`` body (a file-upload form) is
+               handled the same way, reading the token from its
+               ``csrf_token`` part. Other body shapes fall through to
+               the :meth:`_extract_form_token` hook for subclasses.
             3. Validates the token against the session id using the
                configured :class:`CSRFTokenManager`.
 
@@ -375,13 +419,41 @@ class CSRFMiddleware:
                                     token via the header. Defaults to
                                     64 KiB.
         :param unsafe_methods: Iterable of HTTP method names that require
-                               token validation. Defaults to
+                               token validation even if they are listed
+                               as safe. Defaults to
                                ``{"POST", "PUT", "PATCH", "DELETE"}``.
         :param exempt_paths: Optional set of exact request paths that
                              bypass validation entirely (e.g. webhook
                              endpoints with their own signing scheme).
         :param logger: Logger used for diagnostic messages. When ``None``
                        a module-default logger is used.
+        :param safe_methods: Iterable of HTTP method names that pass
+                             without validation. Every method that is
+                             not listed here is validated. Defaults to
+                             ``{"GET", "HEAD", "OPTIONS", "TRACE"}``.
+        :param exempt_prefixes: Optional iterable of path prefixes that
+                                bypass validation (``"/api/"`` exempts
+                                everything below ``/api/``).
+        :param exempt_patterns: Optional iterable of glob strings
+                                (``"/hooks/*/notify"``) or compiled
+                                regular expressions; a path that matches
+                                one bypasses validation.
+        :param exempt_predicate: Optional callable given the ASGI scope
+                                 that returns ``True`` for requests that
+                                 bypass validation.
+        :param require_session: When ``True`` (the default) a request
+                                that needs validation and carries no
+                                session is refused. Set to ``False`` when
+                                the application also serves clients that
+                                authenticate without a cookie (bearer
+                                tokens, API keys) or accepts anonymous
+                                posts such as a login form: a request
+                                without the session cookie has no session
+                                a forged request could act in, and is
+                                passed through unvalidated. Leave it
+                                ``True`` if anything other than that
+                                cookie authenticates a browser, such as
+                                HTTP Basic authentication.
     """
 
     def __init__(
@@ -394,7 +466,12 @@ class CSRFMiddleware:
         max_form_body_bytes: int = DEFAULT_MAX_FORM_BODY_BYTES,
         unsafe_methods: Optional[Set[str]] = None,
         exempt_paths: Optional[Set[str]] = None,
-        logger: Optional[logging.Logger] = None
+        logger: Optional[logging.Logger] = None,
+        safe_methods: Optional[Set[str]] = None,
+        exempt_prefixes: Optional[Iterable[str]] = None,
+        exempt_patterns: Optional[Iterable[Union[str, "re.Pattern"]]] = None,
+        exempt_predicate: Optional[Callable[[Dict[str, Any]], bool]] = None,
+        require_session: bool = True
     ):
         """
             Construct the middleware.
@@ -411,6 +488,14 @@ class CSRFMiddleware:
             :param unsafe_methods: HTTP methods that require validation.
             :param exempt_paths: Request paths that bypass validation.
             :param logger: Logger for diagnostic messages.
+            :param safe_methods: HTTP methods that pass without validation.
+            :param exempt_prefixes: Path prefixes that bypass validation.
+            :param exempt_patterns: Glob strings or compiled patterns of
+                                    paths that bypass validation.
+            :param exempt_predicate: Callable deciding per request
+                                     whether it bypasses validation.
+            :param require_session: Whether a request without a session
+                                    is refused.
 
             :raises CSRFError: When required arguments are missing.
         """
@@ -440,10 +525,34 @@ class CSRFMiddleware:
                 str(method).upper() for method in unsafe_methods
             }
 
+        if safe_methods is None:
+            self._safe_methods = set(DEFAULT_SAFE_METHODS)
+        else:
+            self._safe_methods = {
+                str(method).upper() for method in safe_methods
+            }
+
         if exempt_paths is None:
             self._exempt_paths = set()
         else:
             self._exempt_paths = {str(path) for path in exempt_paths}
+
+        self._exempt_prefixes: Tuple[str, ...] = tuple()
+        if exempt_prefixes is not None:
+            self._exempt_prefixes = tuple(
+                str(prefix) for prefix in exempt_prefixes if len(str(prefix)) > 0
+            )
+
+        self._exempt_patterns: List["re.Pattern"] = []
+        if exempt_patterns is not None:
+            for pattern in exempt_patterns:
+                if isinstance(pattern, str):
+                    self._exempt_patterns.append(re.compile(fnmatch.translate(pattern)))
+                else:
+                    self._exempt_patterns.append(pattern)
+
+        self._exempt_predicate = exempt_predicate
+        self._require_session = bool(require_session)
 
         if logger is None:
             self._logger = logging.getLogger(__name__)
@@ -471,6 +580,14 @@ class CSRFMiddleware:
     @property
     def exempt_paths(self) -> Set[str]:
         return set(self._exempt_paths)
+
+    @property
+    def safe_methods(self) -> Set[str]:
+        return set(self._safe_methods)
+
+    @property
+    def require_session(self) -> bool:
+        return self._require_session
 
     def _extract_header_token(self, scope: Dict[str, Any]) -> Optional[str]:
         """
@@ -726,7 +843,10 @@ class CSRFMiddleware:
                       ``receive`` to the wrapped application.
         """
         content_type = self._resolve_content_type(scope)
-        if not content_type.startswith(FORM_URLENCODED_CONTENT_TYPE):
+        is_urlencoded = content_type.startswith(FORM_URLENCODED_CONTENT_TYPE)
+        is_multipart = content_type.startswith(MULTIPART_FORM_CONTENT_TYPE)
+
+        if not is_urlencoded and not is_multipart:
             return None, None
 
         content_length = self._resolve_content_length(scope)
@@ -744,13 +864,61 @@ class CSRFMiddleware:
         if buffered is None:
             return None, None
 
-        token = self._parse_form_token(buffered)
+        if is_multipart:
+            token = self._parse_multipart_token(scope, buffered)
+        else:
+            token = self._parse_form_token(buffered)
+
         replay_receive = self._build_replay_receive(buffered, receive)
         return token, replay_receive
+
+    def _parse_multipart_token(
+        self,
+        scope: Dict[str, Any],
+        body: bytes
+    ) -> Optional[str]:
+        """
+            Parse a buffered ``multipart/form-data`` body and return the
+            value of the configured CSRF form field, if present.
+
+            :param scope: ASGI scope dictionary for the current request.
+            :param body: Buffered request body bytes.
+
+            :returns: The token string when the form field is present,
+                      ``None`` otherwise.
+        """
+        from ccai.webworks.routing.multipart import parse_multipart
+
+        # The boundary parameter is case-sensitive, so the header is read
+        # again instead of using the lowercased content type.
+        raw_content_type = self._read_request_header(scope, "content-type") or ""
+
+        try:
+            result = parse_multipart(body=body, content_type=raw_content_type)
+        except Exception as exc:
+            # Too many parts or an oversized field: there is no token
+            # to be had from this body.
+            self._logger.debug("CSRF multipart token extraction failed: %s", exc)
+            return None
+
+        for name, value in result.form_parts:
+            if name == self._form_field_name:
+                if value is None or len(value) == 0:
+                    return None
+                return value
+
+        return None
 
     def _is_exempt(self, scope: Dict[str, Any]) -> bool:
         """
             Determine whether the current request bypasses CSRF validation.
+
+            A request bypasses validation when its method is safe, or when
+            its path is exempt: listed exactly, below an exempt prefix,
+            matching an exempt pattern, or accepted by the exempt
+            predicate. A path with a ``.`` or ``..`` segment is never
+            exempt by prefix or pattern, because it does not name the
+            location its beginning suggests.
 
             :param scope: ASGI scope dictionary for the current request.
 
@@ -758,12 +926,32 @@ class CSRFMiddleware:
                       is exempt; ``False`` otherwise.
         """
         method = str(scope.get("method", "")).upper()
-        if method not in self._unsafe_methods:
+
+        if method in self._safe_methods and method not in self._unsafe_methods:
             return True
 
         path = scope.get("path", "")
         if path in self._exempt_paths:
             return True
+
+        path_text = str(path)
+        has_dot_segment = False
+        for segment in path_text.split("/"):
+            if segment in (".", ".."):
+                has_dot_segment = True
+
+        if not has_dot_segment:
+            for prefix in self._exempt_prefixes:
+                if path_text.startswith(prefix):
+                    return True
+
+            for pattern in self._exempt_patterns:
+                if pattern.match(path_text) is not None:
+                    return True
+
+        if self._exempt_predicate is not None:
+            if self._exempt_predicate(scope) is True:
+                return True
 
         return False
 
@@ -830,8 +1018,28 @@ class CSRFMiddleware:
             await self._app(scope, receive, send)
             return
 
-        session_id = self._session_id_resolver(scope)
+        try:
+            session_id = self._session_id_resolver(scope)
+        except CSRFSessionError as exc:
+            self._logger.warning(
+                "CSRF rejected: ambiguous session for path %r: %s",
+                scope.get("path", ""),
+                exc
+            )
+            await self._send_forbidden(
+                send=send,
+                error_code="csrf_ambiguous_session",
+                error_description="The request does not identify a single session."
+            )
+            return
+
         if session_id is None or len(session_id) == 0:
+            if self._require_session is not True:
+                # No session cookie, so no session a forged request
+                # could act in: nothing to validate against.
+                await self._app(scope, receive, send)
+                return
+
             self._logger.debug(
                 "CSRF rejected: no session identifier resolved for path %r",
                 scope.get("path", "")

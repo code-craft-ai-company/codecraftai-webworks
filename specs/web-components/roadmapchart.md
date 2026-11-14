@@ -1,247 +1,96 @@
 # Roadmap Chart Spec
 
 - **Tag:** `<mj-roadmap-chart>`
-- **Class / file:** `RoadmapChart` / `roadmapchart.js`
+- **Class / file:** `MjRoadmapChart` / `components/mjroadmapchart.js` (base: `components/pmchartwrapper.js`)
 - **Category:** Project-management & configuration-management charts
-- **Primary or Variant:** Primary
+- **Primary or Variant:** Variant — a convenience wrapper for `<mj-chart type="roadmap">`
 - **Synonyms covered:** Now/Next/Later roadmap, Release roadmap, Initiative roadmap
-- **Phase:** P3
-- **Status:** Planned
+- **Status:** Implemented (wrapper since WW-1498)
 
-> Universal requirements (Custom Element standard, Shadow DOM/theming, WCAG 2.2
-> AA, events/API, form participation, SSR, i18n, performance, testing, docs) are
-> defined once in `web-component-development-plan.md` §3 and are not repeated
-> here. This spec records only what is specific to this component.
+> `<mj-roadmap-chart>` is `<mj-chart type="roadmap">` with the type fixed and the
+> initiative data shape of this component family. Drawing (swimlanes with stacked
+> bars, period or bucket columns, markers, phases, today), keyboard support, the
+> data table and data loading are the chart's: see [chart.md](chart.md) (§21) and
+> the `roadmap` chart-type page. This spec records only what differs.
 
-## 1. Purpose
+## 1. Purpose and when to use
 
-`<mj-roadmap-chart>` renders initiatives, epics, or features grouped by
-timeframe (calendar quarters, sprints, or named buckets like Now/Next/Later) in
-horizontal swimlane rows. It supports milestone markers, time-column headers, and
-an optional editable mode. It is the primary tool for communicating product or
-release plans to stakeholders.
+A strategic roadmap: swimlane rows, calendar-period or named-bucket columns,
+status-coloured bars with icons. Use `<mj-gantt-chart>` for task-level schedules
+and `<mj-milestone-timeline>` for a single axis of key dates.
 
-## 2. When to use / when not to use
+## 2. Data shape (mapped onto the chart type)
 
-**Use** for high-level initiative or feature roadmaps where the audience needs
-to understand what ships in which timeframe without day-level precision. **Do
-not use** for task-level scheduling (use `<mj-gantt-chart>`), for sprint
-burn-down tracking (use `<mj-burndown-chart>`), or for a single axis of key
-dates (use `<mj-milestone-timeline>`). Nearest alternatives: `<mj-gantt-chart>`
-for detailed task planning.
+```
+{ swimlanes: [{ id, name }], buckets: [{ id, name }],
+  initiatives: [{ id, name, swimlaneId, status, percentComplete, description,
+                  columnId | startDate + endDate }],
+  markers: [{ name, date }], phases: [{ name, start, end }] }
+```
 
-## 3. Anatomy
+| Wrapper field | Chart type field |
+|---|---|
+| `initiatives` | `tasks` |
+| `name` (else `id`, else "Initiative N") | `label` |
+| `swimlaneId` / `swimlane` | `group`; `swimlanes` -> `groups [{ id, label }]` |
+| `startDate` / `start`, `endDate` / `end` | `start`, `end` |
+| `columnId` / `bucket` / `column` | `bucket`; `buckets` -> `buckets [{ id, label }]` |
+| `status` (missing = planned) | `status` |
+| `percentComplete` | `progress` (0-1; shown in the table and the detail panel) |
+| `markers[].name`, `phases[].name` | `label` |
 
-- **Column headers** — timeframe labels (Q1 2025, Q2 2025… or Now/Next/Later)
-  spanning the top of the chart; driven by the time-axis utility in calendar
-  mode or by a named-bucket list in bucket mode.
-- **Swimlane rows** — one row per team, product area, or theme; labeled on the
-  left.
-- **Initiative bars** — horizontal bars placed in the intersecting column of a
-  swimlane; carry a label, status chip, and optional percent-complete.
-- **Milestone markers** — named vertical markers from the shared milestone/marker
-  model overlaid on the column headers.
-- **Phase bands** — optional color spans across multiple columns (e.g. "H1
-  Investment Theme").
-- **Accessible data table** — visually hidden `<table>` of all initiatives.
-- **Legend** — maps status colors/icons to labels.
+An initiative naming an unknown swimlane goes to the "Unassigned" lane; one that
+cannot be placed (no dates in the range, unknown bucket) is counted in a note
+under the chart and listed as "Not placed" in the table.
 
-## 4. Variants & modes
+## 3. Attributes
 
-| Mode / Variant | Attribute | Behavior |
+| Attribute | Chart type option | Notes |
 |---|---|---|
-| Calendar mode | `mode="calendar"` (default) | Columns are time periods; time-axis utility used |
-| Bucket mode | `mode="bucket"` | Columns are named buckets (Now/Next/Later); no time axis |
-| Read-only | `readonly` (boolean, default) | No bar editing |
-| Editable | `editable` (boolean) | Bars are draggable between columns |
-| Compact | `density="compact"` | Reduced swimlane height; label only on bars |
-| Full | `density="full"` (default) | Full bar details including status chip |
+| `mode` | same | calendar (default) / bucket; bucket without buckets falls back to calendar |
+| `scale` | same | quarter (default) / month / half-year |
+| `start-date`, `end-date` | same | fix the calendar range |
+| `today-marker` | `today` | calendar mode; default on |
+| `density` | same | compact: 24 px bars instead of 32 px |
+| `src` | — | as on `<mj-chart>` |
 
-## 5. Attributes
+## 4. Properties
 
-| Attribute | Type | Default | Reflects | Description |
-|-----------|------|---------|----------|-------------|
-| `src` | string | `""` | yes | URL for the data-source adapter |
-| `adapter` | string | `"static"` | yes | Adapter key: `"static"`, `"jira"`, `"linear"`, `"productboard"` |
-| `mode` | `"calendar"` \| `"bucket"` | `"calendar"` | yes | Column type: time periods or named buckets |
-| `scale` | `"month"` \| `"quarter"` \| `"half-year"` \| `"year"` | `"quarter"` | yes | Calendar column granularity (calendar mode only) |
-| `start-date` | string (ISO 8601) | `""` | yes | Start of visible calendar range |
-| `end-date` | string (ISO 8601) | `""` | yes | End of visible calendar range |
-| `today-marker` | boolean | `true` | yes | Show today line in calendar mode |
-| `editable` | boolean | `false` | yes | Allow drag-to-move of initiative bars |
-| `readonly` | boolean | `false` | yes | Explicit read-only lock |
-| `density` | `"compact"` \| `"full"` | `"full"` | yes | Row height variant |
-| `locale` | string | `""` | yes | BCP 47 locale for column header formatting |
-| `label-loading` | string | `"Loading roadmap…"` | yes | Loading message override |
-| `label-empty` | string | `"No initiatives."` | yes | Empty state message |
-| `label-error` | string | `"Failed to load roadmap."` | yes | Error message override |
+| Property | Description |
+|---|---|
+| `data` | The data above; assigning draws at once, clears the selection, emits `mj-data-load` |
+| `selectedInitiative` | The selected initiative object, or null |
 
-## 6. Properties
+## 5. Events
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `data` | `RoadmapData` | `{ swimlanes, initiatives, buckets, markers, phases }` |
-| `selectedInitiative` | `Initiative \| null` | Currently selected initiative bar |
-| `visibleRange` | `{ start: Date, end: Date }` | Current visible window (calendar mode) |
+| Event | `detail` | From |
+|---|---|---|
+| `mj-initiative-select` | `{ initiative }` | `mj-chart-bar-click`; opens the inline detail panel |
+| `mj-initiative-deselect` | `{}` | the detail panel closed |
+| `mj-data-load` | `{ initiatives, swimlanes }` | first draw of each data object |
+| `mj-error` | `{ message }` | `mj-chart-error` |
 
-## 7. Slots
+## 6. Slots, parts, custom properties
 
-| Slot | Description |
-|------|-------------|
-| `(default)` | Fallback `<table>` rendered before upgrade |
-| `initiative-detail` | Custom detail panel for a selected initiative |
-| `legend` | Custom legend markup |
-| `empty` | Shown when no initiatives are present |
-| `loading` | Shown during adapter fetch |
-| `error` | Shown on adapter failure |
+- Slots: `legend` (toolbar content after the data-table button), `initiative-detail`, `empty`.
+- Parts: `toolbar`, `initiative-detail`, the chart's `surface`, `svg`, `message`,
+  `table data-table`, and the renderer's: `column-header`, `swimlane-label`,
+  `bar initiative-bar`, `initiative-label`, `milestone-marker`, `phase-band`,
+  `phase-label`, `today-marker`, `today-label`, `unplaced-note`.
+- Status colours: planned `--mj-text-muted`, in-progress `--mj-accent`, done
+  `--mj-color-success`, at-risk `--mj-color-warning`, blocked `--mj-color-danger`.
 
-## 8. Events
+## 7. Migration (behaviour changes from the standalone implementation)
 
-| Event | `detail` | Bubbles | Cancelable | Description |
-|-------|----------|---------|------------|-------------|
-| `mj-initiative-select` | `{ initiative: Initiative }` | yes | no | Initiative bar activated |
-| `mj-initiative-deselect` | `{}` | yes | no | Selection cleared |
-| `mj-initiative-move` | `{ initiative: Initiative, fromColumn: string, toColumn: string }` | yes | yes | Bar dragged to a new column (editable mode) |
-| `mj-marker-select` | `{ marker: Marker }` | yes | no | Milestone marker activated |
-| `mj-range-change` | `{ start: string, end: string }` | yes | no | Visible calendar range changed |
-| `mj-data-load` | `{ initiatives: number, swimlanes: number }` | yes | no | Data loaded successfully |
-| `mj-error` | `{ message: string, cause: unknown }` | yes | no | Adapter error |
-
-## 9. CSS parts & custom properties
-
-**Parts:**
-- `::part(column-header)` — timeframe or bucket column header cell
-- `::part(swimlane-label)` — left-hand row label for each swimlane
-- `::part(swimlane-row)` — full row container across all columns
-- `::part(initiative-bar)` — initiative item bar
-- `::part(initiative-label)` — text label inside bar
-- `::part(milestone-marker)` — vertical marker line and label
-- `::part(phase-band)` — background phase color span
-- `::part(today-marker)` — today vertical line
-- `::part(legend)` — legend container
-
-**Custom properties:**
-- `--mj-roadmap-row-height` — swimlane row height (default `64px`)
-- `--mj-roadmap-label-width` — swimlane label column width (default `200px`)
-- `--mj-roadmap-column-min-width` — minimum column width (default `120px`)
-- `--mj-bar-radius` — bar corner radius (default `4px`)
-- `--mj-phase-opacity` — phase band opacity (default `0.10`)
-- `--mj-marker-release-color` — release marker color
-- `--mj-marker-freeze-color` — freeze marker color
-- `--mj-today-color` — today marker stroke color
-
-## 10. States
-
-- **loading** — `aria-busy="true"`; loading slot shown.
-- **empty** — empty slot shown.
-- **error** — error slot shown.
-- **initiative-selected** — bar highlighted; detail panel open.
-- **initiative-dragging** — bar partially transparent; destination column
-  highlighted; live region announces current target column.
-- **editable** — drag handles visible on bars.
-
-## 11. Behavior & interactions
-
-In calendar mode the time-axis utility renders column headers and positions
-initiative bars by `startDate`/`endDate`. In bucket mode columns are defined by
-the `buckets` array in `data`; initiatives are placed by `bucketId`. Clicking an
-initiative bar fires `mj-initiative-select` and opens the detail panel. In
-editable mode a bar can be dragged horizontally to a new column; dropping fires
-`mj-initiative-move` (cancelable for validation). The column-header area pans in
-calendar mode via the time-axis utility. Swimlanes without initiatives in a given
-column show an empty cell. Milestone markers appear as vertical lines in the
-column header band.
-
-## 12. Keyboard interaction
-
-| Key | Action |
-|-----|--------|
-| `Tab` | Move focus between initiative bars, swimlane labels, column headers, markers |
-| `Arrow Left` / `Arrow Right` | Move focus between initiative bars in the same swimlane |
-| `Arrow Up` / `Arrow Down` | Move focus between swimlane rows |
-| `Enter` / `Space` | Select focused initiative bar or marker |
-| `Escape` | Deselect; cancel drag |
-| `M` | Move focused bar left one column (editable mode) |
-| `Period` (`.`) | Move focused bar right one column (editable mode) |
-| `Home` / `End` | Focus first / last initiative in current swimlane |
-
-## 13. Accessibility
-
-- Root: `role="img"` with `aria-label` = "Roadmap: {n} initiatives across
-  {m} swimlanes, {start} to {end}".
-- Grid structure: `role="grid"` on the chart area; `role="rowheader"` on
-  swimlane labels; `role="columnheader"` on column headers.
-- Initiative bars: `role="gridcell"` with `aria-label` = "{name}, {status},
-  {column}"; `aria-selected` when selected.
-- Drag operations announced via live-region: "Moving {name} to {column}".
-- Milestone markers: `role="button"` with `aria-label` = "{name} {type} marker,
-  {date or column}".
-- Accessible data table: columns Initiative, Swimlane, Column/Timeframe, Status,
-  % Complete; toggleable via a "Show data table" disclosure button.
-- Color supplemented by status text badge and icon on each bar.
-
-## 14. Form participation
-
-N/A.
-
-## 15. Internationalization & RTL
-
-- Column headers in calendar mode use `Intl.DateTimeFormat` with the `locale`
-  attribute.
-- Named bucket labels are supplied by the consumer (no translation needed).
-- Localizable UI strings (attributes): `label-loading`, `label-empty`,
-  `label-error`, `label-today`, `label-show-table`, `label-move-left`,
-  `label-move-right`.
-- RTL: columns flow right-to-left; swimlane labels appear on the right; bars
-  mirror correctly via CSS logical properties.
-
-## 16. Progressive enhancement / SSR
-
-Server renders a `<table>` of initiatives inside the default slot. On upgrade the
-component hides the table visually (toggleable), draws the roadmap grid, and
-positions bars without layout shift using `height-hint`.
-
-## 17. Dependencies
-
-- §6 time-axis utility (calendar mode zoom/pan/today/ticks)
-- §6 milestone/marker model
-- §6 data-source adapter interface (adapter keys: `static`, `jira`, `linear`,
-  `productboard`)
-- §6 registry + base element helper
-- §6 design-token stylesheet
-- §6 live-region/announcement service
-- §6 localization/formatting hook
-
-## 18. Edge cases & error handling
-
-- **Initiative spans multiple columns** — bar stretches across column borders;
-  label shown in the leftmost occupied cell.
-- **No swimlanes** — all initiatives placed in a default unlabeled swimlane.
-- **`start-date` after `end-date`** — swapped with console warning.
-- **Bar dragged outside visible range** — chart pans to follow; drop target must
-  be within defined columns/range.
-- **Adapter failure** — error slot shown; stale data retained.
-- **Long initiative names** — truncated with tooltip on hover/focus.
-- **More than 20 swimlanes** — virtual scroll on swimlane axis.
-
-## 19. Acceptance criteria
-
-- [ ] Initiatives render in correct swimlane × column intersection from `data`.
-- [ ] Calendar mode column headers reflect `scale` and `locale`.
-- [ ] Bucket mode renders named columns in supplied order.
-- [ ] Milestone markers appear on correct column boundary.
-- [ ] Selecting an initiative fires `mj-initiative-select` and opens detail panel.
-- [ ] Editable drag fires `mj-initiative-move` with from/to columns.
-- [ ] Keyboard column-move (M/.) fires `mj-initiative-move` in editable mode.
-- [ ] Accessible data table lists all initiatives with status and column.
-- [ ] RTL layout mirrors correctly.
-- [ ] axe automated accessibility check passes with zero violations.
-- [ ] Empty, loading, and error states display correct slots.
-
-## 20. Open questions
-
-- Should initiative bars support a sub-bar for a linked "dependency release"
-  date, or is that modeled as a separate milestone marker?
-- Is a "now/next/later" bucket mode with drag-to-prioritize (reorder within
-  column) in scope, or is that a separate product-management component?
-- Should multi-team roadmaps support nested swimlanes (team → sub-team)?
+- The roadmap fits its width (columns share it); it no longer scrolls sideways
+  with 160 px minimum columns.
+- In-progress bars use `--mj-accent` (was `--mj-color-info`).
+- Markers are focusable marks (they were images); activating one does nothing in
+  the wrapper (`mj-chart-marker-click` still fires).
+- An initiative without dates is no longer placed by a `columnId` that names a
+  generated period (`Q1-2026`) in calendar mode; use dates or bucket mode.
+- Parts `wrapper` and `empty-state` are gone (`surface`, `message`); the unplaced
+  note is SVG text inside the chart. Error texts are the chart's generic messages
+  (detail in `mj-error`); the default-slot fallback is not shown.
+- Not built (removed from this spec): editable mode and its events, drag between
+  columns, adapters, `locale`.

@@ -6,12 +6,27 @@
     and SSL/TLS settings.
 """
 
+import importlib.util
 import json
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from ccai.webworks.wsgi.constants import DEFAULT_MAX_REQUEST_BODY_SIZE
 from ccai.webworks.wsgi.exceptions import ServerError
+
+
+def is_gevent_available() -> bool:
+    """
+        Check whether the gevent package can be imported.
+        
+        The gevent worker class is optional, it is installed with the
+        'gevent' extra.
+        
+        :returns: True if gevent is installed.
+    """
+    rtnval = importlib.util.find_spec("gevent") is not None
+    return rtnval
 
 
 class ConfigurationError(ServerError):
@@ -61,7 +76,13 @@ class ServerConfig:
     # Worker configuration
     workers: int = 1
     threads: int = 1
-    worker_class: str = "sync"
+    worker_class: str = "sync"  # "sync" (or its alias "thread") or "gevent"
+    
+    # Worker recycling: a worker that has served max_requests requests (plus
+    # a random 0..max_requests_jitter) stops gracefully and is replaced.
+    # 0 = never.
+    max_requests: int = 0
+    max_requests_jitter: int = 0
     
     # Timeouts (in seconds)
     timeout: int = 30
@@ -69,7 +90,8 @@ class ServerConfig:
     graceful_timeout: int = 30
     
     # Limits
-    max_request_size: int = 0  # 0 = unlimited
+    max_request_size: int = DEFAULT_MAX_REQUEST_BODY_SIZE  # 0 = unlimited
+    max_request_line: int = 8192  # 8KB default, 0 = unlimited
     max_header_size: int = 8192  # 8KB default
     max_headers: int = 100
     max_connections: int = 1000  # Per worker
@@ -130,9 +152,12 @@ class ServerConfig:
             ("keepalive", "WSGI_SERVER_KEEPALIVE"),
             ("graceful_timeout", "WSGI_SERVER_GRACEFUL_TIMEOUT"),
             ("max_request_size", "WSGI_SERVER_MAX_REQUEST_SIZE"),
+            ("max_request_line", "WSGI_SERVER_MAX_REQUEST_LINE"),
             ("max_header_size", "WSGI_SERVER_MAX_HEADER_SIZE"),
             ("max_headers", "WSGI_SERVER_MAX_HEADERS"),
             ("max_connections", "WSGI_SERVER_MAX_CONNECTIONS"),
+            ("max_requests", "WSGI_SERVER_MAX_REQUESTS"),
+            ("max_requests_jitter", "WSGI_SERVER_MAX_REQUESTS_JITTER"),
         ]
         
         for field_name, env_var in int_fields:
@@ -199,8 +224,10 @@ class ServerConfig:
         known_fields = {
             "host", "port", "unix_socket", "backlog",
             "workers", "threads", "worker_class",
+            "max_requests", "max_requests_jitter",
             "timeout", "keepalive", "graceful_timeout",
-            "max_request_size", "max_header_size", "max_headers", "max_connections",
+            "max_request_size", "max_request_line", "max_header_size",
+            "max_headers", "max_connections",
             "ssl_certfile", "ssl_keyfile", "ssl_ca_certs",
             "reload", "debug",
             "access_log", "error_log", "log_level",
@@ -242,9 +269,21 @@ class ServerConfig:
             errors.append(f"Threads must be at least 1, got {self.threads}")
         
         # Validate worker_class
-        valid_worker_classes = {"sync", "thread"}
+        valid_worker_classes = {"sync", "thread", "gevent"}
         if self.worker_class not in valid_worker_classes:
             errors.append(f"Worker class must be one of {valid_worker_classes}, got '{self.worker_class}'")
+        elif self.worker_class == "gevent" and not is_gevent_available():
+            errors.append(
+                "Worker class 'gevent' needs the gevent package, which is not installed. "
+                "Install the 'gevent' extra: pip install 'codecraftai-webworks[gevent]'"
+            )
+        
+        # Validate worker recycling
+        if self.max_requests < 0:
+            errors.append(f"Max requests must be non-negative, got {self.max_requests}")
+        
+        if self.max_requests_jitter < 0:
+            errors.append(f"Max requests jitter must be non-negative, got {self.max_requests_jitter}")
         
         # Validate timeouts
         if self.timeout < 0:
@@ -259,6 +298,9 @@ class ServerConfig:
         # Validate limits
         if self.max_request_size < 0:
             errors.append(f"Max request size must be non-negative, got {self.max_request_size}")
+        
+        if self.max_request_line < 0:
+            errors.append(f"Max request line must be non-negative, got {self.max_request_line}")
         
         if self.max_header_size < 0:
             errors.append(f"Max header size must be non-negative, got {self.max_header_size}")
@@ -314,10 +356,13 @@ class ServerConfig:
             "workers": self.workers,
             "threads": self.threads,
             "worker_class": self.worker_class,
+            "max_requests": self.max_requests,
+            "max_requests_jitter": self.max_requests_jitter,
             "timeout": self.timeout,
             "keepalive": self.keepalive,
             "graceful_timeout": self.graceful_timeout,
             "max_request_size": self.max_request_size,
+            "max_request_line": self.max_request_line,
             "max_header_size": self.max_header_size,
             "max_headers": self.max_headers,
             "max_connections": self.max_connections,

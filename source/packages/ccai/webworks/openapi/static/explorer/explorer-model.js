@@ -134,8 +134,20 @@
         return String(method).toUpperCase() + " " + path;
     }
 
+    /*
+     * An object used as a map from text taken out of a document or a page address. It has no prototype, so a key such as ``constructor`` or
+     * ``toString`` is absent until it is added, where a plain ``{}`` would answer with the member it inherits from Object.prototype.
+     */
+    function newMap() {
+        return Object.create(null);
+    }
+
+    function hasOwn(object, name) {
+        return Object.prototype.hasOwnProperty.call(object, name);
+    }
+
     function operationsByKey(operations) {
-        var rtnval = {};
+        var rtnval = newMap();
         operations.forEach(function (op) { rtnval[op.key] = op; });
         return rtnval;
     }
@@ -143,7 +155,7 @@
     /* ---- Tree --------------------------------------------------------------------------------------------------------------------------- */
 
     function newNode(name, id, depth) {
-        return { name: name, id: id, depth: depth, kids: {}, children: [], ops: [], count: 0 };
+        return { name: name, id: id, depth: depth, kids: newMap(), children: [], ops: [], count: 0 };
     }
 
     /*
@@ -306,7 +318,7 @@
     /* The components a set of values reaches through $ref, and the ones those reach in turn, and nothing else. */
     function reachableComponents(components, roots) {
         var rtnval = {};
-        var seen = {};
+        var seen = newMap();
         var queue = collectRefs(roots, []);
 
         while (queue.length > 0) {
@@ -322,11 +334,11 @@
             }
             var section = parts[1];
             var name = unescapePointer(parts[2]);
-            if (REFERENCED_SECTIONS.indexOf(section) < 0 || !components[section] || !(name in components[section])) {
+            if (REFERENCED_SECTIONS.indexOf(section) < 0 || !components[section] || !hasOwn(components[section], name)) {
                 continue;
             }
             if (!rtnval[section]) {
-                rtnval[section] = {};
+                rtnval[section] = newMap();
             }
             rtnval[section][name] = components[section][name];
             queue = queue.concat(collectRefs(components[section][name], []));

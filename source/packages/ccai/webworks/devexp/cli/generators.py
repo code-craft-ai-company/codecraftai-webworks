@@ -8,11 +8,19 @@
     writing them to disk and an ``--output-dir`` option to specify the
     target directory.
 
+    The generated code uses the framework's own abstractions: an endpoint
+    is a handler marked with ``Endpoint.attach_at`` and a blueprint is a
+    ``RestBlueprint`` subclass, so both become routes as soon as the
+    application collects the generated module.
+
     Generated file names follow the repository naming conventions using
     snake_case. The commands convert the provided name to snake_case
-    before creating the output file.
+    before creating the output file. The snake_case name becomes a Python
+    identifier and a file name, so a name that does not convert to a valid
+    identifier is rejected.
 """
 
+import keyword
 import os
 import re
 
@@ -21,6 +29,8 @@ from typing import Any, Dict, TYPE_CHECKING
 from ccai.webworks.devexp.cli.command import CLICommand
 from ccai.webworks.devexp.cli.exitcodes import EXIT_ERROR
 from ccai.webworks.devexp.cli.exitcodes import EXIT_SUCCESS
+from ccai.webworks.devexp.cli.exitcodes import EXIT_USAGE_ERROR
+from ccai.webworks.devexp.cli.group import CLIGroup
 
 if TYPE_CHECKING:
     from argparse import ArgumentParser, Namespace
@@ -35,19 +45,31 @@ ENDPOINT_TEMPLATE = '''"""
 
     This module defines the ``{endpoint_name}`` endpoint which handles
     incoming HTTP requests and returns appropriate responses.
+
+    The decorator only marks the handler. The application claims it by
+    collecting this module before it starts::
+
+        webapp.registry.collect_from({endpoint_name})
 """
 
+from ccai.webworks.endpoints.endpoint import Endpoint
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.response import JSONResponse
 
-def {function_name}(request):
+
+@Endpoint.attach_at(path="/{url_path}", methods=["GET"])
+def {function_name}(request: Request) -> JSONResponse:
     """
         Handle requests to the {endpoint_name} endpoint.
 
         :param request: The incoming HTTP request object.
 
-        :returns: A dictionary containing the response data.
+        :returns: A JSONResponse containing the response data.
     """
-    rtnval = {{"endpoint": "{endpoint_name}", "status": "ok"}}
-    return rtnval
+    content = {{"endpoint": "{endpoint_name}", "status": "ok"}}
+    response = JSONResponse(content=content, status_code=200)
+
+    return response
 '''
 
 BLUEPRINT_TEMPLATE = '''"""
@@ -55,43 +77,52 @@ BLUEPRINT_TEMPLATE = '''"""
 
     This module defines the ``{blueprint_name}`` blueprint which groups
     related endpoints under a common URL prefix and namespace.
+
+    The decorators only mark the handlers. The application claims them by
+    collecting this module before it starts::
+
+        webapp.registry.collect_from({blueprint_name})
 """
 
+from ccai.webworks.endpoints.doc import Doc
+from ccai.webworks.endpoints.restblueprint import RestBlueprint
+from ccai.webworks.routing.request import Request
+from ccai.webworks.routing.response import JSONResponse
 
-class {class_name}Blueprint:
+
+class {class_name}Blueprint(RestBlueprint):
     """
         Blueprint for the {blueprint_name} feature.
 
-        This blueprint organizes related endpoints and middleware
-        under the ``/{url_prefix}`` URL prefix.
+        This blueprint organizes related endpoints under the
+        ``/{url_prefix}`` URL prefix.
     """
 
-    name = "{blueprint_name}"
-    url_prefix = "/{url_prefix}"
+    base_path = "/{url_prefix}"
+    methods = ["GET"]
+    tags = ["{url_prefix}"]
 
-    def __init__(self):
+    @staticmethod
+    @RestBlueprint.attach_at(
+        leaf="list",
+        methods=["GET"],
+        doc=Doc(
+            summary="List {blueprint_name}",
+            description="Retrieve the {blueprint_name} records.",
+        ),
+    )
+    def list_{blueprint_name}(request: Request) -> JSONResponse:
         """
-            Initialize the {class_name}Blueprint instance.
-        """
-        self._routes = []
-        return
+            Handle GET requests to ``/{url_prefix}/list``.
 
-    @property
-    def routes(self):
-        """
-            The list of registered routes for this blueprint.
+            :param request: The incoming HTTP request.
 
-            :returns: A list of route definitions.
+            :returns: A JSONResponse containing the records.
         """
-        return list(self._routes)
+        content = {{"{blueprint_name}": []}}
+        response = JSONResponse(content=content, status_code=200)
 
-    def register(self, app):
-        """
-            Register this blueprint with the application.
-
-            :param app: The application instance to register with.
-        """
-        return
+        return response
 '''
 
 
@@ -152,6 +183,35 @@ def to_pascal_case(name: str) -> str:
     return result
 
 
+def validate_generated_name(name: str) -> str:
+    """
+        Convert a name to snake_case and check that it can be generated.
+
+        The snake_case name is used as a function or class name and as the
+        file name, so it must be a valid Python identifier that is not a
+        keyword. This also rules out path separators and ``..``, which
+        would write the file outside the output directory.
+
+        :param name: The name as provided by the user.
+
+        :returns: The snake_case name.
+
+        :raises ValueError: If the name does not convert to a valid,
+            non-keyword identifier.
+    """
+    snake_name = to_snake_case(name)
+
+    if not snake_name.isidentifier() or keyword.iskeyword(snake_name):
+        errmsg = (
+            "'{}' cannot be used as a name: it must convert to a valid Python identifier "
+            "that is not a keyword (letters, digits, hyphens and underscores, not starting "
+            "with a digit).".format(name)
+        )
+        raise ValueError(errmsg)
+
+    return snake_name
+
+
 def generate_endpoint_content(name: str) -> str:
     """
         Generate the content for an endpoint file.
@@ -159,12 +219,16 @@ def generate_endpoint_content(name: str) -> str:
         :param name: The endpoint name as provided by the user.
 
         :returns: The generated Python source code for the endpoint.
+
+        :raises ValueError: If the name is not a valid identifier.
     """
-    snake_name = to_snake_case(name)
+    snake_name = validate_generated_name(name)
+    url_path = snake_name.replace("_", "-")
 
     content = ENDPOINT_TEMPLATE.format(
         endpoint_name=snake_name,
-        function_name=snake_name
+        function_name=snake_name,
+        url_path=url_path,
     )
 
     return content
@@ -177,9 +241,11 @@ def generate_blueprint_content(name: str) -> str:
         :param name: The blueprint name as provided by the user.
 
         :returns: The generated Python source code for the blueprint.
+
+        :raises ValueError: If the name is not a valid identifier.
     """
-    snake_name = to_snake_case(name)
-    pascal_name = to_pascal_case(name)
+    snake_name = validate_generated_name(name)
+    pascal_name = to_pascal_case(snake_name)
     url_prefix = snake_name.replace("_", "-")
 
     content = BLUEPRINT_TEMPLATE.format(
@@ -238,7 +304,7 @@ class GenerateEndpointCommand(CLICommand):
         CLI command for generating an endpoint file with boilerplate code.
 
         The ``endpoint`` command creates a Python file containing a
-        basic endpoint function definition. The generated file follows
+        handler attached with ``Endpoint.attach_at``. The generated file follows
         the repository naming conventions using snake_case for the
         file name and function name.
 
@@ -298,7 +364,12 @@ class GenerateEndpointCommand(CLICommand):
         output_dir = args.output_dir
         dry_run = args.dry_run
 
-        snake_name = to_snake_case(name)
+        try:
+            snake_name = validate_generated_name(name)
+        except ValueError as err:
+            print("Error: {}".format(err))
+            return EXIT_USAGE_ERROR
+
         file_name = "{}.py".format(snake_name)
         file_path = os.path.join(output_dir, file_name)
 
@@ -317,8 +388,7 @@ class GenerateBlueprintCommand(CLICommand):
         CLI command for generating a blueprint file with standard structure.
 
         The ``blueprint`` command creates a Python file containing a
-        blueprint class definition with standard structure including
-        route registration and URL prefix configuration.
+        ``RestBlueprint`` subclass with a URL prefix and one endpoint.
 
         Usage::
 
@@ -362,10 +432,9 @@ class GenerateBlueprintCommand(CLICommand):
         """
             Execute the generate blueprint command.
 
-            Generates a Python file containing blueprint boilerplate
-            code with a class definition, route list, and registration
-            method. The file name is derived from the provided name
-            converted to snake_case.
+            Generates a Python file containing a ``RestBlueprint``
+            subclass with a base path and one endpoint. The file name is
+            derived from the provided name converted to snake_case.
 
             :param args: Parsed command-line arguments containing
                 ``name``, ``output_dir``, and ``dry_run``.
@@ -377,7 +446,12 @@ class GenerateBlueprintCommand(CLICommand):
         output_dir = args.output_dir
         dry_run = args.dry_run
 
-        snake_name = to_snake_case(name)
+        try:
+            snake_name = validate_generated_name(name)
+        except ValueError as err:
+            print("Error: {}".format(err))
+            return EXIT_USAGE_ERROR
+
         file_name = "{}.py".format(snake_name)
         file_path = os.path.join(output_dir, file_name)
 
@@ -385,3 +459,37 @@ class GenerateBlueprintCommand(CLICommand):
         exit_code = write_generated_file(file_path, content, dry_run)
 
         return exit_code
+
+
+# =============================================================================
+# GenerateGroup
+# =============================================================================
+
+class GenerateGroup(CLIGroup):
+    """
+        CLI command group for code generation.
+
+        The ``generate`` group organizes the generator commands under the
+        ``webworks generate`` namespace.
+
+        Usage::
+
+            webworks generate endpoint user-profile
+            webworks generate blueprint user-management
+    """
+
+    name = "generate"
+    help = "Code generation commands."
+
+    def __init__(self):
+        """
+            Initialize the GenerateGroup with the generator commands.
+        """
+        commands = [
+            GenerateEndpointCommand(),
+            GenerateBlueprintCommand(),
+        ]
+
+        super().__init__(name=self.name, help=self.help, commands=commands)
+
+        return

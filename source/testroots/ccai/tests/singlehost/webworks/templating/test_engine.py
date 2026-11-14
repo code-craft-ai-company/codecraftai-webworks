@@ -722,3 +722,20 @@ def test_render_compiled_stream_default_yields_single_chunk():
         raise AssertionError(f"Expected ['Hello Stream!'], got {chunks!r}")
     
     return
+
+
+# =============================================================================
+# has_filter() Default Implementation Tests
+# =============================================================================
+
+def test_has_filter_default_reports_false():
+    """
+        Test that the default has_filter() reports no filter as provided.
+    """
+    engine = MockTemplateEngine()
+    engine.add_filter("upper", lambda value: str(value).upper())
+    
+    if engine.has_filter("upper") is not False:
+        raise AssertionError("The default has_filter() should return False")
+    
+    return

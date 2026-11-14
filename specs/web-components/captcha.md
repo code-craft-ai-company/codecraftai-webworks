@@ -111,7 +111,7 @@ theme setting to the provider SDK.
 ## 10. States
 | State | Visual effect | ARIA effect |
 |-------|---------------|-------------|
-| Idle (not yet verified) | Provider widget shown | `aria-invalid` not set; `aria-required` set if `required` |
+| Idle (not yet verified) | Provider widget shown | `aria-invalid` not set |
 | Loading | Widget container shows a skeleton | `aria-busy="true"` on container |
 | Verified | Status shows "Verified ✓"; widget may collapse | `aria-live` announces "Verification successful" |
 | Expired | Status shows "Verification expired"; widget resets | `aria-live` announces "Verification expired, please try again" |
@@ -160,7 +160,9 @@ completing the challenge.
 - `aria-busy="true"` is set on the container while the SDK loads.
 - `aria-invalid="true"` is set on the container when the form is submitted
   without a valid token.
-- `aria-required="true"` on the container when `required` is set.
+- The container (role `group`) does not take `aria-required`, which that role does not allow: `required` is
+  enforced through validity (`valueMissing`, `reportValidity()`), and the visible `label` should say that the
+  verification is required.
 - The component documents that the chosen provider MUST offer a WCAG AA
   accessible alternative challenge (audio CAPTCHA or alternative challenge).
   hCaptcha and reCAPTCHA v2 both provide audio alternatives; the component does

@@ -17,12 +17,15 @@ __author__ = "Code Craft AI LLC"
 __copyright__ = "Copyright 2025, Code Craft AI LLC"
 __credits__ = []
 
+import copy
 import dataclasses
 
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, Dict, List, Set, Tuple, Type, Union
+from typing import Any, Dict, List, Set, Tuple, Type
 from uuid import UUID
+
+from ccai.webworks.endpoints.typeinspection import UNION_ORIGINS, resolve_field_types
 
 try:
     import typing
@@ -38,6 +41,15 @@ try:
 except ImportError:
     PydanticBaseModel = None
     HAS_PYDANTIC = False
+
+
+# Prefix of the references Pydantic writes for nested models, and the place
+# those models live in an OpenAPI document.
+PYDANTIC_DEFS_PREFIX = "#/$defs/"
+COMPONENT_SCHEMAS_PREFIX = "#/components/schemas/"
+
+# Keywords whose value is a list of schemas.
+_SCHEMA_LIST_KEYWORDS = ("anyOf", "oneOf", "allOf")
 
 
 # Type mapping for Python primitives to JSON Schema representations.
@@ -81,15 +93,23 @@ class SchemaConverter:
 
             :returns: A JSON Schema dictionary representing the given type.
         """
+        # A dict is not a type to convert but a schema that already exists:
+        # endpoint descriptors carry the JSON Schema that attach_at
+        # inspected. It is taken as it is, adjusted for OpenAPI.
+        if isinstance(python_type, dict):
+            result = self.convert_json_schema(schema=python_type)
+            return result
+
         # Handle None type
         if python_type is type(None):
             result = {"type": "null"}
             return result
 
         # Handle primitive types
-        if python_type in PYTHON_TO_JSON_SCHEMA:
-            result = dict(PYTHON_TO_JSON_SCHEMA[python_type])
-            return result
+        if isinstance(python_type, type) or python_type is Any:
+            if python_type in PYTHON_TO_JSON_SCHEMA:
+                result = dict(PYTHON_TO_JSON_SCHEMA[python_type])
+                return result
 
         # Handle generic types (List, Dict, Optional, Union)
         origin = _get_origin(python_type) if _get_origin is not None else None
@@ -153,6 +173,119 @@ class SchemaConverter:
         result = {"type": "object"}
         return result
 
+    def convert_json_schema(self, schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+            Adopt a schema that is already JSON Schema, such as the output of
+            a Pydantic model's ``model_json_schema()`` or the inspected
+            schema stored on an endpoint descriptor.
+
+            The schema is copied, never modified. Definitions it carries
+            under ``$defs`` are moved to the component schemas -- with the
+            references inside them rewritten as well as the references to
+            them -- and JSON Schema constructs that OpenAPI 3.0 does not
+            have are rewritten to their 3.0 form (see
+            :meth:`normalize_schema`).
+
+            :param schema: A JSON Schema dictionary.
+
+            :returns: The schema in OpenAPI 3.0 form, as a new dictionary.
+        """
+        working = copy.deepcopy(schema)
+
+        defs = working.pop("$defs", None)
+        if isinstance(defs, dict):
+            for def_name, def_schema in defs.items():
+                if def_name not in self._schema_cache:
+                    self._schema_cache[def_name] = self.normalize_schema(schema=def_schema)
+
+        result = self.normalize_schema(schema=working)
+        return result
+
+    def normalize_schema(self, schema: Any) -> Any:
+        """
+            Rewrite a JSON Schema value into the form OpenAPI 3.0 accepts.
+
+            Applied recursively to every nested schema:
+
+            - ``#/$defs/Name`` references become ``#/components/schemas/Name``.
+            - ``anyOf``/``oneOf`` with a ``{"type": "null"}`` member, which is
+              how JSON Schema (and OpenAPI 3.1) spell an optional value,
+              becomes ``nullable: true`` on the remaining schema.
+            - A ``$ref`` with sibling keywords is wrapped in ``allOf``,
+              because OpenAPI 3.0 ignores everything beside a ``$ref``.
+            - ``const`` becomes a one-value ``enum``.
+
+            :param schema: A schema value: a dict, a list of schemas, or a
+                           scalar keyword value.
+
+            :returns: The rewritten value. Dicts and lists are new objects.
+        """
+        if isinstance(schema, list):
+            rewritten_list = [self.normalize_schema(schema=item) for item in schema]
+            return rewritten_list
+
+        if not isinstance(schema, dict):
+            return schema
+
+        rewritten: Dict[str, Any] = {}
+        for key, value in schema.items():
+            if key == "$ref" and isinstance(value, str):
+                if value.startswith(PYDANTIC_DEFS_PREFIX):
+                    value = COMPONENT_SCHEMAS_PREFIX + value[len(PYDANTIC_DEFS_PREFIX):]
+                rewritten[key] = value
+            elif key in ("default", "example", "enum", "const", "required"):
+                # Data, not schemas: leave the values alone
+                rewritten[key] = copy.deepcopy(value)
+            elif key == "properties" and isinstance(value, dict):
+                rewritten[key] = {
+                    prop_name: self.normalize_schema(schema=prop_schema)
+                    for prop_name, prop_schema in value.items()
+                }
+            else:
+                rewritten[key] = self.normalize_schema(schema=value)
+
+        if "const" in rewritten and "enum" not in rewritten:
+            rewritten["enum"] = [rewritten.pop("const")]
+
+        # Optional values: fold a null member into ``nullable``
+        for keyword in ("anyOf", "oneOf"):
+            members = rewritten.get(keyword)
+            if not isinstance(members, list):
+                continue
+
+            non_null_members = [
+                member for member in members
+                if not (isinstance(member, dict) and member.get("type") == "null" and len(member) == 1)
+            ]
+            if len(non_null_members) == len(members):
+                continue
+
+            rewritten["nullable"] = True
+            if len(non_null_members) == 1:
+                del rewritten[keyword]
+                only_member = non_null_members[0]
+                if isinstance(only_member, dict) and "$ref" in only_member:
+                    rewritten["allOf"] = [only_member]
+                elif isinstance(only_member, dict):
+                    for member_key, member_value in only_member.items():
+                        if member_key not in rewritten:
+                            rewritten[member_key] = member_value
+            elif len(non_null_members) == 0:
+                del rewritten[keyword]
+            else:
+                rewritten[keyword] = non_null_members
+
+        # A $ref cannot have siblings in OpenAPI 3.0
+        if "$ref" in rewritten and len(rewritten) > 1:
+            ref_value = rewritten.pop("$ref")
+            existing_all_of = rewritten.get("allOf")
+            if isinstance(existing_all_of, list):
+                rewritten["allOf"] = [{"$ref": ref_value}] + existing_all_of
+            else:
+                rewritten["allOf"] = [{"$ref": ref_value}]
+
+        return rewritten
+
     def get_ref(self, python_type: Type) -> str:
         """
             Get the ``$ref`` path for a complex type.
@@ -196,8 +329,12 @@ class SchemaConverter:
 
         fields = dataclasses.fields(dc_type)
 
+        # Resolve the annotations: under ``from __future__ import
+        # annotations`` a field's declared type is only a string.
+        field_types = resolve_field_types(dc_type)
+
         for field in fields:
-            field_schema = self.convert(python_type=field.type)
+            field_schema = self.convert(python_type=field_types.get(field.name, field.type))
 
             # Extract description from field metadata
             metadata = field.metadata
@@ -249,15 +386,10 @@ class SchemaConverter:
 
         raw_schema = model_type.model_json_schema()
 
-        # Handle $defs from Pydantic schema and register nested models
-        defs = raw_schema.pop("$defs", None)
-        if defs is not None:
-            for def_name, def_schema in defs.items():
-                if def_name not in self._schema_cache:
-                    self._schema_cache[def_name] = def_schema
-
-        # Rewrite Pydantic $ref paths from #/$defs/Name to #/components/schemas/Name
-        schema = self._rewrite_pydantic_refs(schema=raw_schema)
+        # Move the nested models Pydantic lists under $defs to the component
+        # schemas and rewrite the references to them, including the
+        # references the nested models make to each other.
+        schema = self.convert_json_schema(schema=raw_schema)
 
         return schema
 
@@ -267,32 +399,15 @@ class SchemaConverter:
 
             Pydantic generates references like ``#/$defs/ModelName`` which need
             to be rewritten to ``#/components/schemas/ModelName`` for OpenAPI
-            compatibility.
+            compatibility. The schema is also brought into OpenAPI 3.0 form;
+            see :meth:`normalize_schema`.
 
             :param schema: A schema value that may contain ``$ref`` entries.
 
             :returns: The schema with rewritten reference paths.
         """
-        if isinstance(schema, dict):
-            if "$ref" in schema:
-                ref_value = schema["$ref"]
-                if ref_value.startswith("#/$defs/"):
-                    model_name = ref_value.replace("#/$defs/", "")
-                    schema["$ref"] = f"#/components/schemas/{model_name}"
-                return schema
-
-            rewritten = {}
-            for key, value in schema.items():
-                rewritten[key] = self._rewrite_pydantic_refs(schema=value)
-            return rewritten
-
-        if isinstance(schema, list):
-            rewritten_list = []
-            for item in schema:
-                rewritten_list.append(self._rewrite_pydantic_refs(schema=item))
-            return rewritten_list
-
-        return schema
+        rewritten = self.normalize_schema(schema=schema)
+        return rewritten
 
     def _convert_primitive(self, python_type: Type) -> Dict[str, Any]:
         """
@@ -334,8 +449,9 @@ class SchemaConverter:
             result = self._convert_dict(key_type=key_type, value_type=value_type)
             return result
 
-        # Handle Optional[T] which is Union[T, None]
-        if origin is Union:
+        # Handle Optional[T] which is Union[T, None], in either spelling:
+        # typing.Union or the PEP 604 form ``T | None``
+        if origin in UNION_ORIGINS:
             non_none_types = [t for t in args if t is not type(None)]
             has_none = len(non_none_types) < len(args)
 
@@ -405,6 +521,16 @@ class SchemaConverter:
             :returns: A JSON Schema dictionary with the ``nullable`` flag set to ``True``.
         """
         inner_schema = self.convert(python_type=inner_type)
+
+        if "$ref" in inner_schema:
+            # OpenAPI 3.0 ignores keywords beside a $ref, so ``nullable``
+            # written next to it would be lost. Wrap the reference.
+            result = {
+                "allOf": [dict(inner_schema)],
+                "nullable": True,
+            }
+            return result
+
         result = dict(inner_schema)
         result["nullable"] = True
 

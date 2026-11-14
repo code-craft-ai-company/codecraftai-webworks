@@ -1080,3 +1080,51 @@ def test_property_rate_limit_tree_wide():
                 raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Effective access policy as one merged AccessPolicy
+# =============================================================================
+
+from ccai.webworks.security.accesspolicy import AccessPolicy
+from ccai.webworks.security.securitycontext import SecurityContext
+from ccai.webworks.urlnodemap.urlnodemap import URLNodeMap
+
+
+def test_effective_access_policy_merges_access_policy_objects():
+    """
+        AccessPolicy objects along the chain are merged into one policy
+        that requires every one of them.
+    """
+    url_map = URLNodeMap()
+    url_map.get_or_create_node("/admin").set_metadata("access_policy", AccessPolicy(roles=("staff",)))
+    leaf = url_map.get_or_create_node("/admin/users")
+    leaf.set_metadata("access_policy", AccessPolicy(roles=("admin",), scopes=("users:write",)))
+
+    effective = leaf.get_effective_access_policy()
+
+    assert isinstance(effective, AccessPolicy), f"Expected an AccessPolicy, got {type(effective).__name__}"
+    assert effective.scopes == ("users:write",), f"Unexpected scopes {effective.scopes}"
+
+    admin_only = SecurityContext(user_id="u1", roles=("admin",), scopes=("users:write",))
+    both = SecurityContext(user_id="u2", roles=("staff", "admin"), scopes=("users:write",))
+
+    assert effective.check(admin_only) is False, "The inherited staff requirement must still apply"
+    assert effective.check(both) is True, "A subject meeting both policies is allowed"
+    return
+
+
+def test_effective_access_policy_keeps_list_for_raw_policies():
+    """
+        Policies that are not AccessPolicy objects can not be merged and are
+        returned as a list.
+    """
+    url_map = URLNodeMap()
+    url_map.get_or_create_node("/api").set_metadata("access_policy", "authenticated")
+    leaf = url_map.get_or_create_node("/api/items")
+    leaf.set_metadata("access_policy", "items:read")
+
+    effective = leaf.get_effective_access_policy()
+
+    assert effective == ["items:read", "authenticated"], f"Unexpected value {effective}"
+    return

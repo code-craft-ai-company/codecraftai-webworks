@@ -177,3 +177,14 @@ The feature enables developers to centralize access control and constraints once
 3. THE web map SHALL enable reviewers to confirm that sensitive routes (admin, hero, etc.) enforce the correct roles before deployment.
 4. THE EndpointRegistry SHALL provide tooling hooks such as `export_security_map(filter_tag="admin")` for CI integration.
 5. THE CI tooling SHALL be able to diff the map and block changes that weaken security without code reviewers manually tracing decorators.
+
+### Requirement 12: REST Processing Opt-Out
+
+**User Story:** As an API developer, I want to say per handler whether its REST metadata drives the request/response processing, so that a handler that parses the body and shapes the response itself keeps doing so while its schemas still document it.
+
+#### Acceptance Criteria
+
+1. `Endpoint.attach_at`, `RestEndpoint.attach_at` and its `read` / `create` / `update` / `delete` helpers, `Blueprint.attach_at` and `RestBlueprint.attach_at` SHALL accept a `rest_processing` keyword (default None).
+2. WHEN `rest_processing` is None, THE decorator SHALL use the class attribute `rest_processing` of the class it is called on (True on `Endpoint`).
+3. WHEN a handler declares REST metadata, THE descriptor SHALL record `extras["rest"]["managed"] = True` when `rest_processing` is True and `extras["rest"]["processing"] = False` when it is False; the keyword SHALL NOT be stored among the free-form extras.
+4. A handler without REST metadata SHALL record nothing, whatever `rest_processing` says.

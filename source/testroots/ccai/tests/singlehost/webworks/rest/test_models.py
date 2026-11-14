@@ -1777,3 +1777,33 @@ def test_property_5_partial_update_with_validator():
                 raise AssertionError(errmsg)
     
     return
+
+
+# =============================================================================
+# Positional placeholders in a message template
+# =============================================================================
+
+def test_error_mapping_template_interpolates_a_bare_placeholder():
+    """A bare ``{}`` in a message template stands for the exception's message."""
+    mapping = ErrorMapping(status_code=404, error_code="not_found", message_template="No such thing: {}")
+
+    rest_error = mapping.build_response(LookupError("widget"))
+
+    if rest_error.message != "No such thing: widget":
+        raise AssertionError(f"Expected 'No such thing: widget', got {rest_error.message!r}")
+
+
+def test_error_mapping_template_interpolates_named_and_bare_placeholders_together():
+    """A template may mix a bare placeholder with exception attributes."""
+
+    class QuotaError(Exception):
+        def __init__(self, message, limit):
+            super().__init__(message)
+            self.limit = limit
+
+    mapping = ErrorMapping(status_code=429, error_code="quota", message_template="{} (limit {limit})")
+
+    rest_error = mapping.build_response(QuotaError("Too many requests", 5))
+
+    if rest_error.message != "Too many requests (limit 5)":
+        raise AssertionError(f"Expected 'Too many requests (limit 5)', got {rest_error.message!r}")

@@ -762,3 +762,60 @@ def test_env_override_hyphenated_extension_name():
             os.environ[env_var] = original_value
 
     return
+
+
+# =============================================================================
+# Extension configuration from a configuration registry (dot-notation keys)
+# =============================================================================
+
+class _FlatConfig:
+    """
+        A configuration with dot-notation keys offered through items(), the
+        shape of the ConfigRegistry a web application loads.
+    """
+
+    def __init__(self, values: dict):
+        self._values = dict(values)
+        return
+
+    def get(self, key: str, default: Any = None) -> Any:
+        rtnval = self._values.get(key, default)
+        return rtnval
+
+    def items(self) -> list:
+        rtnval = list(self._values.items())
+        return rtnval
+
+
+def test_load_extension_config_reads_dot_notation_keys():
+    """
+        Test that an extension's settings are collected from dot-notation
+        keys and nested again.
+    """
+    config = _FlatConfig({
+        "extensions.audit.level": "full",
+        "extensions.audit.sink.path": "/var/log/audit",
+        "extensions.other.level": "none",
+        "extensions.load": ["pkg.mod:Cls"],
+        "server.port": 8000,
+    })
+
+    result = load_extension_config("audit", config)
+
+    expected = {"level": "full", "sink": {"path": "/var/log/audit"}}
+    if result != expected:
+        raise AssertionError("Expected {}, got {}".format(expected, result))
+
+    return
+
+
+def test_load_extension_config_without_items_is_empty():
+    """
+        Test that a configuration offering neither shape gives an empty config.
+    """
+    result = load_extension_config("audit", object())
+
+    if result != {}:
+        raise AssertionError("Expected an empty configuration, got {}".format(result))
+
+    return

@@ -7,7 +7,15 @@
  * mj-dock-layout (see core/anchoring.js); the docking-related declarations
  * here only cover the docked child's own presentation.
  *
- * This stylesheet is also safe to link directly in light DOM.
+ * The rules are written for a shadow root. The copy that components actually
+ * adopt is the BASE_CSS string in javascript/core/basestyles.js (constructable
+ * stylesheets cannot be linked, and the library needs no fetch or build
+ * step); the two hold the same rules and must be changed together.
+ *
+ * Linking this file in a document is harmless but does little: every :host
+ * rule matches nothing outside a shadow root, so only the `[hidden]` rule and
+ * the `.mj-visually-hidden` / `.mj-focus-ring` helper classes apply to
+ * light-DOM content. Link tokens.css for the theme; this file is optional.
  */
 
 :host {
@@ -17,7 +25,6 @@
   font-size: var(--mj-font-size-md);
   line-height: var(--mj-line-height);
   color: var(--mj-text);
-  -webkit-text-size-adjust: 100%;
 }
 
 :host *,
@@ -31,6 +38,13 @@
   display: none !important;
 }
 
+/*
+ * A disabled control ignores the pointer. This is meant for CONTROL
+ * components: a container whose slotted content must stay usable while the
+ * container itself is disabled overrides it with `pointer-events: auto`
+ * (mj-accordion, mj-card, mj-disclosure and mj-split-pane do), and disables
+ * only its own interactive parts.
+ */
 :host([disabled]) {
   pointer-events: none;
   cursor: not-allowed;
@@ -39,10 +53,15 @@
 /* ----------------------------------------------------------------------
  * Anchoring
  *
- * Any component placed inside a positioned container (a container that sets
- * `position: relative`, which all mj-* layout containers do) can pin itself to
- * an anchor point with the `anchor` attribute. RTL is handled by logical
- * inset properties so `start`/`end` follow text direction.
+ * Any component placed inside a positioned container can pin itself to an
+ * anchor point with the `anchor` attribute. The positioning context is the
+ * nearest positioned ancestor in the flattened tree: mj-dock-layout,
+ * mj-surface, mj-stack, mj-grid, mj-media-object, mj-accordion and the
+ * mj-split-pane panes are positioned for their slotted children; for any
+ * other parent, give it (or the element it is slotted into) `position:
+ * relative`. RTL is handled by logical inset properties so `start`/`end`
+ * follow text direction, and the centred anchors centre with auto margins
+ * instead of a physical translate, so they stay centred in RTL.
  * -------------------------------------------------------------------- */
 :host([anchor]) {
   position: absolute;
@@ -50,15 +69,22 @@
 }
 
 :host([anchor="top-start"])     { inset-block-start: var(--mj-anchor-inset, 0); inset-inline-start: var(--mj-anchor-inset, 0); }
-:host([anchor="top"])           { inset-block-start: var(--mj-anchor-inset, 0); inset-inline-start: 50%; translate: -50% 0; }
+:host([anchor="top"])           { inset-block-start: var(--mj-anchor-inset, 0); inset-inline: 0; margin-inline: auto; }
 :host([anchor="top-end"])       { inset-block-start: var(--mj-anchor-inset, 0); inset-inline-end: var(--mj-anchor-inset, 0); }
 :host([anchor="start"])         { inset-inline-start: var(--mj-anchor-inset, 0); inset-block-start: 50%; translate: 0 -50%; }
-:host([anchor="center"])        { inset-block-start: 50%; inset-inline-start: 50%; translate: -50% -50%; }
+:host([anchor="center"])        { inset: 0; margin: auto; }
 :host([anchor="end"])           { inset-inline-end: var(--mj-anchor-inset, 0); inset-block-start: 50%; translate: 0 -50%; }
 :host([anchor="bottom-start"])  { inset-block-end: var(--mj-anchor-inset, 0); inset-inline-start: var(--mj-anchor-inset, 0); }
-:host([anchor="bottom"])        { inset-block-end: var(--mj-anchor-inset, 0); inset-inline-start: 50%; translate: -50% 0; }
+:host([anchor="bottom"])        { inset-block-end: var(--mj-anchor-inset, 0); inset-inline: 0; margin-inline: auto; }
 :host([anchor="bottom-end"])    { inset-block-end: var(--mj-anchor-inset, 0); inset-inline-end: var(--mj-anchor-inset, 0); }
 :host([anchor="stretch"])       { inset: var(--mj-anchor-inset, 0); }
+
+/*
+ * The centred anchors shrink to their content so the auto margins can centre
+ * them. Zero specificity beyond :host, so a component's own :host size wins.
+ */
+:host(:where([anchor="top"], [anchor="bottom"])) { inline-size: fit-content; }
+:host(:where([anchor="center"]))                 { inline-size: fit-content; block-size: fit-content; }
 
 /* ----------------------------------------------------------------------
  * Docking
@@ -66,6 +92,17 @@
  * A component carrying `dock` is laid out by an enclosing mj-dock-layout.
  * The host declarations below only ensure a docked child fills the band the
  * layout assigns to it; the edge-consumption geometry is JS-driven.
+ *
+ * The layout sets a band's cross size (the width of a top/bottom band, the
+ * height of a start/end band) but takes the size along the consumed axis
+ * from the child. A component whose host defaults to `block-size: 100%`
+ * (or `inline-size: 100%`) would claim the whole container there, so such a
+ * component resets it itself under `:host([dock="top"])`,
+ * `:host([dock="bottom"])` (block-size: auto) and `:host([dock="start"])`,
+ * `:host([dock="end"])` (inline-size: auto), as mj-dock-layout,
+ * mj-split-pane, mj-file-browser, mj-master-detail and mj-diagram do. It is
+ * not reset here because that would also override components with a fixed
+ * host size (mj-toc, mj-progress, mj-notification-center ...).
  * -------------------------------------------------------------------- */
 :host([dock]) {
   flex: 0 0 auto;

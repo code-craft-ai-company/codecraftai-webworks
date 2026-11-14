@@ -735,3 +735,100 @@ def test_property_21_component_interface_validation():
             raise AssertionError(errmsg)
 
     return
+
+
+# =============================================================================
+# Forwarding components to the registries that use them
+# =============================================================================
+
+def test_forwarder_receives_the_validated_component_before_listeners():
+    """
+        Test that a component is handed to its forwarder after validation
+        and before the hook's callbacks are told about it.
+    """
+    manager = HookManager()
+    sequence = []
+
+    def forward(component):
+        sequence.append(("forward", component))
+
+    manager.register(REGISTER_MIDDLEWARE, lambda component: sequence.append(("listener", component)), extension_name="ext")
+
+    hooks = ComponentRegistrationHooks(hook_manager=manager, forwarders={REGISTER_MIDDLEWARE: forward})
+    component = _ValidMiddleware()
+
+    hooks.fire_register_middleware(component)
+
+    if sequence != [("forward", component), ("listener", component)]:
+        raise AssertionError("Expected forward then listener, got {}".format(sequence))
+
+    if hooks.get_registered_components(REGISTER_MIDDLEWARE) != [component]:
+        raise AssertionError("Expected the component to be recorded")
+
+    if hooks.has_forwarder(REGISTER_MIDDLEWARE) is not True or hooks.has_forwarder(REGISTER_CLI_COMMAND) is not False:
+        raise AssertionError("Expected has_forwarder to report the configured forwarders")
+
+    return
+
+
+def test_forwarder_is_not_called_for_an_invalid_component():
+    """
+        Test that a component failing validation never reaches the forwarder.
+    """
+    forwarded = []
+    hooks = ComponentRegistrationHooks(
+        hook_manager=HookManager(),
+        forwarders={REGISTER_MIDDLEWARE: forwarded.append}
+    )
+
+    caught = None
+    try:
+        hooks.fire_register_middleware(_PartialMiddleware())
+    except ExtensionPointError as err:
+        caught = err
+
+    if caught is None or forwarded != []:
+        raise AssertionError("Expected ExtensionPointError and no forwarding, got {} / {}".format(caught, forwarded))
+
+    return
+
+
+def test_component_refused_by_its_forwarder_is_not_recorded():
+    """
+        Test that when the forwarder raises, the component is not recorded
+        and the exception reaches the caller.
+    """
+    def refuse(component):
+        raise ValueError("refused")
+
+    hooks = ComponentRegistrationHooks(hook_manager=HookManager(), forwarders={REGISTER_SERIALIZER: refuse})
+
+    caught = None
+    try:
+        hooks.fire_register_serializer(_ValidSerializer())
+    except ValueError as err:
+        caught = err
+
+    if caught is None:
+        raise AssertionError("Expected the forwarder's ValueError")
+
+    if hooks.get_registered_components(REGISTER_SERIALIZER) != []:
+        raise AssertionError("Expected the refused component not to be recorded")
+
+    return
+
+
+def test_forwarder_for_unknown_hook_is_refused():
+    """
+        Test that a forwarder keyed by an unknown hook name is refused.
+    """
+    caught = None
+    try:
+        ComponentRegistrationHooks(hook_manager=HookManager(), forwarders={"register_widget": lambda c: None})
+    except ValueError as err:
+        caught = err
+
+    if caught is None:
+        raise AssertionError("Expected ValueError for an unknown hook name")
+
+    return

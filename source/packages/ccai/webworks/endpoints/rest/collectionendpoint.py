@@ -13,12 +13,16 @@ __credits__ = []
 
 import logging
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
+from ccai.webworks.endpoints.descriptor import EndpointDescriptor
+from ccai.webworks.endpoints.rest.exceptions import ValidationError
+from ccai.webworks.endpoints.rest.middleware import RESTMiddleware
 from ccai.webworks.endpoints.rest.resourceendpoint import ResourceEndpoint
 from ccai.webworks.endpoints.rest.models import (
     BulkItemError,
     BulkOperationResult,
+    FieldError,
     PaginatedResponse,
     RESTError,
 )
@@ -411,6 +415,224 @@ class CollectionEndpoint(ResourceEndpoint):
         
         return BulkOperationResult(succeeded=succeeded, failed=failed)
     
+    @classmethod
+    def get_list_query_params(cls) -> Dict[str, Type]:
+        """
+            Get the query parameters the list route reads: the pagination
+            parameters, ``sort`` when sorting is configured, and one
+            parameter per filter field.
+
+            Returns:
+                Mapping of query parameter name to Python type.
+        """
+        query_params: Dict[str, Type] = {
+            "page": int,
+            "page_size": int,
+        }
+
+        if len(cls.sort_fields) > 0:
+            query_params["sort"] = str
+
+        for field_name in cls.filter_fields:
+            query_params[field_name] = str
+
+        return query_params
+
+    @classmethod
+    def build_routes(
+        cls,
+        instance: "ResourceEndpoint",
+        middleware: RESTMiddleware
+    ) -> List[EndpointDescriptor]:
+        """
+            Build the descriptors for this collection's routes: the list
+            route, the bulk routes when ``bulk_enabled`` is set, and the
+            CRUD routes of :class:`ResourceEndpoint`.
+
+            - GET /{resource_name} calls :meth:`list` with the page, page
+              size, filters and sort order parsed from the query string.
+            - POST, PUT and DELETE /{resource_name}/bulk call
+              :meth:`bulk_create`, :meth:`bulk_update` and
+              :meth:`bulk_delete` with the JSON array in the request body.
+
+            The list route is only built when GET is an allowed method.
+
+            Args:
+                instance: The collection endpoint instance the routes serve.
+                middleware: The REST middleware to run the operations inside.
+
+            Returns:
+                List of EndpointDescriptor objects, one per route.
+        """
+        descriptors: List[EndpointDescriptor] = []
+        allowed = [method.upper() for method in cls.get_effective_allowed_methods()]
+        resource_title = cls.resource_name.replace("_", " ").replace("-", " ").title()
+
+        # List route
+        if "GET" in allowed:
+            def list_operation(request: Any) -> Any:
+                query_params = cls.read_query_params(request)
+                page, page_size = cls.parse_pagination_params(query_params)
+                filters = cls.parse_filter_params(query_params)
+                sort = cls.parse_sort_params(query_params)
+                return instance.list(page=page, page_size=page_size, filters=filters, sort=sort)
+
+            descriptors.append(cls.build_route(
+                instance=instance,
+                middleware=middleware,
+                operation=list_operation,
+                name=f"list_{cls.resource_name}",
+                path=f"/{cls.resource_name}",
+                methods=["GET"],
+                summary=f"List {resource_title}",
+                extras=cls.build_route_extras(
+                    with_request_schema=False,
+                    with_response_schema=False,
+                    query_params=cls.get_list_query_params()
+                )
+            ))
+
+        # Bulk routes. They are built before the item route so that a
+        # router which tries routes in registration order reaches the
+        # literal "bulk" segment before the identifier parameter.
+        for method, path_suffix, handler_name in cls.get_bulk_routes():
+            descriptors.append(cls.build_route(
+                instance=instance,
+                middleware=middleware,
+                operation=cls.build_bulk_operation(instance, middleware, handler_name),
+                name=f"{handler_name}_{cls.resource_name}",
+                path=f"/{cls.resource_name}{path_suffix}",
+                methods=[method],
+                summary=f"{handler_name.replace('_', ' ').capitalize()} {resource_title}",
+                extras=cls.build_route_extras(
+                    with_request_schema=False,
+                    with_response_schema=False
+                )
+            ))
+
+        descriptors.extend(super().build_routes(instance, middleware))
+
+        return descriptors
+
+    @staticmethod
+    def read_query_params(request: Any) -> Dict[str, Any]:
+        """
+            Read the query parameters of a request into a plain dictionary,
+            as the ``parse_*_params`` helpers expect them.
+
+            Args:
+                request: The HTTP request object.
+
+            Returns:
+                Dictionary of query parameter name to value. A parameter
+                given more than once keeps its first value.
+        """
+        rtnval: Dict[str, Any] = {}
+
+        query_params = getattr(request, "query_params", None)
+        if query_params is None:
+            return rtnval
+
+        for key in query_params.keys():
+            if key not in rtnval:
+                rtnval[key] = query_params.get(key)
+
+        return rtnval
+
+    @classmethod
+    def build_bulk_operation(
+        cls,
+        instance: "ResourceEndpoint",
+        middleware: RESTMiddleware,
+        handler_name: str
+    ) -> Callable[[Any], Any]:
+        """
+            Build the operation behind one bulk route.
+
+            The request body must be a JSON array. For ``bulk_create`` each
+            item is validated into ``request_schema`` first, and any invalid
+            item rejects the whole request with its index in the field path
+            (``2.email``); ``bulk_update`` receives the items as sent and
+            ``bulk_delete`` the list of identifiers. The result is returned
+            with status 200: a bulk request reports per-item outcomes rather
+            than creating one resource.
+
+            Args:
+                instance: The collection endpoint instance.
+                middleware: The REST middleware, used to parse the body and
+                            validate items.
+                handler_name: ``bulk_create``, ``bulk_update`` or
+                              ``bulk_delete``.
+
+            Returns:
+                Callable taking the request and returning ``(result, 200)``.
+        """
+        def bulk_operation(request: Any) -> Any:
+            items = middleware.read_body(request)
+            if not isinstance(items, list):
+                raise ValidationError(
+                    message="Expected a JSON array",
+                    field_errors=[
+                        FieldError(
+                            field="$",
+                            code="type_error",
+                            message=f"Expected list, got {type(items).__name__}"
+                        )
+                    ]
+                )
+
+            if handler_name == "bulk_create" and cls.request_schema is not None:
+                items = cls.validate_bulk_items(middleware, items)
+
+            result = getattr(instance, handler_name)(items)
+
+            return (result, 200)
+
+        return bulk_operation
+
+    @classmethod
+    def validate_bulk_items(cls, middleware: RESTMiddleware, items: List[Any]) -> List[Any]:
+        """
+            Validate every item of a bulk create request into
+            ``request_schema`` before any of them is processed.
+
+            Args:
+                middleware: The REST middleware whose validator is used.
+                items: The parsed items of the request body.
+
+            Returns:
+                The validated items, in request order.
+
+            Raises:
+                ValidationError: If any item is invalid. The field path of
+                                 each error starts with the item's index.
+        """
+        validated_items: List[Any] = []
+        field_errors: List[FieldError] = []
+
+        for index, item in enumerate(items):
+            try:
+                validated_items.append(middleware.validator.validate(item, cls.request_schema))
+            except ValidationError as exc:
+                for field_error in exc.field_errors:
+                    if field_error.field == "$":
+                        item_field = str(index)
+                    else:
+                        item_field = f"{index}.{field_error.field}"
+                    field_errors.append(FieldError(
+                        field=item_field,
+                        code=field_error.code,
+                        message=field_error.message
+                    ))
+
+        if len(field_errors) > 0:
+            raise ValidationError(
+                message="Request validation failed",
+                field_errors=field_errors
+            )
+
+        return validated_items
+
     @classmethod
     def get_bulk_routes(cls) -> List[Tuple[str, str, str]]:
         """

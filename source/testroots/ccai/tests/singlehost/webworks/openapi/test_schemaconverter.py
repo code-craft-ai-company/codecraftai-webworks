@@ -709,7 +709,9 @@ def test_convert_optional_int():
 
 def test_convert_optional_dataclass():
     """
-        Test converting Optional[SimpleItem] to nullable $ref.
+        Test converting Optional[SimpleItem] to a nullable reference. OpenAPI
+        3.0 ignores keywords written beside a $ref, so the reference is
+        wrapped in allOf and nullable sits next to that.
     """
     converter = SchemaConverter()
     result = converter.convert(python_type=Optional[SimpleItem])
@@ -718,8 +720,13 @@ def test_convert_optional_dataclass():
         errmsg = f"Expected nullable True, got {result.get('nullable')!r}"
         raise AssertionError(errmsg)
 
-    if "$ref" not in result:
-        errmsg = f"Expected $ref in result, got {result}"
+    if "$ref" in result:
+        errmsg = f"Expected no $ref beside nullable (it would be ignored), got {result}"
+        raise AssertionError(errmsg)
+
+    expected_all_of = [{"$ref": "#/components/schemas/SimpleItem"}]
+    if result.get("allOf") != expected_all_of:
+        errmsg = f"Expected allOf {expected_all_of}, got {result.get('allOf')!r}"
         raise AssertionError(errmsg)
 
     return
@@ -938,5 +945,216 @@ def test_converter_initial_state():
     if len(schemas) != 0:
         errmsg = f"Expected empty schemas, got {schemas}"
         raise AssertionError(errmsg)
+
+    return
+
+
+# =============================================================================
+# PEP 604 unions, postponed annotations and adopted JSON Schema
+# =============================================================================
+
+@dataclass
+class ModernProfile:
+    """A dataclass written with the PEP 604 union spelling."""
+    name: str
+    nick: str | None = None
+    owner: SimpleItem | None = None
+
+
+def test_convert_pep_604_optional_is_nullable():
+    """``str | None`` converts to a nullable string, exactly as Optional[str] does."""
+    converter = SchemaConverter()
+
+    result = converter.convert(python_type=str | None)
+
+    if result != {"type": "string", "nullable": True}:
+        errmsg = f"Expected a nullable string, got {result}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_convert_pep_604_union_is_one_of():
+    """``int | str`` converts to oneOf, exactly as Union[int, str] does."""
+    converter = SchemaConverter()
+
+    result = converter.convert(python_type=int | str)
+
+    if result != {"oneOf": [{"type": "integer"}, {"type": "string"}]}:
+        errmsg = f"Expected oneOf integer/string, got {result}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_convert_dataclass_with_pep_604_fields():
+    """A dataclass field written ``str | None`` is a nullable string and is not required."""
+    converter = SchemaConverter()
+    converter.convert(python_type=ModernProfile)
+
+    schema = converter.get_all_schemas()["ModernProfile"]
+
+    if schema["properties"]["nick"].get("type") != "string" or schema["properties"]["nick"].get("nullable") is not True:
+        errmsg = f"Expected a nullable string for 'nick', got {schema['properties']['nick']}"
+        raise AssertionError(errmsg)
+
+    if schema["required"] != ["name"]:
+        errmsg = f"Expected only 'name' to be required, got {schema['required']}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_convert_dataclass_with_postponed_annotations():
+    """A dataclass whose annotations are strings at runtime is converted by its real field types."""
+
+    @dataclass
+    class Postponed:
+        count: "int"
+        labels: "List[str]"
+
+    converter = SchemaConverter()
+    converter.convert(python_type=Postponed)
+
+    properties = converter.get_all_schemas()["Postponed"]["properties"]
+
+    if properties["count"] != {"type": "integer"}:
+        errmsg = f"Expected an integer for 'count', got {properties['count']}"
+        raise AssertionError(errmsg)
+
+    if properties["labels"] != {"type": "array", "items": {"type": "string"}}:
+        errmsg = f"Expected an array of strings for 'labels', got {properties['labels']}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def _pydantic_style_schema() -> Dict[str, Any]:
+    """The shape of JSON Schema a Pydantic model with nested models produces."""
+    return {
+        "title": "Order",
+        "type": "object",
+        "properties": {
+            "customer": {"$ref": "#/$defs/Customer"},
+            "note": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None, "title": "Note"},
+            "gift_to": {"anyOf": [{"$ref": "#/$defs/Customer"}, {"type": "null"}], "default": None},
+            "kind": {"const": "order", "title": "Kind"},
+        },
+        "required": ["customer"],
+        "$defs": {
+            "Customer": {
+                "title": "Customer",
+                "type": "object",
+                "properties": {"address": {"$ref": "#/$defs/Address"}},
+            },
+            "Address": {
+                "title": "Address",
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        },
+    }
+
+
+def test_adopted_schema_hoists_definitions_into_components():
+    """Definitions under $defs become component schemas."""
+    converter = SchemaConverter()
+
+    converter.convert(python_type=_pydantic_style_schema())
+
+    if sorted(converter.get_all_schemas().keys()) != ["Address", "Customer"]:
+        errmsg = f"Expected Address and Customer in the components, got {sorted(converter.get_all_schemas().keys())}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_adopted_schema_rewrites_references_inside_hoisted_definitions():
+    """A hoisted definition that references another one points at components, not at $defs."""
+    converter = SchemaConverter()
+
+    converter.convert(python_type=_pydantic_style_schema())
+
+    address_ref = converter.get_all_schemas()["Customer"]["properties"]["address"]
+
+    if address_ref != {"$ref": "#/components/schemas/Address"}:
+        errmsg = f"Expected a components reference inside the hoisted definition, got {address_ref}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_adopted_schema_rewrites_top_level_references_and_drops_defs():
+    """The schema itself references components and no longer carries $defs."""
+    converter = SchemaConverter()
+
+    result = converter.convert(python_type=_pydantic_style_schema())
+
+    if "$defs" in result:
+        raise AssertionError("Expected $defs to be removed from the adopted schema")
+
+    if result["properties"]["customer"] != {"$ref": "#/components/schemas/Customer"}:
+        errmsg = f"Expected a components reference, got {result['properties']['customer']}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_adopted_schema_turns_any_of_null_into_nullable():
+    """``anyOf: [T, null]`` is 3.1 syntax; in a 3.0 document it becomes T with nullable."""
+    converter = SchemaConverter()
+
+    result = converter.convert(python_type=_pydantic_style_schema())
+    note = result["properties"]["note"]
+
+    if "anyOf" in note or note.get("type") != "string" or note.get("nullable") is not True:
+        errmsg = f"Expected a nullable string, got {note}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_adopted_schema_wraps_a_nullable_reference_in_all_of():
+    """An optional nested model becomes allOf[$ref] with nullable beside it, never $ref with siblings."""
+    converter = SchemaConverter()
+
+    result = converter.convert(python_type=_pydantic_style_schema())
+    gift_to = result["properties"]["gift_to"]
+
+    if "$ref" in gift_to:
+        errmsg = f"Expected no $ref with sibling keywords, got {gift_to}"
+        raise AssertionError(errmsg)
+
+    if gift_to.get("allOf") != [{"$ref": "#/components/schemas/Customer"}] or gift_to.get("nullable") is not True:
+        errmsg = f"Expected allOf[$ref Customer] with nullable, got {gift_to}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_adopted_schema_turns_const_into_a_single_value_enum():
+    """``const`` does not exist in OpenAPI 3.0; it becomes an enum of one value."""
+    converter = SchemaConverter()
+
+    result = converter.convert(python_type=_pydantic_style_schema())
+    kind = result["properties"]["kind"]
+
+    if "const" in kind or kind.get("enum") != ["order"]:
+        errmsg = f"Expected enum ['order'], got {kind}"
+        raise AssertionError(errmsg)
+
+    return
+
+
+def test_adopting_a_schema_does_not_modify_it():
+    """The schema handed to the converter is left exactly as it was."""
+    converter = SchemaConverter()
+    original = _pydantic_style_schema()
+    expected = _pydantic_style_schema()
+
+    converter.convert(python_type=original)
+
+    if original != expected:
+        raise AssertionError("Expected the adopted schema to be left unmodified")
 
     return

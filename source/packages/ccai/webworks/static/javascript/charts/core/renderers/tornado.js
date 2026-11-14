@@ -4,22 +4,81 @@
  * Tornado / sensitivity renderer.
  *
  * Registers:
- *   "tornado" — paired horizontal bars diverging from a center baseline,
- *               rows sorted top-to-bottom by spread magnitude (widest first).
- *               style="butterfly" treats low/high as magnitudes rather than
- *               absolute values and mirrors bars symmetrically.
+ *   "tornado" — paired horizontal bars from a centre baseline, one row per
+ *               input, rows sorted top-to-bottom by spread (widest first).
+ *               `low` and `high` are the output values when the input is at
+ *               its low and its high setting, so an inverse driver (low input
+ *               gives the higher output) simply has its bars swapped.
+ *
+ * variant="butterfly" treats low / high as magnitudes drawn to the left and
+ * right of the baseline (a population pyramid, two-sided comparison); rows
+ * keep the data order and values are shown as magnitudes on both sides.
  *
  * ctx.raw shape:
- *   baseline: number          (central reference value)
- *   series: [{
- *     name: string,
- *     values: [{ label, low, high }]
- *   }]
+ *   baseline: number            central reference value (default 0)
+ *   low_label?, high_label?     legend names of the two bar colours
+ *                               (default "Low input" / "High input", in
+ *                               butterfly mode "Left" / "Right")
+ *   series: [{ name, values: [{ label, low, high }] }]
+ * Numeric strings are accepted; a missing or non-numeric side draws no bar.
+ *
+ * Events:
+ *   mj-chart-bar-click { label, side, value, baseline }
  */
 
 import { registerRenderer } from "../renderregistry.js";
-import { svgEl, escapeHtml, formatNumber } from "../svgdraw.js";
+import { svgEl, formatNumber } from "../svgdraw.js";
 import { linearScale, bandScale, niceTicks } from "../scales.js";
+
+
+const LABEL_FONT = 11;
+const VALUE_FONT = 10;
+const CHAR_WIDTH = 0.56;
+
+
+function _textWidth(text, fontSize) {
+  /*
+   * Approximate rendered width of a label.
+   */
+  const width = String(text).length * fontSize * CHAR_WIDTH
+  return width
+}
+
+
+function _fitText(text, maxWidth, fontSize) {
+  /*
+   * Shorten a label with an ellipsis so it fits a width ("" if hopeless).
+   */
+  const value = String(text)
+  let fitted = value
+  if (_textWidth(value, fontSize) > maxWidth) {
+    const maxChars = Math.floor(maxWidth / (fontSize * CHAR_WIDTH)) - 1
+    fitted = maxChars >= 2 ? value.slice(0, maxChars) + "…" : ""
+  }
+  return fitted
+}
+
+
+function _number(value) {
+  /*
+   * A finite number from a number or numeric string, else null.
+   */
+  if (value === null || value === undefined || value === "") {
+    return null
+  }
+  const numeric = Number(value)
+  const result = Number.isFinite(numeric) === true ? numeric : null
+  return result
+}
+
+
+function _compact(value) {
+  /*
+   * Short value label for the bar ends ("4.2M").
+   */
+  const text = formatNumber(value, { notation: "compact", maximumFractionDigits: 2 })
+  return text
+}
 
 
 export function render(ctx) {
@@ -29,210 +88,240 @@ export function render(ctx) {
    * :param ctx: The renderer context.
    * :returns: A <g> SVGElement.
    */
-  const raw = ctx.raw
-  const baseline = (raw !== null && raw !== undefined && typeof raw.baseline === "number")
-    ? raw.baseline : 0
-  const seriesArr = (raw !== null && raw !== undefined && Array.isArray(raw.series))
-    ? raw.series : []
+  const raw = ctx.raw !== null && ctx.raw !== undefined ? ctx.raw : {}
+  const baselineValue = _number(raw.baseline)
+  const baseline = baselineValue !== null ? baselineValue : 0
+  const seriesArr = Array.isArray(raw.series) ? raw.series : []
 
-  const isButterfly = ctx.attrs("style", "") === "butterfly"
+  const isButterfly = ctx.attrs("style", "") === "butterfly" || ctx.type === "butterfly"
+  const lowName = typeof raw.low_label === "string" && raw.low_label !== ""
+    ? raw.low_label : (isButterfly === true ? "Left" : "Low input")
+  const highName = typeof raw.high_label === "string" && raw.high_label !== ""
+    ? raw.high_label : (isButterfly === true ? "Right" : "High input")
+  const lowColor = ctx.colorFor(lowName)
+  const highColor = ctx.colorFor(highName)
 
   const root = svgEl("g", { part: "plot" }, [])
 
-  /* Flatten all values from the first series (tornado uses one series). */
-  const rawValues = []
+  /* Rows: { label, low, high, lowShown, highShown } in output units. */
+  const rows = []
   for (let s = 0; s < seriesArr.length; s = s + 1) {
     const series = seriesArr[s]
-    if (Array.isArray(series.values) === false) {
+    if (series === null || typeof series !== "object" || Array.isArray(series.values) === false) {
       continue
     }
     for (let v = 0; v < series.values.length; v = v + 1) {
-      rawValues.push(series.values[v])
+      const entry = series.values[v]
+      if (entry === null || typeof entry !== "object") {
+        continue
+      }
+      const low = _number(entry.low)
+      const high = _number(entry.high)
+      let lowValue = low
+      let highValue = high
+      if (isButterfly === true) {
+        lowValue = low !== null ? baseline - Math.abs(low) : null
+        highValue = high !== null ? baseline + Math.abs(high) : null
+      }
+      rows.push({
+        label: entry.label !== undefined && entry.label !== null ? String(entry.label) : "",
+        low: lowValue,
+        high: highValue,
+        lowShown: isButterfly === true && low !== null ? Math.abs(low) : low,
+        highShown: isButterfly === true && high !== null ? Math.abs(high) : high,
+        order: rows.length
+      })
     }
   }
 
-  if (rawValues.length === 0) {
+  ctx.setLegend([{ label: lowName, color: lowColor }, { label: highName, color: highColor }])
+  ctx.setTable({
+    columns: ["Input", lowName, highName, "Baseline", "Spread"],
+    rows: rows.map((row) => [
+      row.label,
+      row.lowShown !== null ? row.lowShown : "",
+      row.highShown !== null ? row.highShown : "",
+      baseline,
+      row.low !== null && row.high !== null ? Math.abs(row.high - row.low) : ""
+    ])
+  })
+
+  if (rows.length === 0) {
     return root
   }
 
-  /* Normalise: if butterfly mode treat low/high as magnitudes from baseline. */
-  const normValues = rawValues.map((entry) => {
-    const low = typeof entry.low === "number" ? entry.low : 0
-    const high = typeof entry.high === "number" ? entry.high : 0
-    let normLow = low
-    let normHigh = high
-    if (isButterfly === true) {
-      normLow = baseline - Math.abs(low)
-      normHigh = baseline + Math.abs(high)
+  /* Tornado: widest spread first (a missing side counts from baseline). */
+  if (isButterfly === false) {
+    const spreadOf = (row) => {
+      const lowSide = row.low !== null ? row.low : baseline
+      const highSide = row.high !== null ? row.high : baseline
+      return Math.abs(highSide - lowSide)
     }
-    return { label: entry.label, low: normLow, high: normHigh }
-  })
+    rows.sort((a, b) => {
+      const difference = spreadOf(b) - spreadOf(a)
+      return difference !== 0 ? difference : a.order - b.order
+    })
+  }
 
-  /* Sort rows by spread magnitude descending (widest bar = top). */
-  normValues.sort((a, b) => {
-    const spreadA = Math.abs(a.high - a.low)
-    const spreadB = Math.abs(b.high - b.low)
-    return spreadB - spreadA
-  })
-
-  /* Compute value domain: encompass all low/high plus baseline. */
+  /* Value domain: both ends of every row, whichever side they are on. */
   let domainMin = baseline
   let domainMax = baseline
-  for (let index = 0; index < normValues.length; index = index + 1) {
-    const entry = normValues[index]
-    if (entry.low < domainMin) {
-      domainMin = entry.low
-    }
-    if (entry.high > domainMax) {
-      domainMax = entry.high
+  for (let index = 0; index < rows.length; index = index + 1) {
+    const values = [rows[index].low, rows[index].high]
+    for (let k = 0; k < values.length; k = k + 1) {
+      if (values[k] !== null) {
+        domainMin = Math.min(domainMin, values[k])
+        domainMax = Math.max(domainMax, values[k])
+      }
     }
   }
-  /* Pad domain a bit. */
-  const domainPad = (domainMax - domainMin) * 0.05
+  if (domainMin === domainMax) {
+    const spread = Math.max(Math.abs(baseline) * 0.1, 1)
+    domainMin = domainMin - spread
+    domainMax = domainMax + spread
+  }
+  /* Room for the end-of-bar value labels. */
+  const domainPad = (domainMax - domainMin) * 0.12
   domainMin = domainMin - domainPad
   domainMax = domainMax + domainPad
-  if (domainMin === domainMax) {
-    domainMin = domainMin - 1
-    domainMax = domainMax + 1
+
+  let longest = 0
+  for (let index = 0; index < rows.length; index = index + 1) {
+    longest = Math.max(longest, _textWidth(rows[index].label, LABEL_FONT))
   }
+  const gutter = Math.min(Math.max(longest + 16, 48), Math.max(ctx.width * 0.35, 48))
 
-  const labels = normValues.map((entry) => {
-    const label = entry.label !== undefined ? String(entry.label) : ""
-    return label
-  })
-
-  const margin = { top: 16, right: 16, bottom: 40, left: 120 }
+  const margin = { top: 12, right: 16, bottom: 28, left: gutter }
   const plotW = Math.max(ctx.width - margin.left - margin.right, 10)
   const plotH = Math.max(ctx.height - margin.top - margin.bottom, 10)
 
   const valScale = linearScale([domainMin, domainMax], [0, plotW])
-  const rowScale = bandScale(labels, [0, plotH], 0.2)
+  const rowScale = bandScale(rows.map((row, index) => index), [0, plotH], 0.2)
   const bandwidth = rowScale.bandwidth()
+  const baseX = valScale(baseline)
 
   const plot = svgEl("g", {
     transform: `translate(${margin.left},${margin.top})`
   }, [])
   root.appendChild(plot)
+  const axis = svgEl("g", { "aria-hidden": "true" }, [])
+  const marks = svgEl("g", null, [])
+  const labels = svgEl("g", { "aria-hidden": "true" }, [])
+  plot.appendChild(axis)
+  plot.appendChild(marks)
+  plot.appendChild(labels)
 
-  /* Value axis ticks (bottom). */
-  const ticks = niceTicks(domainMin, domainMax, 5)
+  /* Value axis (bottom); butterfly shows distances from the baseline. */
+  const ticks = niceTicks(domainMin, domainMax, Math.max(4, Math.floor(plotW / 90)))
   for (let t = 0; t < ticks.length; t = t + 1) {
-    const tick = ticks[t]
-    const x = valScale(tick)
-    plot.appendChild(svgEl("line", {
+    const x = valScale(ticks[t])
+    axis.appendChild(svgEl("line", {
       x1: x, y1: 0, x2: x, y2: plotH,
       stroke: "var(--mj-border, #e0e3e9)", "stroke-width": 1
     }, []))
-    plot.appendChild(svgEl("text", {
+    const shown = isButterfly === true ? Math.abs(ticks[t] - baseline) : ticks[t]
+    axis.appendChild(svgEl("text", {
       x: x, y: plotH + 16, "text-anchor": "middle",
       "font-size": 10, fill: "var(--mj-text-muted, #6b7280)"
-    }, formatNumber(tick)))
+    }, _compact(shown)))
   }
-
-  /* Baseline center line. */
-  const baselineX = valScale(baseline)
-  plot.appendChild(svgEl("line", {
-    x1: baselineX, y1: 0, x2: baselineX, y2: plotH,
-    stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
-  }, []))
-
-  /* Axis baseline. */
-  plot.appendChild(svgEl("line", {
+  axis.appendChild(svgEl("line", {
     x1: 0, y1: plotH, x2: plotW, y2: plotH,
     stroke: "var(--mj-border-strong, #c7ccd6)", "stroke-width": 1.5
   }, []))
 
-  const lowColor = "var(--mj-chart-negative, var(--mj-color-danger, #b91c1c))"
-  const highColor = "var(--mj-chart-positive, var(--mj-color-success, #15803d))"
+  for (let index = 0; index < rows.length; index = index + 1) {
+    const row = rows[index]
+    const rowY = rowScale.at(index)
+    const barH = Math.max(bandwidth, 2)
 
-  /* Draw rows. */
-  for (let index = 0; index < normValues.length; index = index + 1) {
-    const entry = normValues[index]
-    const label = entry.label !== undefined ? String(entry.label) : ""
-    const rowY = rowScale(label)
-    const barH = Math.max(bandwidth, 4)
-
-    /* Row label. */
-    plot.appendChild(svgEl("text", {
+    labels.appendChild(svgEl("text", {
       x: -8, y: rowY + barH / 2 + 4,
-      "text-anchor": "end", "font-size": 11,
+      "text-anchor": "end", "font-size": LABEL_FONT,
       fill: "var(--mj-text, #14181f)"
-    }, escapeHtml(label)))
+    }, _fitText(row.label, margin.left - 12, LABEL_FONT)))
 
-    /* Left bar: from low up to baseline. */
-    const lowX = valScale(entry.low)
-    const baseX = valScale(baseline)
-    const leftBarX = Math.min(lowX, baseX)
-    const leftBarW = Math.abs(baseX - lowX)
-
-    if (leftBarW > 0) {
-      const ariaLow = `${escapeHtml(label)} low: ${formatNumber(entry.low)}`
-      const leftBar = svgEl("rect", {
-        x: leftBarX, y: rowY, width: leftBarW, height: barH, rx: 2,
-        fill: lowColor, "fill-opacity": 0.8, part: "bar"
-      }, [])
-      leftBar.setAttribute("tabindex", "0")
-      leftBar.setAttribute("role", "img")
-      leftBar.setAttribute("aria-label", ariaLow)
-      leftBar.appendChild(svgEl("title", null, ariaLow))
-
-      const emitEntry = entry
-      const clickHandlerLow = () => {
-        ctx.emit("mj-chart-bar-click", {
-          label: emitEntry.label,
-          side: "low",
-          value: emitEntry.low,
-          baseline: baseline
-        })
+    const sides = [
+      { side: "low", value: row.low, shown: row.lowShown, color: lowColor, name: lowName },
+      { side: "high", value: row.high, shown: row.highShown, color: highColor, name: highName }
+    ]
+    for (let k = 0; k < sides.length; k = k + 1) {
+      const side = sides[k]
+      if (side.value === null) {
+        continue
       }
-      leftBar.addEventListener("click", clickHandlerLow)
-      leftBar.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          clickHandlerLow()
+      const endX = valScale(side.value)
+      const barX = Math.min(endX, baseX)
+      const barW = Math.abs(endX - baseX)
+      const ariaLabel = `${row.label}, ${side.name}: ${formatNumber(side.shown)}`
+      if (barW > 0) {
+        const bar = svgEl("rect", {
+          x: barX, y: rowY, width: barW, height: barH, rx: 2,
+          fill: side.color, part: "bar",
+          tabindex: "0", role: "img", "aria-label": ariaLabel
+        }, [])
+        bar.appendChild(svgEl("title", null, ariaLabel))
+        const emitRow = row
+        const emitSide = side
+        const clickHandler = () => {
+          ctx.emit("mj-chart-bar-click", {
+            label: emitRow.label,
+            side: emitSide.side,
+            value: emitSide.shown,
+            baseline: baseline
+          })
         }
-      })
-      plot.appendChild(leftBar)
-    }
-
-    /* Right bar: from baseline up to high. */
-    const highX = valScale(entry.high)
-    const rightBarX = Math.min(baseX, highX)
-    const rightBarW = Math.abs(highX - baseX)
-
-    if (rightBarW > 0) {
-      const ariaHigh = `${escapeHtml(label)} high: ${formatNumber(entry.high)}`
-      const rightBar = svgEl("rect", {
-        x: rightBarX, y: rowY, width: rightBarW, height: barH, rx: 2,
-        fill: highColor, "fill-opacity": 0.8, part: "bar"
-      }, [])
-      rightBar.setAttribute("tabindex", "0")
-      rightBar.setAttribute("role", "img")
-      rightBar.setAttribute("aria-label", ariaHigh)
-      rightBar.appendChild(svgEl("title", null, ariaHigh))
-
-      const emitEntry = entry
-      const clickHandlerHigh = () => {
-        ctx.emit("mj-chart-bar-click", {
-          label: emitEntry.label,
-          side: "high",
-          value: emitEntry.high,
-          baseline: baseline
+        bar.addEventListener("click", clickHandler)
+        bar.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault()
+            clickHandler()
+          }
         })
+        marks.appendChild(bar)
       }
-      rightBar.addEventListener("click", clickHandlerHigh)
-      rightBar.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          clickHandlerHigh()
-        }
-      })
-      plot.appendChild(rightBar)
+
+      /* Value at the outer end of the bar, when the row is tall enough. */
+      const leftOfBase = endX < baseX
+      const valueText = _compact(side.shown)
+      const valueW = _textWidth(valueText, VALUE_FONT) + 4
+      const fits = leftOfBase === true ? endX - valueW >= 0 : endX + valueW <= plotW + margin.right - 2
+      if (barH >= 9 && barW > 0 && fits === true) {
+        labels.appendChild(svgEl("text", {
+          x: leftOfBase === true ? endX - 4 : endX + 4,
+          y: rowY + barH / 2 + 3.5,
+          "text-anchor": leftOfBase === true ? "end" : "start",
+          "font-size": VALUE_FONT, fill: "var(--mj-text-muted, #6b7280)"
+        }, valueText))
+      }
     }
   }
+
+  /* Baseline with its value. */
+  axis.appendChild(svgEl("line", {
+    x1: baseX, y1: 0, x2: baseX, y2: plotH,
+    stroke: "var(--mj-text-muted, #6b7280)", "stroke-width": 1.5
+  }, []))
+  labels.appendChild(svgEl("text", {
+    x: baseX, y: -2, "text-anchor": "middle", "font-size": VALUE_FONT,
+    fill: "var(--mj-text, #14181f)"
+  }, isButterfly === true ? "" : `Base ${_compact(baseline)}`))
 
   return root
 }
 
 
-registerRenderer("tornado", render);
+function _isEmpty(model) {
+  /*
+   * Nothing to draw when no series has a row (a bare baseline is not data).
+   */
+  const raw = model !== null && model !== undefined && model.raw !== null && model.raw !== undefined
+    ? model.raw : {}
+  const series = Array.isArray(raw.series) === true ? raw.series : []
+  const hasRow = series.some((entry) => entry !== null && typeof entry === "object" &&
+    Array.isArray(entry.values) === true && entry.values.length > 0)
+  return hasRow === false
+}
+
+
+registerRenderer("tornado", render, { orientation: "horizontal", isEmpty: _isEmpty });
