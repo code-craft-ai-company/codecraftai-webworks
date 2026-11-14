@@ -881,7 +881,7 @@ mjSandbox.log("selectedRows after clearSelection()", Array.from(grid.selectedRow
         ("footer", "Container of the `footer` slot (row count by default)."),
     ],
     css_properties=[
-        ("--mj-dt-body-max-height", "Height the body grows to before it scrolls when the element has no height (default 400px)."),
+        ("--mj-dt-body-max-height", "Height the rows below the header grow to before they scroll when the element has no height (default 400px)."),
         ("--mj-dt-header-bg", "Header background (default `--mj-bg-subtle`)."),
         ("--mj-dt-selected-row-bg", "Selected row background (default a 10% accent tint)."),
     ],
@@ -910,8 +910,8 @@ _TREE_GRID = ComponentDoc(
         "expands a collapsed parent or moves to its first child, ArrowLeft collapses or moves "
         "to the parent, Home / End go to the first / last row, Enter toggles expansion and "
         "Space toggles selection. Sortable headers are focusable and sort on Enter / Space. "
-        "Without an explicit height the body grows up to <code>--mj-tg-body-max-height</code> "
-        "(400px) and then scrolls.</p>"
+        "Without an explicit height the rows grow up to <code>--mj-tg-body-max-height</code> "
+        "(400px) and then scroll under the header, which scrolls sideways with them.</p>"
     ),
     how_to_use=(
         "<p>Set <code>columns</code> (<code>{ key, label?, width?, sortable? }</code>; the first "
@@ -1255,7 +1255,7 @@ tree.shadowRoot.querySelector('.row[data-key="locked"] .expander-btn').click()
         ("footer", "Container of the `footer` slot."),
     ],
     css_properties=[
-        ("--mj-tg-body-max-height", "Height the body grows to before it scrolls when the element has no height (default 400px)."),
+        ("--mj-tg-body-max-height", "Height the rows below the header grow to before they scroll when the element has no height (default 400px)."),
         ("--mj-tg-hover-bg", "Row hover background (default `--mj-bg-muted`)."),
         ("--mj-tg-selected-bg", "Selected row background (default a 10% accent tint)."),
         ("--mj-tg-expander-size", "Size of the expander button (default 20px)."),

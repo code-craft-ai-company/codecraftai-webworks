@@ -1092,6 +1092,106 @@ def test_mj_tree_grid_keyboard_navigation(page, base_url):
     return
 
 
+@testbase.mark_categories(categories=["functional"])
+@testbase.attach.parameter(create_page, identifier="page")
+def test_mj_tree_grid_header_scrolls_with_the_rows(page, base_url):
+    """
+        The header row sits inside the rows' scroll container and sticks to its
+        top. Focusing a sortable header that is clipped on the right scrolls
+        the rows with it, so every header stays over its column, and sorting
+        by it leaves it in view. Scrolled down, the header stays on top; End
+        shows the last row below the header, not under it; without a height of
+        its own the grid is as tall as its header and rows, with the rows up to
+        --mj-tg-body-max-height.
+
+        :param page: Playwright page fixture.
+        :param base_url: Site base URL fixture.
+    """
+
+    frame = _open(page, base_url, "mj-tree-grid")
+    result = frame.evaluate(
+        """async () => {
+            const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+            const make = async (count) => {
+                document.body.innerHTML =
+                    '<mj-tree-grid id="hs" label="Files" sortable style="width: 300px; --mj-tg-body-max-height: 200px"></mj-tree-grid>';
+                const el = document.getElementById('hs');
+                el.columns = ['name', 'size', 'kind', 'modified'].map((key) => ({ key: key, label: key }));
+                el.rows = Array.from({ length: count }, (_, i) => ({
+                    key: 'r' + i, name: 'Row ' + i, size: i, kind: 'file', modified: 'today',
+                }));
+                await wait(300);
+                return el.shadowRoot;
+            };
+
+            let sr = await make(3);
+            const small = {
+                bodyHeight: sr.querySelector('.body-scroll').offsetHeight,
+                headerHeight: sr.querySelector('.header-viewport').offsetHeight,
+                rowsHeight: 3 * sr.querySelector('.row').offsetHeight,
+            };
+
+            sr = await make(40);
+            const body = sr.querySelector('.body-scroll');
+            const header = sr.querySelector('.header-viewport');
+            const aligned = () => {
+                const firstRow = Array.from(sr.querySelectorAll('.row')).sort((x, y) => x.offsetTop - y.offsetTop)[0];
+                const left = (node) => Math.round(node.getBoundingClientRect().left);
+                const heads = Array.from(sr.querySelectorAll('.header-cell')).map(left);
+                const cells = Array.from(firstRow.children).map(left);
+                return JSON.stringify(heads) === JSON.stringify(cells);
+            };
+            const inView = (node) => {
+                const box = node.getBoundingClientRect();
+                const bodyBox = body.getBoundingClientRect();
+                return box.left >= bodyBox.left - 1 && box.right <= bodyBox.left + body.clientWidth + 1;
+            };
+            const big = { bodyHeight: body.offsetHeight, headerHeight: header.offsetHeight };
+
+            const last = sr.querySelectorAll('.header-cell')[3];
+            last.focus();
+            await wait(100);
+            const focused = { scrolled: body.scrollLeft > 0, aligned: aligned(), inView: inView(last) };
+            last.dispatchEvent(new KeyboardEvent('keydown',
+                { key: 'Enter', bubbles: true, composed: true, cancelable: true }));
+            await wait(100);
+            const sorted = {
+                sort: last.getAttribute('aria-sort'), aligned: aligned(),
+                active: sr.activeElement === last, inView: inView(last),
+            };
+
+            body.scrollTop = 600;
+            await wait(150);
+            const headerOnTop = Math.abs(header.getBoundingClientRect().top - body.getBoundingClientRect().top) < 1;
+
+            body.scrollTop = 0;
+            body.scrollLeft = 0;
+            await wait(100);
+            document.getElementById('hs').focus();
+            sr.activeElement.dispatchEvent(new KeyboardEvent('keydown',
+                { key: 'End', bubbles: true, composed: true, cancelable: true }));
+            await wait(150);
+            const rowBox = sr.activeElement.getBoundingClientRect();
+            const atEnd = {
+                rowIndex: sr.activeElement.getAttribute('data-row-index'),
+                belowHeader: rowBox.top >= header.getBoundingClientRect().bottom - 1,
+                insideBody: rowBox.bottom <= body.getBoundingClientRect().top + body.clientHeight + 1,
+            };
+            return { small: small, big: big, focused: focused, sorted: sorted, headerOnTop: headerOnTop, atEnd: atEnd };
+        }"""
+    )
+
+    small = result["small"]
+    assert small["bodyHeight"] == small["headerHeight"] + small["rowsHeight"], result
+    assert result["big"]["bodyHeight"] == result["big"]["headerHeight"] + 200, result
+    assert result["focused"] == {"scrolled": True, "aligned": True, "inView": True}, result
+    assert result["sorted"] == {"sort": "ascending", "aligned": True, "active": True, "inView": True}, result
+    assert result["headerOnTop"] is True, result
+    assert result["atEnd"] == {"rowIndex": "39", "belowHeader": True, "insideBody": True}, result
+
+    return
+
+
 # ===========================================================================
 # mj-list
 # ===========================================================================

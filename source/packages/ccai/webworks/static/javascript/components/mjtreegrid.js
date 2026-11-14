@@ -47,9 +47,18 @@ const STYLES = `
   outline: none;
 }
 
+/*
+ * The header row sits inside the body's scroll container and sticks to its
+ * top: it scrolls sideways with the rows, so focusing a sortable header that
+ * is out of view scrolls the rows with it and the columns stay aligned. The
+ * header is as wide as the columns, so its background follows the rows.
+ */
 .header-viewport {
-  overflow: hidden;
-  flex-shrink: 0;
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  inline-size: max-content;
+  min-inline-size: 100%;
   background: var(--mj-bg-subtle);
   border-block-end: 2px solid var(--mj-border-strong);
 }
@@ -82,18 +91,26 @@ const STYLES = `
 .sort-indicator.active { opacity: 1; }
 
 /*
- * Without an explicit host height the body is as tall as its rows up to
- * --mj-tg-body-max-height, then it scrolls; a host height wins.
+ * Without an explicit host height the body is as tall as its header and rows,
+ * with the rows up to --mj-tg-body-max-height, then it scrolls; a host height
+ * wins. --mj-tg-content-height (header and rows) and --_tg-header-height are
+ * set by the component; the scroll padding keeps a row scrolled into view from
+ * ending up under the sticky header.
  */
 .body-scroll {
-  flex: 1 1 min(var(--mj-tg-content-height, 0px), var(--mj-tg-body-max-height, 400px));
+  flex: 1 1 min(
+    var(--mj-tg-content-height, 0px),
+    calc(var(--mj-tg-body-max-height, 400px) + var(--_tg-header-height, 0px))
+  );
   min-block-size: 0;
   overflow: auto;
   position: relative;
+  scroll-padding-block-start: var(--_tg-header-height, 0px);
 }
 .body-inner { position: relative; }
 
-:host([loading]) .body-scroll { opacity: 0.5; pointer-events: none; }
+:host([loading]) .body-inner,
+:host([loading]) .empty-state { opacity: 0.5; pointer-events: none; }
 
 .row {
   display: flex;
@@ -249,10 +266,10 @@ export class MjTreeGrid extends MjElement {
     const markup = `
       <div class="toolbar" part="toolbar"><slot name="toolbar"></slot></div>
       <div class="grid-root" part="grid-root" role="treegrid" aria-rowcount="-1">
-        <div class="header-viewport">
-          <div class="header-row" part="header-row" role="row" aria-rowindex="1"></div>
-        </div>
         <div class="body-scroll" part="body">
+          <div class="header-viewport">
+            <div class="header-row" part="header-row" role="row" aria-rowindex="1"></div>
+          </div>
           <div class="body-inner"></div>
         </div>
       </div>
@@ -576,11 +593,15 @@ export class MjTreeGrid extends MjElement {
     const focusWasInside = this._bodyInner.contains(this.shadowRoot.activeElement)
 
     this._bodyInner.style.height = `${scrollHeight}px`
-    this._bodyScroll.style.setProperty("--mj-tg-content-height", `${scrollHeight}px`)
+    this._setContentHeight(scrollHeight)
     this._syncEmptyState()
     this._syncColumnMetrics()
 
-    const viewH = this._bodyScroll.clientHeight || 400
+    /*
+     * The rows start below the header in the scroll container, so a
+     * scrollTop is also the offset of the first row in view.
+     */
+    const viewH = this._rowViewHeight()
     const win = this._vw.range(this._bodyScroll.scrollTop, viewH)
 
     /* The focused row stays rendered while scrolled away so focus survives. */
@@ -726,11 +747,14 @@ export class MjTreeGrid extends MjElement {
 
     /* Fallback content of the slot: shown unless the host slots its own. */
     this._emptyEl.querySelector("slot").textContent = this.getAttribute("empty-label") || t("mj.treeGrid.empty")
-    this._bodyScroll.style.setProperty("--mj-tg-content-height", `${this._emptyEl.offsetHeight}px`)
+    this._setContentHeight(this._emptyEl.offsetHeight)
     return
   }
 
-  /* Keep the body as wide as the columns and the header aligned with it. */
+  /*
+   * Keep the rows as wide as the columns. The header shares the rows' scroll
+   * container, so it needs no alignment of its own.
+   */
   _syncColumnMetrics() {
     const headerCells = this._headerRow.children
     let totalWidth = 0
@@ -738,10 +762,36 @@ export class MjTreeGrid extends MjElement {
       totalWidth = totalWidth + headerCells[i].offsetWidth
     }
     this._bodyInner.style.minWidth = totalWidth > 0 ? `${totalWidth}px` : ""
+    return
+  }
 
-    const gutter = this._bodyScroll.offsetWidth - this._bodyScroll.clientWidth
-    this._headerRow.style.paddingInlineEnd = gutter > 0 ? `${gutter}px` : "0"
-    this._headerViewport.scrollLeft = this._bodyScroll.scrollLeft
+  /* Height of the sticky header row. */
+  _headerHeight() {
+    const height = this._headerViewport.offsetHeight
+    return height
+  }
+
+  /*
+   * Height of the part of the scroll container that shows rows: below the
+   * sticky header. 400 before the container has been laid out.
+   */
+  _rowViewHeight() {
+    const clientHeight = this._bodyScroll.clientHeight
+    let height = 400
+    if (clientHeight > 0) {
+      height = Math.max(0, clientHeight - this._headerHeight())
+    }
+    return height
+  }
+
+  /*
+   * Size the scroll container for `contentHeight` px of rows (or empty state)
+   * below the header; see the .body-scroll rule.
+   */
+  _setContentHeight(contentHeight) {
+    const headerHeight = this._headerHeight()
+    this._bodyScroll.style.setProperty("--_tg-header-height", `${headerHeight}px`)
+    this._bodyScroll.style.setProperty("--mj-tg-content-height", `${headerHeight + contentHeight}px`)
     return
   }
 
@@ -750,14 +800,19 @@ export class MjTreeGrid extends MjElement {
       return
     }
     let lastHeight = -1
+    let lastHeaderHeight = -1
     const observer = new ResizeObserver(() => {
       const height = this._bodyScroll.clientHeight
-      if (height !== lastHeight) {
+      const headerHeight = this._headerHeight()
+      if (height !== lastHeight || headerHeight !== lastHeaderHeight) {
         lastHeight = height
+        lastHeaderHeight = headerHeight
         this._renderRows()
       }
     })
     observer.observe(this._bodyScroll)
+    /* The header can change height on its own (fonts, wrapped labels). */
+    observer.observe(this._headerViewport)
     this.onTeardown(() => { observer.disconnect() })
     return
   }
@@ -930,7 +985,7 @@ export class MjTreeGrid extends MjElement {
     const clamped = Math.max(0, Math.min(rowIdx, total - 1))
     const rowH = this._vw.rowHeight
     const top = clamped * rowH
-    const viewH = this._bodyScroll.clientHeight
+    const viewH = this._rowViewHeight()
 
     if (top < this._bodyScroll.scrollTop) {
       this._bodyScroll.scrollTop = top
@@ -948,10 +1003,8 @@ export class MjTreeGrid extends MjElement {
     return
   }
 
+  /* The rows in view are rendered on the next frame. */
   _onScroll() {
-    if (this._headerViewport.scrollLeft !== this._bodyScroll.scrollLeft) {
-      this._headerViewport.scrollLeft = this._bodyScroll.scrollLeft
-    }
     if (this._scrollFrame !== 0) {
       return
     }
@@ -969,7 +1022,7 @@ export class MjTreeGrid extends MjElement {
     if (item === undefined) {
       return
     }
-    const pageRows = Math.max(1, Math.floor(this._bodyScroll.clientHeight / this._vw.rowHeight) - 1)
+    const pageRows = Math.max(1, Math.floor(this._rowViewHeight() / this._vw.rowHeight) - 1)
 
     if (key === "ArrowDown") {
       event.preventDefault()
