@@ -135,7 +135,7 @@ Note: on a route served through the REST processing, criteria 5 to 7 apply to th
 1. THE system SHALL support an `error_map` attribute on endpoints mapping exception types to HTTP status codes and error codes.
 2. WHEN an exception in the error_map is raised, THE system SHALL return the mapped status code with the mapped error code.
 3. THE error_map SHALL support custom message templates with exception attribute interpolation.
-4. THE system SHALL provide default mappings for common exceptions: `ValueError` to 400, `KeyError` to 404, `PermissionError` to 403.
+4. THE system SHALL map only its own exceptions by default: `ValidationError` to 400, and its HTTP exceptions (`NotFound`, `BadRequest`, `Unauthorized`, `Forbidden` and the rest) to the status and detail they carry. Built-in exceptions such as `ValueError`, `KeyError` and `PermissionError` SHALL NOT be mapped by default: raised by accident under a handler they are server errors and SHALL be answered as unhandled exceptions (Requirement 7.8, 7.9), never with their text. THE system SHALL provide the former mappings (`ValueError` to 400, `KeyError` to 404, `PermissionError` to 403) as an opt-in set, `BUILTIN_EXCEPTION_MAPPINGS`, that an application turns on for all routes (`ErrorHandler(builtin_mappings=True)`, `register_builtin_mappings()`, `create_rest_middleware(builtin_mappings=True)`) or names as an endpoint's `error_map`.
 5. WHEN an exception is not in the error_map, THE system SHALL fall back to the global error handler.
 6. THE error_map SHALL be inheritable from parent endpoints with child maps extending or overriding parent mappings.
 

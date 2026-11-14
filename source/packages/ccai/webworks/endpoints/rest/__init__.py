@@ -46,6 +46,7 @@ from ccai.webworks.endpoints.rest.validation import (
 )
 
 from ccai.webworks.endpoints.rest.errors import (
+    BUILTIN_EXCEPTION_MAPPINGS,
     ErrorHandler,
     merge_error_maps,
 )
@@ -107,6 +108,7 @@ __all__ = [
     # Validation
     "Validator",
     # Error Handling
+    "BUILTIN_EXCEPTION_MAPPINGS",
     "ErrorHandler",
     "merge_error_maps",
     # Content Negotiation

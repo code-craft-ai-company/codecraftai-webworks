@@ -159,9 +159,15 @@ def test_attach_route_with_schemas_is_served_through_rest_processing():
 
 
 def test_mapped_exception_is_answered_with_the_rest_error_shape():
-    """An exception the REST error handler maps (KeyError -> 404) is answered with a RESTError body."""
+    """
+        An exception the REST error handler maps is answered with a RESTError
+        body: here KeyError -> 404, after the application turns on the
+        built-in mappings.
+    """
 
     def declare(app):
+        app.rest_middleware.error_handler.register_builtin_mappings()
+
         @app.attach_route("/notes/{note_id}", methods=["GET"], response_schema=NoteOut)
         def get_note(request):
             raise KeyError(request.path_params["note_id"])
@@ -173,6 +179,28 @@ def test_mapped_exception_is_answered_with_the_rest_error_shape():
         _expect(response.status_code == 404, "Expected 404, got {}".format(response.status_code))
         _expect(response.json.get("error") == "not_found", "Expected the not_found RESTError, got {}".format(response.json))
         _expect("message" in response.json, "Expected a message in the RESTError body, got {}".format(response.json))
+        return
+
+    _serve(declare, check)
+
+    return
+
+
+def test_unmapped_built_in_exception_is_a_server_error_without_its_text():
+    """WW-0087: a KeyError a handler lets escape is a 500 internal_error, and the key is not sent."""
+
+    def declare(app):
+        @app.attach_route("/notes/{note_id}", methods=["GET"], response_schema=NoteOut)
+        def get_note(request):
+            raise KeyError("DATABASE_URL")
+
+        return
+
+    def check(client, app):
+        response = client.get("/notes/42")
+        _expect(response.status_code == 500, "Expected 500, got {}".format(response.status_code))
+        _expect(response.json.get("error") == "internal_error", "Expected the internal_error RESTError, got {}".format(response.json))
+        _expect("DATABASE_URL" not in str(response.json), "Expected the key to stay on the server, got {}".format(response.json))
         return
 
     _serve(declare, check)

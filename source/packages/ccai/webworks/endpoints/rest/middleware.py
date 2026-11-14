@@ -1118,7 +1118,8 @@ class RESTMiddleware:
 
 def create_rest_middleware(
     debug: bool = False,
-    serializer_registry: Optional[SerializerRegistry] = None
+    serializer_registry: Optional[SerializerRegistry] = None,
+    builtin_mappings: bool = False
 ) -> RESTMiddleware:
     """
         Create a RESTMiddleware with default configuration.
@@ -1131,6 +1132,10 @@ def create_rest_middleware(
             serializer_registry: Optional custom serializer registry.
                                  If not provided, creates a default registry
                                  with JSON support.
+            builtin_mappings: If True, the error handler also maps
+                              ValueError, KeyError and PermissionError
+                              (BUILTIN_EXCEPTION_MAPPINGS, the defaults
+                              up to 1.6.0).
         
         Returns:
             Configured RESTMiddleware instance.
@@ -1141,7 +1146,7 @@ def create_rest_middleware(
         serializer_registry = create_default_registry()
     
     validator = Validator()
-    error_handler = ErrorHandler(debug=debug)
+    error_handler = ErrorHandler(debug=debug, builtin_mappings=builtin_mappings)
     
     return RESTMiddleware(
         serializer_registry=serializer_registry,

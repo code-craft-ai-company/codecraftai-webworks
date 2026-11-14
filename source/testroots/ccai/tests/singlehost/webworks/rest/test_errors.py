@@ -18,12 +18,15 @@ import string
 from typing import Dict, Type
 
 from ccai.webworks.endpoints.rest import (
+    BUILTIN_EXCEPTION_MAPPINGS,
     ErrorHandler,
     ErrorMapping,
     FieldError,
     ValidationError,
+    create_rest_middleware,
     merge_error_maps,
 )
+from ccai.webworks.routing.exceptions import BadRequest, Forbidden, MalformedRequestBody, NotFound
 
 
 # =============================================================================
@@ -119,39 +122,21 @@ def test_error_handler_debug_true():
         raise AssertionError(f"Expected debug=True, got {handler.debug}")
 
 
-def test_error_handler_has_default_mappings():
-    """ErrorHandler should have default mappings for common exceptions."""
+def test_error_handler_maps_only_framework_exceptions_by_default():
+    """WW-0087: the default mappings hold the framework's ValidationError, not built-in exceptions."""
     handler = ErrorHandler()
-    
-    # Check that default mappings exist
-    if ValueError not in handler._mappings:
-        raise AssertionError("ValueError should be in default mappings")
-    
-    if KeyError not in handler._mappings:
-        raise AssertionError("KeyError should be in default mappings")
-    
-    if PermissionError not in handler._mappings:
-        raise AssertionError("PermissionError should be in default mappings")
     
     if ValidationError not in handler._mappings:
         raise AssertionError("ValidationError should be in default mappings")
+    
+    for builtin_type in (ValueError, KeyError, PermissionError):
+        if builtin_type in handler._mappings:
+            raise AssertionError(f"{builtin_type.__name__} must not be mapped by default")
 
 
 def test_error_handler_default_mapping_status_codes():
     """Default mappings should have correct status codes."""
     handler = ErrorHandler()
-    
-    # ValueError -> 400
-    if handler._mappings[ValueError].status_code != 400:
-        raise AssertionError(f"ValueError should map to 400, got {handler._mappings[ValueError].status_code}")
-    
-    # KeyError -> 404
-    if handler._mappings[KeyError].status_code != 404:
-        raise AssertionError(f"KeyError should map to 404, got {handler._mappings[KeyError].status_code}")
-    
-    # PermissionError -> 403
-    if handler._mappings[PermissionError].status_code != 403:
-        raise AssertionError(f"PermissionError should map to 403, got {handler._mappings[PermissionError].status_code}")
     
     # ValidationError -> 400
     if handler._mappings[ValidationError].status_code != 400:
@@ -178,7 +163,7 @@ def test_error_handler_register_mapping():
 
 def test_error_handler_register_mapping_override():
     """register_mapping() should override existing mappings."""
-    handler = ErrorHandler()
+    handler = ErrorHandler(builtin_mappings=True)
     
     # Override ValueError mapping
     new_mapping = ErrorMapping(status_code=422, error_code="unprocessable")
@@ -192,46 +177,92 @@ def test_error_handler_register_mapping_override():
 # Unit Tests: ErrorHandler.handle() - Default Mappings
 # =============================================================================
 
-def test_error_handler_handle_value_error():
-    """handle() should return 400 for ValueError."""
+def test_error_handler_built_in_exceptions_are_server_errors_by_default():
+    """WW-0087: an unmapped ValueError, KeyError or PermissionError is a 500 whose text is not sent."""
     handler = ErrorHandler()
-    exc = ValueError("Invalid input")
-    
-    rest_error, status_code = handler.handle(exc)
-    
-    if status_code != 400:
-        raise AssertionError(f"Expected status 400, got {status_code}")
-    
-    if rest_error.error != "bad_request":
-        raise AssertionError(f"Expected error 'bad_request', got '{rest_error.error}'")
+    exceptions = [
+        ValueError("invalid literal for int() with base 10: 'abc'"),
+        KeyError("DATABASE_URL"),
+        PermissionError("[Errno 13] Permission denied: '/srv/app/secrets.toml'"),
+    ]
+
+    for exc in exceptions:
+        rest_error, status_code = handler.handle(exc)
+
+        if status_code != 500 or rest_error.error != "internal_error":
+            raise AssertionError(f"Expected 500 internal_error for {exc!r}, got {status_code} {rest_error.error}")
+
+        if rest_error.message != "An internal error occurred":
+            raise AssertionError(f"Expected the generic message for {exc!r}, got '{rest_error.message}'")
 
 
-def test_error_handler_handle_key_error():
-    """handle() should return 404 for KeyError."""
+def test_error_handler_framework_http_exceptions_keep_their_status():
+    """NotFound, BadRequest, Forbidden and MalformedRequestBody (also a ValueError) answer with their own status."""
     handler = ErrorHandler()
-    exc = KeyError("user_123")
-    
-    rest_error, status_code = handler.handle(exc)
-    
+    cases = [
+        (NotFound("No user 42"), 404, "not_found", "No user 42"),
+        (BadRequest("Bad cursor"), 400, "bad_request", "Bad cursor"),
+        (Forbidden("Not yours"), 403, "forbidden", "Not yours"),
+        (MalformedRequestBody("The request body is not valid JSON"), 400, "bad_request",
+         "The request body is not valid JSON"),
+    ]
+
+    for exc, expected_status, expected_error, expected_message in cases:
+        rest_error, status_code = handler.handle(exc)
+        result = (status_code, rest_error.error, rest_error.message)
+
+        if result != (expected_status, expected_error, expected_message):
+            raise AssertionError(f"Expected {(expected_status, expected_error, expected_message)} for {exc!r}, got {result}")
+
+
+def test_error_handler_builtin_mappings_restore_the_former_statuses():
+    """builtin_mappings=True maps ValueError to 400, KeyError to 404 and PermissionError to 403, as up to 1.6.0."""
+    handler = ErrorHandler(builtin_mappings=True)
+    cases = [
+        (ValueError("Invalid input"), 400, "bad_request", "Invalid input"),
+        (KeyError("user_123"), 404, "not_found", "Resource not found: user_123"),
+        (PermissionError("Access denied"), 403, "forbidden", "Access denied"),
+    ]
+
+    for exc, expected_status, expected_error, expected_message in cases:
+        rest_error, status_code = handler.handle(exc)
+        result = (status_code, rest_error.error, rest_error.message)
+
+        if result != (expected_status, expected_error, expected_message):
+            raise AssertionError(f"Expected {(expected_status, expected_error, expected_message)} for {exc!r}, got {result}")
+
+
+def test_error_handler_register_builtin_mappings_keeps_a_registered_mapping():
+    """register_builtin_mappings() adds the built-in mappings but keeps one the application registered."""
+    handler = ErrorHandler()
+    handler.register_mapping(ValueError, ErrorMapping(status_code=422, error_code="unprocessable_entity"))
+
+    handler.register_builtin_mappings()
+
+    if handler._mappings[ValueError].status_code != 422:
+        raise AssertionError(f"Expected the registered ValueError mapping to stay, got {handler._mappings[ValueError]}")
+
+    if handler._mappings[KeyError] != BUILTIN_EXCEPTION_MAPPINGS[KeyError]:
+        raise AssertionError("Expected the built-in KeyError mapping to be added")
+
+
+def test_create_rest_middleware_builtin_mappings_option():
+    """create_rest_middleware(builtin_mappings=True) builds an error handler with the built-in mappings."""
+    _, default_status = create_rest_middleware().error_handler.handle(KeyError("user_123"))
+    _, opted_status = create_rest_middleware(builtin_mappings=True).error_handler.handle(KeyError("user_123"))
+
+    if (default_status, opted_status) != (500, 404):
+        raise AssertionError(f"Expected 500 by default and 404 with builtin_mappings, got {(default_status, opted_status)}")
+
+
+def test_error_handler_endpoint_map_can_use_the_builtin_mappings():
+    """An endpoint's error_map can name BUILTIN_EXCEPTION_MAPPINGS for that endpoint only."""
+    handler = ErrorHandler()
+
+    _, status_code = handler.handle(KeyError("user_123"), endpoint_error_map=BUILTIN_EXCEPTION_MAPPINGS)
+
     if status_code != 404:
-        raise AssertionError(f"Expected status 404, got {status_code}")
-    
-    if rest_error.error != "not_found":
-        raise AssertionError(f"Expected error 'not_found', got '{rest_error.error}'")
-
-
-def test_error_handler_handle_permission_error():
-    """handle() should return 403 for PermissionError."""
-    handler = ErrorHandler()
-    exc = PermissionError("Access denied")
-    
-    rest_error, status_code = handler.handle(exc)
-    
-    if status_code != 403:
-        raise AssertionError(f"Expected status 403, got {status_code}")
-    
-    if rest_error.error != "forbidden":
-        raise AssertionError(f"Expected error 'forbidden', got '{rest_error.error}'")
+        raise AssertionError(f"Expected 404 from the endpoint's error_map, got {status_code}")
 
 
 def test_error_handler_handle_validation_error():
@@ -326,7 +357,7 @@ def test_error_handler_endpoint_map_takes_priority():
 
 def test_error_handler_falls_back_to_global():
     """handle() should fall back to global mappings when not in endpoint map."""
-    handler = ErrorHandler()
+    handler = ErrorHandler(builtin_mappings=True)
     
     # Endpoint map doesn't include KeyError
     endpoint_map = {
@@ -369,7 +400,7 @@ def test_error_handler_endpoint_map_custom_exception():
 
 def test_error_handler_matches_exception_subclass():
     """handle() should match exception subclasses to parent mappings."""
-    handler = ErrorHandler()
+    handler = ErrorHandler(builtin_mappings=True)
     
     # Create a subclass of ValueError
     class CustomValueError(ValueError):
@@ -435,8 +466,12 @@ def test_error_handler_shows_500_details_debug():
 def test_error_handler_does_not_hide_4xx_details():
     """handle() should NOT hide details for 4xx errors even in production mode."""
     handler = ErrorHandler(debug=False)
-    
-    exc = ValueError("Invalid email format")
+
+    class InvalidEmail(Exception):
+        pass
+
+    handler.register_mapping(InvalidEmail, ErrorMapping(status_code=400, error_code="bad_request"))
+    exc = InvalidEmail("Invalid email format")
     rest_error, status_code = handler.handle(exc)
     
     if status_code != 400:
@@ -595,9 +630,16 @@ def test_property_7_error_response_status_code_mapping():
             errmsg = f"Iteration {iteration}: Expected {num_field_errors} field errors, got {len(rest_error.field_errors)}"
             raise AssertionError(errmsg)
         
-        # Test case 3: KeyError returns 404 (not_found)
+        # Test case 3: KeyError is a server error by default and returns
+        # 404 (not_found) with the built-in mappings
         key_exc = KeyError(generate_random_string(5, 20))
-        rest_error, status_code = handler.handle(key_exc)
+        _, default_status = handler.handle(key_exc)
+        if default_status != 500:
+            errmsg = f"Iteration {iteration}: KeyError should return 500 by default, got {default_status}"
+            raise AssertionError(errmsg)
+
+        builtin_handler = ErrorHandler(debug=handler.debug, builtin_mappings=True)
+        rest_error, status_code = builtin_handler.handle(key_exc)
         
         # Property: KeyError must return 404
         if status_code != 404:
@@ -609,9 +651,10 @@ def test_property_7_error_response_status_code_mapping():
             errmsg = f"Iteration {iteration}: KeyError should have error 'not_found', got '{rest_error.error}'"
             raise AssertionError(errmsg)
         
-        # Test case 4: PermissionError returns 403 (forbidden)
+        # Test case 4: PermissionError returns 403 (forbidden) with the
+        # built-in mappings
         perm_exc = PermissionError(generate_random_string(10, 30))
-        rest_error, status_code = handler.handle(perm_exc)
+        rest_error, status_code = builtin_handler.handle(perm_exc)
         
         # Property: PermissionError must return 403
         if status_code != 403:
@@ -804,8 +847,8 @@ def test_registered_mapping_takes_precedence_over_http_exception_status():
 
 
 def test_key_error_message_uses_the_template_and_the_plain_key():
-    """The default KeyError mapping reports 'Resource not found: <key>', not the quoted repr of the key."""
-    handler = ErrorHandler()
+    """The built-in KeyError mapping reports 'Resource not found: <key>', not the quoted repr of the key."""
+    handler = ErrorHandler(builtin_mappings=True)
     rest_error, status_code = handler.handle(KeyError("user_42"))
 
     if status_code != 404:

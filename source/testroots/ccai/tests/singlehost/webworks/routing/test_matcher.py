@@ -933,8 +933,9 @@ def test_property_non_matching_path_returns_none():
 
         # Non-integer value for int param
         non_int = _random_safe_segment()
-        # Ensure it's not accidentally a valid integer
-        if non_int.isdigit():
+        # Ensure it's not accidentally a valid integer: the int converter
+        # also takes a sign, so '-0' or '-17' is one (isdigit() is False)
+        if non_int.lstrip("-").isdigit():
             non_int = non_int + "x"
         path = f"/users/{non_int}/posts"
         result = matcher.match(path)

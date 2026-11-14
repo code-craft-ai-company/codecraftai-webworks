@@ -548,17 +548,21 @@ class ErrorHandler:
     Handles exceptions and converts them to REST error responses.
     """
     
-    # Default mappings for common exceptions
+    # Only the framework's own exceptions are mapped by default; its HTTP
+    # exceptions (NotFound, BadRequest, Forbidden, ...) carry their status.
     DEFAULT_MAPPINGS: Dict[Type[Exception], ErrorMapping] = {
-        ValueError: ErrorMapping(400, "bad_request"),
-        KeyError: ErrorMapping(404, "not_found"),
-        PermissionError: ErrorMapping(403, "forbidden"),
         ValidationError: ErrorMapping(400, "validation_error"),
     }
     
-    def __init__(self, debug: bool = False):
+    def __init__(self, debug: bool = False, builtin_mappings: bool = False):
         self.debug = debug
         self._mappings = dict(self.DEFAULT_MAPPINGS)
+        if builtin_mappings:
+            self.register_builtin_mappings()
+    
+    def register_builtin_mappings(self) -> None:
+        """Add BUILTIN_EXCEPTION_MAPPINGS, keeping mappings already registered."""
+        pass
     
     def register_mapping(
         self,
@@ -901,6 +905,13 @@ ACTION_POST_STATUS = 200
 
 ### Default Error Mappings
 
+Only the framework's own exceptions are mapped by default. Built-in exceptions
+(`ValueError`, `KeyError`, `PermissionError`) are not: raised by accident under a
+handler -- a failed `int()`, a missing dictionary key, a file the server may not
+read -- they are server errors, and answering them 400, 404 or 403 hid them from
+monitoring and sent their text to the client. They are answered 500
+`internal_error` like any unhandled exception.
+
 ```python
 # Default exception to HTTP error mappings
 DEFAULT_ERROR_MAPPINGS = {
@@ -909,21 +920,13 @@ DEFAULT_ERROR_MAPPINGS = {
         error_code="validation_error",
         message_template="Request validation failed"
     ),
-    ValueError: ErrorMapping(
-        status_code=400,
-        error_code="bad_request",
-        message_template="{}"
-    ),
-    KeyError: ErrorMapping(
-        status_code=404,
-        error_code="not_found",
-        message_template="Resource not found: {}"
-    ),
-    PermissionError: ErrorMapping(
-        status_code=403,
-        error_code="forbidden",
-        message_template="Access denied"
-    ),
+}
+
+# The framework's HTTP exceptions need no mapping: each carries its status
+# and detail, answered as below.
+#   NotFound -> 404 not_found, BadRequest -> 400 bad_request,
+#   Unauthorized -> 401 unauthorized, Forbidden -> 403 forbidden, ...
+HTTP_EXCEPTION_RESPONSES = {
     NotFound: ErrorMapping(
         status_code=404,
         error_code="not_found",
@@ -938,6 +941,30 @@ DEFAULT_ERROR_MAPPINGS = {
         status_code=403,
         error_code="forbidden",
         message_template="{detail}"
+    ),
+}
+
+# Opt-in: the built-in exception mappings of releases up to 1.6.0, for an
+# application that relies on them. Turned on for every route with
+# ErrorHandler(builtin_mappings=True), register_builtin_mappings() or
+# create_rest_middleware(builtin_mappings=True), or for one endpoint with
+# error_map=BUILTIN_EXCEPTION_MAPPINGS. The ValueError mapping sends the
+# exception's text as the message.
+BUILTIN_EXCEPTION_MAPPINGS = {
+    ValueError: ErrorMapping(
+        status_code=400,
+        error_code="bad_request",
+        message_template=None
+    ),
+    KeyError: ErrorMapping(
+        status_code=404,
+        error_code="not_found",
+        message_template="Resource not found: {}"
+    ),
+    PermissionError: ErrorMapping(
+        status_code=403,
+        error_code="forbidden",
+        message_template="Access denied"
     ),
 }
 ```
@@ -984,9 +1011,9 @@ DEFAULT_ERROR_MAPPINGS = {
 
 ### Property 7: Error Response Status Code Mapping
 
-*For any* exception type with a registered error mapping, the error handler SHALL return the mapped status code and error code. *For any* ValidationError, the response SHALL be 400 with field_errors populated. *For any* NotFound, the response SHALL be 404. *For any* unhandled exception, the response SHALL be 500.
+*For any* exception type with a registered error mapping, the error handler SHALL return the mapped status code and error code. *For any* ValidationError, the response SHALL be 400 with field_errors populated. *For any* NotFound, the response SHALL be 404. *For any* unhandled exception, the response SHALL be 500; that includes a ValueError, KeyError or PermissionError while the built-in mappings are not turned on.
 
-**Validates: Requirements 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 8.1, 8.2**
+**Validates: Requirements 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 8.1, 8.2, 8.4**
 
 ### Property 8: HTTP Method to Status Code Mapping
 

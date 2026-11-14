@@ -71,7 +71,8 @@ This implementation plan creates the REST API Support feature providing resource
 
 - [x] 4. Implement error handling
   - [x] 4.1 Create `ErrorHandler` class with default mappings
-    - Include mappings for ValueError, KeyError, PermissionError, ValidationError
+    - Default mapping for ValidationError only; ValueError, KeyError and PermissionError
+      are the opt-in BUILTIN_EXCEPTION_MAPPINGS (builtin_mappings=True, register_builtin_mappings())
     - _Requirements: 8.4_
 
   - [x] 4.2 Implement `handle()` method in ErrorHandler

@@ -42,6 +42,36 @@ HTTP_STATUS_ERROR_CODES: Dict[int, str] = {
 }
 
 
+# The mappings of built-in exceptions that ErrorHandler applied by default
+# in releases up to 1.6.0: ValueError -> 400 (with the exception text as
+# the message), KeyError -> 404 and PermissionError -> 403. They are no
+# longer defaults (see ErrorHandler.DEFAULT_MAPPINGS); an application that
+# relies on them turns them back on with ErrorHandler(builtin_mappings=True),
+# ErrorHandler.register_builtin_mappings(),
+# create_rest_middleware(builtin_mappings=True) or, for one endpoint,
+# error_map=BUILTIN_EXCEPTION_MAPPINGS. Doing so also brings back what they
+# cost: an accidental ValueError, KeyError or PermissionError anywhere under a
+# handler is answered as a client error, and a ValueError's text is sent to
+# the client.
+BUILTIN_EXCEPTION_MAPPINGS: Dict[Type[Exception], ErrorMapping] = {
+    ValueError: ErrorMapping(
+        status_code=400,
+        error_code="bad_request",
+        message_template=None  # Use exception message
+    ),
+    KeyError: ErrorMapping(
+        status_code=404,
+        error_code="not_found",
+        message_template="Resource not found: {}"
+    ),
+    PermissionError: ErrorMapping(
+        status_code=403,
+        error_code="forbidden",
+        message_template="Access denied"
+    ),
+}
+
+
 def get_http_exception_status(exception: Exception) -> Optional[int]:
     """
         The HTTP status an exception asks for, when it is one of the
@@ -85,7 +115,9 @@ class ErrorHandler:
         The ErrorHandler provides a centralized mechanism for converting
         Python exceptions to standardized REST error responses. It supports:
         
-        - Default mappings for common exceptions (ValueError, KeyError, etc.)
+        - A default mapping for the framework's ValidationError; framework
+          HTTP exceptions (NotFound, BadRequest, Forbidden, ...) carry
+          their own status
         - Custom error mappings registered at runtime
         - Endpoint-specific error maps that override global mappings
         - Production mode error hiding for 500 errors
@@ -93,27 +125,20 @@ class ErrorHandler:
         
         Attributes:
             debug: If False, internal error details are hidden for 500 errors.
-            DEFAULT_MAPPINGS: Class-level default mappings for common exceptions.
+            DEFAULT_MAPPINGS: Class-level default mappings: the framework's
+                              own exceptions only.
     """
     
-    # Default mappings for common exceptions
-    # These provide sensible defaults that can be overridden
+    # Only the framework's own exceptions are mapped by default. Built-in
+    # exceptions such as ValueError, KeyError and PermissionError are not:
+    # raised by accident anywhere under a handler (a failed int(), a missing
+    # dict key, a file the server may not read) they are server bugs, and
+    # mapped to 400/404/403 they were hidden from monitoring and sent the
+    # exception text to the client. They fall back to 500; an application
+    # that wants one mapped says so with error_map or register_mapping, or
+    # raises NotFound, BadRequest or Forbidden. BUILTIN_EXCEPTION_MAPPINGS
+    # holds the former mappings for an application that relies on them.
     DEFAULT_MAPPINGS: Dict[Type[Exception], ErrorMapping] = {
-        ValueError: ErrorMapping(
-            status_code=400,
-            error_code="bad_request",
-            message_template=None  # Use exception message
-        ),
-        KeyError: ErrorMapping(
-            status_code=404,
-            error_code="not_found",
-            message_template="Resource not found: {}"
-        ),
-        PermissionError: ErrorMapping(
-            status_code=403,
-            error_code="forbidden",
-            message_template="Access denied"
-        ),
         ValidationError: ErrorMapping(
             status_code=400,
             error_code="validation_error",
@@ -121,16 +146,34 @@ class ErrorHandler:
         ),
     }
     
-    def __init__(self, debug: bool = False):
+    def __init__(self, debug: bool = False, builtin_mappings: bool = False):
         """
             Initialize an ErrorHandler.
             
             Args:
                 debug: If True, include internal error details in 500 responses.
                        If False (production mode), hide internal error details.
+                builtin_mappings: If True, also map ValueError, KeyError and
+                                  PermissionError as BUILTIN_EXCEPTION_MAPPINGS
+                                  does (the defaults up to 1.6.0).
         """
         self.debug = debug
         self._mappings: Dict[Type[Exception], ErrorMapping] = dict(self.DEFAULT_MAPPINGS)
+        if builtin_mappings:
+            self.register_builtin_mappings()
+
+    def register_builtin_mappings(self) -> None:
+        """
+            Map ValueError to 400, KeyError to 404 and PermissionError to 403
+            (BUILTIN_EXCEPTION_MAPPINGS), the defaults up to 1.6.0. A mapping
+            already registered for one of these types is kept.
+
+            For an application: ``app.rest_middleware.error_handler.register_builtin_mappings()``.
+        """
+        for exception_type, mapping in BUILTIN_EXCEPTION_MAPPINGS.items():
+            if exception_type not in self._mappings:
+                self._mappings[exception_type] = mapping
+        return
     
     def register_mapping(
         self,

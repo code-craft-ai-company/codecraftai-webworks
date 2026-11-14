@@ -19,6 +19,7 @@ import string
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Type
 
+from ccai.webworks.routing.exceptions import BadRequest
 from ccai.webworks.routing.response import Response
 
 from ccai.webworks.endpoints.rest import (
@@ -815,7 +816,7 @@ def test_middleware_handle_error():
     middleware = create_rest_middleware()
     
     request = MockRequest()
-    exc = ValueError("Test error")
+    exc = BadRequest("Test error")
     
     response = middleware._handle_error(request, exc)
     
