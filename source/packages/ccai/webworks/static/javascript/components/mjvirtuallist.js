@@ -81,7 +81,6 @@ const STYLES = `
   border: 1px solid var(--mj-border);
   border-radius: var(--mj-radius-md);
   cursor: pointer;
-  /* --mj-accent as text is under 4.5:1 on the dark --mj-surface. */
   color: var(--mj-text);
   font: inherit;
   font-size: var(--mj-font-size-sm);

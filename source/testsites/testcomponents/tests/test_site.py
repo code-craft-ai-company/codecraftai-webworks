@@ -160,6 +160,83 @@ def test_theme_toggle_switches_theme(page, base_url):
     return
 
 
+_TOKEN_CONTRAST_JS = """(pairs) => {
+    const probe = document.createElement("div");
+    document.body.appendChild(probe);
+    const colorOf = (token) => {
+        probe.style.color = "var(" + token + ")";
+        const parts = getComputedStyle(probe).color.match(/[0-9.]+/g).slice(0, 3).map(Number);
+        return parts;
+    };
+    const luminance = (rgb) => {
+        const linear = rgb.map((value) => {
+            const channel = value / 255;
+            return channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+        });
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+    };
+    const ratios = {};
+    for (const [foreground, background] of pairs) {
+        const a = luminance(colorOf(foreground));
+        const b = luminance(colorOf(background));
+        const ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+        ratios[foreground + " on " + background] = Math.round(ratio * 100) / 100;
+    }
+    probe.remove();
+    return ratios;
+}"""
+
+# Text colour / background pairs the components use: the accent as text on
+# every surface, and --mj-text-on-accent on the accent fill in each state.
+_ACCENT_TEXT_PAIRS = [
+    ["--mj-accent", "--mj-bg"],
+    ["--mj-accent", "--mj-surface"],
+    ["--mj-accent", "--mj-surface-raised"],
+    ["--mj-text-on-accent", "--mj-accent"],
+    ["--mj-text-on-accent", "--mj-accent-hover"],
+    ["--mj-text-on-accent", "--mj-accent-active"],
+]
+
+
+@testbase.attach.parameter(create_page, identifier="page")
+def test_accent_tokens_keep_text_contrast_in_every_theme(page, base_url):
+    """
+        The accent used as text keeps 4.5:1 on --mj-bg, --mj-surface and
+        --mj-surface-raised, and --mj-text-on-accent keeps 4.5:1 on the
+        accent fill and its hover and active states: in the light theme, the
+        dark theme, and the dark theme the operating system picks when the
+        page sets no data-theme (a separate block in tokens.css).
+    """
+
+    page.goto(base_url + "/")
+
+    ratios = {}
+    for theme in ("light", "dark"):
+        page.evaluate("theme => document.documentElement.setAttribute('data-theme', theme)", theme)
+        ratios[theme] = page.evaluate(_TOKEN_CONTRAST_JS, _ACCENT_TEXT_PAIRS)
+
+    page.emulate_media(color_scheme="dark")
+    page.evaluate("() => document.documentElement.removeAttribute('data-theme')")
+    ratios["system dark"] = page.evaluate(_TOKEN_CONTRAST_JS, _ACCENT_TEXT_PAIRS)
+    page.emulate_media(color_scheme="light")
+
+    failing = {
+        theme + ": " + pair: ratio
+        for theme, theme_ratios in ratios.items()
+        for pair, ratio in theme_ratios.items()
+        if ratio < 4.5
+    }
+    if len(failing) != 0:
+        errmsg = f"Expected 4.5:1 or better for accent text, got {failing} (all ratios: {ratios})"
+        raise AssertionError(errmsg)
+
+    if ratios["system dark"] != ratios["dark"]:
+        errmsg = f"Expected the system dark theme to match data-theme=dark, got {ratios}"
+        raise AssertionError(errmsg)
+
+    return
+
+
 @testbase.attach.parameter(create_page, identifier="page")
 def test_brand_link_returns_home(page, base_url):
     """

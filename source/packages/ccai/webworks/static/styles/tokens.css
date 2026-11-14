@@ -178,10 +178,12 @@
   --mj-text: var(--mj-color-neutral-50);
   --mj-text-muted: #a7aebd;
   --mj-text-on-accent: var(--mj-color-neutral-900);
-  --mj-accent: var(--mj-color-accent-400);
-  --mj-accent-hover: var(--mj-color-accent-300);
-  --mj-accent-active: var(--mj-color-accent-200);
-  --mj-focus-ring: var(--mj-color-accent-300);
+  /* accent-300: as text 6.2:1 on --mj-surface and 4.7:1 on --mj-surface-raised
+     (accent-400 was 4.1:1 and 3.1:1); --mj-text-on-accent on it is 7.6:1. */
+  --mj-accent: var(--mj-color-accent-300);
+  --mj-accent-hover: var(--mj-color-accent-200);
+  --mj-accent-active: var(--mj-color-accent-100);
+  --mj-focus-ring: var(--mj-color-accent-200);
   --mj-overlay-scrim: rgba(0, 0, 0, 0.68);
 
   /* Status foregrounds: 4.5:1 or better on their surfaces, --mj-surface and --mj-surface-raised. */
@@ -228,10 +230,12 @@
     --mj-text: var(--mj-color-neutral-50);
     --mj-text-muted: #a7aebd;
     --mj-text-on-accent: var(--mj-color-neutral-900);
-    --mj-accent: var(--mj-color-accent-400);
-    --mj-accent-hover: var(--mj-color-accent-300);
-    --mj-accent-active: var(--mj-color-accent-200);
-    --mj-focus-ring: var(--mj-color-accent-300);
+    /* accent-300: as text 6.2:1 on --mj-surface and 4.7:1 on --mj-surface-raised
+       (accent-400 was 4.1:1 and 3.1:1); --mj-text-on-accent on it is 7.6:1. */
+    --mj-accent: var(--mj-color-accent-300);
+    --mj-accent-hover: var(--mj-color-accent-200);
+    --mj-accent-active: var(--mj-color-accent-100);
+    --mj-focus-ring: var(--mj-color-accent-200);
     --mj-overlay-scrim: rgba(0, 0, 0, 0.68);
 
     /* Status foregrounds: 4.5:1 or better on their surfaces, --mj-surface and --mj-surface-raised. */
